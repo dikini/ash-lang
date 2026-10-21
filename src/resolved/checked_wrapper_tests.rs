@@ -124,6 +124,12 @@ fn checked_wrapper_summary_rejects_erased_native_and_capture_requirements() {
         |summary| summary.erase_exported_capture_for_test("closed"),
         |summary| {
             summary.native_symbols.clear();
+            for effect in &mut summary.effects {
+                effect.native_contract = None;
+            }
+        },
+        |summary| {
+            summary.native_symbols.clear();
             summary
                 .effects
                 .retain(|effect| effect.native_contract.is_none());
@@ -417,4 +423,44 @@ fn checked_wrapper_branch_and_callable_paths_preserve_original_contract_union() 
                 .unwrap()
         );
     }
+}
+
+#[test]
+fn checked_wrapper_capture_closure_has_exact_prefixed_and_memoized_work() {
+    let summary = wrapper_summary();
+    let capture = &summary.terms["closed"].capture;
+    let mut measured = TypeWorkBudget::unbounded();
+    summary
+        .authenticate_capture_effect_closure(
+            capture,
+            &mut crate::core::capture::CaptureGraphVisits::default(),
+            &mut measured,
+        )
+        .unwrap();
+    let required = measured.used();
+    assert!(required > 2);
+    for short in [false, true, false] {
+        let mut work = TypeWorkBudget::with_limit(7 + required - usize::from(short));
+        work.charge(7).unwrap();
+        let mut visits = crate::core::capture::CaptureGraphVisits::default();
+        let result = summary.authenticate_capture_effect_closure(capture, &mut visits, &mut work);
+        if short {
+            assert_eq!(result, Err(ResolvedBuildFailure::TypeResource));
+        } else {
+            result.unwrap();
+        }
+    }
+    let mut visits = crate::core::capture::CaptureGraphVisits::default();
+    let mut work = TypeWorkBudget::with_limit(required + 1);
+    summary
+        .authenticate_capture_effect_closure(capture, &mut visits, &mut work)
+        .unwrap();
+    summary
+        .authenticate_capture_effect_closure(capture, &mut visits, &mut work)
+        .unwrap();
+    assert_eq!(
+        work.used(),
+        required + 1,
+        "an alias pays its visit while sharing the complete graph scan"
+    );
 }

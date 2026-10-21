@@ -51,3 +51,14 @@ requirements and publication ownership. [Output](table-erasure-red.log),
 [manifest](table-erasure-red-source-configuration.json) retain this checkpoint.
 All 59 other summary regression controls pass on the same source. The graph-to-
 dependency-table closure repair and final regression evidence remain pending.
+
+Graph closure membership now reconstructs effect IDs from retained callable
+controls and nested types, including row arguments/lacks, once per graph. Eight
+private controls pass, including exact/prefixed/refused/fresh closure work and
+shared-graph memo reuse. A distinguishing mutation still fails: keep the effect
+identity/position and original graph, but clear its native tag and table entry.
+[Output](classification-red.log), [receipt](classification-red-receipt.json) and
+[manifest](classification-red-source-configuration.json) preserve this red
+checkpoint. The next repair reuses original declaration-coordinate classification
+from resident source snapshots. It does not infer callable requirements from
+source bodies. Final review remains pending.

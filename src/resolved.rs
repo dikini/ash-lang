@@ -11655,6 +11655,7 @@ impl ExportSummary {
             }
         }
 
+        let mut capture_effect_visits = crate::core::capture::CaptureGraphVisits::default();
         let mut canonical_globals = HashMap::<BinderId, &ExportedGlobal>::new();
         constraint_work
             .charge(self.terms.len())
@@ -11749,6 +11750,11 @@ impl ExportSummary {
                 continue;
             }
             authenticate_global_publication(global, type_work, constraint_work)?;
+            self.authenticate_capture_effect_closure(
+                &global.capture,
+                &mut capture_effect_visits,
+                type_work,
+            )?;
             canonical_globals.insert(global.binder, global);
             term_binders.insert(global.binder);
             register_summary_scheme_parameters(
@@ -11779,6 +11785,11 @@ impl ExportSummary {
             }
             authenticate_exact_implementation_head_binders(fact, constraint_work)?;
             for method in &fact.methods {
+                self.authenticate_capture_effect_closure(
+                    &method.capture,
+                    &mut capture_effect_visits,
+                    type_work,
+                )?;
                 if !term_binders.insert(method.binder) {
                     {
                         return Err(ResolvedBuildFailure::InvalidState);
@@ -14730,6 +14741,54 @@ impl ExportSummary {
 
     pub(crate) fn term(&self, spelling: &str) -> Option<&ExportedGlobal> {
         self.terms.get(spelling)
+    }
+
+    /// Reconstruct the same graph closure retained by export construction.
+    /// This checks metadata dependencies, never executable bodies or permission.
+    fn authenticate_capture_effect_closure<'a>(
+        &self,
+        capture: &'a crate::core::capture::CaptureValueSummary,
+        visits: &mut crate::core::capture::CaptureGraphVisits<'a>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        if !visits
+            .visit(capture, work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+        {
+            return Ok(());
+        }
+        let mut required = HashSet::new();
+        for effect in capture
+            .effects(work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+        {
+            work.charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            required
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            required.insert(effect);
+        }
+        for ty in capture
+            .types(work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+        {
+            collect_effect_identities(ty, &mut required, work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        }
+        work.charge(required.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for effect in required {
+            if !self
+                .effect_positions
+                .get(&effect)
+                .and_then(|position| self.effects.get(*position))
+                .is_some_and(|fact| fact.id == effect)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        Ok(())
     }
 
     /// Reads original checked contracts after body-free summary authentication.
