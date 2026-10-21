@@ -1,0 +1,21 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 19s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 2 tests
+test resolved::checked_wrapper_tests::checked_wrapper_summary_keeps_original_contract_and_charges_the_profile_scan ... ok
+
+thread 'resolved::checked_wrapper_tests::checked_wrapper_summary_rejects_erased_native_and_capture_requirements' (673) panicked at src/resolved/checked_wrapper_tests.rs:140:9:
+erasure 2 was accepted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_wrapper_tests::checked_wrapper_summary_rejects_erased_native_and_capture_requirements ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_wrapper_tests::checked_wrapper_summary_rejects_erased_native_and_capture_requirements
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 1966 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p ash --lib`

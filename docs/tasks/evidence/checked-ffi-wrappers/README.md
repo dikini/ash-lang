@@ -19,3 +19,17 @@ prepaid by table cardinality; a closed outward row cannot erase this requirement
 [manifest](guard-source-configuration.json) record the focused checkpoint.
 Erasure, aliases/re-exports, branch/higher-order and work-bound evidence remain
 pending, as do final review and whole F3 acceptance.
+
+Eight connected source/Core controls now pass, including aliases/re-exports,
+opaque constructor exclusion, branch-only dependencies, recursion and returned
+functions. [Output](flows.log), [receipt](flows-receipt.json) and
+[manifest](flows-source-configuration.json) pin that checkpoint.
+
+The private erasure test exposes a separate remaining failure: removing only an
+outward-pure global's capture graph is accepted by summary authentication. The
+first two native-table/tag erasures reject; the capture-only case fails the test
+before its coordinated-erasure case executes. The profile scan's prefixed work
+boundary control passes. [Red output](erasure-red.log),
+[receipt](erasure-red-receipt.json) and
+[manifest](erasure-red-source-configuration.json) retain the failure. Repair and
+final verification remain pending.

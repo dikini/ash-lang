@@ -1,5 +1,7 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
+#[cfg(test)]
+mod checked_wrapper_tests;
 mod image_registry;
 #[cfg(test)]
 mod image_subset_tests;
