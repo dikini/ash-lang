@@ -434,6 +434,7 @@ fn checked_wrapper_capture_closure_has_exact_prefixed_and_memoized_work() {
         .authenticate_capture_effect_closure(
             capture,
             &mut crate::core::capture::CaptureGraphVisits::default(),
+            &mut OriginalEffectMemo::new(),
             &mut measured,
         )
         .unwrap();
@@ -443,7 +444,12 @@ fn checked_wrapper_capture_closure_has_exact_prefixed_and_memoized_work() {
         let mut work = TypeWorkBudget::with_limit(7 + required - usize::from(short));
         work.charge(7).unwrap();
         let mut visits = crate::core::capture::CaptureGraphVisits::default();
-        let result = summary.authenticate_capture_effect_closure(capture, &mut visits, &mut work);
+        let result = summary.authenticate_capture_effect_closure(
+            capture,
+            &mut visits,
+            &mut OriginalEffectMemo::new(),
+            &mut work,
+        );
         if short {
             assert_eq!(result, Err(ResolvedBuildFailure::TypeResource));
         } else {
@@ -452,15 +458,65 @@ fn checked_wrapper_capture_closure_has_exact_prefixed_and_memoized_work() {
     }
     let mut visits = crate::core::capture::CaptureGraphVisits::default();
     let mut work = TypeWorkBudget::with_limit(required + 1);
+    let mut originals = OriginalEffectMemo::new();
     summary
-        .authenticate_capture_effect_closure(capture, &mut visits, &mut work)
+        .authenticate_capture_effect_closure(capture, &mut visits, &mut originals, &mut work)
         .unwrap();
     summary
-        .authenticate_capture_effect_closure(capture, &mut visits, &mut work)
+        .authenticate_capture_effect_closure(capture, &mut visits, &mut originals, &mut work)
         .unwrap();
     assert_eq!(
         work.used(),
         required + 1,
         "an alias pays its visit while sharing the complete graph scan"
     );
+}
+
+#[test]
+fn checked_wrapper_declaration_provenance_rejects_missing_donor_duplicate_and_wrong_module() {
+    let mutations: &[fn(&mut ExportSummary)] = &[
+        |summary| {
+            summary
+                .defining_sources
+                .retain(|(module, _)| *module != summary.module)
+        },
+        |summary| {
+            let source = summary
+                .defining_sources
+                .iter_mut()
+                .find(|(module, _)| *module == summary.module)
+                .unwrap();
+            source.1 = Arc::new(
+                crate::source::SourceFile::new("donor", "effect Abs {\n    call : Int -> Int\n}\n")
+                    .unwrap(),
+            );
+        },
+        |summary| {
+            let source = summary
+                .defining_sources
+                .iter()
+                .find(|(module, _)| *module == summary.module)
+                .unwrap();
+            summary
+                .defining_sources
+                .push((source.0, Arc::clone(&source.1)));
+        },
+        |summary| {
+            let source = summary
+                .defining_sources
+                .iter_mut()
+                .find(|(module, _)| *module == summary.module)
+                .unwrap();
+            source.0 = ModuleId::new(10998);
+        },
+    ];
+    for (index, mutate) in mutations.iter().enumerate() {
+        let mut summary = wrapper_summary();
+        authenticate(&summary).unwrap();
+        mutate(&mut summary);
+        assert!(
+            authenticate(&summary).is_err(),
+            "invalid declaring-source association {index} was accepted"
+        );
+    }
 }

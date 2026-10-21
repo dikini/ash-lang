@@ -298,13 +298,23 @@ authorization routes, and hidden kind, identity, interface-shape, or
 effect-signature facts required to close those public facts. The compiler
 produces this source-body-free summary only after
 checking the complete module; Ash source does not declare it. It contains no
-dependency source body, implementation source body, forwarding declaration,
-or mutable dependency scope. Importing a scheme does not infer or generalize
-it again.
+dependency executable body, implementation executable body, forwarding
+declaration, or mutable dependency scope. Importing a scheme does not infer or
+generalize it again. Immutable resident source snapshots may accompany provenance.
+They authenticate original declaration syntax, coordinates and ordinary/native
+classification; they do not supply callable requirements, introduce dependency
+names, elaborate dependency bodies or provide executable code.
 Exported function values also retain compiler-inferred control summaries for
 capture checking. These summaries describe possible calls, requests and handler
 control; they do not import dependency source bodies. Admission authenticates
 their defining function identity and retained type and effect identities.
+Each exported ordinary global view retains the same completed defining fact
+through imports and re-exports. Admission compares its binder, scheme, provenance
+and callable summary against that original and authenticates the summary's
+required effect/type closure. Erasing the view's native table, native tag or
+callable graph cannot turn checked native work into an ordinary pure dependency.
+Resident declaration provenance distinguishes native operations from ordinary
+effects even when both have the same apparent signature.
 
 Summary admission authenticates every retained type-variable identity against
 one defining kinded binder record and derives each nominal constructor kind

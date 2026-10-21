@@ -77,7 +77,9 @@ struct EffectCoordinate {
 }
 
 #[derive(Default)]
-struct DeclarationCoordinates {
+/// Readonly declaration provenance reconstructed from resident source syntax.
+/// These coordinates contain no inferred callable requirements or executable code.
+pub(crate) struct DeclarationCoordinates {
     nominals: Vec<NominalCoordinate>,
     nominal_origins: HashMap<Span, usize>,
     constructors: Vec<ConstructorCoordinate>,
@@ -546,7 +548,7 @@ impl ResourceBinderCoordinates {
 }
 
 impl DeclarationCoordinates {
-    fn from_source(
+    pub(crate) fn from_source(
         source: &SourceFile,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
@@ -778,6 +780,54 @@ impl DeclarationCoordinates {
                 _ => {}
             }
             member = member.checked_add(1).ok_or_else(resource)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authenticate_effect(
+        &self,
+        module: ModuleId,
+        source: &SourceFile,
+        effect: &crate::resolved::ResolvedEffectDeclaration,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        charge(work, 1)?;
+        let origin = original_span(&effect.origin, work)?;
+        let expected = *self
+            .effect_origins
+            .get(&origin)
+            .ok_or_else(registry_error)?;
+        let coordinate = &self.effects[expected];
+        if effect.id != EffectId::new(module, ordinal(expected)?)
+            || effect.span != coordinate.span
+            || effect.native_contract.is_some() != coordinate.foreign.is_some()
+            || !same_name(source, coordinate.name, &effect.spelling, work)?
+        {
+            return Err(registry_error());
+        }
+        if let Some(written) = coordinate.foreign {
+            let symbol = effect.native_contract.as_ref().ok_or_else(registry_error)?;
+            let prepared = symbol.prepared();
+            charge(work, 1)?;
+            let declaration = prepared
+                .symbols()
+                .get(written.symbol)
+                .ok_or_else(registry_error)?;
+            if prepared.module() != module
+                || symbol.symbol_index() != written.symbol
+                || symbol.library()
+                    != crate::foreign::checked_source::NativeLibraryId::new(
+                        module,
+                        written.library.ordinal,
+                    )
+                || original_span(prepared.origin(), work)? != written.library.span
+                || declaration.member_index() != written.member
+                || original_span(declaration.origin(), work)? != coordinate.origin
+                || !same_name(source, written.library.name, prepared.name(), work)?
+                || !same_name(source, coordinate.name, declaration.name(), work)?
+            {
+                return Err(registry_error());
+            }
         }
         Ok(())
     }
@@ -1029,44 +1079,7 @@ fn authenticate_module(
             }
             continue;
         }
-        charge(work, 1)?;
-        let origin = original_span(&effect.origin, work)?;
-        let expected = *coordinates
-            .effect_origins
-            .get(&origin)
-            .ok_or_else(registry_error)?;
-        let coordinate = &coordinates.effects[expected];
-        if effect.id != EffectId::new(module, ordinal(expected)?)
-            || effect.span != coordinate.span
-            || effect.native_contract.is_some() != coordinate.foreign.is_some()
-            || !same_name(source, coordinate.name, &effect.spelling, work)?
-        {
-            return Err(registry_error());
-        }
-        if let Some(written) = coordinate.foreign {
-            let symbol = effect.native_contract.as_ref().ok_or_else(registry_error)?;
-            let prepared = symbol.prepared();
-            charge(work, 1)?;
-            let declaration = prepared
-                .symbols()
-                .get(written.symbol)
-                .ok_or_else(registry_error)?;
-            if prepared.module() != module
-                || symbol.symbol_index() != written.symbol
-                || symbol.library()
-                    != crate::foreign::checked_source::NativeLibraryId::new(
-                        module,
-                        written.library.ordinal,
-                    )
-                || original_span(prepared.origin(), work)? != written.library.span
-                || declaration.member_index() != written.member
-                || original_span(declaration.origin(), work)? != coordinate.origin
-                || !same_name(source, written.library.name, prepared.name(), work)?
-                || !same_name(source, coordinate.name, declaration.name(), work)?
-            {
-                return Err(registry_error());
-            }
-        }
+        coordinates.authenticate_effect(module, source, effect, work)?;
     }
     for fact in registry.source_resource_facts() {
         charge(work, 1)?;

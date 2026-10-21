@@ -7778,6 +7778,22 @@ impl ImportedTypeAccess {
     }
 }
 
+type OriginalEffectMemo<'a> = HashMap<
+    ModuleId,
+    (
+        &'a crate::source::SourceFile,
+        crate::core::validate::DeclarationCoordinates,
+    ),
+>;
+
+fn original_effect_failure(error: crate::core::ValidationError) -> ResolvedBuildFailure {
+    if error.reason() == crate::core::ValidationReason::Resource {
+        ResolvedBuildFailure::TypeResource
+    } else {
+        ResolvedBuildFailure::InvalidState
+    }
+}
+
 fn authenticate_global_publication(
     global: &ExportedGlobal,
     work: &mut TypeWorkBudget,
@@ -11656,6 +11672,7 @@ impl ExportSummary {
         }
 
         let mut capture_effect_visits = crate::core::capture::CaptureGraphVisits::default();
+        let mut original_effects = OriginalEffectMemo::new();
         let mut canonical_globals = HashMap::<BinderId, &ExportedGlobal>::new();
         constraint_work
             .charge(self.terms.len())
@@ -11753,6 +11770,7 @@ impl ExportSummary {
             self.authenticate_capture_effect_closure(
                 &global.capture,
                 &mut capture_effect_visits,
+                &mut original_effects,
                 type_work,
             )?;
             canonical_globals.insert(global.binder, global);
@@ -11788,6 +11806,7 @@ impl ExportSummary {
                 self.authenticate_capture_effect_closure(
                     &method.capture,
                     &mut capture_effect_visits,
+                    &mut original_effects,
                     type_work,
                 )?;
                 if !term_binders.insert(method.binder) {
@@ -14746,9 +14765,10 @@ impl ExportSummary {
     /// Reconstruct the same graph closure retained by export construction.
     /// This checks metadata dependencies, never executable bodies or permission.
     fn authenticate_capture_effect_closure<'a>(
-        &self,
+        &'a self,
         capture: &'a crate::core::capture::CaptureValueSummary,
         visits: &mut crate::core::capture::CaptureGraphVisits<'a>,
+        original_effects: &mut OriginalEffectMemo<'a>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
         if !visits
@@ -14779,14 +14799,52 @@ impl ExportSummary {
         work.charge(required.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         for effect in required {
-            if !self
+            let fact = self
                 .effect_positions
                 .get(&effect)
                 .and_then(|position| self.effects.get(*position))
-                .is_some_and(|fact| fact.id == effect)
+                .filter(|fact| fact.id == effect)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            // These two roles were independently authenticated before the graph walk.
+            // The builtin host has no parsed declaration; manifest originals already
+            // establish exact native classification through their canonical registry.
+            work.charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if effect.module().is_builtin_foreign()
+                || self.foreign_modules.contains_key(&effect.module())
             {
-                return Err(ResolvedBuildFailure::InvalidState);
+                continue;
             }
+            if !original_effects.contains_key(&effect.module()) {
+                work.charge(
+                    self.defining_sources
+                        .len()
+                        .checked_add(1)
+                        .ok_or(ResolvedBuildFailure::TypeResource)?,
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                let mut sources = self
+                    .defining_sources
+                    .iter()
+                    .filter(|(module, _)| *module == effect.module());
+                let (_, source) = sources.next().ok_or(ResolvedBuildFailure::InvalidState)?;
+                if sources.next().is_some() {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let coordinates =
+                    crate::core::validate::DeclarationCoordinates::from_source(source, work)
+                        .map_err(original_effect_failure)?;
+                original_effects
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                original_effects.insert(effect.module(), (source, coordinates));
+            }
+            let (source, coordinates) = original_effects
+                .get(&effect.module())
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            coordinates
+                .authenticate_effect(effect.module(), source, fact, work)
+                .map_err(original_effect_failure)?;
         }
         Ok(())
     }

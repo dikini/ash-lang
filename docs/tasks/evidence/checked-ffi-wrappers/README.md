@@ -62,3 +62,11 @@ identity/position and original graph, but clear its native tag and table entry.
 checkpoint. The next repair reuses original declaration-coordinate classification
 from resident source snapshots. It does not infer callable requirements from
 source bodies. Final review remains pending.
+
+The classification repair now shares Core's original declaration-coordinate
+authentication. A bounded admission-local memo parses each required defining
+source once; missing, donor, duplicate and wrong-module source associations
+reject. Native library/member/symbol correspondence remains exact. The compiler
+owned builtin-host exception retains its existing immutable-byte/shape proof.
+All-test compilation passes; final frozen tests and independent review remain
+pending. Resident source is provenance input, not callable requirement inference.
