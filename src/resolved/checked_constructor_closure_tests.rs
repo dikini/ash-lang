@@ -244,3 +244,221 @@ fn checked_constructor_closure_unreferenced_spare_is_not_required() {
     assert!(summary.hidden_nominals.contains_key(&leaf));
     assert!(summary.hidden_nominals.contains_key(&donor));
 }
+
+#[derive(Clone, Copy)]
+enum ConsumerMutation {
+    MissingLeaf,
+    CoherentDonor,
+}
+
+fn assert_body_free_consumer_rejects(mutation: ConsumerMutation) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "ash-constructor-consumer-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("native.ash"), PRODUCER).unwrap();
+    std::fs::write(directory.join("entry.ash"),
+        "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Native.inspect (Native.make 7)\n").unwrap();
+    let graph = crate::module::load_module_graph(
+        &directory.join("entry.ash"),
+        &crate::module::ModuleRoots::empty(),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+    let mut summaries: Vec<ExportSummary> = Vec::new();
+    for loaded in graph.modules() {
+        if loaded.id() == graph.entry() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        summaries
+                            .iter()
+                            .find(|summary| summary.module == edge.target())
+                            .unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let canonical =
+                crate::resolve::resolve_checked_foreign_module(loaded, &dependencies).unwrap();
+            crate::elaborate::check_module(canonical).unwrap();
+            let producer = summaries
+                .iter_mut()
+                .find(|summary| {
+                    summary.terms.contains_key("make") && summary.terms.contains_key("inspect")
+                })
+                .unwrap();
+            let (leaf, donor) = assert_payload_only_leaf(producer);
+            match mutation {
+                ConsumerMutation::MissingLeaf => {
+                    assert!(producer.hidden_nominals.remove(&leaf).is_some());
+                    producer.hidden_nominal_order.retain(|id| *id != leaf);
+                }
+                ConsumerMutation::CoherentDonor => {
+                    assert!(producer.hidden_nominals.contains_key(&leaf));
+                    assert!(producer.hidden_nominals.contains_key(&donor));
+                    let envelope = producer.nominals["Envelope"].id;
+                    let constructor = producer.constructors.get_mut("Envelope").unwrap();
+                    constructor.payload = Some(Type::Nominal(donor));
+                    constructor.scheme.value_type = Type::Function(
+                        Box::new(Type::Nominal(donor)),
+                        Box::new(Type::Nominal(envelope)),
+                    );
+                }
+            }
+            for global in producer.terms.values() {
+                authenticate_global_publication(
+                    global,
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .unwrap();
+            }
+        }
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                crate::resolve::DependencyExports::new(
+                    edge,
+                    summaries
+                        .iter()
+                        .find(|summary| summary.module == edge.target())
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies);
+        if loaded.id() == graph.entry() {
+            let error = match resolved {
+                Err(crate::resolve::ResolveModuleError::Resolution(error)) => error,
+                Ok(resolved) => {
+                    crate::elaborate::check_module(resolved)
+                        .expect("the mutated summary also passed body-free checking");
+                    panic!(
+                        "coherent constructor mutation passed body-free resolution and checking"
+                    );
+                }
+                Err(other) => panic!("unexpected dependency refusal: {other:?}"),
+            };
+            assert_eq!(error.reason, crate::resolve::ResolveReason::InternalState);
+            assert_eq!(
+                error.subject_fact(),
+                Some((
+                    "cause",
+                    "resolver-internal-cause",
+                    "dependency-summary-invalid"
+                ))
+            );
+            return;
+        }
+        summaries.push(
+            crate::elaborate::check_module(resolved.unwrap())
+                .unwrap()
+                .into_exports(),
+        );
+    }
+    panic!("consumer missing");
+}
+
+#[test]
+fn checked_constructor_closure_body_free_consumer_rejects_missing_leaf() {
+    assert_body_free_consumer_rejects(ConsumerMutation::MissingLeaf);
+}
+
+#[test]
+fn checked_constructor_closure_body_free_consumer_rejects_coherent_donor() {
+    assert_body_free_consumer_rejects(ConsumerMutation::CoherentDonor);
+}
+
+impl ResolvedRegistry {
+    /// Changes one canonical payload only; Core retains its independent body
+    /// annotations. There is no constructor scheme mirror in this registry.
+    pub(crate) fn replace_constructor_payload_for_closure_core_test(
+        &mut self,
+        constructor: ConstructorId,
+        leaf: NominalTypeId,
+        donor: NominalTypeId,
+    ) -> bool {
+        if leaf == donor
+            || leaf.module() != donor.module()
+            || constructor.owner().module() != leaf.module()
+            || self.nominal(leaf).is_none()
+            || self.nominal(donor).is_none()
+            || self
+                .nominal_parameters(leaf)
+                .is_none_or(|parameters| !parameters.is_empty())
+            || self
+                .nominal_parameters(donor)
+                .is_none_or(|parameters| !parameters.is_empty())
+        {
+            return false;
+        }
+        let Some(position) = self.constructor_positions.get(&constructor).copied() else {
+            return false;
+        };
+        let Some(fact) = self.constructors.get_mut(position) else {
+            return false;
+        };
+        if fact.id != constructor
+            || fact.owner != constructor.owner()
+            || fact.payload.as_ref() != Some(&Type::Nominal(leaf))
+        {
+            return false;
+        }
+        fact.payload = Some(Type::Nominal(donor));
+        true
+    }
+}
+
+#[test]
+fn checked_constructor_closure_summary_work_is_exact_and_operation_local() {
+    let summary = summary();
+    assert_payload_only_leaf(&summary);
+    let mut work = TypeWorkBudget::default();
+    let mut constraints = crate::interface::InterfaceConstraintBudget::default();
+    summary.authenticate(&mut work, &mut constraints).unwrap();
+    let (types, interfaces) = (work.used(), constraints.used());
+    assert!(types > 7 && interfaces > 7);
+    for (type_short, constraint_short) in
+        [(false, false), (true, false), (false, true), (false, false)]
+    {
+        let mut work = TypeWorkBudget::with_limit(7 + types - usize::from(type_short));
+        let mut constraints = crate::interface::InterfaceConstraintBudget::with_limit(
+            7 + interfaces - usize::from(constraint_short),
+        );
+        work.charge(7).unwrap();
+        constraints.charge(7).unwrap();
+        assert_eq!(
+            summary.authenticate(&mut work, &mut constraints),
+            if type_short {
+                Err(ResolvedBuildFailure::TypeResource)
+            } else if constraint_short {
+                Err(ResolvedBuildFailure::ConstraintResource)
+            } else {
+                Ok(())
+            }
+        );
+    }
+    let mut work = TypeWorkBudget::with_limit(types);
+    let mut constraints = crate::interface::InterfaceConstraintBudget::with_limit(interfaces);
+    summary.authenticate(&mut work, &mut constraints).unwrap();
+    assert!(matches!(
+        summary.authenticate(&mut work, &mut constraints),
+        Err(ResolvedBuildFailure::TypeResource | ResolvedBuildFailure::ConstraintResource)
+    ));
+    summary
+        .authenticate(
+            &mut TypeWorkBudget::with_limit(types),
+            &mut crate::interface::InterfaceConstraintBudget::with_limit(interfaces),
+        )
+        .unwrap();
+}
