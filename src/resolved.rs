@@ -974,6 +974,13 @@ pub struct CheckedGlobalScheme {
     pub origin: Origin,
 }
 
+impl Drop for CheckedGlobalScheme {
+    fn drop(&mut self) {
+        let span = self.origin.primary_span();
+        discard_origin_iteratively(std::mem::replace(&mut self.origin, Origin::Source(span)));
+    }
+}
+
 /// Body-free completed facts used by provider entries before the defining
 /// module's single publication commit. Lowered ABI and source bodies are absent.
 #[derive(Debug)]
@@ -1708,8 +1715,7 @@ impl Drop for CheckedModule {
             discard_resolved_effect_iteratively(effect);
         }
         for checked in self.schemes.drain(..) {
-            drop(checked.scheme);
-            discard_origin_iteratively(checked.origin);
+            drop(checked);
         }
     }
 }
@@ -1842,8 +1848,7 @@ impl Drop for ResolvedModuleGroup {
             discard_resolved_interface_iteratively(interface);
         }
         for checked in std::mem::take(&mut self.schemes).into_vec() {
-            drop(checked.scheme);
-            discard_origin_iteratively(checked.origin);
+            drop(checked);
         }
     }
 }
@@ -5143,6 +5148,10 @@ impl ImportedFacts {
         fact: ImportedGlobalScheme,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ()> {
+        if budget.charge(1).is_err() || fact.publication.is_none() {
+            discard_imported_global(fact);
+            return Err(());
+        }
         if !self.globals.contains_key(&fact.binder) {
             if budget.charge(1).is_err()
                 || self.global_order.try_reserve(1).is_err()
@@ -6957,6 +6966,8 @@ pub(crate) fn clone_checked_implementation_fact(
 /// One imported checked global scheme.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImportedGlobalScheme {
+    /// Immutable completed defining fact; projections cannot replace its capture obligations.
+    pub(crate) publication: Option<Arc<CheckedGlobalScheme>>,
     pub(crate) scalar_preflight:
         Option<Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>>,
     pub(crate) capture: crate::core::capture::CaptureValueSummary,
@@ -7767,9 +7778,40 @@ impl ImportedTypeAccess {
     }
 }
 
+fn authenticate_global_publication(
+    global: &ExportedGlobal,
+    work: &mut TypeWorkBudget,
+    constraints: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    work.charge(1)
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    let original = global
+        .publication
+        .as_deref()
+        .ok_or(ResolvedBuildFailure::InvalidState)?;
+    if original.binder != global.binder
+        || !same_origin_with_budget(&original.origin, &global.origin, work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+        || !original
+            .capture
+            .same_with_budget(&global.capture, work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+        || !same_constrained_schemes_with_constraint_budget(
+            &original.scheme,
+            &global.scheme,
+            constraints,
+        )?
+    {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    Ok(())
+}
+
 /// One checked public global in an immutable export summary.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ExportedGlobal {
+    /// Immutable completed defining fact; projections cannot replace its capture obligations.
+    pub(crate) publication: Option<Arc<CheckedGlobalScheme>>,
     pub(crate) scalar_preflight:
         Option<Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>>,
     pub(crate) capture: crate::core::capture::CaptureValueSummary,
@@ -9418,7 +9460,11 @@ fn same_imported_global_fact_with_optional_nominal_observer(
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
     }
-    if left.binder != right.binder
+    constraint_work
+        .charge(1)
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    if !matches!((&left.publication, &right.publication), (Some(left), Some(right)) if Arc::ptr_eq(left, right))
+        || left.binder != right.binder
         || !same_scalar_preflight(
             left.scalar_preflight.as_ref(),
             right.scalar_preflight.as_ref(),
@@ -9435,7 +9481,6 @@ fn same_imported_global_fact_with_optional_nominal_observer(
         .type_parameters
         .len()
         .checked_add(right.scheme.requirements.len())
-        .and_then(|work| work.checked_add(1))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     constraint_work
         .charge(metadata_work)
@@ -11642,6 +11687,7 @@ impl ExportSummary {
             .try_reserve(term_binder_count)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         for (_, global) in self.terms() {
+            authenticate_global_publication(global, type_work, constraint_work)?;
             match &global.scalar_preflight {
                 Some(fact) => {
                     type_work
@@ -11679,18 +11725,25 @@ impl ExportSummary {
                 }
             }
             if let Some(existing) = canonical_globals.get(&global.binder) {
-                if !same_constrained_schemes_with_constraint_budget(
-                    &existing.scheme,
-                    &global.scheme,
-                    constraint_work,
-                )? || !same_scalar_preflight(
-                    existing.scalar_preflight.as_ref(),
-                    global.scalar_preflight.as_ref(),
-                ) || !same_origin_with_constraint_budget(
-                    &existing.origin,
-                    &global.origin,
-                    constraint_work,
-                )? {
+                constraint_work
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                if !matches!((&existing.publication, &global.publication), (Some(left), Some(right)) if Arc::ptr_eq(left, right))
+                    || !same_constrained_schemes_with_constraint_budget(
+                        &existing.scheme,
+                        &global.scheme,
+                        constraint_work,
+                    )?
+                    || !same_scalar_preflight(
+                        existing.scalar_preflight.as_ref(),
+                        global.scalar_preflight.as_ref(),
+                    )
+                    || !same_origin_with_constraint_budget(
+                        &existing.origin,
+                        &global.origin,
+                        constraint_work,
+                    )?
+                {
                     {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
@@ -12822,6 +12875,13 @@ impl ExportSummary {
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         // Stage only actual codec dependencies during the existing global pass.
         let mut preflight_constructor_owners = Vec::new();
+        type_work
+            .charge(resolved.export_candidate.term_order.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut publications = HashMap::<BinderId, Arc<CheckedGlobalScheme>>::new();
+        publications
+            .try_reserve(resolved.export_candidate.term_order.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for spelling in &resolved.export_candidate.term_order {
             let candidate = resolved
                 .export_candidate
@@ -12866,6 +12926,46 @@ impl ExportSummary {
             if binder != candidate.binder {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
+            let publication = match candidate.source {
+                CandidateFactSource::Local => {
+                    type_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    if let Some(original) = publications.get(&binder) {
+                        Some(Arc::clone(original))
+                    } else {
+                        let checked = checked_by_binder
+                            .get(&binder)
+                            .ok_or(ResolvedBuildFailure::InvalidState)?;
+                        type_work
+                            .charge(1 + checked.spelling.len())
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        let original = Arc::new(CheckedGlobalScheme {
+                            capture: capture
+                                .clone_with_budget(type_work)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                            binder,
+                            spelling: try_clone_string(&checked.spelling)?,
+                            scheme: scheme
+                                .clone_with_budget(type_work)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                            origin: clone_effect_origin_with_budget(origin, type_work)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                        });
+                        publications.insert(binder, Arc::clone(&original));
+                        Some(original)
+                    }
+                }
+                CandidateFactSource::Imported => Some(Arc::clone(
+                    resolved
+                        .imported
+                        .global(binder)
+                        .ok_or(ResolvedBuildFailure::InvalidState)?
+                        .publication
+                        .as_ref()
+                        .ok_or(ResolvedBuildFailure::InvalidState)?,
+                )),
+            };
             let scalar_preflight = resolved
                 .registry
                 .scalar_preflight(binder)
@@ -12884,6 +12984,7 @@ impl ExportSummary {
                 .insert(
                     spelling.clone(),
                     ExportedGlobal {
+                        publication,
                         scalar_preflight,
                         capture: capture
                             .clone_with_budget(type_work)
@@ -15292,12 +15393,14 @@ impl ExportSummary {
                     (
                         spelling.to_owned(),
                         ExportedGlobal {
+                            publication: None,
                             scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(scheme),
                             origin,
-                        },
+                        }
+                        .with_fixture_publication(),
                     )
                 })
                 .collect(),
@@ -17615,12 +17718,14 @@ impl ExportSummary {
         };
         discard_type_iteratively(std::mem::replace(&mut scheme.value_type, value_type));
         let exported = ExportedGlobal {
+            publication: None,
             scalar_preflight: None,
             capture: source.capture.clone(),
             binder: source.binder,
             scheme,
             origin: source.origin.clone(),
-        };
+        }
+        .with_fixture_publication();
         self.term_order.push(spelling.to_owned());
         if let Some(displaced) = self.terms.insert(spelling.to_owned(), exported) {
             drop(displaced.scheme);
@@ -30570,6 +30675,7 @@ mod tests {
         summary.terms.insert(
             "duplicate".to_owned(),
             ExportedGlobal {
+                publication: None,
                 scalar_preflight: None,
                 capture: crate::core::capture::CaptureValueSummary::default(),
                 binder,
@@ -30579,7 +30685,8 @@ mod tests {
                     value_type: Type::Unit,
                 },
                 origin: Origin::Source(span),
-            },
+            }
+            .with_fixture_publication(),
         );
         summary
     }
@@ -30765,6 +30872,7 @@ mod tests {
                 summary.terms.insert(
                     "forged".to_owned(),
                     ExportedGlobal {
+                        publication: None,
                         scalar_preflight: None,
                         capture: crate::core::capture::CaptureValueSummary::default(),
                         binder,
@@ -30777,7 +30885,8 @@ mod tests {
                             ),
                         },
                         origin: Origin::Source(interface_span),
-                    },
+                    }
+                    .with_fixture_publication(),
                 );
             }
         }
@@ -31461,6 +31570,7 @@ mod tests {
                     summary.terms.insert(
                         spelling,
                         ExportedGlobal {
+                            publication: None,
                             scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
@@ -31476,7 +31586,8 @@ mod tests {
                                 },
                             },
                             origin: alias_origin(index),
-                        },
+                        }
+                        .with_fixture_publication(),
                     );
                 }
             }
@@ -34881,19 +34992,23 @@ mod tests {
             value_type: value_type(),
         };
         let imported_global = ImportedGlobalScheme {
+            publication: None,
             scalar_preflight: None,
             capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             scheme: global_scheme(),
             origin: Origin::Source(span),
-        };
+        }
+        .with_fixture_publication();
         let mut exported_global = ExportedGlobal {
+            publication: imported_global.publication.as_ref().map(Arc::clone),
             scalar_preflight: None,
             capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             scheme: global_scheme(),
             origin: Origin::Source(span),
-        };
+        }
+        .with_fixture_publication();
 
         let constructor_scheme = || ConstrainedScheme {
             type_parameters: Box::new([(parameter, Kind::Type)]),
@@ -35114,19 +35229,23 @@ mod tests {
                     origin
                 };
                 let imported = ImportedGlobalScheme {
+                    publication: None,
                     scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                     origin: deep_origin(),
-                };
+                }
+                .with_fixture_publication();
                 let exported = ExportedGlobal {
+                    publication: imported.publication.as_ref().map(Arc::clone),
                     scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                     origin: deep_origin(),
-                };
+                }
+                .with_fixture_publication();
                 let mut type_work = TypeWorkBudget::with_limit(0);
                 let mut short = crate::interface::InterfaceConstraintBudget::with_limit(
                     EXACT_CONSTRAINT_WORK - 1,
@@ -35280,19 +35399,23 @@ mod tests {
                     value_type: public_value_type(),
                 };
                 let imported_global = ImportedGlobalScheme {
+                    publication: None,
                     scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
-                };
+                }
+                .with_fixture_publication();
                 let exported_global = ExportedGlobal {
+                    publication: imported_global.publication.as_ref().map(Arc::clone),
                     scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
-                };
+                }
+                .with_fixture_publication();
                 assert_exact("global", GLOBAL_WORK, &mut |type_work, constraint_work| {
                     same_imported_global_fact_with_budget(
                         &imported_global,
@@ -35614,19 +35737,23 @@ mod tests {
                     value_type: function_type(),
                 };
                 let imported_global = ImportedGlobalScheme {
+                    publication: None,
                     scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
-                };
+                }
+                .with_fixture_publication();
                 let mut exported_global = ExportedGlobal {
+                    publication: imported_global.publication.as_ref().map(Arc::clone),
                     scalar_preflight: None,
                     capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
-                };
+                }
+                .with_fixture_publication();
                 assert_exact("global", GLOBAL_WORK, &mut |type_work, constraint_work| {
                     same_imported_global_fact_with_budget(
                         &imported_global,
@@ -35998,24 +36125,28 @@ mod tests {
                 imported
                     .insert_global(
                         ImportedGlobalScheme {
+                            publication: None,
                             scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
                             origin: generated_origin(&source, DEPTH),
-                        },
+                        }
+                        .with_fixture_publication(),
                         &mut TypeWorkBudget::default(),
                     )
                     .unwrap();
                 imported
                     .insert_global(
                         ImportedGlobalScheme {
+                            publication: None,
                             scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                             origin: generated_origin(&source, 0),
-                        },
+                        }
+                        .with_fixture_publication(),
                         &mut TypeWorkBudget::default(),
                     )
                     .unwrap();
@@ -36049,12 +36180,14 @@ mod tests {
                 assert_eq!(
                     imported.insert_global(
                         ImportedGlobalScheme {
+                            publication: None,
                             scalar_preflight: None,
                             capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
                             origin: generated_origin(&source, DEPTH),
-                        },
+                        }
+                        .with_fixture_publication(),
                         &mut budget,
                     ),
                     Err(())
@@ -42493,5 +42626,41 @@ mod foreign_certificate_tests {
             ),
             Err(ResolvedBuildFailure::InvalidState)
         );
+    }
+}
+
+#[cfg(test)]
+impl ExportedGlobal {
+    pub(crate) fn with_fixture_publication(mut self) -> Self {
+        if self.publication.is_some() {
+            return self;
+        }
+        let mut work = TypeWorkBudget::unbounded();
+        self.publication = Some(Arc::new(CheckedGlobalScheme {
+            binder: self.binder,
+            spelling: String::new(),
+            scheme: self.scheme.clone_with_budget(&mut work).unwrap(),
+            origin: self.origin.clone(),
+            capture: self.capture.clone_with_budget(&mut work).unwrap(),
+        }));
+        self
+    }
+}
+
+#[cfg(test)]
+impl ImportedGlobalScheme {
+    pub(crate) fn with_fixture_publication(mut self) -> Self {
+        if self.publication.is_some() {
+            return self;
+        }
+        let mut work = TypeWorkBudget::unbounded();
+        self.publication = Some(Arc::new(CheckedGlobalScheme {
+            binder: self.binder,
+            spelling: String::new(),
+            scheme: self.scheme.clone_with_budget(&mut work).unwrap(),
+            origin: self.origin.clone(),
+            capture: self.capture.clone_with_budget(&mut work).unwrap(),
+        }));
+        self
     }
 }

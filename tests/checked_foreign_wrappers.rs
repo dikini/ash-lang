@@ -55,7 +55,10 @@ impl Drop for Fixture {
     }
 }
 
-fn checked(graph: &ash::module::ModuleGraph) -> Vec<CheckedModule> {
+fn checked_with_profile(
+    graph: &ash::module::ModuleGraph,
+    checked_profile: bool,
+) -> Vec<CheckedModule> {
     let mut checked: Vec<CheckedModule> = Vec::new();
     for loaded in graph.modules() {
         let dependencies = loaded
@@ -73,10 +76,12 @@ fn checked(graph: &ash::module::ModuleGraph) -> Vec<CheckedModule> {
                 .unwrap()
             })
             .collect::<Vec<_>>();
-        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies)
-            .unwrap_or_else(|error| {
-                panic!("{} resolution: {error:?}", loaded.source().display_path())
-            });
+        let resolved = if checked_profile {
+            ash::resolve::resolve_checked_foreign_module(loaded, &dependencies)
+        } else {
+            ash::resolve::resolve_module(loaded, &dependencies)
+        }
+        .unwrap_or_else(|error| panic!("{} resolution: {error:?}", loaded.source().display_path()));
         checked.push(
             ash::elaborate::check_module(resolved).unwrap_or_else(|error| {
                 panic!("{} checking: {error:?}", loaded.source().display_path())
@@ -87,7 +92,16 @@ fn checked(graph: &ash::module::ModuleGraph) -> Vec<CheckedModule> {
 }
 
 fn core(graph: &ash::module::ModuleGraph) -> ash::core::ValidatedEffectProgram {
-    let linked = ash::elaborate::link_modules(checked(graph), graph.entry()).unwrap();
+    core_with_profile(graph, true)
+}
+
+fn core_with_profile(
+    graph: &ash::module::ModuleGraph,
+    checked_profile: bool,
+) -> ash::core::ValidatedEffectProgram {
+    let linked =
+        ash::elaborate::link_modules(checked_with_profile(graph, checked_profile), graph.entry())
+            .unwrap();
     let linked = ash::evidence_validation::validate_interface_evidence(linked).unwrap();
     let mut elaborator = ash::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
     let typed = elaborator
@@ -281,4 +295,65 @@ fn checked_higher_order_wrapper_retains_its_private_closed_callee() {
     );
     let graph = fixture.graph();
     let _ = core(&graph);
+}
+
+#[test]
+fn legacy_native_wrapper_summary_remains_valid_without_checked_opt_in() {
+    let library = LIBRARY
+        .replace("foreign checked library", "foreign library")
+        .replace(
+            "    assumption Callee \"the admitted callee follows its declared native contract\"\n",
+            "",
+        )
+        .replace("        host H\n", "")
+        .replace("        assumes { Callee }\n", "")
+        .replace("Foreign.CheckedCall", "Foreign.Call");
+    let direct = DIRECT
+        .replace("Foreign.CheckedCall", "Foreign.Call")
+        .replace(", Foreign.NativeHost<H>", "");
+    let fixture = Fixture::new(
+        &format!("{library}{direct}"),
+        "import native as Native\nmain : Unit -> Int\nmain () = 42\n",
+    );
+    let graph = fixture.graph();
+    let _ = core_with_profile(&graph, false);
+}
+
+#[test]
+fn checked_imported_wrapper_rejects_a_reordered_host_actual() {
+    let fixture = Fixture::new(
+        &format!("{LIBRARY}{DIRECT}")
+            .replace("foreign checked library", "pub foreign checked library"),
+        "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = foreign host Session {\n    let invoke : (Bool, Int) -> Foreign.CheckedCall<Int> ! {Native.Abs<{}, Bool, Session, {}>, Foreign.NativeHost<Bool>} = Native.call\n    invoke (true, 1)\n}\n",
+    );
+    let graph = fixture.graph();
+    let mut producers: Vec<CheckedModule> = Vec::new();
+    for loaded in graph.modules() {
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                ash::resolve::DependencyExports::new(
+                    edge,
+                    producers
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let resolved = ash::resolve::resolve_checked_foreign_module(loaded, &dependencies).unwrap();
+        let result = ash::elaborate::check_module(resolved);
+        if loaded.id() == graph.entry() {
+            assert!(
+                result.is_err(),
+                "a complete native actual vector cannot exchange H and another Type argument"
+            );
+            return;
+        }
+        producers.push(result.unwrap());
+    }
+    panic!("consumer module missing");
 }

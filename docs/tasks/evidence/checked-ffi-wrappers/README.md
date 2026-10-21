@@ -33,3 +33,11 @@ boundary control passes. [Red output](erasure-red.log),
 [receipt](erasure-red-receipt.json) and
 [manifest](erasure-red-source-configuration.json) retain the failure. Repair and
 final verification remain pending.
+
+The current draft repairs erasure by retaining a completed immutable
+`CheckedGlobalScheme` publication per local binder. Imports and re-exports retain
+the same allocation; summary admission compares projection binder, scheme, origin
+and capture against that original, including duplicate aliases. Missing originals
+reject. Original facts have iterative provenance destruction, including final
+shared-owner, refusal and replacement paths. Final tests for this repair are
+running; the earlier flow and red receipts do not certify the changed source.

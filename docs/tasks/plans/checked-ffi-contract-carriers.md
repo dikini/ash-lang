@@ -194,6 +194,16 @@ separately at linking. Resident bytes authenticate original declarations rather
 than re-infer wrapper requirements. Erasing an outward-pure wrapper's checked
 requirements must reject against independently reconstructed original facts.
 
+The first erasure probe confirms that native-table authentication alone cannot
+prove an outward-pure wrapper's capture requirements were retained. Complete
+local `CheckedGlobalScheme` facts therefore publish once per original binder as
+immutable shared originals. Export/import projections retain that same original
+across aliases and re-exports, compare binder/scheme/origin/capture against it,
+and reject a missing, donor or stale original. Mint only from completed local
+checked facts, never from an imported projection. Clone and comparison work is
+charged before allocation; failure publishes no partial summary. Source consumers
+remain body-free, while linking/Core independently check producer code.
+
 Write positive and negative cases before changing behavior:
 
 - Direct and generic imported scalar wrappers, preserving unused Type/Row actuals

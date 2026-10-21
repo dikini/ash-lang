@@ -6000,6 +6000,7 @@ impl Resolver {
         self.imported
             .insert_global(
                 ImportedGlobalScheme {
+                    publication: exported.publication.as_ref().map(Arc::clone),
                     scalar_preflight: exported.scalar_preflight.as_ref().map(Arc::clone),
                     capture: exported
                         .capture

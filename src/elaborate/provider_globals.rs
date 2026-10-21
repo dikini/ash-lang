@@ -955,12 +955,14 @@ mod tests {
     ) -> crate::resolved::ImportedGlobalScheme {
         let mut work = TypeWorkBudget::unbounded();
         crate::resolved::ImportedGlobalScheme {
+            publication: None,
             scalar_preflight: None,
             binder: source.binder,
             scheme: source.scheme.clone_with_budget(&mut work).unwrap(),
             origin: source.origin.clone(),
             capture: source.capture.clone_with_budget(&mut work).unwrap(),
         }
+        .with_fixture_publication()
     }
 
     #[test]
@@ -1050,6 +1052,7 @@ mod tests {
                 imported
                     .insert_global(
                         crate::resolved::ImportedGlobalScheme {
+                            publication: None,
                             scalar_preflight: None,
                             binder: deep_binder,
                             scheme: ConstrainedScheme::from_rank1_type(ty),
@@ -1058,7 +1061,8 @@ mod tests {
                                 .capture
                                 .clone_with_budget(&mut TypeWorkBudget::unbounded())
                                 .unwrap(),
-                        },
+                        }
+                        .with_fixture_publication(),
                         &mut TypeWorkBudget::unbounded(),
                     )
                     .unwrap();
