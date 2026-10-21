@@ -14630,6 +14630,20 @@ impl ExportSummary {
         self.terms.get(spelling)
     }
 
+    /// Reads original checked contracts after body-free summary authentication.
+    /// A closed outward row does not remove the native profile requirement.
+    pub(crate) fn requires_checked_foreign_profile(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ResolvedBuildFailure> {
+        work.charge(self.native_symbols.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        Ok(self
+            .native_symbols
+            .values()
+            .any(|symbol| symbol.prepared().checked_contract().is_some()))
+    }
+
     /// Matches constructor-free opaque metadata to the original checked owner
     /// fact. Aliases carry display names;
     /// canonical identity, complete formals and provenance carry authority.

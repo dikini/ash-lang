@@ -132,7 +132,10 @@ The first wrapper controls pass imported generic and closed generic wrapper
 source/Core checking. They expose a body-free admission gap: a default-profile
 consumer accepts the outward-pure closed wrapper. The [initial red receipt](evidence/checked-ffi-wrappers/README.md)
 records two passes and this expected failure before product changes. The draft
-remains incomplete; the next repair uses authenticated retained contract facts.
+remains incomplete. The first guard repair now passes all three controls by
+requiring explicit profile from authenticated retained contracts, independently
+of the outward row. Erasure, alias/re-export, branch/higher-order and bounded-work
+evidence remain pending.
 
 ## Verification
 
