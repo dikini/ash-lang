@@ -1,6 +1,6 @@
 # Dependent Source Resource Startup
 
-This evidence belongs to [TASK-0052](../../TASK-0052-source-resource-default-startup-budget.md)
+This evidence belongs to [historical TASK-0052](https://github.com/dikini/ash-lang/blob/036c366834c839e4f0a503cf63e9db46448bb486/docs/tasks/TASK-0052-source-resource-default-startup-budget.md)
 and [issue #91](https://github.com/dikini/ash-lang/issues/91). PR #93 starts from
 retained `f6a2647a03a2172823f38e332c744eba5edeed06`. It reconstructs Parent and Child
 original templates and final copied scopes without entering native code. The

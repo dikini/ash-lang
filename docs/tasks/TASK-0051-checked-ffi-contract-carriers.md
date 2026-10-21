@@ -156,7 +156,7 @@ Selected-evidence carrier/anti-erasure coverage, complete nominal/resource
 closure erasure, checked owners and primitive/image/runtime obligations remain
 outside this partial delivery; their original criteria stay unchecked.
 
-The next assigned checkpoint starts from retained `284e604` on
+The selected checkpoint started from retained `284e604` on
 `codex/checked-ffi-f3-selected-evidence`. Its
 [owned plan](plans/checked-ffi-contract-carriers.md#selected-ordinary-implementation-method-checkpoint)
 first establishes body-free module-level selected-method/prerequisite controls,
@@ -179,7 +179,7 @@ The final [verification receipt](evidence/checked-ffi-selected/verification.json
 retains 473 distinct passing focused tests, including 15 selected private/Core
 controls, 58 implementation regressions, 86 integrations and targeted Clippy.
 The imported selection is explicitly 33/34: its one default-startup failure also
-occurs at the exact retained base and remains assigned to issue #91. A paid lazy
+occurred at the exact retained base; that historical failure was later repaired under issue #91. A paid lazy
 host census preserves the ordinary no-host ordering tariff; it grants no host
 permission. Independent review cleared `9ad7ce15`; GitHub squash-retained
 [PR #89](https://github.com/dikini/ash-lang/pull/89) at
@@ -187,12 +187,27 @@ permission. Independent review cleared `9ad7ce15`; GitHub squash-retained
 author read back partial issue #59 acceptance, reviewer audited actual retention
 and the orchestrator confirmed advancement. No whole-task criterion is accepted.
 
-The selected checkpoint's affected regression selection also reproduces the
-existing imported native-buffer default-startup failure at retained `0a856957`.
-[Issue #91](https://github.com/dikini/ash-lang/issues/91) owns its repair after this
-checkpoint under [TASK-0052](TASK-0052-source-resource-default-startup-budget.md),
-before nominal/resource closure. The default allowance and required
-F-core gate remain unchanged; the selected delivery must qualify this failure.
+The selected checkpoint's affected regression selection historically reproduced
+an imported native-buffer default-startup failure, followed by a dependent-discard
+failure. [Issue #91](https://github.com/dikini/ash-lang/issues/91) is now closed:
+PRs [#92](https://github.com/dikini/ash-lang/pull/92) and
+[#93](https://github.com/dikini/ash-lang/pull/93) retained the fixes through
+`036c366834c839e4f0a503cf63e9db46448bb486`. Author acceptance, independent retained
+review and PM confirmation are complete. Both unchanged-default startup cases,
+image 16/16, 117 focused tests and Clippy passed. The completed
+[historical TASK-0052](https://github.com/dikini/ash-lang/blob/036c366834c839e4f0a503cf63e9db46448bb486/docs/tasks/TASK-0052-source-resource-default-startup-budget.md)
+is retired at this documentation checkpoint; its durable evidence remains.
+The PR #89 imported result stays labelled historical 33/34. Whole F3 and F-core
+remain pending.
+
+The next nominal declaration-closure checkpoint starts from retained `036c3668`
+on `codex/checked-ffi-nominal-closure`. Its
+[owned plan](plans/checked-ffi-contract-carriers.md#capture-only-nominal-declaration-closure-checkpoint)
+first requires an actual private `Held(Int)` capture edge through a closed checked
+scalar wrapper, hidden metadata and body-free import/Core positives. Only then
+may complete required declaration metadata be erased and a demonstrated gap
+repaired. Selected-only implementation parity follows the same test-first boundary;
+resource and deeper declaration cases remain separately red-driven.
 
 ## Verification
 

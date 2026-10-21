@@ -9,7 +9,6 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0052: Source Resource Default Startup Budget](TASK-0052-source-resource-default-startup-budget.md)
   measures and repairs issue #91 under unchanged defaults and independent
   source/owner/Core admission.
 
