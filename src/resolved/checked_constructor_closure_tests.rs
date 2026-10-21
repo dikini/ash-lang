@@ -462,3 +462,73 @@ fn checked_constructor_closure_summary_work_is_exact_and_operation_local() {
         )
         .unwrap();
 }
+
+fn resolved_constructor_consumer() -> ResolvedModule {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "ash-constructor-checker-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("native.ash"), PRODUCER).unwrap();
+    std::fs::write(directory.join("entry.ash"), "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = Native.inspect (Native.make 7)\n").unwrap();
+    let graph = crate::module::load_module_graph(
+        &directory.join("entry.ash"),
+        &crate::module::ModuleRoots::empty(),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+    let mut summaries: Vec<ExportSummary> = Vec::new();
+    for loaded in graph.modules() {
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                crate::resolve::DependencyExports::new(
+                    edge,
+                    summaries
+                        .iter()
+                        .find(|summary| summary.module == edge.target())
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            crate::resolve::resolve_checked_foreign_module(loaded, &dependencies).unwrap();
+        if loaded.id() == graph.entry() {
+            return resolved;
+        }
+        summaries.push(
+            crate::elaborate::check_module(resolved)
+                .unwrap()
+                .into_exports(),
+        );
+    }
+    panic!("consumer missing");
+}
+
+#[test]
+fn checked_constructor_closure_checker_rejects_unused_constructor_scheme_only_mutation() {
+    crate::elaborate::check_module(resolved_constructor_consumer()).unwrap();
+    let mut changed = resolved_constructor_consumer();
+    let constructor = changed
+        .imported
+        .constructors
+        .values_mut()
+        .find(|fact| fact.spelling == "Envelope")
+        .expect("real retained unused Envelope constructor");
+    assert!(constructor.original.is_some());
+    let payload = constructor.payload.as_ref().unwrap();
+    assert_ne!(payload, &Type::Int);
+    let Type::Function(domain, _) = &mut constructor.scheme.value_type else {
+        panic!("unary constructor scheme");
+    };
+    *domain = Box::new(Type::Int);
+    assert!(
+        crate::elaborate::check_module(changed).is_err(),
+        "scheme-only corruption must reject at checker entry without a constructor use"
+    );
+}

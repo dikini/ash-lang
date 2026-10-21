@@ -1,0 +1,20 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 52s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'resolved::checked_constructor_closure_tests::checked_constructor_closure_checker_rejects_unused_constructor_scheme_only_mutation' (727) panicked at src/resolved/checked_constructor_closure_tests.rs:530:5:
+scheme-only corruption must reject at checker entry without a constructor use
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_constructor_closure_tests::checked_constructor_closure_checker_rejects_unused_constructor_scheme_only_mutation ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_constructor_closure_tests::checked_constructor_closure_checker_rejects_unused_constructor_scheme_only_mutation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2018 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p ash --lib`

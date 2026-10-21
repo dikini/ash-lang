@@ -12,6 +12,8 @@ mod checked_selected_declaration_closure_tests;
 mod checked_selected_tests;
 #[cfg(test)]
 mod checked_wrapper_tests;
+mod constructor_original;
+pub(crate) use constructor_original::ConstructorOriginal;
 mod image_registry;
 #[cfg(test)]
 mod image_subset_tests;
@@ -5153,6 +5155,47 @@ impl ImportedFacts {
         self.implementations.iter()
     }
 
+    pub(crate) fn authenticate_constructor_originals(
+        &self,
+        work: &mut TypeWorkBudget,
+        constraints: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        work.charge(self.constructors.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        for constructor in self.constructors.values() {
+            work.charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let owner = self
+                .nominals
+                .get(&constructor.id.owner())
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let parameters = &owner.parameters;
+            let original = constructor
+                .original
+                .as_ref()
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            original.authenticate(
+                constructor.id,
+                owner.declaration_kind,
+                &constructor.spelling,
+                constructor.payload.as_ref(),
+                &constructor.origin,
+                parameters,
+                work,
+                constraints,
+            )?;
+            authenticate_constructor_scheme_parts(
+                constructor.id,
+                constructor.payload.as_ref(),
+                &constructor.scheme,
+                parameters,
+                work,
+                constraints,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn authenticate_implementation_publications(
         &self,
         type_work: &mut TypeWorkBudget,
@@ -7234,6 +7277,8 @@ impl Drop for PreparedImportedNominalMerge {
 /// One imported transparent constructor fact.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImportedConstructorFact {
+    /// Defining checked registry retained only for exact correspondence.
+    pub(crate) original: Option<ConstructorOriginal>,
     /// Stable defining constructor identity.
     pub id: ConstructorId,
     /// Defining source spelling retained for coverage diagnostics.
@@ -7985,6 +8030,8 @@ impl ExportedType {
 /// One transparent constructor in an immutable export summary.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ExportedConstructor {
+    /// Defining checked registry retained only for exact correspondence.
+    pub(crate) original: Option<ConstructorOriginal>,
     /// Stable constructor identity from the defining module.
     pub id: ConstructorId,
     /// Defining source spelling.
@@ -9724,7 +9771,11 @@ fn same_imported_constructor_fact_with_optional_nominal_observer(
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     mut nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ResolvedBuildFailure> {
-    if left.id != right.id || left.spelling != right.spelling {
+    if left.id != right.id
+        || left.spelling != right.spelling
+        || left.original.is_none()
+        || left.original != right.original
+    {
         return Ok(false);
     }
     let metadata_work = right
@@ -10147,11 +10198,29 @@ fn authenticate_constructor_scheme(
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<(), ResolvedBuildFailure> {
-    authenticate_scheme_parameter_mirror(&constructor.scheme, parameters, constraint_work)?;
-    if !constructor.scheme.requirements.is_empty() {
+    authenticate_constructor_scheme_parts(
+        constructor.id,
+        constructor.payload.as_ref(),
+        &constructor.scheme,
+        parameters,
+        type_work,
+        constraint_work,
+    )
+}
+
+fn authenticate_constructor_scheme_parts(
+    id: ConstructorId,
+    payload: Option<&Type>,
+    scheme: &ConstrainedScheme,
+    parameters: &[ResolvedTypeVariable],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    authenticate_scheme_parameter_mirror(scheme, parameters, constraint_work)?;
+    if !scheme.requirements.is_empty() {
         return Err(ResolvedBuildFailure::InvalidState);
     }
-    let result = match (&constructor.payload, constructor.scheme.value_type()) {
+    let result = match (&payload, scheme.value_type()) {
         (Some(_), Type::Function(_, result)) => result.as_ref(),
         (None, result) => result,
         (Some(_), _) => return Err(ResolvedBuildFailure::InvalidState),
@@ -10172,7 +10241,7 @@ fn authenticate_constructor_scheme(
     type_work
         .charge(1)
         .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-    if !matches!(result, Type::Nominal(identity) if *identity == constructor.id.owner()) {
+    if !matches!(result, Type::Nominal(identity) if *identity == id.owner()) {
         return Err(ResolvedBuildFailure::InvalidState);
     }
     Ok(())
@@ -12172,6 +12241,20 @@ impl ExportSummary {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
             }
+            let original = constructor
+                .original
+                .as_ref()
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            original.authenticate(
+                constructor.id,
+                *declaration_kind,
+                &constructor.spelling,
+                constructor.payload.as_ref(),
+                &constructor.origin,
+                parameters,
+                type_work,
+                constraint_work,
+            )?;
             if let Some(existing) = canonical_constructors.get(&constructor.id) {
                 let payloads_match = match (&existing.payload, &constructor.payload) {
                     (None, None) => true,
@@ -12181,7 +12264,8 @@ impl ExportSummary {
                     }
                     _ => false,
                 };
-                if !payloads_match
+                if existing.original.as_ref() != Some(original)
+                    || !payloads_match
                     || existing.spelling != constructor.spelling
                     || !same_constrained_schemes_with_constraint_budget(
                         &existing.scheme,
@@ -13886,6 +13970,17 @@ impl ExportSummary {
                     )
                 }
             };
+            let original = match candidate.source {
+                CandidateFactSource::Local => {
+                    ConstructorOriginal::from_checked(&resolved.registry, type_work)?
+                }
+                CandidateFactSource::Imported => resolved
+                    .imported
+                    .constructor(candidate.id)
+                    .and_then(|constructor| constructor.original.as_ref())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?
+                    .retain(type_work)?,
+            };
             summary
                 .constructor_names_by_id
                 .entry(candidate.id)
@@ -13895,6 +13990,7 @@ impl ExportSummary {
                 .insert(
                     spelling.clone(),
                     ExportedConstructor {
+                        original: Some(original),
                         id: candidate.id,
                         spelling: defining_spelling.to_owned(),
                         payload: payload
@@ -14240,11 +14336,22 @@ impl ExportSummary {
                     &constructor.origin,
                 )
             };
+            let original = if constructor_id.owner().module() == resolved.module {
+                ConstructorOriginal::from_checked(&resolved.registry, type_work)?
+            } else {
+                resolved
+                    .imported
+                    .constructor(constructor_id)
+                    .and_then(|constructor| constructor.original.as_ref())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?
+                    .retain(type_work)?
+            };
             if summary
                 .hidden_constructors
                 .insert(
                     constructor_id,
                     ExportedConstructor {
+                        original: Some(original),
                         id: constructor_id,
                         spelling: spelling.to_owned(),
                         payload: payload
@@ -15656,6 +15763,44 @@ impl ExportSummary {
                 );
             }
         }
+        // Injected fixture originals are built once from the supplied defining
+        // records; this test-only path is not an import/publication fallback.
+        let mut fixture_work = TypeWorkBudget::unbounded();
+        let mut registry = ResolvedRegistry::new(
+            nominals
+                .iter()
+                .map(|(spelling, id, _, origin)| ResolvedNominalType {
+                    id: *id,
+                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                    spelling: (*spelling).to_owned(),
+                    constructors: constructor_families
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_boxed_slice(),
+                    representation: None,
+                    representation_provenance: None,
+                    origin: clone_effect_origin_with_budget(origin, &mut fixture_work).unwrap(),
+                })
+                .collect(),
+            constructors
+                .iter()
+                .map(|(spelling, id, payload, origin)| ResolvedConstructor {
+                    id: *id,
+                    owner: id.owner(),
+                    spelling: (*spelling).to_owned(),
+                    payload: payload
+                        .as_ref()
+                        .map(|payload| clone_type_with_budget(payload, &mut fixture_work).unwrap()),
+                    origin: clone_effect_origin_with_budget(origin, &mut fixture_work).unwrap(),
+                })
+                .collect(),
+        );
+        for (_, id, _, _) in &nominals {
+            registry.nominal_parameters.insert(*id, Box::new([]));
+        }
+        let fixture_original =
+            ConstructorOriginal::from_checked(&Arc::new(registry), &mut fixture_work).unwrap();
         Self {
             module,
             terms: terms
@@ -15722,6 +15867,7 @@ impl ExportSummary {
                     (
                         spelling.to_owned(),
                         ExportedConstructor {
+                            original: Some(fixture_original.retain(&mut fixture_work).unwrap()),
                             id,
                             spelling: spelling.to_owned(),
                             payload,
@@ -30282,6 +30428,7 @@ mod tests {
                 }
                 let spelling = format!("Value{index}");
                 let constructor = ExportedConstructor {
+                    original: None,
                     id: identity,
                     spelling: spelling.clone(),
                     payload: None,
@@ -31919,6 +32066,7 @@ mod tests {
                     summary.constructors.insert(
                         spelling.clone(),
                         ExportedConstructor {
+                            original: None,
                             id: constructor,
                             spelling: "Make".to_owned(),
                             payload: None,
@@ -35300,6 +35448,7 @@ mod tests {
             ),
         };
         let imported_constructor = ImportedConstructorFact {
+            original: None,
             id: constructor_id,
             spelling: "Wrap".to_owned(),
             payload: Some(Type::Variable(parameter)),
@@ -35307,6 +35456,7 @@ mod tests {
             origin: Origin::Source(span),
         };
         let mut exported_constructor = ExportedConstructor {
+            original: None,
             id: constructor_id,
             spelling: "Wrap".to_owned(),
             payload: Some(Type::Variable(parameter)),
@@ -35719,6 +35869,7 @@ mod tests {
                     ),
                 };
                 let imported_constructor = ImportedConstructorFact {
+                    original: None,
                     id: constructor,
                     spelling: "Deep".to_owned(),
                     payload: Some(applied_parameter()),
@@ -35726,6 +35877,7 @@ mod tests {
                     origin: Origin::Source(span),
                 };
                 let mut exported_constructor = ExportedConstructor {
+                    original: None,
                     id: constructor,
                     spelling: "Deep".to_owned(),
                     payload: Some(applied_parameter()),
@@ -36494,6 +36646,7 @@ mod tests {
                 imported
                     .insert_constructor(
                         ImportedConstructorFact {
+                            original: None,
                             id: constructor,
                             spelling: "Deep".to_owned(),
                             payload: Some(application_type(DEPTH)),
@@ -36509,6 +36662,7 @@ mod tests {
                 imported
                     .insert_constructor(
                         ImportedConstructorFact {
+                            original: None,
                             id: constructor,
                             spelling: "Shallow".to_owned(),
                             payload: None,
@@ -38174,6 +38328,7 @@ mod tests {
                 imported
                     .insert_constructor(
                         ImportedConstructorFact {
+                            original: None,
                             id: imported_constructor,
                             spelling: "Imported".to_owned(),
                             payload: None,
@@ -39521,6 +39676,7 @@ mod tests {
             imported
                 .insert_constructor(
                     ImportedConstructorFact {
+                        original: None,
                         id: constructor,
                         spelling: format!("Member{index}"),
                         payload: None,

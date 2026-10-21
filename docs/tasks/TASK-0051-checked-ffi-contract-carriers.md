@@ -263,6 +263,21 @@ identity/fold positives. Images pass 16/16, with original buffer/dependent start
 Hidden identity/kind metadata carries no constructor access, so the control uses
 the metadata actually retained by that route.
 
+The PR #95 constructor-payload controls establish private Leaf through public
+Envelope's payload and constructor scheme, with no Leaf root in public global
+schemes or callable types. Missing Leaf metadata already rejects. A coherent
+same-kind Donor substitution preserves both hidden kinds and completed global,
+native and source facts but passes summary authentication and real body-free
+consumer resolution/checking. Independent linked Core rejects both changed
+payload and missing final-ordinal Leaf after valid controls. These separate
+[test-first results](evidence/checked-constructor-closure/README.md) justify
+binding the existing constructor projections to the completed defining registry;
+source coordinates do not reconstruct semantic payload meaning. The bounded
+repair forwards that same registry reference through imports and re-exports,
+with paid exact correspondence and independent checker entry. Verification and
+acceptance of the repair remain pending; no new constructor access or execution
+authority follows from retaining the reference.
+
 ## Deviations
 
 None. A semantic gap returns to CP-0024; an unsupported partial route refuses.

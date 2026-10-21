@@ -49,3 +49,15 @@ This later source/test snapshot has the separately pinned aggregate
 `5ef8c1d64b490664a92bbfd6b2bd438602e62a1d78ea3a74b52c1c87947dc932`.
 Its full before/after map is retained with the command; the earlier snapshot
 remains historical. No production repair is present in either checkpoint.
+
+## Checker-entry scheme control
+
+The first defining-registry-reference candidate establishes original payload
+correspondence but its checker-entry scheme helper still checks only owner
+result and formals. A real resolved consumer checks with its original unused
+Envelope constructor, then still checks after changing only that constructor's
+scheme domain to Int. The `checker-scheme-red` expected-rejection target fails
+at aggregate `c32d08ade9e1947ae5c3e371cd0d2c305f01ebd85005bb3603f35f19a49f6e7e`.
+This intermediate candidate is incomplete; exact domain/payload comparison is
+required before final verification. Original defining registry metadata does
+not replace selected projected kind or access facts.

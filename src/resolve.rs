@@ -7154,12 +7154,28 @@ impl Resolver {
                         "imported constructor scheme retention could not reserve storage",
                     )
                 })?;
+            let original = exported
+                .original
+                .as_ref()
+                .ok_or_else(|| {
+                    imported_fact_comparison_error(ResolvedBuildFailure::InvalidState, span)
+                })?
+                .retain(&mut self.type_work)
+                .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+            let origin = crate::resolved::clone_effect_origin_with_budget(
+                &exported.origin,
+                &mut self.type_work,
+            )
+            .map_err(|()| {
+                imported_fact_comparison_error(ResolvedBuildFailure::TypeResource, span)
+            })?;
             staged_constructors.push(ImportedConstructorFact {
+                original: Some(original),
                 id: exported.id,
                 spelling: Self::clone_imported_string_after_precharge(&exported.spelling, span)?,
                 payload: payload.map(IterativeTypeOwner::into_inner),
                 scheme,
-                origin: exported.origin.clone(),
+                origin,
             });
         }
 
@@ -16898,6 +16914,7 @@ mod tests {
                         .try_reserve(1)
                         .expect("the abandoned-fact guard should reserve one record");
                     abandoned.push(ImportedConstructorFact {
+                        original: None,
                         id: exported.id,
                         spelling: exported.spelling.clone(),
                         payload: payload.map(IterativeTypeOwner::into_inner),
