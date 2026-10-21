@@ -23,7 +23,9 @@ No proposed semantic transition is under review.
 
 ## Accepted changes
 
-No accepted transition awaits product checkpoint retention.
+- [CP-0024: Checked Foreign Host Profile](CP-0024-checked-foreign-host-profile.md)
+  accepts the opt-in checked host boundary under the user's delegated decision.
+  Product implementation and F2 architecture/deployment evidence remain pending.
 The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
 retains the completed transition, verified local Main integration and
 historical retrieval commands.

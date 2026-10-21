@@ -1,0 +1,85 @@
+{
+  "cgroup": {
+    "membership": "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.chromium.Chromium-11330.scope\n",
+    "observations": {
+      "/sys/fs/cgroup/cgroup.controllers": {
+        "exists": true,
+        "writable_as_observed": false
+      },
+      "/sys/fs/cgroup/cgroup.procs": {
+        "exists": true,
+        "writable_as_observed": false
+      },
+      "/sys/fs/cgroup/cgroup.subtree_control": {
+        "exists": true,
+        "writable_as_observed": false
+      },
+      "/sys/fs/cgroup/cpu.max": {
+        "exists": false,
+        "writable_as_observed": false
+      },
+      "/sys/fs/cgroup/memory.max": {
+        "exists": false,
+        "writable_as_observed": false
+      },
+      "/sys/fs/cgroup/memory.swap.max": {
+        "exists": false,
+        "writable_as_observed": false
+      },
+      "/sys/fs/cgroup/pids.max": {
+        "exists": false,
+        "writable_as_observed": false
+      }
+    }
+  },
+  "initial_status": {
+    "CapAmb": "0000000000000000",
+    "CapBnd": "0000000000000000",
+    "CapEff": "0000000000000000",
+    "CapInh": "0000000000000000",
+    "CapPrm": "0000000000000000",
+    "Gid": "1000\t1000\t1000\t1000",
+    "Groups": "65534 65534 65534 65534 65534 65534 65534 65534 65534 1000",
+    "NoNewPrivs": "1",
+    "Seccomp": "2",
+    "Uid": "1000\t1000\t1000\t1000"
+  },
+  "kernel": {
+    "machine": "x86_64",
+    "node": "sharo",
+    "processor": "",
+    "release": "7.0.0-38-generic",
+    "system": "Linux",
+    "version": "#38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026"
+  },
+  "memfd": {
+    "error": "module 'os' has no attribute 'memfd_create'"
+  },
+  "nnp_exec_reexec": {
+    "argv": [
+      "/home/dikini/miniforge3/bin/python3",
+      "/home/dikini/Projects/ash-lang/docs/design/foreign-authoring/linux-profile-probe/probe.py",
+      "set-nnp"
+    ],
+    "exit": 0,
+    "stderr": "",
+    "stdout": "{\"after_exec\": {\"CapAmb\": \"0000000000000000\", \"CapBnd\": \"0000000000000000\", \"CapEff\": \"0000000000000000\", \"CapInh\": \"0000000000000000\", \"CapPrm\": \"0000000000000000\", \"Gid\": \"1000\\t1000\\t1000\\t1000\", \"Groups\": \"65534 65534 65534 65534 65534 65534 65534 65534 65534 1000\", \"NoNewPrivs\": \"1\", \"Seccomp\": \"2\", \"Uid\": \"1000\\t1000\\t1000\\t1000\"}, \"after_reexec\": {\"Uid\": \"1000\\t1000\\t1000\\t1000\", \"Gid\": \"1000\\t1000\\t1000\\t1000\", \"Groups\": \"65534 65534 65534 65534 65534 65534 65534 65534 65534 1000\", \"CapInh\": \"0000000000000000\", \"CapPrm\": \"0000000000000000\", \"CapEff\": \"0000000000000000\", \"CapBnd\": \"0000000000000000\", \"CapAmb\": \"0000000000000000\", \"NoNewPrivs\": \"1\", \"Seccomp\": \"2\"}}\n"
+  },
+  "probe_sha256": "747da1135c571fd43dfefb69233bb927916c960c32f2ab623552fc6be8f1215a",
+  "python": "3.12.9 | packaged by conda-forge | (main, Mar  4 2025, 22:48:41) [GCC 13.3.0]",
+  "python_path": "/home/dikini/miniforge3/bin/python3",
+  "python_sha256": "1fd6c4acf910da2c2538614ef38a54f793fd72f8bcf2f08f0bf8ca4be4420ae8",
+  "scope": "Stage A observations only; isolated profile not established",
+  "stage_b": "not executed; no launcher, approved static images, delegated limits or prepared storage",
+  "user_namespace": {
+    "argv": [
+      "/usr/bin/unshare",
+      "--user",
+      "--",
+      "true"
+    ],
+    "exit": 0,
+    "stderr": "",
+    "stdout": ""
+  }
+}

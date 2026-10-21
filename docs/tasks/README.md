@@ -9,7 +9,10 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active implementation tasks.
+- [TASK-0050: Checked FFI, Regions, and Scoped Control Program](TASK-0050-checked-ffi-regions-control-program.md)
+  coordinates the staged program. Its [plan](plans/checked-ffi-regions-control.md)
+  retains the complete acceptance map and checkpoint ownership. M1 has an accepted
+  semantic contract; product and Linux realization gates remain pending.
 
 The generic cell product checkpoint is integrated into local `main`. Its
 [case map, verification and local history](../design/generic-cell/evidence.md)

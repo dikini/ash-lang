@@ -4,6 +4,13 @@ Design notes record exploration, research, alternatives, experiments, tradeoffs,
 
 Use [the template](template.md), allocate the next `DN-NNNN` ID, and link related artifacts. When a non-language choice converges, record it in an architectural decision. When a language-semantic change becomes concrete, write a change proposal.
 
+The checked FFI, region and local-control exploration is retained in
+[DN-0057](DN-0057-checked-ffi-module-boundaries.md),
+[DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md) and
+[DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md).
+[TASK-0050](../tasks/TASK-0050-checked-ffi-regions-control-program.md) owns delivery
+coordination; these notes remain informative.
+
 ## Implementation and evidence boundaries
 
 A note's `exploring` or `evaluating` status describes its design work, not the

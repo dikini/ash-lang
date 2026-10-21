@@ -1,0 +1,8 @@
+{
+  "docs/design/foreign-authoring/minimal-ffi-transitions.md": "c7555cb54034cd271e88a4c6f2393e4e53d84f889804955826cf8d4e95e24ecb",
+  "docs/design/foreign-authoring/minimal-ffi-checked-representation.md": "5b3ec1fb6f7feba172228158b2adbe0a2d276a3aacb3857aee74be4c65e481f2",
+  "docs/design/foreign-authoring/minimal-ffi-sqlite-policy.md": "cc49896af4669d0bb35f1d7a4aac38f6665412acb9fde51e2f6d34610027e089",
+  "docs/design/foreign-authoring/minimal-ffi-abi-profile.md": "c210dba6ee73c7fe46cc4e60649aa69efd05e04d06275038a0d08ffe23382bfe",
+  "docs/design/foreign-authoring/minimal-ffi-launch-and-artifacts.md": "504012805541a2e03dd090d6a4899645d787d72e0cfbf46eadcc1d31e229cb3c",
+  "docs/design/foreign-authoring/minimal-ffi-exhaustion-and-ownership.md": "8f4a4ca33bf5891fb7e0c5fca0faa5677405e8f22231b1717facc08d958dbbfb"
+}

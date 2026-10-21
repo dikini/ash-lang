@@ -20,6 +20,15 @@ TASK-0041 for coordination; the [exact task history](https://github.com/dikini/a
 preserves its work and findings. Supersession does not satisfy the separate Main
 gate or the remaining original acceptance clauses.
 
+The current local Main pin `7949b6d9136b0152ee9104e67bd0451cb9db4727` already
+contains the bounded FFI and generic-cell foundations. The extension program in
+[TASK-0050](tasks/TASK-0050-checked-ffi-regions-control-program.md) proceeds through
+checked FFI, lexical regions, retained local control and two pinned workers.
+[CP-0024](proposals/CP-0024-checked-foreign-host-profile.md) is accepted under the
+user's delegated recommended choices; implementation and Linux profile acceptance
+remain pending. Later milestones remain design/planning work. No new checked
+semantics is current before complete product retention and Main integration.
+
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its
 [closure report](design/mini-ash/closure.md) records the complete dialect
