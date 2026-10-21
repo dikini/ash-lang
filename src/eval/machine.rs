@@ -3135,10 +3135,15 @@ fn dispatch_entry(
                             instantiation: environment.instantiation,
                         },
                     ),
-                    EffectOperation::NativeInterpret(boundary) => Transition::suspend(
-                        Control::Evaluate(boundary.body(), environment.clone()),
-                        Frame::NativeInterpretBoundary { node, environment },
-                    ),
+                    EffectOperation::NativeInterpret(boundary) => {
+                        if boundary.host().is_some() {
+                            return Err(RuntimeFailure::ForeignBinding);
+                        }
+                        Transition::suspend(
+                            Control::Evaluate(boundary.body(), environment.clone()),
+                            Frame::NativeInterpretBoundary { node, environment },
+                        )
+                    }
                     EffectOperation::Handler(handler) => Transition::suspend(
                         Control::Evaluate(handler.body(), environment.clone()),
                         Frame::HandlerBoundary {

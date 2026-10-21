@@ -281,6 +281,9 @@ fn occurrences_in_expressions(
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
             }
+            ResolvedExprKind::ForeignHost(host) => {
+                expressions.push(&host.body);
+            }
             ResolvedExprKind::CopyWindow(window) => {
                 expressions.push(&window.state);
                 expressions.push(&window.body);

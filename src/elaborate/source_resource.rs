@@ -1117,6 +1117,9 @@ impl<'a> SourceBinderInventory<'a, '_> {
                             self.push([Node::Pattern(&arm.pattern), Node::Expression(&arm.body)])?;
                         }
                     }
+                    ResolvedExprKind::ForeignHost(host) => {
+                        self.push([Node::Expression(&host.body)])?;
+                    }
                     ResolvedExprKind::CopyWindow(window) => {
                         self.push([
                             Node::Expression(&window.state),

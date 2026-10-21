@@ -3054,15 +3054,30 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             )?)
         }
         Some(EffectOperation::NativeInterpret(boundary)) => {
-            charge(budget, boundary.interpretations().len())?;
+            let members = boundary
+                .interpretations()
+                .len()
+                .checked_add(usize::from(boundary.host().is_some()))
+                .ok_or(Failure::Resource)?;
+            charge(budget, members)?;
             let mut effects = Vec::new();
             effects
-                .try_reserve_exact(boundary.interpretations().len())
+                .try_reserve_exact(members)
                 .map_err(|_| Failure::Resource)?;
             for interpretation in boundary.interpretations() {
                 let mut request = Request::effect(interpretation.effect(), source, budget)?;
                 request.operation = Some(interpretation.symbol().operation());
                 effects.push(request);
+            }
+            if let Some(host) = boundary.host() {
+                charge(budget, 3)?;
+                let instance = EffectInstance::new_kinded(
+                    host.effect(),
+                    Box::new([crate::types::KindedArgument::TypeArg(Type::Variable(
+                        host.identity(),
+                    ))]),
+                );
+                effects.push(Request::effect(&instance, source, budget)?);
             }
             Control::NativeInterpret {
                 body: index(boundary.body()) + 1,
@@ -3139,10 +3154,26 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             let mut inferred = Request::effect(request.effect(), source, budget)?;
             inferred.operation = Some(request.operation());
             graph.code.push(Control::Request(inferred));
-            Control::Sequence(copy_slice(
-                &[index(request.operand()) + 1, perform],
-                budget,
-            )?)
+            // Preserve sealed host row obligations from the typed request. The
+            // independent Core request check reconstructs these exact members
+            // from original checked contracts; this analysis grants no role.
+            let row = F::effect_row(&node.effects);
+            charge(budget, row.known().len())?;
+            let mut steps = Vec::new();
+            steps
+                .try_reserve_exact(row.known().len().saturating_add(2))
+                .map_err(|_| Failure::Resource)?;
+            steps.extend([index(request.operand()) + 1, perform]);
+            for host in row.known().iter().filter(|instance| {
+                instance.effect().module().is_builtin_foreign()
+                    && instance.effect().declaration() == crate::module::FOREIGN_NATIVE_HOST_LOCAL
+            }) {
+                graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+                let host_request = Request::effect(host, source, budget)?;
+                steps.push(graph.code.len());
+                graph.code.push(Control::Request(host_request));
+            }
+            Control::Sequence(steps)
         }
         Some(EffectOperation::Resume(resume)) => {
             match owners.get(&(resume.handler(), resume.owner())) {

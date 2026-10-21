@@ -221,6 +221,9 @@ impl HandlerRowRecipeDraft {
                         else {
                             return Err(invalid(equation.node));
                         };
+                        if boundary.host().is_some() {
+                            return Err(invalid(equation.node));
+                        }
                         charge(work, boundary.interpretations().len())?;
                         for interpretation in boundary.interpretations() {
                             let actual = instance(interpretation.effect(), work)?;

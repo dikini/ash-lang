@@ -20,6 +20,7 @@ use crate as contract;
 mod sqlite_reference;
 #[cfg(test)]
 pub(crate) use sqlite_reference::sqlite_manifest;
+pub(crate) mod checked_builtins;
 pub mod checked_source;
 pub mod runtime;
 pub(crate) mod scalar_preflight;

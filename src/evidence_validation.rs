@@ -2768,7 +2768,8 @@ pub(crate) fn validate_interface_evidence_with_budget(
         authenticate_linked_registry_facts(&program, constraint_work, type_work)?;
     // Product source scopes have fresh type binders without introducing
     // experimental forwarding dictionaries into the method catalogue.
-    for source in provider_prepass::source_resource_occurrences(&program, type_work)? {
+    let source_scopes = provider_prepass::source_scope_occurrences(&program, type_work)?;
+    for source in source_scopes.resources {
         provider_sources::authenticate_source_resource_identity(
             &program,
             source.resource,
@@ -2788,6 +2789,49 @@ pub(crate) fn validate_interface_evidence_with_budget(
             .is_some()
         {
             return Err(invalid_root(source.span));
+        }
+    }
+    for (host, span) in source_scopes.hosts {
+        charge(constraint_work, 2, span)?;
+        let canonical = program
+            .registry()
+            .type_variable(host.identity.id)
+            .ok_or_else(|| unknown(span))?;
+        let effect = program
+            .registry()
+            .effect(host.effect)
+            .ok_or_else(|| unknown(span))?;
+        if canonical.kind != Kind::Type
+            || host.identity.id.module().is_none()
+            || !same_binders_charged(
+                std::slice::from_ref(canonical),
+                std::slice::from_ref(&host.identity),
+                constraint_work,
+                span,
+            )?
+            || !crate::foreign::checked_builtins::is_canonical_native_host(
+                effect,
+                program.registry(),
+                type_work,
+            )
+            .map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    type_resource(span)
+                } else {
+                    unknown(span)
+                }
+            })?
+        {
+            return Err(unknown(span));
+        }
+        binder_owners.try_reserve(1).map_err(|_| resource(span))?;
+        match binder_owners.entry(host.identity.id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(LinkedBinderOwner::ForeignHost(span));
+            }
+            std::collections::hash_map::Entry::Occupied(entry)
+                if *entry.get() == LinkedBinderOwner::ForeignHost(span) => {}
+            _ => return Err(unknown(span)),
         }
     }
     let mut kind_environments =
@@ -6087,6 +6131,15 @@ fn collect_method_evidence_expression_occurrences<'a>(
     while let Some((expression, row_head)) = pending.pop() {
         charge(constraint_work, 1, expression.span)?;
         match &expression.kind {
+            ResolvedExprKind::ForeignHost(host) => {
+                reserve_method_context_expressions(
+                    &mut pending,
+                    1,
+                    constraint_work,
+                    expression.span,
+                )?;
+                pending.push((&host.body, row_head));
+            }
             ResolvedExprKind::CopyWindow(window) => {
                 reserve_method_context_expressions(
                     &mut pending,
@@ -6837,6 +6890,7 @@ enum LinkedBinderOwner {
     Resource(crate::interface::LexicalEvidenceId),
     ProviderDeclaration(crate::resolved::ResourceDefinitionId),
     CopyWindow(crate::resolved::ResourceDefinitionId, crate::core::NodeId),
+    ForeignHost(Span),
     LexicalMethod(crate::interface::LexicalEvidenceId, MethodId),
     Nominal(NominalTypeId),
     Effect(crate::types::EffectId),
@@ -6998,7 +7052,20 @@ fn authenticate_linked_registry_facts(
         charge(budget, 1, effect.span)?;
         if !modules.contains(&effect.id.module())
             || registry.effect(effect.id) != Some(effect)
-            || effect.operations.is_empty()
+            || if effect.id.module().is_builtin_foreign() {
+                !crate::foreign::checked_builtins::is_canonical_native_host(
+                    effect, registry, type_work,
+                )
+                .map_err(|failure| {
+                    if failure.is_resource_exhaustion() {
+                        resource(effect.span)
+                    } else {
+                        unknown(effect.span)
+                    }
+                })?
+            } else {
+                effect.operations.is_empty()
+            }
         {
             return Err(unknown(effect.span));
         }
@@ -7675,6 +7742,7 @@ fn validate_pending_expressions<'a, 'body>(
                     LinkedLocalScope::Resource(resource) => Some(resource.identity.id),
                     LinkedLocalScope::ProviderResource(resource) => Some(resource.identity.id),
                     LinkedLocalScope::CopyWindow(window) => Some(window.identity.id),
+                    LinkedLocalScope::ForeignHost(host) => Some(host.identity.id),
                     _ => None,
                 } {
                     charge(budget, 1, expression.span)?;
@@ -7720,6 +7788,39 @@ fn validate_pending_expressions<'a, 'body>(
         };
         charge(budget, 1, expression.span)?;
         match &expression.kind {
+            ResolvedExprKind::ForeignHost(host) => {
+                let canonical = program
+                    .registry()
+                    .type_variable(host.identity.id)
+                    .ok_or_else(|| invalid_root(expression.span))?;
+                charge(
+                    budget,
+                    canonical.spelling.len().saturating_add(2),
+                    expression.span,
+                )?;
+                if canonical.kind != Kind::Type
+                    || canonical.spelling != host.identity.spelling
+                    || canonical.origin.primary_span() != host.identity.origin.primary_span()
+                {
+                    return Err(invalid_root(expression.span));
+                }
+                reserve_expressions(pending, 1, budget, expression.span)?;
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+                charge(budget, 1, expression.span)?;
+                method_scopes
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                let body_scope = Some(method_scopes.len());
+                method_scopes.push((LinkedLocalScope::ForeignHost(host), head.1));
+                pending.push(&host.body);
+                resize_lexical_heads(
+                    &mut heads,
+                    pending.len(),
+                    (head.0, body_scope),
+                    budget,
+                    expression.span,
+                )?;
+            }
             ResolvedExprKind::CopyWindow(window) => {
                 let canonical = program
                     .registry()
@@ -9661,6 +9762,7 @@ enum LinkedLocalScope<'a> {
     Resource(&'a crate::resolved::ResolvedResourceExpr),
     ProviderResource(&'a crate::resolved::ResolvedProviderResourceExpr),
     CopyWindow(&'a crate::resolved::ResolvedCopyWindowExpr),
+    ForeignHost(&'a crate::resolved::ResolvedForeignHostExpr),
 }
 
 // The same fixed-size pure shape excluded by ordinary scheme qualification.

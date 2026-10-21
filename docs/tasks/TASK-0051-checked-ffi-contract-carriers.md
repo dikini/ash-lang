@@ -25,6 +25,12 @@ the accepted proposal and reconciled planning context. Main and the milestone
 retaining branch have separate integration gates. The original planning checkout
 and unrelated work remain intact.
 
+The later user instruction changes future PR integration to GitHub
+squash-and-merge, with a GitHub merge commit when squash is unavailable. Local
+commits remain unsigned; GitHub's merge signing behavior follows that chosen
+method. Fetch and synchronize local/origin retaining refs after integration.
+Earlier local squash receipts remain historical evidence and are not rewritten.
+
 F3 is independent of Linux deployment realization. F2's actual controls and
 accepted architecture gate F6/F7; no carrier, flag or unsupported path may bypass
 that gate. The [program plan](plans/checked-ffi-regions-control.md) owns the whole
@@ -87,12 +93,30 @@ binder. Legacy symbol/owner binding and private reconstruction cannot erase the
 checked projection. The candidate passes 51 focused tests (6 profile unit, 1 resolver collision and
 44 integration/regression cases), targeted Clippy and formatting. The
 [raw verification receipt](evidence/checked-ffi-contracts/verification.json) retains
-exact commands, logs and unchanged source/configuration pins. Independent review
-and retention remain pending; no additional whole-task criterion is accepted yet.
+exact commands, logs and unchanged source/configuration pins. Independent review cleared head `e90b0b81f06f1811e5f740c7889169e758087551`;
+[PR #84](https://github.com/dikini/ash-lang/pull/84) retained its exact tree at
+unsigned `f7f13071851a4abfdd344f0bb5a1d5b99a2fbb1f`. The author applied/read back
+the issue #59 partial acceptance; reviewer audited it and the orchestrator
+confirmed advancement. No additional whole-task criterion is accepted. The
+owned plan records the next connected static scalar-host checkpoint.
 
 The first slice is deliberately incomplete: it retains the checked marker and
 refuses legacy ABI preparation for that declaration. It grants no checked
 execution, assumption discharge, host authority or milestone acceptance.
+
+The third candidate introduces an explicit static checked-profile resolver,
+contextual lexical hosts and appended canonical checked builtin codecs. Source
+and linked Core checks cover scalar native/host correspondence, lexical escape,
+transforms, independent role reconstruction and sealed-handler/mode mutations.
+Legacy image compatibility admits only exact inert builtin metadata; actual
+checked hosts still refuse runtime and image admission. The subset passes 46 focused tests, including legacy owner regressions and an
+actual generated legacy build/run, plus targeted Clippy. The
+[verification receipt](evidence/checked-ffi-hosts/verification.json) and
+[capture notes](evidence/checked-ffi-hosts/README.md) retain final source/configuration
+pins, raw logs and the two diagnosed compatibility repairs. Independent exact-head
+review and integration remain pending. These observations accept no additional
+whole-task criterion and supply no checked native execution or Linux containment
+evidence.
 
 ## Verification
 

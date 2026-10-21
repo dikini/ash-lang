@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "build::source_owner_post_record_tests::injected_owner_post_record_refusal_destroys_once_and_fresh_activation_does_not_replay",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "exit": 101,
+  "elapsed_seconds": 77.163,
+  "source_configuration_before_after_equal": true,
+  "file_count": 518,
+  "source_configuration_tree_sha256": "609117301baf87d54b8e6a56b209f1e7899be5b78156b3ba3fa16042f8997580",
+  "log_sha256": "5dea522bec2fb862f4775f033853ccf236dbe06e781fc5bb9e13c8f6e7631307"
+}

@@ -2808,13 +2808,12 @@ impl PureImage {
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<ValidatedProgram, ImageFailure> {
-        // The Pure entry stays closed to Effect metadata. Its only quantified
-        // declarations are the passive canonical byte prototypes authenticated
-        // by the registry and node checks below; applications remain refused.
+        // Pure images retain only canonical inert Foreign declarations after
+        // defining-source and complete registry reconstruction below. Effect
+        // operations and polymorphic applications remain outside this profile.
         charge(work, 1)?;
         if self.effect_dialect
             || !self.abstract_nominals.is_empty()
-            || !self.effects.is_empty()
             || !self.operations.is_empty()
             || !self.prepared_representations.is_empty()
             || !self.prepared_constants.is_empty()
@@ -2923,7 +2922,8 @@ impl PureImage {
         let registry = if seen_common {
             decoder.extended_registry()?.registry
         } else {
-            if !self.kinds.is_empty()
+            if !self.effects.is_empty()
+                || !self.kinds.is_empty()
                 || !self.parameters.is_empty()
                 || !self.nominal_parameters.is_empty()
                 || !self.quantifiers.is_empty()
@@ -6184,6 +6184,109 @@ main () = {
                 "forged Bytes authority {change}"
             );
         }
+    }
+
+    #[test]
+    fn checked_builtin_image_legacy_import_roundtrip_authenticates_inert_host() {
+        let tree = SourceTree::new();
+        tree.write(
+            "entry.ash",
+            "import @builtin.foreign as Foreign\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.pure_build_input().unwrap();
+        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        assert_eq!(image.effects.len(), 1);
+        assert!(image.operations.is_empty());
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        drop(image);
+        drop(compiled);
+        drop(tree);
+        let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = decode().restore(&mut TypeWorkBudget::default()).unwrap();
+        assert_eq!(
+            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            "42"
+        );
+        let mutations: &[fn(&mut PureImage)] = &[
+            |image| image.effects[0].public = false,
+            |image| {
+                image.effects.push(image.effects[0]);
+            },
+            |image| image.effects[0].origin = u32::MAX,
+            |image| image.effects[0].parameters.len = 0,
+        ];
+        for (index, mutate) in mutations.iter().enumerate() {
+            let mut image = decode();
+            mutate(&mut image);
+            assert!(
+                image.restore(&mut TypeWorkBudget::default()).is_err(),
+                "accepted altered inert image metadata {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_builtin_image_empty_host_refuses_before_registry_and_body_encoding() {
+        let tree = SourceTree::new();
+        tree.write("entry.ash", "import @builtin.foreign as Foreign\nmain : Unit -> Int\nmain () = foreign host H {\n    42\n}\n");
+        let configuration = tree.configuration();
+        let graph =
+            crate::module::load_module_graph(&configuration.entry, &configuration.roots).unwrap();
+        let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved =
+                crate::resolve::resolve_checked_foreign_module(loaded, &dependencies).unwrap();
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
+        let linked = crate::elaborate::link_modules(checked, graph.entry()).unwrap();
+        let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let unchecked = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let modules = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let core = crate::core::validate_effect_modules(unchecked, &sources, &modules).unwrap();
+        let provenance = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), Arc::new(module.source().clone())))
+            .collect::<Vec<_>>();
+        let allowance = core.node_count();
+        let mut work = TypeWorkBudget::with_limit(allowance);
+        assert!(matches!(
+            encode_effect_for_build(&core, &provenance, super::super::NATIVE_TARGET, &mut work),
+            Err(NativeImageFailure::Image(ImageFailure::Unsupported(
+                Unsupported::EffectOperation
+            )))
+        ));
+        assert_eq!(work.used(), allowance);
     }
 
     #[test]
@@ -10380,6 +10483,10 @@ impl Encoder<'_> {
                 })
             }
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
+                // Static host authority is not executable image admission.
+                if boundary.host().is_some() {
+                    return Err(ImageFailure::Unsupported(Unsupported::EffectOperation));
+                }
                 let start = self.image.interpretations.len();
                 for interpretation in boundary.interpretations() {
                     charge(self.work, 1)?;
@@ -12690,6 +12797,16 @@ pub(crate) fn encode_effect_for_build(
 ) -> Result<NativeBuildImage, NativeImageFailure> {
     let mut identities = Vec::new();
     let mut original_variables = Vec::new();
+    charge(work, program.node_count())?;
+    // A static host binder grants no executable image permission, even for
+    // an empty interpretation vector. Refuse before encoding registry or body.
+    if program.nodes().iter().any(|node| {
+        matches!(&node.kind,
+            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::NativeInterpret(boundary))
+                if boundary.host().is_some())
+    }) {
+        return Err(ImageFailure::Unsupported(Unsupported::EffectOperation).into());
+    }
     charge(work, program.node_count())?;
     let mut original_templates = std::collections::HashSet::new();
     for node in program.nodes() {

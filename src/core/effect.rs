@@ -77,11 +77,27 @@ impl PartialEq for NativeInterpretation {
 }
 impl Eq for NativeInterpretation {}
 
-/// The explicit owner-free `interpret S in body` Core boundary.
+/// A lexical checked host binder, independently reconstructed by Core.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForeignHostIdentity {
+    pub(crate) identity: crate::types::TypeVariableId,
+    pub(crate) effect: crate::types::EffectId,
+}
+impl ForeignHostIdentity {
+    pub const fn identity(self) -> crate::types::TypeVariableId {
+        self.identity
+    }
+    pub const fn effect(self) -> crate::types::EffectId {
+        self.effect
+    }
+}
+
+/// Explicit ordinary or checked-host interpretation over the shared body/vector.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeInterpretNode {
     pub(super) body: NodeId,
     pub(super) interpretations: Box<[NativeInterpretation]>,
+    pub(super) host: Option<ForeignHostIdentity>,
 }
 
 impl NativeInterpretNode {
@@ -89,7 +105,16 @@ impl NativeInterpretNode {
         Self {
             body,
             interpretations,
+            host: None,
         }
+    }
+    pub(crate) fn with_host(mut self, host: ForeignHostIdentity) -> Self {
+        self.host = Some(host);
+        self
+    }
+    #[must_use]
+    pub const fn host(&self) -> Option<ForeignHostIdentity> {
+        self.host
     }
     #[must_use]
     pub const fn body(&self) -> NodeId {
@@ -99,8 +124,14 @@ impl NativeInterpretNode {
     pub fn interpretations(&self) -> &[NativeInterpretation] {
         &self.interpretations
     }
-    pub(crate) fn into_parts(self) -> (NodeId, Box<[NativeInterpretation]>) {
-        (self.body, self.interpretations)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        NodeId,
+        Box<[NativeInterpretation]>,
+        Option<ForeignHostIdentity>,
+    ) {
+        (self.body, self.interpretations, self.host)
     }
 }
 
@@ -1409,8 +1440,12 @@ impl CoreBuilder<EffectOperationFamily> {
             Cleanup(NodeId, NodeId),
             Pure,
             Replace,
-            Request(NodeId, EffectInstance),
-            NativeInterpret(NodeId, Box<[NativeInterpretation]>),
+            Request(NodeId, EffectInstance, Option<EffectInstance>),
+            NativeInterpret(
+                NodeId,
+                Box<[NativeInterpretation]>,
+                Option<ForeignHostIdentity>,
+            ),
             CopyWindow(NodeId, NodeId, Box<[NativeInterpretation]>),
             Handler(EffectInstance, usize, bool),
             Resource(EffectInstance, NodeId, NodeId),
@@ -1505,6 +1540,7 @@ impl CoreBuilder<EffectOperationFamily> {
                                 &boundary.interpretations,
                                 &mut self.type_work,
                             )?,
+                            boundary.host(),
                         )
                     }
                     EffectExprKind::Operation(EffectOperation::Request(request)) => {
@@ -1514,6 +1550,25 @@ impl CoreBuilder<EffectOperationFamily> {
                                 &request.effect,
                                 &mut self.type_work,
                             )?,
+                            self.provider_registry()
+                                .native_symbol(request.operation())
+                                .cloned()
+                                .map(|symbol| {
+                                    crate::foreign::checked_source::checked_host_instance(
+                                        &symbol,
+                                        request.effect(),
+                                        &mut self.type_work,
+                                    )
+                                })
+                                .transpose()
+                                .map_err(|failure| {
+                                    if failure.is_resource_exhaustion() {
+                                        super::BuildError::TypeWorkExceeded
+                                    } else {
+                                        super::BuildError::InvalidPayload
+                                    }
+                                })?
+                                .flatten(),
                         )
                     }
                     EffectExprKind::Operation(EffectOperation::Handler(nested)) => {
@@ -1697,13 +1752,20 @@ impl CoreBuilder<EffectOperationFamily> {
                     Equation::Pure => self.infer_pure_effects_at(index)?,
                     Equation::Replace => clone_effect_row_with_budget(output, &mut self.type_work)
                         .map_err(|()| super::BuildError::TypeWorkExceeded)?,
-                    Equation::Request(operand, effect) => {
+                    Equation::Request(operand, effect, host) => {
                         let operand = operand.index()?;
+                        let mut requested = EffectRow::singleton(effect);
+                        if let Some(host) = host {
+                            requested = requested
+                                .union_with_budget(&EffectRow::singleton(host), &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
                         self.nodes
                             .get(operand)
                             .ok_or(super::BuildError::InvalidNodeId)?
                             .effects
-                            .union_with_budget(&EffectRow::singleton(effect), &mut self.type_work)
+                            .union_with_budget(&requested, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
@@ -1728,13 +1790,13 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|_| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
-                    Equation::NativeInterpret(body, interpretations) => {
+                    Equation::NativeInterpret(body, interpretations, host) => {
                         let body = &self
                             .nodes
                             .get(body.index()?)
                             .ok_or(super::BuildError::InvalidNodeId)?
                             .effects;
-                        native_interpret_outward_row(body, &interpretations, &mut self.type_work)?
+                        foreign_host_outward_row(body, &interpretations, host, &mut self.type_work)?
                     }
                     Equation::Handler(effect, clause_count, hook_root) => {
                         self.charge_effect_metadata(clause_count)?;
@@ -2019,13 +2081,29 @@ impl CoreBuilder<EffectOperationFamily> {
     pub fn native_interpret(
         &mut self,
         body: NodeId,
+        interpretations: Box<[NativeInterpretation]>,
+        result_type: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.native_interpret_with_host(body, interpretations, None, result_type, effects, origin)
+    }
+
+    pub(crate) fn native_interpret_with_host(
+        &mut self,
+        body: NodeId,
         mut interpretations: Box<[NativeInterpretation]>,
+        host: Option<ForeignHostIdentity>,
         result_type: Type,
         effects: EffectRow,
         origin: Origin,
     ) -> Result<NodeId, super::BuildError> {
         let admitted = (|| {
-            self.charge_effect_metadata(interpretations.len())?;
+            self.charge_effect_metadata(
+                interpretations
+                    .len()
+                    .saturating_add(usize::from(host.is_some())),
+            )?;
             for interpretation in &mut interpretations {
                 let placeholder = EffectInstance::new(interpretation.effect.effect(), Box::new([]));
                 let instance = std::mem::replace(&mut interpretation.effect, placeholder);
@@ -2043,7 +2121,11 @@ impl CoreBuilder<EffectOperationFamily> {
             result_type,
             effects,
             origin,
-            EffectOperation::NativeInterpret(NativeInterpretNode::new(body, interpretations)),
+            EffectOperation::NativeInterpret(NativeInterpretNode {
+                body,
+                interpretations,
+                host,
+            }),
         )
     }
 
@@ -3407,6 +3489,34 @@ pub(crate) fn copy_native_interpretations_with_budget(
         ));
     }
     Ok(result.into_boxed_slice())
+}
+
+pub(crate) fn foreign_host_outward_row(
+    body: &EffectRow,
+    interpretations: &[NativeInterpretation],
+    host: Option<ForeignHostIdentity>,
+    work: &mut TypeWorkBudget,
+) -> Result<EffectRow, super::BuildError> {
+    let mut row = native_interpret_outward_row(body, interpretations, work)?;
+    if let Some(host) = host {
+        work.charge(3)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        let instance = EffectInstance::new_kinded(
+            host.effect(),
+            Box::new([crate::types::KindedArgument::TypeArg(Type::Variable(
+                host.identity(),
+            ))]),
+        );
+        match row
+            .remove_exact_with_budget(&instance, work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+        {
+            Ok(remaining) => row = remaining,
+            Err(crate::types::EffectRowError::Missing) => {}
+            Err(_) => return Err(super::BuildError::InvalidPayload),
+        }
+    }
+    Ok(row)
 }
 
 /// Exact set subtraction never masks another actual vector of the same API.

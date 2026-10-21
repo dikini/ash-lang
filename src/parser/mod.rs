@@ -133,6 +133,8 @@ pub enum NodeKind {
     ResumeExpression,
     /// One builtin cell acquisition with an identity binder and scoped body.
     ResourceExpression,
+    /// A contextual checked foreign host and its direct body.
+    ForeignHostExpression,
     /// A lexical foreign-copy window and its direct body.
     CopyWindowExpression,
     /// A module-owned experimental assembly or explicit source resource declaration.

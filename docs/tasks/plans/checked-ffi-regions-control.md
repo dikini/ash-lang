@@ -11,7 +11,7 @@ assignment. That assignment permits the bounded F2 probes and candidate contract
 product tasks require accepted governing artifacts. The user later authorized
 autonomous recommended choices, unsigned local commits and a separate worktree.
 The orchestrator adopted reviewed CP-0024 under that delegation; TASK-0050 records
-local M1 delivery roles. GitHub publication and per-item unsigned squash retention are now authorized
+local M1 delivery roles. GitHub publication and per-item GitHub integration are authorized
 as recorded below; Main integration retains its separate gate.
 
 ## Baseline and agreed endpoint
@@ -51,9 +51,10 @@ Keep these as design pressure without adding implementation issues for them.
 
 ## Authority and GitHub workflow
 
-The user authorized GitHub publication, one PR per work item and unsigned squash
-retention into the milestone branch after successful independent review on
-2026-10-21. The published hierarchy belongs to
+The user authorized GitHub publication and one PR per work item on 2026-10-21.
+The latest instruction requires GitHub squash-and-merge into the milestone branch
+after successful independent review, with a GitHub merge commit when squash is
+unavailable. Locally authored commits remain unsigned. The published hierarchy belongs to
 [overall milestone 2](https://github.com/dikini/ash-lang/milestone/2). This table
 maps plan keys to GitHub records; those records own live progress.
 
@@ -114,12 +115,13 @@ For later delivery, use one integration branch per milestone under `codex/`
 and the checkpoint/worktree lifecycle in
 [AD-0011](../../decisions/AD-0011-milestone-worktree-lifecycle.md).
 Draft slice PRs target the active checkpoint or milestone retaining branch named
-in the assignment. For this run, the user's explicit per-item squash instruction overrides the
-normal AD-0011 merge-commit rule: after successful exact-head review/checks, create
-the unsigned squash commit locally and push it to the milestone branch. Avoid a
-GitHub web-flow merge that creates a signed commit. Retain the PR head, squash
-commit and tree/verification correspondence; close the PR with that receipt if
-GitHub cannot mark the local squash merged automatically. Each milestone still
+in the assignment. For this run, the user's latest explicit instruction overrides
+the normal AD-0011 merge method: after successful exact-head review/checks, use
+GitHub squash-and-merge, with a GitHub merge commit when squash is unavailable.
+Keep locally authored commits unsigned; GitHub signing follows the chosen merge
+method. Retain the PR head, GitHub merge commit and tree/verification correspondence,
+then fetch and synchronize local/origin retaining refs. Earlier local squash
+receipts remain historical evidence and do not authorize future local squashes. Each milestone still
 has a separately gated final Main PR. Do not carry forward
 a historical unsigned-merge exception as permission for a new delivery.
 

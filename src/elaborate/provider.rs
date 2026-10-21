@@ -4710,7 +4710,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     | ResolvedExprKind::Cleanup(_)
                     | ResolvedExprKind::Resource(_)
                     | ResolvedExprKind::ProviderResource(_)
-                    | ResolvedExprKind::CopyWindow(_) => {
+                    | ResolvedExprKind::CopyWindow(_)
+                    | ResolvedExprKind::ForeignHost(_) => {
                         return Err(contract_error(
                             expression.span,
                             "lifecycle templates cannot contain source handlers, continuations, cleanup or nested resources",

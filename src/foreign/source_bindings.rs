@@ -1277,6 +1277,10 @@ pub(crate) fn admit_source_native_program<'program, 'bindings>(
     let mut errors = HashMap::new();
     for node in program.nodes() {
         paid(work, 1)?;
+        if matches!(&node.kind, EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) if boundary.host().is_some())
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
         if let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &node.kind {
             if !cfg!(all(
                 target_arch = "x86_64",
@@ -1416,7 +1420,7 @@ pub(crate) fn reject_missing_source_bindings(
     for node in program.nodes() {
         paid(work, 1)?;
         if let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) = &node.kind
-            && !boundary.interpretations().is_empty()
+            && (boundary.host().is_some() || !boundary.interpretations().is_empty())
         {
             return Err(RuntimeFailure::ForeignBinding);
         }

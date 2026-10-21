@@ -1,5 +1,7 @@
 //! Independent validation for unchecked pure Core arenas.
 
+#[cfg(test)]
+mod foreign_host_tests;
 pub(crate) mod semantic_type_variables;
 mod source_declarations;
 
@@ -4377,6 +4379,9 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
     fn copy_window(_kind: &Self::Kind) -> Option<&super::source_window::SourceCopyWindowNode> {
         None
     }
+    fn foreign_host(_kind: &Self::Kind) -> Option<super::effect::ForeignHostIdentity> {
+        None
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn authenticate_provider_family_use(
@@ -4495,6 +4500,14 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
             super::effect::EffectExprKind::Operation(
                 super::effect::EffectOperation::SourceCopyWindow(scope),
             ) => Some(scope),
+            _ => None,
+        }
+    }
+    fn foreign_host(kind: &Self::Kind) -> Option<super::effect::ForeignHostIdentity> {
+        match kind {
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::NativeInterpret(boundary),
+            ) => boundary.host(),
             _ => None,
         }
     }
@@ -6681,6 +6694,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             if F::copy_window(&node.kind).is_some_and(|scope| scope.identity() == id) {
                 return Ok(true);
             }
+            if F::foreign_host(&node.kind).is_some_and(|host| host.identity() == id) {
+                return Ok(true);
+            }
+
             if F::source_scope(&node.kind).is_some_and(|scope| scope.identity() == id) {
                 return Ok(true);
             }
@@ -8644,6 +8661,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         original: Option<&source_declarations::OriginalDeclarationProvenance>,
     ) -> Result<RegistryParameterOwners, ValidationError> {
+        self.validate_reserved_builtin_sources()?;
         self.validate_scalar_preflight_registry()?;
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
@@ -8908,6 +8926,41 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         self.validate_lexical_registry(&mut parameter_owners, registry_source)?;
         Ok(parameter_owners)
+    }
+
+    fn validate_reserved_builtin_sources(&self) -> Result<(), ValidationError> {
+        let authenticate = |module: ModuleId, source: SourceId| {
+            self.charge_type_work(1)?;
+            if !module.is_builtin_foreign() {
+                return Ok(());
+            }
+            let source = self
+                .sources
+                .get(&source)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            self.charge_type_work(source.text().len())?;
+            if source.text() != crate::module::foreign_builtin_source_text() {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            Ok(())
+        };
+        if let Some(modules) = &self.module_sources {
+            // Check every supplied reserved original, even one not referenced
+            // by the root or by a materialized registry declaration.
+            for (module, source) in modules {
+                authenticate(*module, *source)?;
+            }
+        } else {
+            // Single-source Core has no explicit module/source table. Its
+            // materialized originals still require the actual defining bytes.
+            for nominal in self.program.registry.nominals() {
+                authenticate(nominal.id.module(), nominal.origin.primary_span().source())?;
+            }
+            for effect in self.program.registry.effects() {
+                authenticate(effect.id.module(), effect.origin.primary_span().source())?;
+            }
+        }
+        Ok(())
     }
 
     fn validate_scalar_preflight_registry(&self) -> Result<(), ValidationError> {
@@ -9339,6 +9392,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
             let expected = next_type_variable.entry(module).or_insert(0);
+            while original.is_some_and(|proof| {
+                proof
+                    .omitted_builtin_formals
+                    .contains(&crate::types::TypeVariableId::resolved(module, *expected))
+            }) {
+                self.charge_type_work(1)?;
+                *expected = expected
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            }
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
             self.charge_type_work(1)?;
@@ -9830,8 +9893,31 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             // exact within each defining module.
             self.charge_type_work(1)?;
             let expected = next_declaration.entry(module).or_insert(0);
+            let invalid_operations = if module.is_builtin_foreign() {
+                let mut work = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let result = crate::foreign::checked_builtins::is_canonical_native_host(
+                    effect,
+                    &self.program.registry,
+                    &mut work,
+                );
+                self.charge_type_work(work.used())?;
+                !result.map_err(|failure| {
+                    ValidationError::new(
+                        if failure.is_resource_exhaustion() {
+                            ValidationReason::Resource
+                        } else {
+                            ValidationReason::Registry
+                        },
+                        None,
+                    )
+                })?
+            } else {
+                effect.operations.is_empty()
+            };
             if self.contextual_registry.is_none() && effect.id.declaration() != *expected
-                || effect.operations.is_empty()
+                || invalid_operations
                 || !valid_upper_spelling(&effect.spelling)
                 || !origin_depth_within_limit(&effect.origin)
                 || self.program.registry.effect(effect.id) != Some(effect)
@@ -12261,6 +12347,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         nominal_parameter_owners: &RegistryParameterOwners,
         abstraction_owners: &CoreAbstractionOwners,
     ) -> Result<CoreTypeBinders<'program>, ValidationError> {
+        static COPIED_HOST_KIND: Kind = Kind::Type;
         let mut definitions = HashMap::new();
         if let Some(entry) = self.provider_handler_entry {
             self.charge_type_work(entry.draft.hidden.len())?;
@@ -12307,15 +12394,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .map(|resource| resource.acquisition.identity)
                 .or_else(|| F::provider_scope(&node.kind).map(|scope| scope.descriptor.identity()))
                 .or_else(|| F::source_scope(&node.kind).map(|scope| scope.identity()))
+                .or_else(|| F::foreign_host(&node.kind).map(|host| host.identity()))
             {
                 let id = node_id(self.program.arena, index)?;
                 self.charge_type_work(1)?;
-                let canonical = self
+                let kind = self
                     .program
                     .registry
                     .type_variable(parameter)
+                    .map(|canonical| &canonical.kind)
+                    .or_else(|| {
+                        (F::foreign_host(&node.kind).is_some()
+                            && parameter.module().is_none()
+                            && self.source_resource_context
+                                == SourceResourceValidationContext::FinalProgram)
+                            .then_some(&COPIED_HOST_KIND)
+                    })
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
-                if canonical.kind != Kind::Type
+                if *kind != Kind::Type
                     || nominal_parameter_owners.contains_key(&parameter)
                     || definitions.contains_key(&parameter)
                 {
@@ -12324,7 +12420,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 definitions
                     .try_reserve(1)
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
-                definitions.insert(parameter, (&canonical.kind, id));
+                definitions.insert(parameter, (kind, id));
             }
             let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
                 F::pure(&node.kind)
@@ -14354,6 +14450,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             ));
                         }
                     }
+                    if let Some(host) = F::foreign_host(&node.kind) {
+                        self.charge_type_work(1)?;
+                        if free.contains(&host.identity()) {
+                            return Err(ValidationError::new(
+                                ValidationReason::ResourceEscape,
+                                Some(id),
+                            ));
+                        }
+                    }
                     self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
                     for child_index in 0..F::child_count(&node.kind) {
                         let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
@@ -14400,6 +14505,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             if child_index > 0 {
                                 child_free.remove(&identity);
                             }
+                        }
+                        if let Some(host) = F::foreign_host(&node.kind) {
+                            self.charge_type_work(1)?;
+                            child_free.remove(&host.identity());
                         }
                         self.merge_type_scope_requirements(&mut free, child_free)?;
                     }
@@ -14545,6 +14654,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     {
                         self.charge_type_work(1)?;
                         free.remove(&identity);
+                    }
+                    if let Some(host) = F::foreign_host(&node.kind) {
+                        self.charge_type_work(1)?;
+                        free.remove(&host.identity());
                     }
                     requirements[self.index(id)?] = Some(free);
                 }
@@ -17086,7 +17199,34 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         Some(id),
                     ));
                 }
-                let requested = self.singleton_effect_row_charged(&request.effect, id)?;
+                let mut requested = self.singleton_effect_row_charged(&request.effect, id)?;
+                if let Some(symbol) = self.program.registry.native_symbol(request.operation()) {
+                    let mut work = TypeWorkBudget::with_limit(
+                        self.type_work_limit.saturating_sub(self.type_work.get()),
+                    );
+                    let host = crate::foreign::checked_source::checked_host_instance(
+                        symbol,
+                        request.effect(),
+                        &mut work,
+                    );
+                    self.charge_type_work(work.used())?;
+                    if let Some(host) = host.map_err(|failure| {
+                        ValidationError::new(
+                            if failure.is_resource_exhaustion() {
+                                ValidationReason::Resource
+                            } else {
+                                ValidationReason::Registry
+                            },
+                            Some(id),
+                        )
+                    })? {
+                        requested = self.union_effect_rows_charged(
+                            &requested,
+                            &EffectRow::singleton(host),
+                            id,
+                        )?;
+                    }
+                }
                 let expected = self.union_effect_rows_charged(&operand.effects, &requested, id)?;
                 if !self.same_type_charged(&node.ty, &result)? {
                     return Err(ValidationError::with_cause(
@@ -17576,6 +17716,33 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         })
     }
 
+    fn foreign_host_row(
+        &self,
+        row: &EffectRow,
+        boundary: &super::effect::NativeInterpretNode,
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = super::effect::foreign_host_outward_row(
+            row,
+            boundary.interpretations(),
+            boundary.host(),
+            &mut work,
+        );
+        self.charge_type_work(work.used())?;
+        result.map_err(|error| {
+            ValidationError::new(
+                if error == super::BuildError::TypeWorkExceeded {
+                    ValidationReason::Resource
+                } else {
+                    ValidationReason::EffectRow
+                },
+                Some(id),
+            )
+        })
+    }
+
     fn validate_copy_window(
         &self,
         id: NodeId,
@@ -17673,7 +17840,56 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let invalid = || ValidationError::new(ValidationReason::Registry, Some(id));
         let resource = || ValidationError::new(ValidationReason::Resource, Some(id));
         self.charge_type_work(boundary.interpretations().len())?;
+        if let Some(host) = boundary.host() {
+            let declaration = self
+                .program
+                .registry
+                .effect(host.effect())
+                .ok_or_else(invalid)?;
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let canonical = crate::foreign::checked_builtins::is_canonical_native_host(
+                declaration,
+                &self.program.registry,
+                &mut work,
+            );
+            self.charge_type_work(work.used())?;
+            if !canonical.map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    resource()
+                } else {
+                    invalid()
+                }
+            })? {
+                return Err(invalid());
+            }
+        }
         for interpretation in boundary.interpretations() {
+            let mut work = TypeWorkBudget::with_limit(
+                self.type_work_limit.saturating_sub(self.type_work.get()),
+            );
+            let selected = crate::foreign::checked_source::checked_host_instance(
+                interpretation.symbol(),
+                interpretation.effect(),
+                &mut work,
+            );
+            self.charge_type_work(work.used())?;
+            let selected = selected.map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    resource()
+                } else {
+                    invalid()
+                }
+            })?;
+            match (boundary.host(), selected) {
+                (None, None) => {}
+                (Some(host), Some(selected))
+                    if selected.effect() == host.effect()
+                        && matches!(selected.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == host.identity()) =>
+                    {}
+                _ => return Err(invalid()),
+            }
             if !matches!(
                 interpretation.symbol().symbol().call(),
                 crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
@@ -17706,7 +17922,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if !self.same_type_charged(&node.ty, &body.ty)? {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
-        let expected = self.native_interpret_row(&body.effects, boundary.interpretations(), id)?;
+        let expected = self.foreign_host_row(&body.effects, boundary, id)?;
         if !self.same_effect_row_charged(&node.effects, &expected, id)? {
             return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
         }
@@ -18055,15 +18271,40 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 id,
                             )?,
                         EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
-                            self.native_interpret_row(
-                                child_row(boundary.body())?,
-                                boundary.interpretations(),
-                                id,
-                            )?
+                            self.foreign_host_row(child_row(boundary.body())?, boundary, id)?
                         }
                         EffectExprKind::Operation(EffectOperation::Request(request)) => {
-                            let requested =
+                            let mut requested =
                                 self.singleton_effect_row_charged(request.effect(), id)?;
+                            if let Some(symbol) =
+                                self.program.registry.native_symbol(request.operation())
+                            {
+                                let mut work = TypeWorkBudget::with_limit(
+                                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                                );
+                                let host = crate::foreign::checked_source::checked_host_instance(
+                                    symbol,
+                                    request.effect(),
+                                    &mut work,
+                                );
+                                self.charge_type_work(work.used())?;
+                                if let Some(host) = host.map_err(|failure| {
+                                    ValidationError::new(
+                                        if failure.is_resource_exhaustion() {
+                                            ValidationReason::Resource
+                                        } else {
+                                            ValidationReason::Registry
+                                        },
+                                        Some(id),
+                                    )
+                                })? {
+                                    requested = self.union_effect_rows_charged(
+                                        &requested,
+                                        &EffectRow::singleton(host),
+                                        id,
+                                    )?;
+                                }
+                            }
                             self.union_effect_rows_charged(
                                 child_row(request.operand())?,
                                 &requested,
@@ -18144,11 +18385,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         // Ordinary Handler nodes carry no registered-native interpretation
         // authority. Providers retain native requests until a separately
         // authenticated interpreter boundary discharges their exact instance.
-        if registered_foreign_effect_with_charge(
-            &self.program.registry,
-            handler.effect.effect(),
-            |cells| self.charge_type_work(cells),
-        )? {
+        if handler.effect.effect().module().is_builtin_foreign()
+            || registered_foreign_effect_with_charge(
+                &self.program.registry,
+                handler.effect.effect(),
+                |cells| self.charge_type_work(cells),
+            )?
+        {
             return Err(ValidationError::new(
                 ValidationReason::ResourceEscape,
                 Some(id),

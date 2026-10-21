@@ -803,6 +803,9 @@ pub(super) struct OriginalDeclarationProvenance {
     // complete semantic non-use and formal disjointness for the current forest.
     pub(super) ordering_candidates: HashSet<TypeVariableId>,
     pub(super) nominal_positions: HashMap<NominalTypeId, (u32, Span)>,
+    // Absent legacy Foreign formals are original ordering slots, not retained
+    // types or scope authority. Only exact authenticated builtin slots qualify.
+    pub(super) omitted_builtin_formals: HashSet<TypeVariableId>,
 }
 
 pub(super) fn authenticate(
@@ -824,6 +827,39 @@ pub(super) fn authenticate(
             work,
             &mut original.nominal_positions,
         )?;
+        if module.is_builtin_foreign() {
+            charge(work, 1)?;
+            if let Some(host) = registry.effect(EffectId::new(
+                *module,
+                crate::module::FOREIGN_NATIVE_HOST_LOCAL,
+            )) {
+                charge(work, source.text().len().saturating_add(10))?;
+                if source.text() != crate::module::foreign_builtin_source_text()
+                    || !crate::foreign::checked_builtins::is_canonical_native_host(
+                        host, registry, work,
+                    )
+                    .map_err(|error| {
+                        if error.is_resource_exhaustion() {
+                            resource()
+                        } else {
+                            registry_error()
+                        }
+                    })?
+                {
+                    return Err(registry_error());
+                }
+                original
+                    .omitted_builtin_formals
+                    .try_reserve(10)
+                    .map_err(|_| resource())?;
+                for local in 4..14 {
+                    let id = TypeVariableId::resolved(*module, local);
+                    if registry.type_variable(id).is_none() {
+                        original.omitted_builtin_formals.insert(id);
+                    }
+                }
+            }
+        }
         coordinates.resource_binders.authenticate(
             registry,
             *module,
@@ -970,6 +1006,27 @@ fn authenticate_module(
     for effect in registry.effects() {
         charge(work, 1)?;
         if effect.id.module() != module {
+            continue;
+        }
+        if module.is_builtin_foreign() {
+            // NativeHost is compiler metadata, not a parsed effect declaration.
+            // Its exception requires the actual immutable defining source and
+            // independently reconstructed complete builtin inventory.
+            charge(work, source.text().len())?;
+            if source.text() != crate::module::foreign_builtin_source_text()
+                || !crate::foreign::checked_builtins::is_canonical_native_host(
+                    effect, registry, work,
+                )
+                .map_err(|error| {
+                    if error.is_resource_exhaustion() {
+                        resource()
+                    } else {
+                        registry_error()
+                    }
+                })?
+            {
+                return Err(registry_error());
+            }
             continue;
         }
         charge(work, 1)?;
@@ -2948,5 +3005,359 @@ main () = 42
             ValidationReason::Registry
         );
         assert!(work.used() > malformed.text().len());
+    }
+
+    #[test]
+    fn checked_builtin_original_declarations_require_exact_source_and_host_role() {
+        let directory =
+            std::env::temp_dir().join(format!("ash-original-host-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let entry = directory.join("entry.ash");
+        std::fs::write(
+            &entry,
+            "import @builtin.foreign as Foreign\nmain : Unit -> Int\nmain () = 42\n",
+        )
+        .unwrap();
+        let graph =
+            crate::module::load_module_graph(&entry, &crate::module::ModuleRoots::empty()).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        let loaded = graph
+            .modules()
+            .iter()
+            .find(|module| module.id().is_builtin_foreign())
+            .unwrap();
+        let resolved = crate::resolve::resolve_module(loaded, &[]).unwrap();
+        let original_registry = Arc::clone(resolved.registry());
+        let original = &original_registry;
+        let check = |registry: &ResolvedRegistry, source: &SourceFile| {
+            authenticate(
+                registry,
+                &HashMap::from([(source.id(), source)]),
+                &HashMap::from([(loaded.id(), source.id())]),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .map(|_| ())
+        };
+        assert!(check(original, loaded.source()).is_ok());
+        let mut effects = original.effects().to_vec();
+        effects[0].public = false;
+        let changed = original.as_ref().clone().with_effects(effects);
+        assert_eq!(
+            check(&changed, loaded.source()).unwrap_err().reason(),
+            ValidationReason::Registry
+        );
+        let rewritten = SourceFile::new(
+            "rewritten.ash",
+            loaded
+                .source()
+                .text()
+                .replace("ConversionError", "ConversionWrong"),
+        )
+        .unwrap();
+        assert_eq!(rewritten.text().len(), loaded.source().text().len());
+        // Keep original coordinates/registry here. Without the resident-byte
+        // comparison this module phase would accept the equal-length rewrite:
+        // no nominal or constructor display spelling grants a defining role.
+        let coordinates =
+            DeclarationCoordinates::from_source(loaded.source(), &mut TypeWorkBudget::unbounded())
+                .unwrap();
+        assert!(
+            authenticate_module(
+                original,
+                loaded.id(),
+                loaded.source(),
+                &coordinates,
+                &mut TypeWorkBudget::unbounded(),
+                &mut HashMap::new()
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            authenticate_module(
+                original,
+                loaded.id(),
+                &rewritten,
+                &coordinates,
+                &mut TypeWorkBudget::unbounded(),
+                &mut HashMap::new()
+            )
+            .unwrap_err()
+            .reason(),
+            ValidationReason::Registry
+        );
+
+        let builtin = crate::elaborate::check_module(resolved).unwrap();
+        let entry = graph
+            .modules()
+            .iter()
+            .find(|module| !module.id().is_builtin_foreign())
+            .unwrap();
+        let dependencies = entry
+            .dependencies()
+            .iter()
+            .map(|edge| crate::resolve::DependencyExports::new(edge, builtin.exports()).unwrap())
+            .collect::<Vec<_>>();
+        let entry_resolved = crate::resolve::resolve_module(entry, &dependencies).unwrap();
+        let view = entry_resolved
+            .registry()
+            .source_original_checker_view(
+                entry_resolved.imported_facts(),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let modules = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let source_map = sources
+            .iter()
+            .map(|source| (source.id(), *source))
+            .collect::<HashMap<_, _>>();
+        let module_map = modules.iter().copied().collect::<HashMap<_, _>>();
+        let mut measured = TypeWorkBudget::unbounded();
+        let proof = authenticate(&view, &source_map, &module_map, &mut measured).unwrap();
+        assert_eq!(
+            proof.omitted_builtin_formals,
+            (4..14)
+                .map(|local| TypeVariableId::resolved(loaded.id(), local))
+                .collect()
+        );
+        assert!(
+            !proof
+                .omitted_builtin_formals
+                .contains(&TypeVariableId::resolved(loaded.id(), 3))
+        );
+        assert!(
+            !proof
+                .omitted_builtin_formals
+                .contains(&TypeVariableId::resolved(loaded.id(), 14))
+        );
+        assert!(
+            !proof
+                .omitted_builtin_formals
+                .contains(&TypeVariableId::resolved(entry.id(), 4))
+        );
+        let required = measured.used();
+        assert!(
+            authenticate(
+                &view,
+                &source_map,
+                &module_map,
+                &mut TypeWorkBudget::with_limit(required)
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            authenticate(
+                &view,
+                &source_map,
+                &module_map,
+                &mut TypeWorkBudget::with_limit(required - 1)
+            )
+            .unwrap_err()
+            .reason(),
+            ValidationReason::Resource
+        );
+        assert!(
+            authenticate(
+                &view,
+                &source_map,
+                &module_map,
+                &mut TypeWorkBudget::with_limit(required)
+            )
+            .is_ok()
+        );
+        assert!(original_registry_phase_modules(&sources, &modules, view.clone()).is_ok());
+        let census_budget = |registry: ResolvedRegistry,
+                             proof: &OriginalDeclarationProvenance,
+                             allowance,
+                             prefix| {
+            let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+            let root = builder
+                .unit(
+                    Type::Unit,
+                    Origin::Source(
+                        loaded
+                            .source()
+                            .span(crate::source::ByteRange::new(0, 1).unwrap())
+                            .unwrap(),
+                    ),
+                )
+                .unwrap();
+            let program = builder.finish(root).unwrap();
+            let mut validator =
+                super::super::Validator::new_modules(&program, &sources, &modules).unwrap();
+            validator.source_resource_context =
+                super::super::SourceResourceValidationContext::OriginalTemplate {
+                    resource: ResourceDefinitionId::new(loaded.id(), 0),
+                    answer: false,
+                };
+            validator.type_work_limit = allowance;
+            validator.type_work.set(prefix);
+            let result = validator
+                .validate_registry_with_original_provenance(Some(proof))
+                .map(|_| ());
+            (result, validator.type_work.get())
+        };
+        let census = |registry, proof| census_budget(registry, proof, usize::MAX, 0).0;
+        assert!(census(view.clone(), &proof).is_ok());
+        let prefix = 7;
+        let (positive, required) = census_budget(view.clone(), &proof, usize::MAX, prefix);
+        assert!(positive.is_ok());
+        assert!(required > prefix + 10);
+        assert!(
+            census_budget(view.clone(), &proof, required, prefix)
+                .0
+                .is_ok()
+        );
+        assert_eq!(
+            census_budget(view.clone(), &proof, required - 1, prefix)
+                .0
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Resource
+        );
+        assert!(
+            census_budget(view.clone(), &proof, required, prefix)
+                .0
+                .is_ok()
+        );
+        let missing_later = view
+            .clone()
+            .remove_type_variable_for_core_test(TypeVariableId::resolved(loaded.id(), 14));
+        assert_eq!(
+            census(missing_later, &proof).unwrap_err().reason(),
+            ValidationReason::Registry
+        );
+        let no_host = view
+            .clone()
+            .rebuild_effect_identity_tables_for_core_test(Vec::new());
+        let absent_proof = authenticate(
+            &no_host,
+            &source_map,
+            &module_map,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert!(absent_proof.omitted_builtin_formals.is_empty());
+        assert_eq!(
+            census(no_host, &absent_proof).unwrap_err().reason(),
+            ValidationReason::Registry
+        );
+        let mut wrong_namespace = authenticate(
+            &view,
+            &source_map,
+            &module_map,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        wrong_namespace.omitted_builtin_formals = (4..14)
+            .map(|local| TypeVariableId::resolved(entry.id(), local))
+            .collect();
+        assert_eq!(
+            census(view.clone(), &wrong_namespace).unwrap_err().reason(),
+            ValidationReason::Registry
+        );
+        let mut stale = authenticate(
+            original,
+            &source_map,
+            &module_map,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert!(stale.omitted_builtin_formals.is_empty());
+        stale.omitted_builtin_formals = proof.omitted_builtin_formals.clone();
+        assert_eq!(
+            census(original.as_ref().clone(), &stale)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        let mut effects = view.effects().to_vec();
+        effects[0].public = false;
+        let forged = view.with_effects(effects);
+        assert_eq!(
+            original_registry_phase_modules(&sources, &modules, forged)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+    }
+
+    #[test]
+    fn checked_builtin_original_selective_legacy_view_has_no_host_or_omission_proof() {
+        let directory =
+            std::env::temp_dir().join(format!("ash-selective-host-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("entry.ash");
+        std::fs::write(
+            &path,
+            "import @builtin.foreign (checked_i64 as signed)\nmain : Unit -> Int\nmain () = 42\n",
+        )
+        .unwrap();
+        let graph =
+            crate::module::load_module_graph(&path, &crate::module::ModuleRoots::empty()).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        let loaded = graph
+            .modules()
+            .iter()
+            .find(|module| module.id().is_builtin_foreign())
+            .unwrap();
+        let builtin =
+            crate::elaborate::check_module(crate::resolve::resolve_module(loaded, &[]).unwrap())
+                .unwrap();
+        let entry = graph
+            .modules()
+            .iter()
+            .find(|module| !module.id().is_builtin_foreign())
+            .unwrap();
+        let dependencies = entry
+            .dependencies()
+            .iter()
+            .map(|edge| crate::resolve::DependencyExports::new(edge, builtin.exports()).unwrap())
+            .collect::<Vec<_>>();
+        let resolved = crate::resolve::resolve_module(entry, &dependencies).unwrap();
+        let view = resolved
+            .registry()
+            .source_original_checker_view(
+                resolved.imported_facts(),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        assert!(
+            view.effect(EffectId::new(
+                loaded.id(),
+                crate::module::FOREIGN_NATIVE_HOST_LOCAL
+            ))
+            .is_none()
+        );
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let modules = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let proof = authenticate(
+            &view,
+            &sources
+                .iter()
+                .map(|source| (source.id(), *source))
+                .collect(),
+            &modules.iter().copied().collect(),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert!(proof.omitted_builtin_formals.is_empty());
+        assert!(original_registry_phase_modules(&sources, &modules, view).is_ok());
     }
 }
