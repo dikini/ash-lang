@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 5 tests
+test core::validate::foreign_host_tests::checked_host_core_forged_mode_cannot_upgrade_a_valid_legacy_interpretation ... ok
+test core::validate::foreign_host_tests::checked_host_core_rejects_return_only_handler_for_sealed_zero_operation_effect ... ok
+test core::validate::foreign_host_tests::checked_host_core_actual_scalar_is_exact_bounded_and_retryable ... ok
+test core::validate::foreign_host_tests::checked_host_core_scope_rejects_a_host_dependent_child_shared_outside_its_binder ... ok
+test core::validate::foreign_host_tests::checked_host_core_rejects_removed_mode_and_independent_host_vector_mutations ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1987 filtered out; finished in 0.05s
+

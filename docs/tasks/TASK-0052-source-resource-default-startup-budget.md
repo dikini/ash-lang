@@ -60,15 +60,15 @@ F-core remains a separate required checkpoint.
 ## Progress
 
 - [x] Retain phase/counter measurements under the existing default.
-- [ ] Repair only the demonstrated cost without weakening admission.
+- [x] Repair only the demonstrated cost without weakening admission.
 - [ ] Original reproducer and affected boundaries pass focused verification.
 - [ ] Independent review, GitHub retention and acceptance readback complete.
 
 The [PR #89 baseline comparison](evidence/checked-ffi-selected/README.md#final-focused-verification)
 reproduces the same `Resource` failure at exact retained `0a856957` and its
 candidate: decode 38705, expected-fact admission 52747, reconstruction refusal at
-327680. Baseline archive paths differ explicitly. The actual failing subphase
-and complete demand are not yet measured.
+327680. Baseline archive paths differ explicitly. Those historical receipts did not
+measure the failing subphase or complete demand; the measurements below do.
 
 ## Verification
 
@@ -90,16 +90,25 @@ receipts accompany the final candidate. No old F-core receipt transfers.
 
 [Three red measurements](evidence/source-resource-startup-budget/README.md)
 localize refusal to strict capture control analysis. Template admission uses one
-fresh registry check and two session hits; main reconstruction completes at207355.
+fresh registry check and two session hits; main reconstruction completes at 207355.
 Final Core's registry, graph, owner, byte/window and scope checks complete before
 the capture query exhausts the remaining allowance. Capture graph construction
 itself completes. The first repair removes an exactly duplicated same-call builtin check by
 populating the existing omitted-formal provenance immediately after its one
-complete authentication. This saves15536 units and preserves both provenance
+complete authentication. This saves 15536 units and preserves both provenance
 controls. Const-derived expected coordinates then remove repeated scans of the
 compiler-owned builtin string, preserving live original checks. The instrumented
-startup passes at318794/327680. Broad probes are removed and final delivered-source
-verification is pending; no result transfers across that source cleanup.
+startup passes at 318794/327680. Broad probes are removed; a fresh delivered-source
+run reproduces that result. Coordinate, builtin, original-provenance, owner,
+import, capture and host controls and Clippy pass on the same frozen source inputs.
+The image suite is 15/16: dependent-discard reconstruction still refuses with
+`Resource`. An exact retained-a301 archive shows this test already failed with bare
+`Resource`; the candidate reports `Validation(Resource)`. Internal failure phases
+are not claimed equal. The comparison retains source/configuration equality and
+its path difference. The
+[final evidence](evidence/source-resource-startup-budget/README.md#delivered-source-verification)
+retains both results. A separate follow-up under this task and issue #91 must
+repair that dependent case before whole-task acceptance; F-core remains pending.
 
 Existing session reuse is bound to exact immutable registry/source/module/global
 and unused-ordering-footprint context; conditional, provider and lexical contexts
