@@ -186,6 +186,14 @@ and the explicit checked-profile requirement. Empty authored assumption sets
 continue to retain automatic native premises. No parallel registry, source-name
 special case or serialized checked flag may supply authority.
 
+An internal H remains lexically bound in portable host provenance. It must not
+be exported as a free Type identity or reused as authority by independent calls.
+The same closed wrapper called twice has separate host activations. Consumer
+checking receives only `DependencyExports`/summaries; producer code is supplied
+separately at linking. Resident bytes authenticate original declarations rather
+than re-infer wrapper requirements. Erasing an outward-pure wrapper's checked
+requirements must reject against independently reconstructed original facts.
+
 Write positive and negative cases before changing behavior:
 
 - Direct and generic imported scalar wrappers, preserving unused Type/Row actuals
@@ -196,6 +204,9 @@ Write positive and negative cases before changing behavior:
   retain required contract facts without exposing hidden constructors or bodies.
 - Wrong H, reordered complete vectors, hidden/captured host dependencies and
   erased or substituted assumption/contract metadata reject independently.
+- Branch-only dependencies, selected evidence and bounded recursive/higher-order
+  summaries preserve the union. If a path cannot be reconstructed in this subset,
+  refuse it explicitly and keep that original obligation pending.
 - New summary/capture reconstruction work has exact, one-short, cumulative and
   fresh sufficient-budget controls. Existing legacy exports remain valid.
 

@@ -128,6 +128,12 @@ product work. Delivered and remaining criteria stay separate: scalar host/Core
 correspondence is retained; checked owner lifecycle correspondence and complete
 wrapper/module/image obligations remain open.
 
+The first wrapper controls pass imported generic and closed generic wrapper
+source/Core checking. They expose a body-free admission gap: a default-profile
+consumer accepts the outward-pure closed wrapper. The [initial red receipt](evidence/checked-ffi-wrappers/README.md)
+records two passes and this expected failure before product changes. The draft
+remains incomplete; the next repair uses authenticated retained contract facts.
+
 ## Verification
 
 Use one Cargo job and reuse compatible artifacts from the existing product cache
