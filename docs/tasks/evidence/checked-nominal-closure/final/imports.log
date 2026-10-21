@@ -1,0 +1,46 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 34 tests
+test core::capture::value::tests::evidence_lookup_preserves_first_original_imported_port_and_refuses_invalid_ordinals ... ok
+test core::capture::tests::imported_capture_carriers_authenticate_identity_and_unknown_state ... ok
+test evidence::tests::local_and_imported_implementation_ingress_have_exact_atomic_boundaries ... ok
+test core::capture::value::tests::evidence_lookup_charges_cold_imported_and_append_boundaries_with_prefilled_retry ... ok
+test evidence_validation::tests::rejects_imported_implementation_route_without_its_exact_direct_edge ... ok
+test foreign::checked_source::tests::imported_opaque_error_and_display_aliases_preserve_canonical_call_authority ... ok
+test evidence_validation::tests::imported_concrete_source_seed_charges_each_wide_lookup ... ok
+test resolve::module_tests::a_renamed_imported_type_does_not_conflict_with_a_local_global ... ok
+test resolve::provider_import_tests::imported_resource_metadata_preserves_defining_origin_without_template_bodies ... ok
+test resolve::module_tests::imported_non_interface_targets_report_interface_kind ... ok
+test build::image::tests::imported_nominal_image_restores_independently_after_original_sources_disappear ... ok
+test resolve::tests::imported_method_binder_kind_authentication_is_exact ... ok
+test elaborate::provider::tests::contextual_structure_rejects_changed_imported_kind_and_native_admission ... ok
+test resolve::tests::imported_parameter_clone_late_failure_dismantles_deep_completed_binders ... ok
+test elaborate::provider::tests::external::provider_external_plain_helper_rejects_private_and_unimported_globals ... ok
+test resolve::tests::imported_implementation_kinded_head_retention_is_exact_and_atomic ... ok
+test elaborate::provider::tests::normal_provider_helpers_use_imported_facts ... ok
+test resolved::tests::checker_view_imported_kind_failure_discards_staged_parameter_rows_on_a_small_stack ... ok
+test resolved::tests::imported_newtype_routes_reject_parameter_and_canonical_fact_tampering ... ok
+contextual handler imported nominals=64 plus canonical data, cost=10285
+test evidence::tests::imported_selector_kind_failure_is_stack_safe_and_atomic ... ok
+test elaborate::provider::tests::handler::source_handler_checks_pure_imported_error_mapping_and_single_resume_branches ... ok
+test resolve::tests::imported_kind_context_reaches_presentation ... ok
+test resolved::tests::duplicate_imported_constructor_is_dismantled_on_a_small_stack ... ok
+test resolved::tests::imported_global_order_failure_dismantles_deep_input_on_a_small_stack ... ok
+test resolved::tests::imported_impl_identity_dedup_does_not_compare_deep_fact_payloads ... ok
+test resolved::tests::duplicate_imported_global_is_dismantled_on_a_small_stack ... ok
+test core::validate::tests::cleanup_imported_generic_open_row_factory_preserves_both_transforms ... ok
+test elaborate::provider::tests::external::provider_external_wide_imported_concrete_roots_have_exact_retry_boundaries ... ok
+test elaborate::provider::tests::handler::contextual_wide_imported_nominal_source_sort_has_exact_work ... ok
+buffer diagnostic compilation: CompilationWork { source_checking: Some(PhaseCost { completed: true, phase: SourceChecking, used: 171396, allowance: Some(5470400) }), final_elaboration: Some(PhaseCost { completed: true, phase: FinalElaboration, used: 55481, allowance: Some(5470400) }), independent_core: Some(PhaseCost { completed: true, phase: IndependentCore, used: 152764, allowance: Some(2359110) }) }
+buffer startup after decode: 38709
+buffer startup after complete fact authentication: 52753
+buffer startup after reconstruction: 318827
+test build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget ... ok
+test elaborate::tests::generic_cell_imported_flow_publication_is_exact_and_retryable ... ok
+test evidence::tests::wide_local_and_imported_implementation_closures_have_exact_retryable_boundaries ... ok
+test build::image::tests::generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work ... ok
+test core::validate::tests::generic_cell_imported_snapshot_recursive_and_handler_core_work_is_retryable ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 1975 filtered out; finished in 3.13s
+

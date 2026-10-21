@@ -246,8 +246,14 @@ existing generic closed wrapper. The [test-first checkpoint](evidence/checked-no
 passes the actual capture/hidden-kind and unrelated Spare controls plus body-free
 consumer, linking, independent Core and identity/fold revalidation. Coherent
 required Held hidden-row erasure still authenticates successfully, exposing a
-summary-admission gap. Product repair and independently mutated consumer/Core
-controls remain pending.
+summary-admission gap. The corrected graph walk now uses paid exact membership in that summary's
+existing authenticated kind environment, including established kind-only
+resource families. Final [delivery evidence](evidence/checked-nominal-closure/README.md#final-delivery-verification)
+records 141 distinct passes and Clippy, selected-only parity, exact missing-kind
+and budget controls, separate consumer/Core mutations, hidden re-export and
+identity/fold positives. Images pass 16/16, with original buffer/dependent startup
+318827/314696 under unchanged 327680. Independent review/integration remain
+pending; broader declaration/resource closure and whole F3/F-core are incomplete.
 Hidden identity/kind metadata carries no constructor access, so the control uses
 the metadata actually retained by that route.
 

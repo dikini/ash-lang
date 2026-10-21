@@ -425,14 +425,115 @@ fn checked_wrapper_branch_and_callable_paths_preserve_original_contract_union() 
     }
 }
 
+pub(super) fn capture_kinds_for_test(summary: &ExportSummary) -> KindEnvironments<'_> {
+    capture_kinds_without_for_test(summary, None)
+}
+
+pub(super) fn capture_kinds_without_for_test(
+    summary: &ExportSummary,
+    omitted: Option<NominalTypeId>,
+) -> KindEnvironments<'_> {
+    let mut kinds = KindEnvironments::new();
+    let mut work = TypeWorkBudget::default();
+    for fact in summary.nominals.values() {
+        if omitted == Some(fact.id) {
+            continue;
+        }
+        kinds
+            .insert_nominal(
+                fact.id,
+                &fact.parameters,
+                fact.origin.primary_span(),
+                &mut work,
+            )
+            .unwrap();
+    }
+    for fact in summary.hidden_nominals.values() {
+        if omitted == Some(fact.id) {
+            continue;
+        }
+        kinds
+            .insert_nominal(
+                fact.id,
+                &fact.parameters,
+                fact.origin.primary_span(),
+                &mut work,
+            )
+            .unwrap();
+    }
+    for fact in summary.source_resource_facts.values() {
+        if omitted == Some(fact.family) {
+            continue;
+        }
+        if fact
+            .parameters
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
+            kinds
+                .insert_row_resource_family(
+                    fact.family,
+                    fact.id,
+                    &fact.parameters,
+                    fact.origin.primary_span(),
+                    &mut work,
+                )
+                .unwrap();
+        } else {
+            kinds
+                .insert_nominal(
+                    fact.family,
+                    &fact.parameters,
+                    fact.origin.primary_span(),
+                    &mut work,
+                )
+                .unwrap();
+        }
+    }
+    for contracts in summary.provider_groups.values() {
+        for (_, _, fact) in contracts.resource_contracts() {
+            if omitted == Some(fact.family) {
+                continue;
+            }
+            if fact
+                .parameters
+                .iter()
+                .any(|parameter| parameter.kind == Kind::EffectRow)
+            {
+                kinds
+                    .insert_row_resource_family(
+                        fact.family,
+                        fact.id,
+                        &fact.parameters,
+                        fact.origin.primary_span(),
+                        &mut work,
+                    )
+                    .unwrap();
+            } else {
+                kinds
+                    .insert_nominal(
+                        fact.family,
+                        &fact.parameters,
+                        fact.origin.primary_span(),
+                        &mut work,
+                    )
+                    .unwrap();
+            }
+        }
+    }
+    kinds
+}
+
 #[test]
 fn checked_wrapper_capture_closure_has_exact_prefixed_and_memoized_work() {
     let summary = wrapper_summary();
     let capture = &summary.terms["closed"].capture;
+    let kinds = capture_kinds_for_test(&summary);
     let mut measured = TypeWorkBudget::unbounded();
     summary
         .authenticate_capture_effect_closure(
             capture,
+            &kinds,
             &mut crate::core::capture::CaptureGraphVisits::default(),
             &mut OriginalEffectMemo::new(),
             &mut measured,
@@ -446,6 +547,7 @@ fn checked_wrapper_capture_closure_has_exact_prefixed_and_memoized_work() {
         let mut visits = crate::core::capture::CaptureGraphVisits::default();
         let result = summary.authenticate_capture_effect_closure(
             capture,
+            &kinds,
             &mut visits,
             &mut OriginalEffectMemo::new(),
             &mut work,
@@ -460,10 +562,22 @@ fn checked_wrapper_capture_closure_has_exact_prefixed_and_memoized_work() {
     let mut work = TypeWorkBudget::with_limit(required + 1);
     let mut originals = OriginalEffectMemo::new();
     summary
-        .authenticate_capture_effect_closure(capture, &mut visits, &mut originals, &mut work)
+        .authenticate_capture_effect_closure(
+            capture,
+            &kinds,
+            &mut visits,
+            &mut originals,
+            &mut work,
+        )
         .unwrap();
     summary
-        .authenticate_capture_effect_closure(capture, &mut visits, &mut originals, &mut work)
+        .authenticate_capture_effect_closure(
+            capture,
+            &kinds,
+            &mut visits,
+            &mut originals,
+            &mut work,
+        )
         .unwrap();
     assert_eq!(
         work.used(),

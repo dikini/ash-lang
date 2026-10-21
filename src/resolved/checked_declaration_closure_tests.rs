@@ -231,10 +231,12 @@ fn checked_declaration_closure_unreferenced_private_spare_is_not_required() {
 fn checked_declaration_closure_nominal_roots_are_paid_and_operation_local() {
     let summary = summary();
     let capture = &summary.terms["select"].capture;
+    let kinds = super::checked_wrapper_tests::capture_kinds_for_test(&summary);
     let mut measured = TypeWorkBudget::default();
     summary
         .authenticate_capture_effect_closure(
             capture,
+            &kinds,
             &mut crate::core::capture::CaptureGraphVisits::default(),
             &mut OriginalEffectMemo::new(),
             &mut measured,
@@ -247,6 +249,7 @@ fn checked_declaration_closure_nominal_roots_are_paid_and_operation_local() {
         work.charge(7).unwrap();
         let result = summary.authenticate_capture_effect_closure(
             capture,
+            &kinds,
             &mut crate::core::capture::CaptureGraphVisits::default(),
             &mut OriginalEffectMemo::new(),
             &mut work,
@@ -265,6 +268,7 @@ fn checked_declaration_closure_nominal_roots_are_paid_and_operation_local() {
         assert_eq!(
             summary.authenticate_capture_effect_closure(
                 capture,
+                &kinds,
                 &mut crate::core::capture::CaptureGraphVisits::default(),
                 &mut OriginalEffectMemo::new(),
                 &mut work,
@@ -276,11 +280,23 @@ fn checked_declaration_closure_nominal_roots_are_paid_and_operation_local() {
     let mut visits = crate::core::capture::CaptureGraphVisits::default();
     let mut originals = OriginalEffectMemo::new();
     summary
-        .authenticate_capture_effect_closure(capture, &mut visits, &mut originals, &mut shared_work)
+        .authenticate_capture_effect_closure(
+            capture,
+            &kinds,
+            &mut visits,
+            &mut originals,
+            &mut shared_work,
+        )
         .unwrap();
     let before = shared_work.used();
     summary
-        .authenticate_capture_effect_closure(capture, &mut visits, &mut originals, &mut shared_work)
+        .authenticate_capture_effect_closure(
+            capture,
+            &kinds,
+            &mut visits,
+            &mut originals,
+            &mut shared_work,
+        )
         .unwrap();
     assert!(shared_work.used() > before);
     assert!(shared_work.used() - before < required);
