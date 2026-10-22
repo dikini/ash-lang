@@ -358,3 +358,16 @@ precedes implementation. Body-free import/re-export, independent Core/transforms
 exact original/Host/assumption facts and hostile/budget controls are required.
 No byte/window/dependency/runtime or deployment permission follows; whole F3
 and the existing F-core/Main gates remain pending.
+
+The scalar Borrow candidate now passes real source/summary, body-free import and
+re-export, linked independent Core/identity/fold, exact copied Read vector/Host/
+membership mutations, and distinct nonempty row actuals around nonfirst H/R.
+Binding controls cover exact/prefix/short/spent/fresh work, original/formal/
+operation identity, direct State shape and extra-operand refusal. Genuine native
+summary erasure controls and the final eight-command uniform affected batch pass:
+527 distinct names / 562 passing lines on 589 equal inputs; source-resource 30/30,
+images 16/16, Clippy zero and startup 318956/314948 below unchanged 327680. The separate appended ordinary-formal versus
+unused lexical-host source-order limitation remains visible; no census guard
+was relaxed. [Borrow evidence](evidence/checked-scalar-borrow/README.md) retains
+all failed prerequisites and precise attribution. Exact-head review, root-assigned
+GitHub integration and partial acceptance follow; whole F3 and F-core remain open.

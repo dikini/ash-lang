@@ -580,8 +580,8 @@ as a partial delivery. This checkpoint implements the next bounded part of
 CP-0024 and TASK-0051 Work 2–4 / Slices 4–5: one opaque Current scalar Borrow
 inside its owning resource's direct handler. It does not expand owner transport.
 
-The shared owner binder already validates scalar Current Borrow signatures, but
-the checked symbol entry currently excludes that role. First establish a real
+At the test-first snapshot, the shared owner binder already validated scalar
+Current Borrow signatures, while the checked symbol entry excluded that role. First establish a real
 prepared contract and observe its actual explicit-profile binding refusal. A
 code exclusion alone is not red evidence. Use the PR #97 State<H,R> library with
 an additional `Read<H,R>: State<H,R> -> Foreign.CheckedCall<Int>`, a scalar C ABI
@@ -628,3 +628,19 @@ deployment, SQLite and F4/F6 are excluded. AD-0015 remains owner-free. Broader
 declaration closure and whole F3 stay pending. The existing generated-host
 connected F3/F4/F6 trigger for F-core and separate Main integration are unchanged.
 A concrete semantic gap returns to CP/design rather than selecting local rules.
+
+The candidate now admits the exact direct State-to-Int role only in Handler,
+retaining the legacy behavior and checked Acquire/Finish refusals. Direct demand
+and substituted row realization reconstruct exact Host from the native original
+and complete request vector. Fresh focused positives include genuine four-formal
+Before-row/H/R/After-row metadata with distinct nonempty rows, body-free import
+and re-export, independent Core/copy mutations and identity/fold. The actual
+request component distinguishes independent Borrow BoundaryFailed from private
+finish authority. A caller-handled independent observer gates its State-hostile
+source refusal; that refusal is not attributed solely to symbolic payload flow.
+
+The appended-observer declaration exposed a separate OriginalTemplate source-order
+census limitation before flow. Its pinned failure remains evidence; equivalent
+declaration ordering isolates the assigned direct-handler case without changing
+the census. Final uniform affected regressions, startup defaults, images, Clippy
+and exact-head review remain the delivery gate. No F-core or whole-F3 pass follows.

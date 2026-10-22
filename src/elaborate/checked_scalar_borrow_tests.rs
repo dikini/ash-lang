@@ -234,7 +234,10 @@ fn observed_boundary_source(transport_state: bool) -> String {
         .replace("run () = handle (foreign host H {", "run () = handle (handle (foreign host H {")
         .replace("}) with Trace {\n    note ignored => resume ()\n}",
             "}) with Trace {\n    note ignored => resume ()\n}) with Observe<Int> {\n    note ignored => resume ()\n}");
-    format!("{source}\neffect Observe<T> {{\n note : T -> Unit\n}}\n")
+    source.replace(
+        "resource Probe<H, R> {",
+        "effect Observe<T> {\n    note : T -> Unit\n}\n\nresource Probe<H, R> {",
+    )
 }
 
 #[test]

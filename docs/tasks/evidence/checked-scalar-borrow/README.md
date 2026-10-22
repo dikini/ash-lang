@@ -108,7 +108,7 @@ That control passes; connected controls are 13/14 and rebinding 5/5.
 
 The independent caller-handled observer still fails before symbolic flow. Pinned
 debugger observations locate Registry/None at the OriginalTemplate registry
-source-order census: ordinary Observe<T> formal local 13 at 4088..4089 is visited
+source-order census: ordinary `Observe<T>` formal local 13 at 4088..4089 is visited
 before the run's lexical host H, local 17 at 3905..3906. The template view contains
 no run-host node, so its reconstructed host context is empty when the source
 span moves backwards. The exact reconstructed fixture and unchanged artifact
@@ -117,3 +117,48 @@ This is not evidence that ordinary outward requests or reason forwarding are
 unsupported; that earlier attribution is withdrawn. The State-hostile variant
 never executes. Moving the equivalent ordinary declaration before the resource
 is a separate fixture isolation, with the original ordering checks retained.
+
+## Final focused delivery
+
+All eight [final command receipts](final/summary.json) pass on the same 589 inputs,
+SHA-256 `a2607f6f21a3b1aad5f122f9b1860c0f59068bf49039617a73b80e89a8b51c39`
+(sorted-key compact JSON, UTF-8, no newline). The frozen input set includes the
+runner and read-only [verifier](final/verify.py), project source/tests/specification,
+relevant root configuration, three bundled libraries and path-dependency source/
+configuration. The verifier checks current/before/after equality, raw hashes,
+historical receipt consistency and actual nonzero test matches without running
+Ash or native artifacts. External test-binary/tool pins are recorded separately.
+
+| Command group | Passing test lines |
+| --- | ---: |
+| Private checked controls | 218 |
+| Six checked-foreign integration targets | 57 |
+| Provider rows | 16 |
+| Source-resource controls | 30 |
+| Capture controls | 157 |
+| Foreign binding/contracts | 68 |
+| Image encode/restore and default startup | 16 |
+| Clippy with warnings denied | exit 0 |
+
+These are 527 distinct passing test names and 562 passing lines after overlapping
+selections. Images pass 16/16; buffer/dependent-discard startup work is
+318956/314948 under the unchanged 327680 default. Genuine Borrow summary tests
+reject exact native-original and native-contract erasure while preserving
+completed publication/header facts. The source State-hostile observer case now
+runs only after its independent outward request passes; its refusal is Source
+category evidence, not an isolated claim about which payload/phase guard fired.
+The exact original-request component separately proves independent checked
+failure alternatives and absence of finish authority.
+
+Only the observer declaration moved before the resource to obtain that positive.
+The prior OriginalTemplate source-order limitation remains unresolved and is not
+ordinary outward-flow refusal evidence. Historical logs, overlays and the exact
+generated diagnostic source retain their bytes; they are not reformatted product
+fixtures. Initial rebinding/callback/parser failures receive only their recorded
+setup/unsupported-boundary credit.
+
+This is a focused static delivery, not F-core or whole-F3 acceptance. Checked
+byte/window/copy and declared owner dependencies remain required downstream, as
+do runtime/native/image execution, K, deployment and the separate Main gate.
+AD-0015 remains owner-free. The existing generated-host connected F3/F4/F6 trigger
+for F-core is unchanged; no older full-gate receipt is presented as a fresh pass.

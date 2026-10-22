@@ -19,7 +19,8 @@ def pins():
         paths.update(str(path.relative_to(ROOT)) for path in (ROOT / directory).rglob("*")
                      if path.is_file() and path.suffix in {".ash", ".rs", ".toml", ".c", ".h", ".json"})
     paths.update({"docs/tasks/plans/checked-ffi-contract-carriers.md",
-                  str(Path(__file__).resolve().relative_to(ROOT))})
+                  str(Path(__file__).resolve().relative_to(ROOT)),
+                  "docs/tasks/evidence/checked-scalar-borrow/final/verify.py"})
     return {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
             for name in sorted(paths) if (ROOT / name).is_file()}
 

@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 16 tests
+test core::provider::dictionary_carrier_tests::outward_family_request_handles_do_not_admit_state_callables_or_returns ... ok
+test core::provider::dictionary_carrier_tests::nested_dictionary_carriers_have_exact_fallible_traversal_and_retry ... ok
+test core::provider::budget_tests::provider_state_scan_charges_nullary_row_labels_cumulatively ... ok
+test core::provider::scope::tests::phase_interpretation_preserves_formal_callback_delta_without_native_exclusion ... ok
+test core::provider::specialization::executable_scope_tests::deferred_source_rows_require_unique_variables_complete_original_domains_and_exact_work ... ok
+test core::provider::specialization::executable_scope_tests::actual_source_final_solved_rows_require_original_domains_and_exact_budget ... ok
+test core::provider::external::storage_tests::external_type_replacement_and_drop_dispose_exact_owned_trees ... ok
+test core::provider::specialization::executable_scope_tests::arena_source_capture_receipt_is_exact_budgeted_and_not_executable ... ok
+test core::provider::specialization::executable_scope_tests::attached_arena_cleanup_rows_restore_both_caches_and_retry_exactly ... ok
+test core::provider::specialization::executable_scope_tests::admitted_arena_source_capture_view_is_exact_and_budgeted ... ok
+test core::provider::specialization::executable_scope_tests::arena_scope_transforms_reject_changed_forwarding_and_native_operand_edges ... ok
+test core::provider::specialization::executable_scope_tests::mixed_resource_owner_vectors_reject_independent_core_mutations_after_both_transforms ... ok
+test core::provider::specialization::executable_scope_tests::sqlite_scope_preparation_and_another_occurrences_proof_cannot_authorize_execution ... ok
+test core::provider::specialization::executable_scope_tests::arena_scope_transforms_reject_a_different_genuine_same_typed_family_dictionary ... ok
+test core::provider::row::realize::tests::source_control_copy_window_rows_keep_state_and_refuse_unhandled_body ... ok
+test core::provider::specialization::executable_scope_tests::sqlite_scope_transforms_revalidate_and_same_typed_template_forgery_is_rejected ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 2085 filtered out; finished in 1.16s
+
