@@ -8714,6 +8714,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<RegistryParameterOwners, ValidationError> {
         self.validate_reserved_builtin_sources()?;
         self.validate_scalar_preflight_registry()?;
+        self.validate_registry_contents(original)
+    }
+
+    fn validate_registry_contents(
+        &self,
+        original: Option<&source_declarations::OriginalDeclarationProvenance>,
+    ) -> Result<RegistryParameterOwners, ValidationError> {
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
@@ -9014,7 +9021,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
-    fn validate_scalar_preflight_registry(&self) -> Result<(), ValidationError> {
+    fn validate_scalar_preflight_registry(
+        &self,
+    ) -> Result<crate::resolved::ScalarPreflightOwnerAuthentication<'program>, ValidationError>
+    {
         let registry = &self.program.registry;
         for (function, fact) in registry.scalar_preflights() {
             self.charge_type_work(1)?;
@@ -9032,7 +9042,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         let mut work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let result = registry.authenticate_scalar_preflights(&mut work);
+        let result = registry.authenticate_scalar_preflights_for_owners(&mut work);
         self.charge_type_work(work.used())?;
         result.map_err(|failure| {
             ValidationError::new(
@@ -9896,19 +9906,37 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_effect_registry(
         &self,
         module_sources: Option<&HashMap<ModuleId, SourceId>>,
         parameter_owners: &mut RegistryParameterOwners,
     ) -> Result<(), ValidationError> {
+        self.validate_effect_registry_with_preflights(module_sources, parameter_owners, None)
+    }
+
+    fn validate_effect_registry_with_preflights(
+        &self,
+        module_sources: Option<&HashMap<ModuleId, SourceId>>,
+        parameter_owners: &mut RegistryParameterOwners,
+        preflights: Option<crate::resolved::ScalarPreflightOwnerAuthentication<'program>>,
+    ) -> Result<(), ValidationError> {
         let mut owner_work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let owner_result = self
-            .program
-            .registry
-            .authenticate_owner_definitions(&mut owner_work);
+        let owner_result = match preflights {
+            Some(authentication) => self
+                .program
+                .registry
+                .authenticate_owner_definitions_with_preflights(authentication, &mut owner_work)
+                .map(Some),
+            None => self
+                .program
+                .registry
+                .authenticate_owner_definitions(&mut owner_work)
+                .map(|()| None),
+        };
         self.charge_type_work(owner_work.used())?;
-        owner_result.map_err(|failure| {
+        let host_authentication = owner_result.map_err(|failure| {
             ValidationError::new(
                 if matches!(failure, crate::resolved::ResolvedBuildFailure::TypeResource) {
                     ValidationReason::Resource
@@ -9966,11 +9994,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let mut work = TypeWorkBudget::with_limit(
                     self.type_work_limit.saturating_sub(self.type_work.get()),
                 );
-                let result = crate::foreign::checked_builtins::is_canonical_native_host(
-                    effect,
-                    &self.program.registry,
-                    &mut work,
-                );
+                let result = match &host_authentication {
+                    Some(authentication) => authentication.is_canonical_native_host(
+                        effect,
+                        &self.program.registry,
+                        &mut work,
+                    ),
+                    None => crate::foreign::checked_builtins::is_canonical_native_host(
+                        effect,
+                        &self.program.registry,
+                        &mut work,
+                    ),
+                };
                 self.charge_type_work(work.used())?;
                 !result.map_err(|failure| {
                     ValidationError::new(
@@ -16220,8 +16255,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         } else {
             None
         };
-        let mut owners = self.validate_registry_with_original_provenance(original.as_ref())?;
-        self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
+        self.validate_reserved_builtin_sources()?;
+        let preflights = self.validate_scalar_preflight_registry()?;
+        let mut owners = self.validate_registry_contents(original.as_ref())?;
+        self.validate_effect_registry_with_preflights(
+            self.module_sources.as_ref(),
+            &mut owners,
+            Some(preflights),
+        )?;
         let empty_type_binders = CoreTypeBinders::new();
         for nominal in self
             .program

@@ -1,0 +1,60 @@
+[
+  {
+    "name": "two-owner",
+    "command": [
+      "python3",
+      "docs/tasks/evidence/checked-byte-windows/test-first/run.py",
+      "candidate-host-chain-two-owner-diagnostic",
+      "timeout",
+      "--kill-after=10s",
+      "180s",
+      "gdb",
+      "-q",
+      "--batch",
+      "-ex",
+      "set pagination off",
+      "-ex",
+      "set breakpoint pending on",
+      "-ex",
+      "source /tmp/ash-checked-byte-windows/exclusive-profile/phase-ledger-two-owner-cost.py",
+      "-ex",
+      "run",
+      "-ex",
+      "python require_completed_target()",
+      "--args",
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+      "build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+      "--exact",
+      "--nocapture"
+    ]
+  },
+  {
+    "name": "dependent",
+    "command": [
+      "python3",
+      "docs/tasks/evidence/checked-byte-windows/test-first/run.py",
+      "candidate-host-chain-dependent-diagnostic",
+      "timeout",
+      "--kill-after=10s",
+      "180s",
+      "gdb",
+      "-q",
+      "--batch",
+      "-ex",
+      "set pagination off",
+      "-ex",
+      "set breakpoint pending on",
+      "-ex",
+      "source /tmp/ash-checked-byte-windows/exclusive-profile/phase-ledger-dependent-cost.py",
+      "-ex",
+      "run",
+      "-ex",
+      "python require_completed_target()",
+      "--args",
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+      "build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work",
+      "--exact",
+      "--nocapture"
+    ]
+  }
+]

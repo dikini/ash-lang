@@ -793,3 +793,17 @@ A baseline earlier-phase ledger is retained, with the current-side counterpart
 still required before a paid-work simplification is selected. Temporary source
 hooks were restored and removed; no product profiler, cap or guard change is
 part of this checkpoint.
+
+#### Coordinate and window-control checkpoint
+
+The paid canonical-coordinate factory and operation-local scalar/owner/Host
+chain have five passing focused controls. The connected checked-window matrix
+now passes 15 tests, including genuine donor/key positives, legacy-call and
+post-attempt refusals, and copied Core Host/vector/order mutations. See
+[the candidate receipts](../evidence/checked-byte-windows/candidates/coordinate-host-and-window-controls/README.md).
+The original startup limit remains 327680: nested cleanup passes at 327334,
+while two-owner and dependent startup remain Resource. Separate alternate-cap
+cost diagnostics measure deficits 6748 and 10443; they confer no default pass.
+Next work addresses repeated exact source/inventory proof within one immutable
+admission, then actual checked-owner static-image and remaining hostile/bounds
+and affected regression gates. PR101 and whole F3 remain incomplete.

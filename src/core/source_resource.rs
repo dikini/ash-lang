@@ -8805,3 +8805,8 @@ pub(crate) mod checked_lifecycle_core_tests;
 #[cfg(test)]
 #[path = "source_resource/checked_borrow_core_tests.rs"]
 pub(crate) mod checked_borrow_core_tests;
+
+// Private canonical-first byte-window authority mutation controls.
+#[cfg(test)]
+#[path = "source_resource/checked_byte_window_core_tests.rs"]
+pub(crate) mod checked_byte_window_core_tests;

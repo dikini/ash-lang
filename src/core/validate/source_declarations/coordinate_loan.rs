@@ -69,7 +69,7 @@ impl<'source> DeclarationCoordinateLoan<'source> {
             return Ok(Arc::clone(coordinates));
         }
         charge(work, 1)?;
-        let coordinates = DeclarationCoordinates::from_source(source, work)?;
+        let coordinates = DeclarationCoordinates::from_module_source(module, source, work)?;
         // No failed/partial syntax or unpaid retention becomes a future hit.
         charge(work, 1)?;
         let mut retained = self.coordinates.borrow_mut();

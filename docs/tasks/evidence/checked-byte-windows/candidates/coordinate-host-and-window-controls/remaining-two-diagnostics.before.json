@@ -1,0 +1,16 @@
+{
+  "binary": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "sha256": "64b13f8f532a8df5f71a7a057be60955ad84e780b7d436a805282c12e303291b",
+  "size": 848016864,
+  "scripts": {
+    "phase-ledger-two-owner-cost.py": "e1791cc704d5618da1624cab1104ac3306e29438a0f9f3ba9b6178c33fb50938",
+    "phase-ledger-dependent-cost.py": "46f0a002e7d99ced4aa6d6ae8deee481552ea1224c91df1d20ecba23a0b4f427"
+  },
+  "source_aggregate": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30",
+  "source_count": 591,
+  "root_original_limit": 327680,
+  "diagnostic_limit": 655360,
+  "timeout_seconds": 180,
+  "kill_after_seconds": 10,
+  "dependent_stop_line": 3642
+}
