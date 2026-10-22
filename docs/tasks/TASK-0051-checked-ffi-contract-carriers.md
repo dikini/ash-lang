@@ -402,3 +402,9 @@ now expose real Resource regressions at unchanged 327680; these block delivery.
 Passive-image hostile completion, remaining window/Host/original controls and
 bounds/regressions remain pending. The candidate evidence records both positives
 and reds; no whole-F3, checked execution or image activation claim follows.
+
+The [owned-call State checkpoint](evidence/checked-byte-windows/candidates/owned-call-move/README.md)
+passes its focused controls and all three unchanged startup probes on the isolated
+parallel F3 configuration. Integration onto the retained passive milestone,
+affected regressions, Clippy and final review remain pending; no whole F3 or
+public checked execution acceptance follows.
