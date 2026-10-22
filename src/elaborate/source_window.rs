@@ -3,8 +3,7 @@ use super::{
     Arc, CheckKind, CoreElaborator, CoreLoweringFamily, EffectOperation, ElaborationTask,
     ElaborationTaskBuffer, IterativeTypeOwner, Origin, ProvenancedType, Span, Type, TypeError,
     TypeReason, TypeVariableId, TypedNode, TypedNodeBuffer, TypedNodeOwner,
-    clone_effect_instance_with_budget, clone_effect_row_with_budget, inference_failure,
-    invalid_state, type_resource,
+    clone_effect_instance_with_budget, inference_failure, invalid_state, type_resource,
 };
 use crate::foreign::source_access::CheckedForeignAccess;
 
@@ -161,6 +160,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 "an open copy window cannot suspend",
             ));
         }
+        let host = crate::foreign::source_access::checked_window_host_instance(
+            &progress.family,
+            &progress.arguments.0,
+            &self.registry,
+            &mut self.type_work,
+        )
+        .map_err(|error| {
+            if error.is_resource_exhaustion() {
+                type_resource()
+            } else {
+                invalid_state()
+            }
+        })?;
+        let mut retained_host = false;
         let mut interpretations = Vec::new();
         self.type_work
             .charge(row.known().len())
@@ -169,6 +182,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .try_reserve_exact(row.known().len())
             .map_err(|_| type_resource())?;
         for effect in row.known() {
+            if let Some(host) = &host {
+                if crate::types::compare_effect_instances_with_budget(
+                    effect,
+                    host,
+                    &mut self.type_work,
+                )
+                .map_err(|_| type_resource())?
+                    == std::cmp::Ordering::Equal
+                {
+                    retained_host = true;
+                    // The exact sealed Host obligation is retained, never
+                    // interpreted as a native operation by this window.
+                    continue;
+                }
+            }
             let symbol = self
                 .registry
                 .native_symbol(crate::types::OperationId::new(effect.effect(), 0))
@@ -214,8 +242,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(inference_failure(TypeReason::Argument, progress.span, "copy-window identity escapes in the result"));
         }
         let provenance = self.at_span_provenance(&ty, progress.span)?;
-        let effects = clone_effect_row_with_budget(&state.effects, &mut self.type_work)
-            .map_err(|()| type_resource())?;
+        let host_row = if let Some(host) = host.filter(|_| retained_host) {
+            self.type_work.charge(1).map_err(|_| type_resource())?;
+            crate::types::EffectRow::singleton(host)
+        } else {
+            crate::types::EffectRow::empty()
+        };
+        let effects = self.union_effects(&state.effects, &host_row, progress.span)?;
         let node_ty = self.clone_type(&ty)?;
         let node_effects = self.core_effect_row(&effects)?;
         self.type_work.charge(2).map_err(|()| type_resource())?;

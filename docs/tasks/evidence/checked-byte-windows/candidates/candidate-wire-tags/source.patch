@@ -1,0 +1,1101 @@
+diff --git a/src/build/image.rs b/src/build/image.rs
+index 3c8fea00..505a083a 100644
+--- a/src/build/image.rs
++++ b/src/build/image.rs
+@@ -1328,6 +1328,10 @@ impl Encoder<'_> {
+                             Intrinsic::ForeignByteWrite { function } => (function, Role::ByteWrite),
+                             _ => return Err(ImageFailure::Unsupported(Unsupported::Intrinsic)),
+                         };
++                        let role = if let Some(checked) = Role::checked_memory_local(function.local()) {
++                            if checked.operation_role() != role { return Err(ImageFailure::InvalidRecord); }
++                            checked
++                        } else { role };
+                         NodeTag::ScalarPreflight {
+                             function: self.binder_id(function)?,
+                             role,
+@@ -3405,11 +3409,11 @@ impl Decoder<'_> {
+                     Role::Nul => Intrinsic::ForeignCheckedNul { function },
+                     Role::DataOf => Intrinsic::ForeignDataOf { function },
+                     Role::ReplaceData => Intrinsic::ForeignReplaceData { function },
+-                    Role::CopyBytes => Intrinsic::ForeignCopyBytes { function },
+-                    Role::CopyNul => Intrinsic::ForeignCopyNul { function },
++                    Role::CopyBytes | Role::CheckedCopyBytes => Intrinsic::ForeignCopyBytes { function },
++                    Role::CopyNul | Role::CheckedCopyNul => Intrinsic::ForeignCopyNul { function },
+                     Role::ExtentValue => Intrinsic::ForeignExtentValue { function },
+-                    Role::ByteRead => Intrinsic::ForeignByteRead { function },
+-                    Role::ByteWrite => Intrinsic::ForeignByteWrite { function },
++                    Role::ByteRead | Role::CheckedByteRead => Intrinsic::ForeignByteRead { function },
++                    Role::ByteWrite | Role::CheckedByteWrite => Intrinsic::ForeignByteWrite { function },
+                 };
+                 builder.with_caller_type_work(self.work, |builder| {
+                     builder.intrinsic(operation, module, ty.into_inner(), origin.take())
+@@ -7776,6 +7780,10 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
+             Self::CopyBytes => 7,
+             Self::CopyNul => 8,
+             Self::ExtentValue => 9,
++            Self::CheckedByteRead => 10,
++            Self::CheckedByteWrite => 11,
++            Self::CheckedCopyBytes => 12,
++            Self::CheckedCopyNul => 13,
+         }
+         .write(writer)
+     }
+@@ -7791,6 +7799,10 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
+             7 => Ok(Self::CopyBytes),
+             8 => Ok(Self::CopyNul),
+             9 => Ok(Self::ExtentValue),
++            10 => Ok(Self::CheckedByteRead),
++            11 => Ok(Self::CheckedByteWrite),
++            12 => Ok(Self::CheckedCopyBytes),
++            13 => Ok(Self::CheckedCopyNul),
+             _ => Err(ImageFailure::InvalidEncoding),
+         }
+     }
+@@ -8423,7 +8435,7 @@ impl Encoder<'_> {
+                         && !matches!(input, StructuralInput::Type(Type::Forall(parameters, _))
+                         if parameters.first().and_then(|(id,_)| id.module()).is_some_and(|module| {
+                             use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+-                            [Role::ByteRead, Role::ByteWrite, Role::DataOf, Role::ReplaceData, Role::CopyBytes, Role::CopyNul, Role::ExtentValue].iter().any(|role| role.matches_parameters(module, parameters))
++                            [Role::ByteRead, Role::ByteWrite, Role::DataOf, Role::ReplaceData, Role::CopyBytes, Role::CopyNul, Role::ExtentValue, Role::CheckedByteRead, Role::CheckedByteWrite, Role::CheckedCopyBytes, Role::CheckedCopyNul].iter().any(|role| role.matches_parameters(module, parameters))
+                         }))
+                     {
+                         return Err(ImageFailure::Unsupported(Unsupported::Type));
+diff --git a/src/core/native_interpret_tests.rs b/src/core/native_interpret_tests.rs
+index c131f442..3d233e10 100644
+--- a/src/core/native_interpret_tests.rs
++++ b/src/core/native_interpret_tests.rs
+@@ -172,6 +172,7 @@ impl Fixture {
+         let declarations = self
+             .registry
+             .scalar_preflights()
++            .filter(|(_, fact)| fact.role().host_parameter(fact.module()).is_none())
+             .filter_map(|(_, fact)| {
+                 fact.role()
+                     .borrowed_parameter(fact.module())
+diff --git a/src/core/packed.rs b/src/core/packed.rs
+index 084195f5..c2ea08aa 100644
+--- a/src/core/packed.rs
++++ b/src/core/packed.rs
+@@ -123,6 +123,59 @@ impl IntrinsicNode {
+     /// Returns the fixed ordinary signature, including nominal result identity.
+     #[must_use]
+     pub fn expected_type(self) -> Type {
++        // The operation tags share the existing callable carrier, while distinct
++        // defining function IDs select the checked codec and latent Host row.
++        let function = match self.operation {
++            Intrinsic::ForeignByteRead { function }
++            | Intrinsic::ForeignByteWrite { function }
++            | Intrinsic::ForeignCopyBytes { function }
++            | Intrinsic::ForeignCopyNul { function } => Some(function),
++            _ => None,
++        };
++        if let Some(role) = function.and_then(|function| {
++            crate::foreign::scalar_preflight::ForeignScalarPreflightRole::checked_memory_local(
++                function.local(),
++            )
++        }) {
++            use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
++            use crate::types::{
++                ComputationType, EffectId, EffectInstance, EffectRow, NominalTypeId,
++            };
++            let host = role.host_parameter(self.module).expect("checked role H");
++            let borrowed = role
++                .borrowed_parameter(self.module)
++                .expect("checked role State/view");
++            let mut fields = vec![Type::Variable(borrowed)];
++            fields.push(if role == Role::CheckedCopyBytes {
++                Type::Application(
++                    Box::new(Type::Nominal(NominalTypeId::new(self.module, 5))),
++                    Box::new(Type::Variable(borrowed)),
++                )
++            } else {
++                Type::Int
++            });
++            if role == Role::CheckedByteWrite {
++                fields.push(Type::Int);
++            }
++            let output = Type::Application(
++                Box::new(Type::Nominal(NominalTypeId::new(self.module, 12))),
++                Box::new(match role {
++                    Role::CheckedByteRead => Type::Int,
++                    Role::CheckedByteWrite => Type::Unit,
++                    _ => Type::Bytes,
++                }),
++            );
++            return Type::EffectfulFunction(
++                Box::new(Type::Tuple(fields.into_boxed_slice())),
++                Box::new(ComputationType::new(
++                    output,
++                    EffectRow::singleton(EffectInstance::new(
++                        EffectId::new(self.module, crate::module::FOREIGN_NATIVE_HOST_LOCAL),
++                        Box::new([Type::Variable(host)]),
++                    )),
++                )),
++            );
++        }
+         let (input, output) = match self.operation {
+             Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. } => (
+                 Type::Int,
+diff --git a/src/core/source_resource.rs b/src/core/source_resource.rs
+index 9e636cae..7e91f888 100644
+--- a/src/core/source_resource.rs
++++ b/src/core/source_resource.rs
+@@ -832,15 +832,20 @@ impl CheckedSourceResourceHeader {
+         if checked
+             && (!owner.owner().retained_parameters().is_empty()
+                 || !matches!(
+-                    owner.owner().representation(),
+-                    PreparedAddressRepresentation::Opaque
+-                )
+-                || !matches!(
+-                    acquire.owner_role(),
+-                    Some(PreparedOwnerCall::Acquire {
+-                        initialized_bytes: None,
+-                        ..
+-                    })
++                    (owner.owner().representation(), acquire.owner_role()),
++                    (
++                        PreparedAddressRepresentation::Opaque,
++                        Some(PreparedOwnerCall::Acquire {
++                            initialized_bytes: None,
++                            ..
++                        })
++                    ) | (
++                        PreparedAddressRepresentation::Bytes,
++                        Some(PreparedOwnerCall::Acquire {
++                            initialized_bytes: Some(_),
++                            ..
++                        })
++                    )
+                 )
+                 || !matches!(
+                     teardown.owner_role(),
+@@ -2291,7 +2296,7 @@ fn eval_flow<'a>(
+                     .scalar_preflight(function)
+                     .ok_or_else(invalid)?;
+                 if fact.function() != function
+-                    || fact.role() != role
++                    || fact.role().operation_role() != role
+                     || fact.module() != intrinsic.module()
+                     || !same(&stored.ty, fact.signature(), work)?
+                 {
+@@ -2556,7 +2561,7 @@ fn eval_flow<'a>(
+                             let FlowFact::Tuple(fields) = facts.fact(argument)? else {
+                                 return Err(invalid());
+                             };
+-                            let write = fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite;
++                            let write = fact.role().operation_role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite;
+                             if fields.len() != 2 + usize::from(write) || path.consumed || path.attempted_teardown
+                                 || header.owner.owner().representation() != crate::foreign::source_contract::PreparedAddressRepresentation::Bytes
+                                 || !matches!(header.acquire.owner_role(), Some(PreparedOwnerCall::Acquire {initialized_bytes:Some(_), ..}))
+@@ -2645,10 +2650,12 @@ fn eval_flow<'a>(
+                     else {
+                         return Err(invalid());
+                     };
+-                    if application.arguments().len() != 1
++                    let fact = program.registry.scalar_preflight(function).ok_or_else(invalid)?;
++                    let offset = primitive_host_offset(fact, header, application.arguments(), work)?;
++                    if application.arguments().len() != 1 + offset
+                         || !application.row_arguments().is_empty()
+                         || !window
+-                            .matches_view_type(&application.arguments()[0], work)
++                            .matches_view_type(&application.arguments()[offset], work)
+                             .map_err(|()| resource())?
+                     {
+                         return Err(invalid());
+@@ -2670,11 +2677,12 @@ fn eval_flow<'a>(
+                         .scalar_preflight(function)
+                         .ok_or_else(invalid)?;
+                     let data = fact.role().data_parameter(fact.module()).is_some();
+-                    if application.arguments().len() != 1 + usize::from(data)
++                    let offset = primitive_host_offset(fact, header, application.arguments(), work)?;
++                    if application.arguments().len() != 1 + usize::from(data) + offset
+                         || !application.row_arguments().is_empty()
+-                        || !same(&application.arguments()[0], &header.original.state.ty, work)?
++                        || !same(&application.arguments()[offset], &header.original.state.ty, work)?
+                         || data
+-                            && !same(&application.arguments()[1], &header.original.data.ty, work)?
++                            && !same(&application.arguments()[offset + 1], &header.original.data.ty, work)?
+                     {
+                         return Err(invalid());
+                     }
+@@ -3238,6 +3246,41 @@ fn eval_flow<'a>(
+         _ => Err(invalid()),
+     }
+ }
++/// Validate H against the original selected resource host before retaining an
++/// applied primitive occurrence. Pure data/extent inspection remains unchanged.
++fn primitive_host_offset(
++    fact: &crate::foreign::scalar_preflight::CheckedForeignScalarPreflight,
++    header: &CheckedSourceResourceHeader,
++    arguments: &[Type],
++    work: &mut TypeWorkBudget,
++) -> Result<usize, ValidationError> {
++    use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
++    charge(work, 2)?;
++    let memory = matches!(
++        fact.role().operation_role(),
++        Role::ByteRead | Role::ByteWrite | Role::CopyBytes | Role::CopyNul
++    );
++    let checked = fact.role().host_parameter(fact.module()).is_some();
++    if memory && checked != header.owner.prepared().checked_contract().is_some() {
++        return Err(invalid());
++    }
++    if checked {
++        let selector = header.original.host.ok_or_else(invalid)?;
++        let selected = header
++            .original
++            .parameters
++            .get(selector.position)
++            .ok_or_else(invalid)?;
++        let actual = arguments.first().ok_or_else(invalid)?;
++        if !same(actual, &Type::Variable(selected.id), work)? {
++            return Err(invalid());
++        }
++        Ok(1)
++    } else {
++        Ok(0)
++    }
++}
++
+ fn admit_view_primitive(
+     program: &UnvalidatedEffectProgram,
+     function: crate::resolved::BinderId,
+@@ -3264,7 +3307,7 @@ fn admit_view_primitive(
+         if fields.len() != 2 {
+             return Err(invalid());
+         }
+-        match fact.role() {
++        match fact.role().operation_role() {
+             Role::CopyBytes => {
+                 let FlowFact::WindowExtent { view } = facts.fact(fields[1])? else {
+                     return Err(invalid());
+@@ -3410,6 +3453,12 @@ fn eval_window_request<'a>(
+             let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
+             push(&mut results, (refusal, path.copy(work)?), work)?;
+         }
++        if symbol.prepared().checked_contract().is_some() {
++            // Every checked query also has an independent boundary alternative;
++            // it never carries an owner finish-request or disposition witness.
++            let boundary = facts.wrapped(ConstructorId::new(call.call, 2), 0, work)?;
++            push(&mut results, (boundary, path.copy(work)?), work)?;
++        }
+         let output = match symbol.symbol().access_result() {
+             Some(PreparedAccessResult::View { keys, .. }) => {
+                 let mut selected = Vec::new();
+diff --git a/src/core/validate.rs b/src/core/validate.rs
+index b3b1c5a9..ac68fbf0 100644
+--- a/src/core/validate.rs
++++ b/src/core/validate.rs
+@@ -12913,7 +12913,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
+             return Ok(false);
+         }
+         Ok(matches!(function.value(), Type::Application(call, payload)
+-            if matches!(call.as_ref(), Type::Nominal(id) if id.module().is_builtin_foreign() && id.declaration() == 1)
++            if matches!(call.as_ref(), Type::Nominal(id) if id.module().is_builtin_foreign() && matches!(id.declaration(), 1 | 12))
+                 && **payload == Type::Bytes)
+             && (fields[1] == Type::Int || extent(&fields[1]).is_some()))
+     }
+@@ -17900,13 +17900,37 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
+             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+         }
+         let outward = self.native_interpret_row(&body.effects, scope.interpretations(), id)?;
+-        if !outward.is_empty() {
++        let mut work =
++            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
++        let host = crate::foreign::source_access::checked_window_host_instance(
++            scope.family(),
++            scope.arguments(),
++            &self.program.registry,
++            &mut work,
++        );
++        self.charge_type_work(work.used())?;
++        let host = host.map_err(|error| {
++            if error.is_resource_exhaustion() {
++                resource()
++            } else {
++                invalid()
++            }
++        })?;
++        let expected = if let Some(host) = host.filter(|_| !outward.is_empty()) {
++            self.charge_type_work(1)?;
++            EffectRow::singleton(host)
++        } else {
++            EffectRow::empty()
++        };
++        if !self.same_effect_row_charged(&outward, &expected, id)? {
+             return Err(ValidationError::new(
+                 ValidationReason::ResourceEscape,
+                 Some(id),
+             ));
+         }
+-        if !self.same_effect_row_charged(&node.effects, &self.node(scope.state())?.effects, id)? {
++        let effects =
++            self.union_effect_rows_charged(&self.node(scope.state())?.effects, &expected, id)?;
++        if !self.same_effect_row_charged(&node.effects, &effects, id)? {
+             return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+         }
+         Ok(())
+diff --git a/src/elaborate.rs b/src/elaborate.rs
+index 0ab511a8..37ed56ae 100644
+--- a/src/elaborate.rs
++++ b/src/elaborate.rs
+@@ -11980,19 +11980,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
+                 crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ReplaceData => {
+                     Intrinsic::ForeignReplaceData { function: name.id }
+                 }
+-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyBytes => {
++                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyBytes
++                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedCopyBytes => {
+                     Intrinsic::ForeignCopyBytes { function: name.id }
+                 }
+-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyNul => {
++                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyNul
++                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedCopyNul => {
+                     Intrinsic::ForeignCopyNul { function: name.id }
+                 }
+                 crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ExtentValue => {
+                     Intrinsic::ForeignExtentValue { function: name.id }
+                 }
+-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead => {
++                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead
++                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedByteRead => {
+                     Intrinsic::ForeignByteRead { function: name.id }
+                 }
+-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite => {
++                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite
++                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedByteWrite => {
+                     Intrinsic::ForeignByteWrite { function: name.id }
+                 }
+             }));
+diff --git a/src/elaborate/checked_byte_window_tests.rs b/src/elaborate/checked_byte_window_tests.rs
+index 617a484f..e9bd933e 100644
+--- a/src/elaborate/checked_byte_window_tests.rs
++++ b/src/elaborate/checked_byte_window_tests.rs
+@@ -247,3 +247,29 @@ fn checked_byte_window_initialized_owner_binding_after_name_isolation() {
+     resolve_entry(&graph, true)
+         .expect("genuine prepared checked initialized owner/view contracts must bind independently of missing new builtin names");
+ }
++
++#[test]
++fn checked_byte_window_all_four_primitives_check_actual_source_and_summary() {
++    let graph = fixture();
++    assert_prepared(&graph);
++    let checked = check_graph(&graph)
++        .expect("all four checked primitives need genuine initialized State and actual lexical view/extent window source admission");
++    let producer = checked
++        .iter()
++        .find(|module| module.module() == graph.entry())
++        .unwrap();
++    assert!(producer.source_resource_code().is_some());
++    let registry = producer.registry();
++    for name in ["Allocate", "Free", "QueryBytes", "ByteLength", "QueryNul"] {
++        let effect = registry
++            .effects()
++            .iter()
++            .find(|effect| effect.spelling == name)
++            .unwrap();
++        let original = registry
++            .native_symbol(crate::types::OperationId::new(effect.id, 0))
++            .unwrap();
++        assert!(original.prepared().checked_contract().is_some());
++        assert!(original.owner().is_some());
++    }
++}
+diff --git a/src/elaborate/source_window.rs b/src/elaborate/source_window.rs
+index 83d8aa11..cd0ee88f 100644
+--- a/src/elaborate/source_window.rs
++++ b/src/elaborate/source_window.rs
+@@ -3,8 +3,7 @@ use super::{
+     Arc, CheckKind, CoreElaborator, CoreLoweringFamily, EffectOperation, ElaborationTask,
+     ElaborationTaskBuffer, IterativeTypeOwner, Origin, ProvenancedType, Span, Type, TypeError,
+     TypeReason, TypeVariableId, TypedNode, TypedNodeBuffer, TypedNodeOwner,
+-    clone_effect_instance_with_budget, clone_effect_row_with_budget, inference_failure,
+-    invalid_state, type_resource,
++    clone_effect_instance_with_budget, inference_failure, invalid_state, type_resource,
+ };
+ use crate::foreign::source_access::CheckedForeignAccess;
+ 
+@@ -161,6 +160,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
+                 "an open copy window cannot suspend",
+             ));
+         }
++        let host = crate::foreign::source_access::checked_window_host_instance(
++            &progress.family,
++            &progress.arguments.0,
++            &self.registry,
++            &mut self.type_work,
++        )
++        .map_err(|error| {
++            if error.is_resource_exhaustion() {
++                type_resource()
++            } else {
++                invalid_state()
++            }
++        })?;
++        let mut retained_host = false;
+         let mut interpretations = Vec::new();
+         self.type_work
+             .charge(row.known().len())
+@@ -169,6 +182,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
+             .try_reserve_exact(row.known().len())
+             .map_err(|_| type_resource())?;
+         for effect in row.known() {
++            if let Some(host) = &host {
++                if crate::types::compare_effect_instances_with_budget(
++                    effect,
++                    host,
++                    &mut self.type_work,
++                )
++                .map_err(|_| type_resource())?
++                    == std::cmp::Ordering::Equal
++                {
++                    retained_host = true;
++                    // The exact sealed Host obligation is retained, never
++                    // interpreted as a native operation by this window.
++                    continue;
++                }
++            }
+             let symbol = self
+                 .registry
+                 .native_symbol(crate::types::OperationId::new(effect.effect(), 0))
+@@ -214,8 +242,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
+             return Err(inference_failure(TypeReason::Argument, progress.span, "copy-window identity escapes in the result"));
+         }
+         let provenance = self.at_span_provenance(&ty, progress.span)?;
+-        let effects = clone_effect_row_with_budget(&state.effects, &mut self.type_work)
+-            .map_err(|()| type_resource())?;
++        let host_row = if let Some(host) = host.filter(|_| retained_host) {
++            self.type_work.charge(1).map_err(|_| type_resource())?;
++            crate::types::EffectRow::singleton(host)
++        } else {
++            crate::types::EffectRow::empty()
++        };
++        let effects = self.union_effects(&state.effects, &host_row, progress.span)?;
+         let node_ty = self.clone_type(&ty)?;
+         let node_effects = self.core_effect_row(&effects)?;
+         self.type_work.charge(2).map_err(|()| type_resource())?;
+diff --git a/src/foreign/checked_source.rs b/src/foreign/checked_source.rs
+index dd1ed5b2..a8b948b6 100644
+--- a/src/foreign/checked_source.rs
++++ b/src/foreign/checked_source.rs
+@@ -623,43 +623,38 @@ pub(crate) fn bind_checked_foreign_symbol(
+         .map(PreparedForeignSymbol::call)
+     {
+         Some(PreparedForeignCall::Scalar { .. }) => true,
+-        Some(PreparedForeignCall::Owner(
+-            super::source_contract::PreparedOwnerCall::Acquire {
+-                application,
+-                initialized_bytes: None,
+-                ..
+-            }
+-            | super::source_contract::PreparedOwnerCall::Teardown { application, .. },
+-        )) => {
+-            charge(work, 1, effect.span)?;
+-            prepared
+-                .owners()
+-                .get(application.owner())
+-                .is_some_and(|owner| {
+-                    owner.retained_parameters().is_empty()
+-                        && owner.representation()
+-                            == super::source_contract::PreparedAddressRepresentation::Opaque
+-                })
+-        }
+-        Some(PreparedForeignCall::Owner(super::source_contract::PreparedOwnerCall::Borrow {
+-            application,
+-            current_operand: 0,
+-            ..
+-        })) => {
++        Some(PreparedForeignCall::Owner(role)) => {
++            use super::source_contract::{
++                PreparedAddressRepresentation as Representation, PreparedOwnerCall,
++            };
+             charge(work, 1, effect.span)?;
+             let symbol = &prepared.symbols()[symbol_index];
+-            symbol.operands().len() == 1
+-                && matches!(symbol.operands()[0].source(), PreparedOperandSource::Current(path) if path == &[0])
+-                && effect.operations.first().is_some_and(|operation| {
+-                    matches!(&operation.annotation.ty, Type::Function(domain, _) if !matches!(domain.as_ref(), Type::Tuple(_)))
+-                })
+-                && symbol.access_result().is_none()
+-                && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
+-                && prepared.owners().get(application.owner()).is_some_and(|owner| {
+-                    owner.retained_parameters().is_empty()
+-                        && owner.representation()
+-                            == super::source_contract::PreparedAddressRepresentation::Opaque
+-                })
++            prepared.owners().get(role.application().owner()).is_some_and(|owner| {
++                owner.retained_parameters().is_empty() && match role {
++                    PreparedOwnerCall::Acquire { initialized_bytes, .. } => matches!(
++                        (owner.representation(), initialized_bytes),
++                        (Representation::Opaque, None) | (Representation::Bytes, Some(_))
++                    ),
++                    PreparedOwnerCall::Teardown { .. } => matches!(owner.representation(), Representation::Opaque | Representation::Bytes),
++                    PreparedOwnerCall::Borrow { .. } if symbol.access_result().is_some() => {
++                        // The shared symbol validator proves the exact original
++                        // access application, producing key and extent relation.
++                        // A live window is independently required at each use.
++                        matches!(owner.representation(), Representation::Opaque | Representation::Bytes)
++                    }
++                    PreparedOwnerCall::Borrow { current_operand: 0, .. } => {
++                        // Preserve the narrower PR98 scalar-Current subset.
++                        symbol.operands().len() == 1
++                            && matches!(symbol.operands()[0].source(), PreparedOperandSource::Current(path) if path == &[0])
++                            && effect.operations.first().is_some_and(|operation| {
++                                matches!(&operation.annotation.ty, Type::Function(domain, _) if !matches!(domain.as_ref(), Type::Tuple(_)))
++                            })
++                            && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
++                            && owner.representation() == Representation::Opaque
++                    }
++                    _ => false,
++                }
++            })
+         }
+         _ => false,
+     };
+diff --git a/src/foreign/scalar_preflight.rs b/src/foreign/scalar_preflight.rs
+index effb7622..a3783097 100644
+--- a/src/foreign/scalar_preflight.rs
++++ b/src/foreign/scalar_preflight.rs
+@@ -25,6 +25,10 @@ pub(crate) enum ForeignScalarPreflightRole {
+     CopyBytes,
+     CopyNul,
+     ExtentValue,
++    CheckedByteRead,
++    CheckedByteWrite,
++    CheckedCopyBytes,
++    CheckedCopyNul,
+ }
+ 
+ impl ForeignScalarPreflightRole {
+@@ -40,6 +44,41 @@ impl ForeignScalarPreflightRole {
+             Self::CopyBytes => 7,
+             Self::CopyNul => 8,
+             Self::ExtentValue => 9,
++            Self::CheckedByteRead => 11,
++            Self::CheckedByteWrite => 12,
++            Self::CheckedCopyBytes => 13,
++            Self::CheckedCopyNul => 14,
++        }
++    }
++
++    pub(crate) const fn checked_memory_local(local: u32) -> Option<Self> {
++        match local {
++            11 => Some(Self::CheckedByteRead),
++            12 => Some(Self::CheckedByteWrite),
++            13 => Some(Self::CheckedCopyBytes),
++            14 => Some(Self::CheckedCopyNul),
++            _ => None,
++        }
++    }
++
++    pub(crate) const fn host_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
++        let local = match self {
++            Self::CheckedByteRead => 23,
++            Self::CheckedByteWrite => 25,
++            Self::CheckedCopyBytes => 27,
++            Self::CheckedCopyNul => 29,
++            _ => return None,
++        };
++        Some(TypeVariableId::resolved(module, local))
++    }
++
++    pub(crate) const fn operation_role(self) -> Self {
++        match self {
++            Self::CheckedByteRead => Self::ByteRead,
++            Self::CheckedByteWrite => Self::ByteWrite,
++            Self::CheckedCopyBytes => Self::CopyBytes,
++            Self::CheckedCopyNul => Self::CopyNul,
++            other => other,
+         }
+     }
+ 
+@@ -48,6 +87,8 @@ impl ForeignScalarPreflightRole {
+             // Five preceding canonical nominal declarations bind one Type formal each.
+             Self::ByteRead => Some(TypeVariableId::resolved(module, 5)),
+             Self::ByteWrite => Some(TypeVariableId::resolved(module, 6)),
++            Self::CheckedByteRead => Some(TypeVariableId::resolved(module, 24)),
++            Self::CheckedByteWrite => Some(TypeVariableId::resolved(module, 26)),
+             _ => None,
+         }
+     }
+@@ -73,6 +114,8 @@ impl ForeignScalarPreflightRole {
+             Self::CopyBytes => Some(TypeVariableId::resolved(module, 11)),
+             Self::CopyNul => Some(TypeVariableId::resolved(module, 12)),
+             Self::ExtentValue => Some(TypeVariableId::resolved(module, 13)),
++            Self::CheckedCopyBytes => Some(TypeVariableId::resolved(module, 28)),
++            Self::CheckedCopyNul => Some(TypeVariableId::resolved(module, 30)),
+             _ => None,
+         }
+     }
+@@ -87,6 +130,11 @@ impl ForeignScalarPreflightRole {
+         module: ModuleId,
+         parameters: &[(TypeVariableId, Kind)],
+     ) -> bool {
++        if let Some(host) = self.host_parameter(module) {
++            return self.borrowed_parameter(module).is_some_and(|borrowed| {
++                parameters == [(host, Kind::Type), (borrowed, Kind::Type)]
++            });
++        }
+         match (self.borrowed_parameter(module), self.data_parameter(module)) {
+             (Some(state), Some(data)) => parameters == [(state, Kind::Type), (data, Kind::Type)],
+             (Some(state), None) => parameters == [(state, Kind::Type)],
+@@ -99,6 +147,11 @@ impl ForeignScalarPreflightRole {
+         module: ModuleId,
+         parameters: &[TypeVariableId],
+     ) -> bool {
++        if let Some(host) = self.host_parameter(module) {
++            return self
++                .borrowed_parameter(module)
++                .is_some_and(|borrowed| parameters == [host, borrowed]);
++        }
+         match (self.borrowed_parameter(module), self.data_parameter(module)) {
+             (Some(state), Some(data)) => parameters == [state, data],
+             (Some(state), None) => parameters == [state],
+@@ -210,12 +263,16 @@ impl CheckedForeignScalarPreflight {
+                     .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, source))?,
+             );
+             let data = role.data_parameter(call_codec.module());
+-            let count = 1 + usize::from(data.is_some());
++            let host = role.host_parameter(call_codec.module());
++            let count = 1 + usize::from(data.is_some()) + usize::from(host.is_some());
+             charge(work, 2 + count, source)?;
+             let mut parameters = Vec::new();
+             parameters
+                 .try_reserve_exact(count)
+                 .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, source))?;
++            if let Some(host) = host {
++                parameters.push((host, Kind::Type));
++            }
+             parameters.push((parameter, Kind::Type));
+             if let Some(data) = data {
+                 parameters.push((data, Kind::Type));
+@@ -307,6 +364,9 @@ impl CheckedForeignScalarPreflight {
+         {
+             return Err(invalid());
+         }
++        if self.role.host_parameter(module).is_some() {
++            return self.authenticate_checked_memory_annotation(work);
++        }
+         if self.role.view_parameter(module).is_some() {
+             return self.authenticate_view_annotation(work);
+         }
+@@ -641,6 +701,21 @@ impl CheckedForeignScalarPreflight {
+             registry,
+             work,
+         )?;
++        if self.role.host_parameter(self.module()).is_some() {
++            charge(work, 1, self.source)?;
++            let host = registry
++                .effect(crate::types::EffectId::new(
++                    self.module(),
++                    crate::module::FOREIGN_NATIVE_HOST_LOCAL,
++                ))
++                .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, self.source))?;
++            if !super::checked_builtins::is_canonical_native_host(host, registry, work)? {
++                return Err(failure(
++                    ForeignAdmissionReason::InvalidSignature,
++                    self.source,
++                ));
++            }
++        }
+         charge(work, 2, self.source)?;
+         let id = self
+             .conversion_error_constructor()
+@@ -665,3 +740,5 @@ impl CheckedForeignScalarPreflight {
+         Ok(())
+     }
+ }
++
++mod checked_memory;
+diff --git a/src/foreign/source_access.rs b/src/foreign/source_access.rs
+index c2d3a5f7..b6e914f4 100644
+--- a/src/foreign/source_access.rs
++++ b/src/foreign/source_access.rs
+@@ -741,3 +741,70 @@ pub(super) fn validate_result_signature<'a>(
+     }
+     Ok(view)
+ }
++
++/// Reconstruct the checked window's exact Host from its original owner selector
++/// and complete family actuals. This does not supply a native interpretation.
++pub(crate) fn checked_window_host_instance(
++    access: &CheckedForeignAccess,
++    arguments: &[crate::types::KindedArgument],
++    registry: &ResolvedRegistry,
++    work: &mut TypeWorkBudget,
++) -> Result<Option<crate::types::EffectInstance>, ForeignAdmissionError> {
++    use super::source_contract::PreparedOwnerArgument;
++    use crate::types::{EffectId, EffectInstance, KindedArgument};
++    let span = primary_span(
++        access.declaration().origin(),
++        work,
++        access.prepared().origin().primary_span(),
++    )?;
++    charge(work, 5 + arguments.len(), span)?;
++    let Some(contract) = access.prepared().checked_contract() else {
++        return Ok(None);
++    };
++    let invalid = || failure(ForeignAdmissionReason::InvalidParameters, span);
++    let application = access.declaration().owner();
++    let owner = access
++        .prepared()
++        .owners()
++        .get(application.owner())
++        .ok_or_else(invalid)?;
++    let selected = contract
++        .owners()
++        .get(application.owner())
++        .ok_or_else(invalid)?;
++    if selected.member_index() != owner.member_index()
++        || arguments.len() != access.parameters().len()
++    {
++        return Err(invalid());
++    }
++    let Some(PreparedOwnerArgument::Type(position)) =
++        application.arguments().get(selected.host_parameter())
++    else {
++        return Err(invalid());
++    };
++    let Some(KindedArgument::TypeArg(host)) = arguments.get(*position) else {
++        return Err(invalid());
++    };
++    charge(work, registry.effects().len(), span)?;
++    let declaration = registry
++        .effects()
++        .iter()
++        .find(|effect| {
++            effect.id.module().is_builtin_foreign()
++                && effect.id.declaration() == crate::module::FOREIGN_NATIVE_HOST_LOCAL
++        })
++        .ok_or_else(invalid)?;
++    if !super::checked_builtins::is_canonical_native_host(declaration, registry, work)? {
++        return Err(invalid());
++    }
++    let host = crate::types::clone_type_with_budget(host, work)
++        .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, span))?;
++    charge(work, 2, span)?;
++    Ok(Some(EffectInstance::new(
++        EffectId::new(
++            declaration.id.module(),
++            crate::module::FOREIGN_NATIVE_HOST_LOCAL,
++        ),
++        Box::new([host]),
++    )))
++}
+diff --git a/src/foreign/source_owner.rs b/src/foreign/source_owner.rs
+index a7480939..818a8c15 100644
+--- a/src/foreign/source_owner.rs
++++ b/src/foreign/source_owner.rs
+@@ -106,8 +106,9 @@ pub(crate) fn bind_foreign_owner(
+     )
+ }
+ 
+-/// Binds only the dependency-free opaque checked-owner prerequisite. This does
+-/// not admit a resource lifecycle, native interpretation or executable image.
++/// Binds the dependency-free checked owner declaration, retaining its exact
++/// opaque or byte representation. Initialized access remains an operation/phase
++/// obligation; this declaration grants no executable activation.
+ pub(crate) fn bind_checked_foreign_owner(
+     library: NativeLibraryId,
+     prepared: Arc<PreparedForeignLibrary>,
+@@ -131,7 +132,11 @@ pub(crate) fn bind_checked_foreign_owner(
+             .map(|p| p.kind())
+             != Some(&Kind::Type)
+         || !owner.retained_parameters().is_empty()
+-        || owner.representation() != super::source_contract::PreparedAddressRepresentation::Opaque
++        || !matches!(
++            owner.representation(),
++            super::source_contract::PreparedAddressRepresentation::Opaque
++                | super::source_contract::PreparedAddressRepresentation::Bytes
++        )
+     {
+         return Err(invalid());
+     }
+diff --git a/src/module.rs b/src/module.rs
+index 4bbfd2d1..27d769e1 100644
+--- a/src/module.rs
++++ b/src/module.rs
+@@ -108,6 +108,10 @@ const FOREIGN_SOURCE: &str = concat!(
+     "pub type ViolationCause = UnexpectedStatus(Int)\n| UnexpectedTag(Int)\n| UnexpectedNull\n| InvalidNativeExtent(Int)\n| ContradictoryNativeResult(Int, Int)\n",
+     "native_host_metadata : Unit -> String\n",
+     "native_host_metadata ignored = \"pub effect NativeHost<H> (compiler-owned; no operations)\"\n",
++    "pub checked_byte_read<H, S> : (S, Int) -> CheckedCall<Int> ! {NativeHost<H>}\nchecked_byte_read value = checked_byte_read value\n",
++    "pub checked_byte_write<H, S> : (S, Int, Int) -> CheckedCall<Unit> ! {NativeHost<H>}\nchecked_byte_write value = checked_byte_write value\n",
++    "pub checked_copy_bytes<H, V> : (V, Extent<V>) -> CheckedCall<Bytes> ! {NativeHost<H>}\nchecked_copy_bytes value = checked_copy_bytes value\n",
++    "pub checked_copy_nul<H, V> : (V, Int) -> CheckedCall<Bytes> ! {NativeHost<H>}\nchecked_copy_nul value = checked_copy_nul value\n",
+ );
+ 
+ /// Immutable coordinate data; matching these bytes alone grants no builtin role.
+@@ -137,6 +141,10 @@ pub(crate) fn foreign_scalar_preflight_ranges(
+         7 => ("copy_bytes", 3, 29),
+         8 => ("copy_nul", 3, 23),
+         9 => ("extent_value", 3, 16),
++        11 => ("checked_byte_read", 6, 46),
++        12 => ("checked_byte_write", 6, 52),
++        13 => ("checked_copy_bytes", 6, 54),
++        14 => ("checked_copy_nul", 6, 48),
+         _ => return None,
+     };
+     // Only the immutable compiler-owned source is inspected here. Runtime
+diff --git a/src/module/foreign_coordinates.rs b/src/module/foreign_coordinates.rs
+index b51d7779..c63d2a2b 100644
+--- a/src/module/foreign_coordinates.rs
++++ b/src/module/foreign_coordinates.rs
+@@ -249,10 +249,10 @@ const HOST_START: usize = unique(FOREIGN_SOURCE.as_bytes(), b"pub effect NativeH
+ pub(super) const HOST_NAME: ByteRange = range(HOST_START + 11, HOST_START + 21);
+ pub(super) const HOST_FORMAL: ByteRange = range(HOST_START + 22, HOST_START + 23);
+ 
+-const fn formal_table() -> [ByteRange; 23] {
++const fn formal_table() -> [ByteRange; 31] {
+     let text = FOREIGN_SOURCE.as_bytes();
+-    let mut rows = [EMPTY_RANGE; 23];
+-    let mut seen = [false; 23];
++    let mut rows = [EMPTY_RANGE; 31];
++    let mut seen = [false; 31];
+     let mut index = 0;
+     while index < FORMALS.len() {
+         let (header, locals) = FORMALS[index];
+@@ -308,4 +308,4 @@ const fn formal_table() -> [ByteRange; 23] {
+     rows
+ }
+ 
+-pub(super) const FORMAL_RANGES: [ByteRange; 23] = formal_table();
++pub(super) const FORMAL_RANGES: [ByteRange; 31] = formal_table();
+diff --git a/src/module/foreign_host.rs b/src/module/foreign_host.rs
+index 46b16e4a..fba628c3 100644
+--- a/src/module/foreign_host.rs
++++ b/src/module/foreign_host.rs
+@@ -124,6 +124,10 @@ pub(super) const FORMALS: &[(&str, &[u32])] = &[
+     ("pub type CheckedCompletion<E>", &[18]),
+     ("pub type CheckedScope<A, I, E>", &[19, 20, 21]),
+     ("pub effect NativeHost<H>", &[22]),
++    ("pub checked_byte_read<H, S>", &[23, 24]),
++    ("pub checked_byte_write<H, S>", &[25, 26]),
++    ("pub checked_copy_bytes<H, V>", &[27, 28]),
++    ("pub checked_copy_nul<H, V>", &[29, 30]),
+ ];
+ 
+ /// Exact formal-name coordinates to reserved builtin locals; not a role grant.
+@@ -398,7 +402,7 @@ mod tests {
+                 "ViolationCause"
+             ]
+         );
+-        assert_eq!(module.surface.definitions.len(), 11);
++        assert_eq!(module.surface.definitions.len(), 15);
+         assert!(!module.surface.definitions[10].public);
+         let crate::surface::SurfaceDefinitionKind::Equational(metadata) =
+             &module.surface.definitions[10].kind
+@@ -467,6 +471,28 @@ mod tests {
+                 .collect::<Vec<_>>();
+             assert_eq!(locals, expected);
+         }
++        for (index, name, expected) in [
++            (11, "checked_byte_read", [23, 24]),
++            (12, "checked_byte_write", [25, 26]),
++            (13, "checked_copy_bytes", [27, 28]),
++            (14, "checked_copy_nul", [29, 30]),
++        ] {
++            let crate::surface::SurfaceDefinitionKind::Equational(value) =
++                &module.surface.definitions[index].kind
++            else {
++                panic!("canonical checked primitive");
++            };
++            assert_eq!(value.interface.name.text, name);
++            let locals = value
++                .interface
++                .type_parameters
++                .as_ref()
++                .unwrap()
++                .iter()
++                .map(|formal| foreign_type_formal_local(source, formal.name.span).unwrap())
++                .collect::<Vec<_>>();
++            assert_eq!(locals, expected);
++        }
+         let mut seen = Vec::new();
+         let formals = module
+             .surface
+@@ -493,7 +519,7 @@ mod tests {
+             );
+         }
+         seen.sort_unstable();
+-        assert_eq!(seen, (0..23).collect::<Vec<_>>());
++        assert_eq!(seen, (0..31).collect::<Vec<_>>());
+         let (_, name, formal) = foreign_native_host_ranges(source).unwrap();
+         assert_eq!(module.surface.effects[0].name.span.range(), name);
+         assert_eq!(
+diff --git a/src/resolve/foreign.rs b/src/resolve/foreign.rs
+index 17ae3b4f..82f9d3b7 100644
+--- a/src/resolve/foreign.rs
++++ b/src/resolve/foreign.rs
+@@ -180,7 +180,7 @@ impl Resolver {
+                 None
+             }
+         });
+-        if declarations.definitions.len() != 11
++        if declarations.definitions.len() != 15
+             || loaded.surface().definitions.get(10).is_none_or(|definition| definition.public)
+             || metadata.is_none_or(|metadata| metadata.interface.name.id != BinderId::resolved(self.module, 10)
+                 || !metadata.interface.type_parameters.is_empty()
+@@ -195,7 +195,7 @@ impl Resolver {
+                 "builtin scalar preflight declaration inventory is invalid",
+             ));
+         }
+-        for (definition, role) in declarations.definitions.iter().zip([
++        for role in [
+             ForeignScalarPreflightRole::I64,
+             ForeignScalarPreflightRole::SizeT,
+             ForeignScalarPreflightRole::ByteRead,
+@@ -206,7 +206,12 @@ impl Resolver {
+             ForeignScalarPreflightRole::CopyBytes,
+             ForeignScalarPreflightRole::CopyNul,
+             ForeignScalarPreflightRole::ExtentValue,
+-        ]) {
++            ForeignScalarPreflightRole::CheckedByteRead,
++            ForeignScalarPreflightRole::CheckedByteWrite,
++            ForeignScalarPreflightRole::CheckedCopyBytes,
++            ForeignScalarPreflightRole::CheckedCopyNul,
++        ] {
++            let definition = &declarations.definitions[role.local() as usize];
+             let ResolvedDefinitionKind::Equational(global) = &definition.kind else {
+                 return Err(error(
+                     ResolveReason::InternalState,
+@@ -215,25 +220,30 @@ impl Resolver {
+                 ));
+             };
+             if global.interface.name.id != BinderId::resolved(self.module, role.local())
+-                || match role.borrowed_parameter(self.module) {
+-                    None => !global.interface.type_parameters.is_empty(),
+-                    Some(expected) => {
+-                        let parameters = &global.interface.type_parameters;
+-                        let (name, _) =
+-                            crate::module::foreign_scalar_preflight_ranges(span, role.local())
+-                                .ok_or_else(|| {
+-                                    error(
+-                                        ResolveReason::InternalState,
+-                                        span,
+-                                        "sealed byte declaration range is invalid",
+-                                    )
+-                                })?;
+-                        parameters.len() != 1 + usize::from(role.data_parameter(self.module).is_some())
+-                            || parameters[0].id != expected
+-                            || parameters[0].kind != crate::types::Kind::Type
+-                            || !matches!(&parameters[0].origin, crate::source::Origin::Source(parameter) if parameter.source() == span.source() && parameter.range().start() == name.end()+1 && parameter.range().end() == name.end()+2)
+-                            || role.data_parameter(self.module).is_some_and(|expected| parameters.get(1).is_none_or(|parameter| parameter.id != expected || parameter.kind != crate::types::Kind::Type || !matches!(&parameter.origin, crate::source::Origin::Source(origin) if origin.source() == span.source() && origin.range().start() == name.end()+4 && origin.range().end() == name.end()+5)))
+-                    }
++                || {
++                    let parameters = &global.interface.type_parameters;
++                    self.type_work.charge(parameters.len()).map_err(|_| {
++                        error(
++                            ResolveReason::TypeResourceExhausted,
++                            span,
++                            "builtin primitive formal verification exceeded work",
++                        )
++                    })?;
++                    let host = role.host_parameter(self.module);
++                    let borrowed = role.borrowed_parameter(self.module);
++                    let data = role.data_parameter(self.module);
++                    let count = usize::from(host.is_some())
++                        + usize::from(borrowed.is_some())
++                        + usize::from(data.is_some());
++                    parameters.len() != count || parameters.iter().enumerate().any(|(index, parameter)| {
++                        let expected = if host.is_some() {
++                            if index == 0 { host } else { borrowed }
++                        } else if index == 0 { borrowed } else { data };
++                        Some(parameter.id) != expected || parameter.kind != crate::types::Kind::Type
++                            || !matches!(&parameter.origin, crate::source::Origin::Source(origin)
++                                if crate::module::foreign_type_formal_local(span, *origin)
++                                    .is_some_and(|local| parameter.id == crate::types::TypeVariableId::resolved(self.module, local)))
++                    })
+                 }
+                 || !global.interface.requirements.is_empty()
+             {
+@@ -243,12 +253,46 @@ impl Resolver {
+                     "builtin scalar preflight binder inventory is invalid",
+                 ));
+             }
++            let selected_codec = if role.host_parameter(self.module).is_some() {
++                let checked_call = NominalTypeId::new(self.module, 12);
++                self.type_work.charge(1).map_err(|_| {
++                    error(
++                        ResolveReason::TypeResourceExhausted,
++                        span,
++                        "checked primitive codec retention exceeded work",
++                    )
++                })?;
++                Arc::new(
++                    CheckedForeignCallCodec::authenticate(
++                        self.module,
++                        span,
++                        ForeignCallCodecIds {
++                            call: checked_call,
++                            returned: ConstructorId::new(checked_call, 0),
++                            conversion_failed: ConstructorId::new(checked_call, 1),
++                            conversion_error: NominalTypeId::new(self.module, 0),
++                        },
++                        registry,
++                        &mut self.type_work,
++                    )
++                    .map_err(source_admission_failure)?,
++                )
++            } else {
++                self.type_work.charge(1).map_err(|_| {
++                    error(
++                        ResolveReason::TypeResourceExhausted,
++                        span,
++                        "primitive codec retention exceeded work",
++                    )
++                })?;
++                Arc::clone(&codec)
++            };
+             let fact = CheckedForeignScalarPreflight::from_original(
+                 role,
+                 span,
+                 &global.interface.name.origin,
+                 &global.interface.annotation,
+-                Arc::clone(&codec),
++                selected_codec,
+                 &mut self.type_work,
+             )
+             .map_err(source_admission_failure)?;
+diff --git a/src/resolved/checked_codec_category_tests.rs b/src/resolved/checked_codec_category_tests.rs
+index de3ee79b..785dce19 100644
+--- a/src/resolved/checked_codec_category_tests.rs
++++ b/src/resolved/checked_codec_category_tests.rs
+@@ -66,9 +66,14 @@ fn original_view() -> ResolvedRegistry {
+ 
+ fn assert_distinct_original_codecs(view: &ResolvedRegistry) {
+     assert_eq!(view.native_symbols.len(), 2);
+-    assert_eq!(view.scalar_preflights.len(), 10);
++    assert_eq!(view.scalar_preflights.len(), 14);
+     let checked = view.native_symbols.values().next().unwrap().call_codec();
+-    let legacy = view.scalar_preflights.values().next().unwrap().call_codec();
++    let legacy = view
++        .scalar_preflights
++        .values()
++        .find(|fact| fact.role().host_parameter(fact.module()).is_none())
++        .unwrap()
++        .call_codec();
+     assert_eq!(
+         checked.module(),
+         legacy.module(),
+@@ -81,7 +86,18 @@ fn assert_distinct_original_codecs(view: &ResolvedRegistry) {
+         assert_eq!(symbol.call_codec().ids(), checked.ids());
+     }
+     for preflight in view.scalar_preflights.values() {
+-        assert_eq!(preflight.call_codec().ids(), legacy.ids());
++        assert_eq!(
++            preflight.call_codec().ids(),
++            if preflight
++                .role()
++                .host_parameter(preflight.module())
++                .is_some()
++            {
++                checked.ids()
++            } else {
++                legacy.ids()
++            }
++        );
+     }
+ }
+ 

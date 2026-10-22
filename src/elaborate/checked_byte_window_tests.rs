@@ -247,3 +247,29 @@ fn checked_byte_window_initialized_owner_binding_after_name_isolation() {
     resolve_entry(&graph, true)
         .expect("genuine prepared checked initialized owner/view contracts must bind independently of missing new builtin names");
 }
+
+#[test]
+fn checked_byte_window_all_four_primitives_check_actual_source_and_summary() {
+    let graph = fixture();
+    assert_prepared(&graph);
+    let checked = check_graph(&graph)
+        .expect("all four checked primitives need genuine initialized State and actual lexical view/extent window source admission");
+    let producer = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .unwrap();
+    assert!(producer.source_resource_code().is_some());
+    let registry = producer.registry();
+    for name in ["Allocate", "Free", "QueryBytes", "ByteLength", "QueryNul"] {
+        let effect = registry
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == name)
+            .unwrap();
+        let original = registry
+            .native_symbol(crate::types::OperationId::new(effect.id, 0))
+            .unwrap();
+        assert!(original.prepared().checked_contract().is_some());
+        assert!(original.owner().is_some());
+    }
+}

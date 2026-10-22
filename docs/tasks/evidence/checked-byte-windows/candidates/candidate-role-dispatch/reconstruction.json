@@ -1,0 +1,8 @@
+{
+  "base": "3cdde7d0d525f2d988ea338f305447f00b6d3bfb",
+  "tracked_patch": "source.patch",
+  "added": {
+    "src/foreign/scalar_preflight/checked_memory.rs": "checked_memory.rs"
+  },
+  "test_artifact_sha256": "8a8ef81edf6de158e18a0b3dc7a581790a64aec312d29822eeb2d77a32a5f631"
+}

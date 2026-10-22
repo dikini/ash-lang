@@ -741,3 +741,70 @@ pub(super) fn validate_result_signature<'a>(
     }
     Ok(view)
 }
+
+/// Reconstruct the checked window's exact Host from its original owner selector
+/// and complete family actuals. This does not supply a native interpretation.
+pub(crate) fn checked_window_host_instance(
+    access: &CheckedForeignAccess,
+    arguments: &[crate::types::KindedArgument],
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<Option<crate::types::EffectInstance>, ForeignAdmissionError> {
+    use super::source_contract::PreparedOwnerArgument;
+    use crate::types::{EffectId, EffectInstance, KindedArgument};
+    let span = primary_span(
+        access.declaration().origin(),
+        work,
+        access.prepared().origin().primary_span(),
+    )?;
+    charge(work, 5 + arguments.len(), span)?;
+    let Some(contract) = access.prepared().checked_contract() else {
+        return Ok(None);
+    };
+    let invalid = || failure(ForeignAdmissionReason::InvalidParameters, span);
+    let application = access.declaration().owner();
+    let owner = access
+        .prepared()
+        .owners()
+        .get(application.owner())
+        .ok_or_else(invalid)?;
+    let selected = contract
+        .owners()
+        .get(application.owner())
+        .ok_or_else(invalid)?;
+    if selected.member_index() != owner.member_index()
+        || arguments.len() != access.parameters().len()
+    {
+        return Err(invalid());
+    }
+    let Some(PreparedOwnerArgument::Type(position)) =
+        application.arguments().get(selected.host_parameter())
+    else {
+        return Err(invalid());
+    };
+    let Some(KindedArgument::TypeArg(host)) = arguments.get(*position) else {
+        return Err(invalid());
+    };
+    charge(work, registry.effects().len(), span)?;
+    let declaration = registry
+        .effects()
+        .iter()
+        .find(|effect| {
+            effect.id.module().is_builtin_foreign()
+                && effect.id.declaration() == crate::module::FOREIGN_NATIVE_HOST_LOCAL
+        })
+        .ok_or_else(invalid)?;
+    if !super::checked_builtins::is_canonical_native_host(declaration, registry, work)? {
+        return Err(invalid());
+    }
+    let host = crate::types::clone_type_with_budget(host, work)
+        .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, span))?;
+    charge(work, 2, span)?;
+    Ok(Some(EffectInstance::new(
+        EffectId::new(
+            declaration.id.module(),
+            crate::module::FOREIGN_NATIVE_HOST_LOCAL,
+        ),
+        Box::new([host]),
+    )))
+}

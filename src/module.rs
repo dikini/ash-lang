@@ -108,6 +108,10 @@ const FOREIGN_SOURCE: &str = concat!(
     "pub type ViolationCause = UnexpectedStatus(Int)\n| UnexpectedTag(Int)\n| UnexpectedNull\n| InvalidNativeExtent(Int)\n| ContradictoryNativeResult(Int, Int)\n",
     "native_host_metadata : Unit -> String\n",
     "native_host_metadata ignored = \"pub effect NativeHost<H> (compiler-owned; no operations)\"\n",
+    "pub checked_byte_read<H, S> : (S, Int) -> CheckedCall<Int> ! {NativeHost<H>}\nchecked_byte_read value = checked_byte_read value\n",
+    "pub checked_byte_write<H, S> : (S, Int, Int) -> CheckedCall<Unit> ! {NativeHost<H>}\nchecked_byte_write value = checked_byte_write value\n",
+    "pub checked_copy_bytes<H, V> : (V, Extent<V>) -> CheckedCall<Bytes> ! {NativeHost<H>}\nchecked_copy_bytes value = checked_copy_bytes value\n",
+    "pub checked_copy_nul<H, V> : (V, Int) -> CheckedCall<Bytes> ! {NativeHost<H>}\nchecked_copy_nul value = checked_copy_nul value\n",
 );
 
 /// Immutable coordinate data; matching these bytes alone grants no builtin role.
@@ -137,6 +141,10 @@ pub(crate) fn foreign_scalar_preflight_ranges(
         7 => ("copy_bytes", 3, 29),
         8 => ("copy_nul", 3, 23),
         9 => ("extent_value", 3, 16),
+        11 => ("checked_byte_read", 6, 46),
+        12 => ("checked_byte_write", 6, 52),
+        13 => ("checked_copy_bytes", 6, 54),
+        14 => ("checked_copy_nul", 6, 48),
         _ => return None,
     };
     // Only the immutable compiler-owned source is inspected here. Runtime

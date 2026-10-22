@@ -1,0 +1,39 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+warning: unused import: `clone_effect_row_with_budget`
+ --> src/elaborate/source_window.rs:6:40
+  |
+6 |     clone_effect_instance_with_budget, clone_effect_row_with_budget, inference_failure,
+  |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0004]: non-exhaustive patterns: `&scalar_preflight::ForeignScalarPreflightRole::CheckedByteRead`, `&scalar_preflight::ForeignScalarPreflightRole::CheckedByteWrite`, `&scalar_preflight::ForeignScalarPreflightRole::CheckedCopyBytes` and 1 more not covered
+    --> src/build/image.rs:7772:15
+     |
+7772 |         match self {
+     |               ^^^^ patterns `&scalar_preflight::ForeignScalarPreflightRole::CheckedByteRead`, `&scalar_preflight::ForeignScalarPreflightRole::CheckedByteWrite`, `&scalar_preflight::ForeignScalarPreflightRole::CheckedCopyBytes` and 1 more not covered
+     |
+note: `scalar_preflight::ForeignScalarPreflightRole` defined here
+    --> src/foreign/scalar_preflight.rs:17:17
+     |
+  17 | pub(crate) enum ForeignScalarPreflightRole {
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  28 |     CheckedByteRead,
+     |     --------------- not covered
+  29 |     CheckedByteWrite,
+     |     ---------------- not covered
+  30 |     CheckedCopyBytes,
+     |     ---------------- not covered
+  31 |     CheckedCopyNul,
+     |     -------------- not covered
+     = note: the matched value is of type `&scalar_preflight::ForeignScalarPreflightRole`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown, or multiple match arms
+     |
+7782 ~             Self::ExtentValue => 9,
+7783 ~             _ => todo!(),
+     |
+
+For more information about this error, try `rustc --explain E0004`.
+warning: `ash` (lib) generated 1 warning
+error: could not compile `ash` (lib) due to 1 previous error; 1 warning emitted

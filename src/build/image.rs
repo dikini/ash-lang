@@ -1328,6 +1328,10 @@ impl Encoder<'_> {
                             Intrinsic::ForeignByteWrite { function } => (function, Role::ByteWrite),
                             _ => return Err(ImageFailure::Unsupported(Unsupported::Intrinsic)),
                         };
+                        let role = if let Some(checked) = Role::checked_memory_local(function.local()) {
+                            if checked.operation_role() != role { return Err(ImageFailure::InvalidRecord); }
+                            checked
+                        } else { role };
                         NodeTag::ScalarPreflight {
                             function: self.binder_id(function)?,
                             role,
@@ -3405,11 +3409,11 @@ impl Decoder<'_> {
                     Role::Nul => Intrinsic::ForeignCheckedNul { function },
                     Role::DataOf => Intrinsic::ForeignDataOf { function },
                     Role::ReplaceData => Intrinsic::ForeignReplaceData { function },
-                    Role::CopyBytes => Intrinsic::ForeignCopyBytes { function },
-                    Role::CopyNul => Intrinsic::ForeignCopyNul { function },
+                    Role::CopyBytes | Role::CheckedCopyBytes => Intrinsic::ForeignCopyBytes { function },
+                    Role::CopyNul | Role::CheckedCopyNul => Intrinsic::ForeignCopyNul { function },
                     Role::ExtentValue => Intrinsic::ForeignExtentValue { function },
-                    Role::ByteRead => Intrinsic::ForeignByteRead { function },
-                    Role::ByteWrite => Intrinsic::ForeignByteWrite { function },
+                    Role::ByteRead | Role::CheckedByteRead => Intrinsic::ForeignByteRead { function },
+                    Role::ByteWrite | Role::CheckedByteWrite => Intrinsic::ForeignByteWrite { function },
                 };
                 builder.with_caller_type_work(self.work, |builder| {
                     builder.intrinsic(operation, module, ty.into_inner(), origin.take())
@@ -6376,7 +6380,9 @@ main () = {
                     | Role::ReplaceData
                     | Role::CopyBytes
                     | Role::CopyNul
-                    | Role::ExtentValue => Role::I64,
+                    | Role::ExtentValue
+                    | Role::CheckedByteRead | Role::CheckedByteWrite
+                    | Role::CheckedCopyBytes | Role::CheckedCopyNul => Role::I64,
                 }
             },
             |image| image.scalar_preflights[0].annotation.provenance = u32::MAX,
@@ -7776,6 +7782,10 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
             Self::CopyBytes => 7,
             Self::CopyNul => 8,
             Self::ExtentValue => 9,
+            Self::CheckedByteRead => 10,
+            Self::CheckedByteWrite => 11,
+            Self::CheckedCopyBytes => 12,
+            Self::CheckedCopyNul => 13,
         }
         .write(writer)
     }
@@ -7791,6 +7801,10 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
             7 => Ok(Self::CopyBytes),
             8 => Ok(Self::CopyNul),
             9 => Ok(Self::ExtentValue),
+            10 => Ok(Self::CheckedByteRead),
+            11 => Ok(Self::CheckedByteWrite),
+            12 => Ok(Self::CheckedCopyBytes),
+            13 => Ok(Self::CheckedCopyNul),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -8423,7 +8437,7 @@ impl Encoder<'_> {
                         && !matches!(input, StructuralInput::Type(Type::Forall(parameters, _))
                         if parameters.first().and_then(|(id,_)| id.module()).is_some_and(|module| {
                             use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
-                            [Role::ByteRead, Role::ByteWrite, Role::DataOf, Role::ReplaceData, Role::CopyBytes, Role::CopyNul, Role::ExtentValue].iter().any(|role| role.matches_parameters(module, parameters))
+                            [Role::ByteRead, Role::ByteWrite, Role::DataOf, Role::ReplaceData, Role::CopyBytes, Role::CopyNul, Role::ExtentValue, Role::CheckedByteRead, Role::CheckedByteWrite, Role::CheckedCopyBytes, Role::CheckedCopyNul].iter().any(|role| role.matches_parameters(module, parameters))
                         }))
                     {
                         return Err(ImageFailure::Unsupported(Unsupported::Type));
@@ -8755,6 +8769,10 @@ impl Decoder<'_> {
             Role::CopyBytes,
             Role::CopyNul,
             Role::ExtentValue,
+            Role::CheckedByteRead,
+            Role::CheckedByteWrite,
+            Role::CheckedCopyBytes,
+            Role::CheckedCopyNul,
         ] {
             charge(self.work, 1)?;
             if role.matches_parameters(module, &restored) {

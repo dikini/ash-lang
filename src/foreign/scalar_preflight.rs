@@ -25,6 +25,10 @@ pub(crate) enum ForeignScalarPreflightRole {
     CopyBytes,
     CopyNul,
     ExtentValue,
+    CheckedByteRead,
+    CheckedByteWrite,
+    CheckedCopyBytes,
+    CheckedCopyNul,
 }
 
 impl ForeignScalarPreflightRole {
@@ -40,6 +44,41 @@ impl ForeignScalarPreflightRole {
             Self::CopyBytes => 7,
             Self::CopyNul => 8,
             Self::ExtentValue => 9,
+            Self::CheckedByteRead => 11,
+            Self::CheckedByteWrite => 12,
+            Self::CheckedCopyBytes => 13,
+            Self::CheckedCopyNul => 14,
+        }
+    }
+
+    pub(crate) const fn checked_memory_local(local: u32) -> Option<Self> {
+        match local {
+            11 => Some(Self::CheckedByteRead),
+            12 => Some(Self::CheckedByteWrite),
+            13 => Some(Self::CheckedCopyBytes),
+            14 => Some(Self::CheckedCopyNul),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn host_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
+        let local = match self {
+            Self::CheckedByteRead => 23,
+            Self::CheckedByteWrite => 25,
+            Self::CheckedCopyBytes => 27,
+            Self::CheckedCopyNul => 29,
+            _ => return None,
+        };
+        Some(TypeVariableId::resolved(module, local))
+    }
+
+    pub(crate) const fn operation_role(self) -> Self {
+        match self {
+            Self::CheckedByteRead => Self::ByteRead,
+            Self::CheckedByteWrite => Self::ByteWrite,
+            Self::CheckedCopyBytes => Self::CopyBytes,
+            Self::CheckedCopyNul => Self::CopyNul,
+            other => other,
         }
     }
 
@@ -48,6 +87,8 @@ impl ForeignScalarPreflightRole {
             // Five preceding canonical nominal declarations bind one Type formal each.
             Self::ByteRead => Some(TypeVariableId::resolved(module, 5)),
             Self::ByteWrite => Some(TypeVariableId::resolved(module, 6)),
+            Self::CheckedByteRead => Some(TypeVariableId::resolved(module, 24)),
+            Self::CheckedByteWrite => Some(TypeVariableId::resolved(module, 26)),
             _ => None,
         }
     }
@@ -73,6 +114,8 @@ impl ForeignScalarPreflightRole {
             Self::CopyBytes => Some(TypeVariableId::resolved(module, 11)),
             Self::CopyNul => Some(TypeVariableId::resolved(module, 12)),
             Self::ExtentValue => Some(TypeVariableId::resolved(module, 13)),
+            Self::CheckedCopyBytes => Some(TypeVariableId::resolved(module, 28)),
+            Self::CheckedCopyNul => Some(TypeVariableId::resolved(module, 30)),
             _ => None,
         }
     }
@@ -87,6 +130,11 @@ impl ForeignScalarPreflightRole {
         module: ModuleId,
         parameters: &[(TypeVariableId, Kind)],
     ) -> bool {
+        if let Some(host) = self.host_parameter(module) {
+            return self.borrowed_parameter(module).is_some_and(|borrowed| {
+                parameters == [(host, Kind::Type), (borrowed, Kind::Type)]
+            });
+        }
         match (self.borrowed_parameter(module), self.data_parameter(module)) {
             (Some(state), Some(data)) => parameters == [(state, Kind::Type), (data, Kind::Type)],
             (Some(state), None) => parameters == [(state, Kind::Type)],
@@ -99,6 +147,11 @@ impl ForeignScalarPreflightRole {
         module: ModuleId,
         parameters: &[TypeVariableId],
     ) -> bool {
+        if let Some(host) = self.host_parameter(module) {
+            return self
+                .borrowed_parameter(module)
+                .is_some_and(|borrowed| parameters == [host, borrowed]);
+        }
         match (self.borrowed_parameter(module), self.data_parameter(module)) {
             (Some(state), Some(data)) => parameters == [state, data],
             (Some(state), None) => parameters == [state],
@@ -210,12 +263,16 @@ impl CheckedForeignScalarPreflight {
                     .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, source))?,
             );
             let data = role.data_parameter(call_codec.module());
-            let count = 1 + usize::from(data.is_some());
+            let host = role.host_parameter(call_codec.module());
+            let count = 1 + usize::from(data.is_some()) + usize::from(host.is_some());
             charge(work, 2 + count, source)?;
             let mut parameters = Vec::new();
             parameters
                 .try_reserve_exact(count)
                 .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, source))?;
+            if let Some(host) = host {
+                parameters.push((host, Kind::Type));
+            }
             parameters.push((parameter, Kind::Type));
             if let Some(data) = data {
                 parameters.push((data, Kind::Type));
@@ -306,6 +363,9 @@ impl CheckedForeignScalarPreflight {
             || !matches!(&self.annotation.origin, Origin::Source(span) if *span == self.annotation.span)
         {
             return Err(invalid());
+        }
+        if self.role.host_parameter(module).is_some() {
+            return self.authenticate_checked_memory_annotation(work);
         }
         if self.role.view_parameter(module).is_some() {
             return self.authenticate_view_annotation(work);
@@ -641,6 +701,21 @@ impl CheckedForeignScalarPreflight {
             registry,
             work,
         )?;
+        if self.role.host_parameter(self.module()).is_some() {
+            charge(work, 1, self.source)?;
+            let host = registry
+                .effect(crate::types::EffectId::new(
+                    self.module(),
+                    crate::module::FOREIGN_NATIVE_HOST_LOCAL,
+                ))
+                .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, self.source))?;
+            if !super::checked_builtins::is_canonical_native_host(host, registry, work)? {
+                return Err(failure(
+                    ForeignAdmissionReason::InvalidSignature,
+                    self.source,
+                ));
+            }
+        }
         charge(work, 2, self.source)?;
         let id = self
             .conversion_error_constructor()
@@ -665,3 +740,5 @@ impl CheckedForeignScalarPreflight {
         Ok(())
     }
 }
+
+mod checked_memory;

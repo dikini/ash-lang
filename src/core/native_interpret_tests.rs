@@ -172,6 +172,7 @@ impl Fixture {
         let declarations = self
             .registry
             .scalar_preflights()
+            .filter(|(_, fact)| fact.role().host_parameter(fact.module()).is_none())
             .filter_map(|(_, fact)| {
                 fact.role()
                     .borrowed_parameter(fact.module())
