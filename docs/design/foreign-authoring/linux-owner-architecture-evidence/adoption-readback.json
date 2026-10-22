@@ -1,0 +1,122 @@
+{
+  "status": "MECHANISM_OWNER_ADOPTED_FINAL_DELIVERY_REVIEW_AND_RETENTION_PENDING",
+  "decision": "AD-0016",
+  "owner_receipt": {
+    "path": "/tmp/ash-ad0016-owner-adoption.json",
+    "size": 2001,
+    "sha256": "25d5540e9fc80daf1941f8aaa8d14aa96b8d28ecf7d1516181d1a8aebeda080b"
+  },
+  "reviewed_proposal": {
+    "path": "/tmp/ash-ownerful-ad-proposal/payload/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md",
+    "size": 17173,
+    "sha256": "4b379d6a8963c36f803bc849af0b74c40c832e432fedac4993798a0defe7ac15"
+  },
+  "accepted_wording": {
+    "path": "/tmp/ash-ad0016-accepted-delivery/payload/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md",
+    "size": 18066,
+    "sha256": "3885e7fd731b652f33256b360c2ad71cc0d585e2ae745088478ec5205f23d790"
+  },
+  "diagnostic_retaining_commit": "0f94d650ca68e3453c9400023c64cf1e6f63a0fb",
+  "diagnostic_acceptance_confirmation": "https://github.com/dikini/ash-lang/issues/58#issuecomment-6340959368",
+  "source_of_authority": "Explicit root owner adoption under human autonomous recommended-choice delegation after independent mechanism review. This authored readback records associations, not a second authority or executable approval.",
+  "delta": [
+    "Status and wording reflect actual mechanism adoption; proposal remains preserved unchanged.",
+    "Genuine scalar-only alternative, without blanket blocking static F3 or preparatory F4/F6 work.",
+    "Per-image strict approval, protected context/store, connected F3/F4/F6 and all F7/C-to-S/copy/SQLite/Main gates remain separate."
+  ],
+  "ID_check": {
+    "retaining_tree": [
+      "docs/decisions/AD-0001-implementation-environment.md",
+      "docs/decisions/AD-0002-documentation-system.md",
+      "docs/decisions/AD-0003-formal-notation-fences.md",
+      "docs/decisions/AD-0004-small-step-semantic-method.md",
+      "docs/decisions/AD-0005-parser-architecture.md",
+      "docs/decisions/AD-0006-front-end-semantic-boundaries.md",
+      "docs/decisions/AD-0007-typed-core-dialects.md",
+      "docs/decisions/AD-0008-explicit-evaluator-machine.md",
+      "docs/decisions/AD-0009-ordered-resolved-global-binder-authority.md",
+      "docs/decisions/AD-0010-human-diagnostic-presentation-and-localization.md",
+      "docs/decisions/AD-0011-milestone-worktree-lifecycle.md",
+      "docs/decisions/AD-0012-proof-development-feedback-and-build-reuse.md",
+      "docs/decisions/AD-0013-generated-native-bridges-and-program-builds.md",
+      "docs/decisions/AD-0014-rust-verification-stage-reuse.md",
+      "docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md",
+      "docs/decisions/README.md",
+      "docs/decisions/template.md"
+    ],
+    "all_history_unused": true,
+    "working_directories_unused": true,
+    "working_paths": [
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0009-ordered-resolved-global-binder-authority.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0010-human-diagnostic-presentation-and-localization.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0002-documentation-system.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0001-implementation-environment.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0011-milestone-worktree-lifecycle.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0003-formal-notation-fences.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0005-parser-architecture.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0008-explicit-evaluator-machine.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0004-small-step-semantic-method.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0007-typed-core-dialects.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0006-front-end-semantic-boundaries.md",
+      "/home/dikini/Projects/ash-lang/docs/decisions/AD-0012-proof-development-feedback-and-build-reuse.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0013-generated-native-bridges-and-program-builds.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0009-ordered-resolved-global-binder-authority.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0010-human-diagnostic-presentation-and-localization.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0002-documentation-system.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0001-implementation-environment.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0011-milestone-worktree-lifecycle.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0003-formal-notation-fences.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0005-parser-architecture.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0008-explicit-evaluator-machine.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0004-small-step-semantic-method.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0007-typed-core-dialects.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0006-front-end-semantic-boundaries.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0014-rust-verification-stage-reuse.md",
+      "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/decisions/AD-0012-proof-development-feedback-and-build-reuse.md"
+    ]
+  },
+  "adoption_is_not_native_or_product_activation_approval": true,
+  "originals": [
+    {
+      "retained_path": "reviewed-proposal.txt",
+      "source": {
+        "path": "/tmp/ash-ownerful-ad-proposal/payload/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md",
+        "size": 17173,
+        "sha256": "4b379d6a8963c36f803bc849af0b74c40c832e432fedac4993798a0defe7ac15"
+      }
+    },
+    {
+      "retained_path": "reviewed-proposed-index.txt",
+      "source": {
+        "path": "/tmp/ash-ownerful-ad-proposal/payload/docs/decisions/README.md",
+        "size": 1851,
+        "sha256": "bfde26a96f872945ed7be5caabbb5fc1ef69b992d2c5acf45b81c43f5cf6734e"
+      }
+    },
+    {
+      "retained_path": "reviewed-proposal-manifest.json",
+      "source": {
+        "path": "/tmp/ash-ownerful-ad-proposal/manifest.json",
+        "size": 678,
+        "sha256": "161475748d34aa9fc0190a8298c88176f7f29b8e65fe651e97933e958ff09baf"
+      }
+    },
+    {
+      "retained_path": "original-allocation.json",
+      "source": {
+        "path": "/tmp/ash-ownerful-ad-proposal/allocation.json",
+        "size": 2502,
+        "sha256": "8c7264ece161310162266f740d4f7e841dd9734223a025b832df222767a8b88a"
+      }
+    },
+    {
+      "retained_path": "owner-adoption.json",
+      "source": {
+        "path": "/tmp/ash-ad0016-owner-adoption.json",
+        "size": 2001,
+        "sha256": "25d5540e9fc80daf1941f8aaa8d14aa96b8d28ecf7d1516181d1a8aebeda080b"
+      }
+    }
+  ]
+}

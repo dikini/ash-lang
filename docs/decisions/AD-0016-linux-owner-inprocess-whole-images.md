@@ -1,0 +1,269 @@
+# AD-0016: Linux owner in-process whole images
+
+- ID: `AD-0016`
+- Status: accepted
+- Related: [AD-0015](AD-0015-linux-scalar-inprocess-whole-images.md),
+  [AD-0013](AD-0013-generated-native-bridges-and-program-builds.md),
+  [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
+  [DN-0057](../design/DN-0057-checked-ffi-module-boundaries.md),
+  [TASK-0050](../tasks/TASK-0050-checked-ffi-regions-control-program.md),
+  [TASK-0051](../tasks/TASK-0051-checked-ffi-contract-carriers.md)
+
+## Decision
+
+Select an owner/resource extension of the existing GNU in-process whole-image
+mechanism: target `x86_64-unknown-linux-gnu`, explicit `in-process` mode, one
+static ELF64 little-endian x86-64 ET_EXEC containing the evaluator, generated
+bridges, private program payload and approved native inputs. Each image needs
+its own complete receipt, independently applicable approval and established
+launch context before any native startup or acquisition. Adding or changing a
+binding, runtime, contract, premise, policy or context requires new applicable
+approval. No data record or successful experiment selects a public activation.
+
+This decision selects a non-language mechanism and finite trust boundary. Root
+adopted the independently reviewed meaning under the human's explicit delegation
+for autonomous recommended choices; the [owner readback](../design/foreign-authoring/linux-owner-architecture-evidence/owner-adoption.json)
+records the exact reviewed draft and diagnostic retaining commit. The
+[delivery evidence](../design/foreign-authoring/linux-owner-architecture-evidence/README.md)
+and [readback](../design/foreign-authoring/linux-owner-architecture-evidence/adoption-readback.json)
+separate mechanism adoption from final wording review, retention and activation.
+No implementation or launch is assigned by adoption, and current Main semantics
+do not change. AD-0015 remains accepted only for owner-free scalar images.
+CP-0024 supplies accepted transition obligations; tasks and this decision cannot
+invent completion, copying, retention or failure rules. New checked execution
+must remain refused until connected F3/F4/F6 product gates pass.
+
+Architecture selection, per-image approval and product enforcement are separate
+gates. Owner adoption can select this mechanism after reviewing its finite
+premises without first claiming a completed F4/F6 implementation or an existing
+strict per-image approval. Activation still requires those later gates. This
+decision does not complete whole F2 or the full FFI milestone.
+
+## Context, question and alternatives
+
+Can ownerful in-process execution reuse the scalar whole-image/admission design
+while stating the additional allocator, lifetime, reporting and shutdown trust
+obligations honestly? A matching C prototype or a printed completion cannot
+prove native ownership behavior. Conversely, retaining libc loading paths or
+missing temporary objects does not establish that loading occurred or require
+a formal proof of every libc implementation path before choosing a mechanism.
+
+| Choice | Consequence | Recommendation |
+| --- | --- | --- |
+| Retain scalar-only architecture pending further ownerful evidence | Preserves the accepted scalar scope while further owner evidence is gathered. F3 static work and preparatory F4/F6 work can continue; ownerful activation still awaits an appropriate selection and product gates. | A genuine conservative alternative, not selected. Static and preparatory work would remain possible while ownerful activation awaited selection and product gates. |
+| Exact ownerful whole image plus explicit trusted closure, protected independent approval and fixed context | Reuses known mechanisms and supports bounded connected owner delivery; native memory corruption and host loss remain possible, and product enforcement is still required | Selected by owner adoption under the reviewed finite premises; final delivery review and per-image/product gates remain. |
+| Require isolated workers for every owner | Stronger containment can be selected only after F7 deployment/credential evidence; missing isolation cannot silently choose in-process mode | Preserve as a separate mode and obligation, not a fallback or prerequisite for this distinct host-authority choice. |
+
+A different static runtime/toolchain or shared-library profile would need its
+own reviewed experiment and decision. This decision selects no loader
+interposition, privileged helper, daemon, new registry, host-policy change or
+SQLite-specific runtime exception.
+
+## Evidence and its limits
+
+The [static packaging record](../design/foreign-authoring/linux-owner-static-packaging-evidence/README.md)
+retains the actual fifth image, 71,022,184 bytes, SHA-256
+`52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65`,
+and complete 100,345,205-byte map SHA-256
+`43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b`.
+ELF inspection found 12 program headers, four LOAD segments and no INTERP or
+DYNAMIC. The 78 map LOAD records contain 68 hashed existing records covering
+67 paths and 10 absent linker temporaries; this is not a fully hashed closure.
+The finite map budget and diagnostic flags are operational evidence choices,
+not universal product admission limits or claims about native behavior.
+
+The [header/closure record](../design/foreign-authoring/linux-owner-header-closure-evidence/README.md)
+distinguishes post-query header discovery from the separate syntax-only check
+with 27 frozen headers plus exact source, equal before/after byte pins and
+emitted dependency set. It supports conditional fixed GNU installed-header
+size_t/pointer/target/malloc/free prototype correspondence. It does not prove
+the installed libc implementation, arbitrary ABI behavior or all-path loading
+exclusion. The [proposed premise example](../design/foreign-authoring/linux-owner-header-closure-evidence/ownerful-premise.proposed.json)
+remains data, not approval or architecture acceptance.
+
+The [trusted diagnostic record](../design/foreign-authoring/linux-owner-diagnostic-evidence/README.md)
+retains a sandbox errno 13 refusal and the separate, explicitly approved host
+run returning `Completed(8, Closed)` plus newline, exit zero and observed reap.
+The exact sealed object was executed under a fixed argv and empty environment;
+artifact pins and prior records matched, and temporary copies were disposed.
+The producer uses malloc/free, but the handler returns stored source data 8,
+not native memory. The report is not independent proof that native free was
+truthful or that checked K/group accounting worked. The approved experiment
+accepted loading uncertainty and host authority; it is never a strict
+no-loading or checked-runtime approval.
+
+Three forms of support must stay separate:
+
+- Structural/observed: whole-image/source/tool/bridge/fact correspondence,
+  static ELF, complete-map associations, conditional header checks, immutable
+  same-fd experiment, actual report/refusal/reaping and measured cleanup.
+- Source-conditional: the scalar audit's C-locale/gettext/strerror argument
+  transfers only while built-in global and every thread locale remain C.
+  Exact owner guard/report source and generated typed calls narrow review,
+  but old scalar constructor-array counts do not enumerate this image.
+- Trusted residual: pinned producer/build/native/runtime integrity and finite
+  startup/error/allocator/cleanup closure conformity. Digests bind these
+  premises; they do not prove them. Ten missing temporary objects, the
+  patches-unapplied distribution import, no audited malloc.c in the existing
+  source packet and precompiled-stdlib correspondence remain explicit limits.
+
+## Additional ownerful trust and applicability
+
+An applicable image receipt must identify the actual native operation and
+owner/lifecycle/descriptor closure, not just a compatible C function type.
+The first evidence baseline is dependency-free opaque nullable allocation and
+void consuming teardown. It supplies no blanket approval for arbitrary owners,
+callbacks, byte access, dependencies or another library. Extension uses the
+common mechanism with its own reviewed carriers, closure and evidence; no
+library name may bypass a check.
+
+Required finite premises for each applicable closure include:
+
+- Native allocation produces null or the declared valid extent/alignment and
+  live lifetime; teardown receives only the exact still-live compatible
+  pointer once and conforms to declared disposition. No initialized-byte
+  promise follows from malloc, an opaque State or this stored-data example.
+- The pinned allocator/runtime conforms through initialization, arenas,
+  thread/TLS state, locking, reentrancy, allocation failure/diagnostics and
+  abort paths. No unreviewed allocator plugin/debug/tunable configuration
+  belongs to the fixed launch context. Native memory integrity remains
+  trusted; a bad pointer or double free can corrupt the whole host.
+- Guard preparation precedes irreversible acquisition. Arming/recording native
+  ownership and known disposition precede fallible source reporting under
+  CP-0024. Review covers null, partial acquisition/report refusal, abandoned
+  continuations, panic/unwind/drop and pending cleanup. Native return does not
+  establish source completion; local discharge does not prove physical release.
+- The exact runtime conforms through `_start`, `_init`, `_fini`, all
+  preinit/init/fini arrays, IFUNC/TLS, libc/Rust startup, known constructors,
+  signals/thread entries, registered cleanup, error/IO/allocation/panic/unwind
+  and shutdown. Reviewed internal runtime callbacks remain within the closure;
+  unknown callbacks/registrations or a source/native callback facility do not.
+- Strict applicability preserves built-in C locale globally and in every
+  thread and excludes direct/indirect runtime module loading, plugins, NSS
+  dispatch, arbitrary charset conversion and locale replacement. Retained
+  loader names do not prove a load; a possible-loading diagnostic cannot
+  discharge this strict premise. Independent review must explicitly accept
+  finite trusted conformity and source/build limits, not demand or pretend
+  a formal whole-libc proof. If applicability cannot be established, refuse.
+- Host address space, credentials, supplementary groups and ordinary authority
+  remain shared. Faults, aborts, corruption, nonreturning native calls or host
+  loss may prevent cleanup or a report. No unconditional availability,
+  filesystem/syscall/resource containment, native truth, rollback or eventual
+  release guarantee is created. Isolated failure never causes mode fallback.
+
+CP-0024 group lineage is distinct from H and ordinary source continuation.
+Independent owners under one H are not automatically one group. This decision
+does not infer group reservation, exact generation/dependency membership,
+one-attempt/quarantine, synthetic finish or O/K permission from a native
+receipt, ordinary constructor, printed result, OS process or opaque pointer.
+Those checks belong to connected F3/F4 and remain independently validated.
+
+## Receipt, independent approval and launch mechanism
+
+Reuse the existing producer receipt plus independent protected approval
+mechanism and versioned exact-closure applicability data. Add owner-specific
+associations to the same bounded data, not a new registry or self-authorizing
+boolean. F6 must freeze deterministic encodings, versions, finite work/record
+caps and charged comparison before startup; this prose is not a product schema.
+
+Bind final image digest/size/target/mode/role; complete required checked
+contracts, source originals, exact H/R/full Type/Row vectors, lifecycle and
+operation coordinates, wrappers/captures/assumptions, bridge/generator plan,
+private program/facts, native/header/runtime/tool/configuration closure and
+protocol/policy/premise/context versions. The existing-profile diagnostic
+receipt lacks that checked closure and cannot approve a checked image.
+A hash detects substitution; authority comes from independent approval.
+
+Reuse AD-0015's selected deployment mechanism, whose enforcement is pending: preconfigured root-owned
+local approval directory protected from the ordinary nonzero producer/runtime
+identity through ancestors, ACLs, namespace/mount substitution, privileges
+and open descriptors. Establish the administrator-controlled host user/mount/
+filesystem context through protected launcher configuration; apparent numeric
+UID/root ownership alone is insufficient. No store, context or privilege is
+provisioned by this decision. The manual experiment approval is not this
+product store. Other trust models need separate review.
+
+Open regular approvals through that established association without untrusted
+links. Approval binds exact receipt/image/premise hashes and target/mode/role/
+context/version applicability. Caller-selected files, package manifests,
+producer reports, same-UID files or unknown signatures cannot self-approve.
+Use an independent approval snapshot before activation; future activations
+consult current approval state, without promising revocation of active hosts.
+
+Inspect without native startup or candidate metadata queries. Copy to an
+executable memfd, seal writes/growth/shrink/seal changes, then hash/inspect the
+final immutable object, compare to applicable approval and execute that same
+fd. Fixed argv, empty environment, standard descriptors and unrelated-FD
+closure belong to the exact launch policy. Refuse missing/malformed/unknown/
+mismatched or over-budget receipt, image, closure, premise, context, version,
+mode, ABI, operation mapping or unsupported environment before native
+initialization/acquisition. No pathname reopening, ambient library lookup,
+unapproved bridge installation, implicit compilation or legacy fallback.
+
+The strict production closure remains whole-static with no interpreter/shared
+dependency metadata or runtime loading. Structural ELF checks alone do not
+prove the last property. A distinct trusted possible-loading diagnostic can
+produce evidence only under its own explicit approval; it never becomes a
+public runtime alternative to a refused strict image. No new invocation is
+authorized by architecture adoption or this decision.
+
+## Consequences and remaining delivery
+
+This choice provides a reviewed ownerful Linux in-process architecture
+basis for appropriately assigned F4/F6 work, with its larger trust boundary
+visible. It reuses whole-image construction, typed generated bridges, exact
+receipt/approval/context association and immutable execution. It does not
+reuse scalar executable approvals or mint owner/source/native authority.
+
+[F4/F6/F7 plans](../tasks/plans/checked-ffi-regions-control.md) remain connected
+product obligations:
+
+- F3 must retain original-source/summary/body-free consumer/link/Core/image
+  identity, hidden closure and selected-evidence checks; a projected carrier
+  never supplies a missing original or grants native entry by itself.
+- F4 must reserve mandatory control storage before native acquisition, enforce
+  exact host/session/group/generation/owner lineage, commit known disposition
+  and local discharge before fallible reporting, preserve retained backing,
+  handle evaluator exhaustion/native failure/quarantine and enforce bounded
+  copies with no exposed pointer/callback/suspension/partial publication.
+- F6 must connect deterministic checked preparation/receipt emission to
+  independent protected approval and immutable startup, including hostile
+  and exact/short/spent/fresh budget evidence at public paths. Current refusal
+  remains correct until this is implemented; passive-only startup is not
+  completion of ownerful checked execution.
+- F7 still needs trusted deployment credentials and actual worker/root/storage/
+  syscall/cgroup/quota/resource-limit/fault/termination evidence, one request
+  in flight, fresh sessions, no native pointers or replay, independent parent
+  validation/reaping and reservations retained until observed termination.
+- Declared C-to-S dependencies, retained backing, copy/window integration,
+  SQLite and its VFS/lifecycle policy need their own supported connected
+  cases on the common mechanisms. The full F-core gate exercises acquisition,
+  call, copy, completion and admission together; the legacy stored-data
+  example is not that checkpoint. Whole F2/M1 and Main gates remain open.
+
+## Verification and activation gates
+
+Independent review of the exact proposed mechanism/trust boundary, alternatives,
+evidence limits and applicability obligations preceded explicit root adoption.
+The [preserved proposal](../design/foreign-authoring/linux-owner-architecture-evidence/reviewed-proposal.txt)
+retains its historical proposed status and exact digest. The diagnostic was
+retained first at `0f94d650ca68e3453c9400023c64cf1e6f63a0fb`; the ID and evidence
+links were rechecked for this accepted wording. Final delivery review and GitHub
+retention remain separately recorded. Mechanism adoption is not implementation
+evidence or empirical proof of every trusted native behavior.
+
+Before each image activation, require the independently applicable exact
+checked approval and established context plus connected product admission.
+Missing strict approval is an activation gate, not a claim that this decision
+can bypass it or that full product implementation must precede architecture
+choice. Test changed binding/runtime/native/header/image/receipt/operation/
+mode/context/premise/version, missing or writable/replaced store, malformed
+records, unsupported controls and exhausted budgets before acquisition.
+
+Connected F4 tests must distinguish null/nonnull acquisition, refused or
+late reporting after native return, consuming/retained/unknown dispositions,
+wrong or stale H/R/group/dependency, exact finish attempts, source required
+continuations, copy failure, quarantine and host loss without inventing
+consumption or replaying unknown operations. F7 tests remain separate actual
+containment evidence. These are implementation acceptance targets, not
+passing tests or semantic rules introduced by this AD.

@@ -16,6 +16,10 @@ and immutable fd execution under explicit trusted runtime/native premises.
 It supplies no strict per-image approval, product implementation or isolated,
 SQLite or owner/resource acceptance. The remaining exploration below retains
 its design status; current language truth still comes from the specification.
+[AD-0016](../../decisions/AD-0016-linux-owner-inprocess-whole-images.md) later
+selects the owner/resource extension of those mechanisms with finite trusted
+native/allocator/closure premises. It grants no strict executable approval,
+checked activation or isolated/SQLite deployment acceptance.
 
 ## Common obligations and platform mechanisms
 

@@ -16,6 +16,11 @@ The narrow owner-free scalar GNU in-process realization is now selected by
 explicit trusted closure and refusal obligations. That accepted non-language
 choice does not adopt the remaining exploration here, approve an executable or
 complete isolated/SQLite/owner deployment evidence.
+[AD-0016](../decisions/AD-0016-linux-owner-inprocess-whole-images.md) later
+selects the owner/resource GNU in-process whole-image mechanism under explicit
+trusted closure and host-loss premises. Per-image strict approval, connected
+checked runtime/admission and deployment enforcement remain separate gates;
+this informative note acquires no language authority from that decision.
 
 ## Question
 

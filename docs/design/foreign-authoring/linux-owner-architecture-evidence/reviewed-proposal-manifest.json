@@ -1,0 +1,18 @@
+{
+  "status": "PROPOSED_NOT_ACCEPTED",
+  "base": "0b2b9dc90122d5513bb63f4608bede76f5339fea",
+  "files": [
+    {
+      "relative_path": "docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md",
+      "path": "/tmp/ash-ownerful-ad-proposal/payload/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md",
+      "size": 17173,
+      "sha256": "4b379d6a8963c36f803bc849af0b74c40c832e432fedac4993798a0defe7ac15"
+    },
+    {
+      "relative_path": "docs/decisions/README.md",
+      "path": "/tmp/ash-ownerful-ad-proposal/payload/docs/decisions/README.md",
+      "size": 1851,
+      "sha256": "bfde26a96f872945ed7be5caabbb5fc1ef69b992d2c5acf45b81c43f5cf6734e"
+    }
+  ]
+}
