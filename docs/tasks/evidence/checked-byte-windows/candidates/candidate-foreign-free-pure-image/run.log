@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+test build::image::tests::foreign_free_default_compilation_keeps_pure_private_image ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2110 filtered out; finished in 0.01s
+

@@ -4380,23 +4380,24 @@ mod tests {
         })
         .unwrap();
         let (program, _) = compiled
-            .pure_build_input()
-            .expect("checks preserve Pure Core");
+            .effect_build_input()
+            .expect("retained checked schemes select Effect Core");
         let intrinsics = [true, false].map(|signed| {
             program
                 .nodes()
                 .iter()
                 .find_map(|node| match &node.kind {
-                    PureExprKind::Value(PureValue::Intrinsic(intrinsic))
-                        if matches!(
+                    crate::core::EffectExprKind::Pure(PureExprKind::Value(
+                        PureValue::Intrinsic(intrinsic),
+                    )) if matches!(
+                        intrinsic.operation(),
+                        crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
+                    ) == signed
+                        && matches!(
                             intrinsic.operation(),
                             crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
-                        ) == signed
-                            && matches!(
-                                intrinsic.operation(),
-                                crate::core::packed::Intrinsic::ForeignCheckedI64 { .. }
-                                    | crate::core::packed::Intrinsic::ForeignCheckedSizeT { .. }
-                            ) =>
+                                | crate::core::packed::Intrinsic::ForeignCheckedSizeT { .. }
+                        ) =>
                     {
                         Some(*intrinsic)
                     }
@@ -4597,19 +4598,21 @@ mod tests {
             roots: ModuleRoots::empty(),
         })
         .unwrap();
-        let (program, _) = compiled.pure_build_input().expect("pure preflight");
+        let (program, _) = compiled
+            .effect_build_input()
+            .expect("retained checked schemes select Effect Core");
         let (intrinsic, function) = program
             .nodes()
             .iter()
             .find_map(|node| match &node.kind {
-                PureExprKind::Value(PureValue::Intrinsic(intrinsic)) => {
-                    match intrinsic.operation() {
-                        crate::core::packed::Intrinsic::ForeignCheckedNul { function } => {
-                            Some((*intrinsic, function))
-                        }
-                        _ => None,
+                crate::core::EffectExprKind::Pure(PureExprKind::Value(PureValue::Intrinsic(
+                    intrinsic,
+                ))) => match intrinsic.operation() {
+                    crate::core::packed::Intrinsic::ForeignCheckedNul { function } => {
+                        Some((*intrinsic, function))
                     }
-                }
+                    _ => None,
+                },
                 _ => None,
             })
             .unwrap();

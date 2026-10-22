@@ -744,3 +744,12 @@ lookup. Both commands share 591 equal inputs, aggregate `c74e45c0`.
 Body-free consumer/re-export, independent Core/transforms, passive image
 validation, hostile controls and affected bounds/regressions remain pending.
 No runtime or image activation permission follows.
+
+The next frozen candidate passes both actual body-free consumer routes and
+linked independent default Core/identity/fold (7/7 with the prior source gates).
+Foreign-free Pure, inert legacy import, checked-host image refusal and scalar/NUL
+atomicity controls pass. Passive-image tamper completion and stale formal-count
+fixtures need test-premise corrections. More materially, both buffer and the
+dependent-discard startup probes now exhaust the unchanged 327680 allowance;
+these are delivery blockers, with measured repeated codec proof work retained.
+No budget, startup fixture or activation guard may be relaxed to close them.

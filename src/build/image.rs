@@ -6191,6 +6191,29 @@ main () = {
     }
 
     #[test]
+    fn foreign_free_default_compilation_keeps_pure_private_image() {
+        let tree = SourceTree::new();
+        tree.write("entry.ash", "main : Unit -> Int\nmain () = 42\n");
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert!(compiled.effect_build_input().is_none());
+        let (program, provenance) = compiled
+            .pure_build_input()
+            .expect("no Foreign or effectful scheme selects ordinary Pure Core");
+        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        assert!(!image.effect_dialect);
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        drop(image);
+        drop(compiled);
+        drop(tree);
+        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = decoded.restore(&mut TypeWorkBudget::default()).unwrap();
+        assert_eq!(
+            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            "42"
+        );
+    }
+
+    #[test]
     fn checked_builtin_image_legacy_import_roundtrip_authenticates_inert_host() {
         let tree = SourceTree::new();
         tree.write(
@@ -6198,8 +6221,18 @@ main () = {
             "import @builtin.foreign as Foreign\nmain : Unit -> Int\nmain () = 42\n",
         );
         let compiled = compile_path(tree.configuration()).unwrap();
-        let (program, provenance) = compiled.pure_build_input().unwrap();
-        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        assert!(compiled.pure_build_input().is_none());
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            "x86_64-unknown-linux-gnu",
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert!(build.bridges.is_empty());
+        assert!(build.libraries.is_empty());
+        let image = build.image;
         assert_eq!(image.effects.len(), 1);
         assert!(image.operations.is_empty());
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
@@ -6207,9 +6240,14 @@ main () = {
         drop(compiled);
         drop(tree);
         let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        let restored = decode().restore(&mut TypeWorkBudget::default()).unwrap();
+        let restored = decode()
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
         assert_eq!(
-            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
             "42"
         );
         let mutations: &[fn(&mut PureImage)] = &[
@@ -6224,7 +6262,9 @@ main () = {
             let mut image = decode();
             mutate(&mut image);
             assert!(
-                image.restore(&mut TypeWorkBudget::default()).is_err(),
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
                 "accepted altered inert image metadata {index}"
             );
         }
@@ -6299,8 +6339,23 @@ main () = {
         let tree = SourceTree::new();
         tree.write("entry.ash", "import @builtin.foreign as Foreign\nmain : Unit -> Bool\nmain () = match Foreign.checked_i64 42 {\n    Foreign.Returned(value) => value == 42\n    Foreign.ConversionFailed(_) => false\n}\n");
         let compiled = compile_path(tree.configuration()).unwrap();
-        let (program, provenance) = compiled.pure_build_input().unwrap();
-        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        assert!(
+            compiled.pure_build_input().is_none(),
+            "retained checked schemes have latent Host rows and select Effect Core"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        assert!(!program.nodes().iter().any(|node| matches!(&node.kind,
+            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::NativeInterpret(boundary)) if boundary.host().is_some())));
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            "x86_64-unknown-linux-gnu",
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert!(build.bridges.is_empty());
+        assert!(build.libraries.is_empty());
+        let image = build.image;
         let mut roles = image
             .scalar_preflights
             .iter()
@@ -6319,35 +6374,60 @@ main () = {
                 Role::ReplaceData,
                 Role::CopyBytes,
                 Role::CopyNul,
-                Role::ExtentValue
+                Role::ExtentValue,
+                Role::CheckedByteRead,
+                Role::CheckedByteWrite,
+                Role::CheckedCopyBytes,
+                Role::CheckedCopyNul
             ]
         );
-        assert_eq!(image.call_codecs.len(), 1);
-        assert_eq!(
-            image.scalar_preflights[0].codec,
-            image.scalar_preflights[1].codec
-        );
+        assert_eq!(image.call_codecs.len(), 2);
+        let codec_for = |role| {
+            image
+                .scalar_preflights
+                .iter()
+                .find(|fact| fact.role == role)
+                .unwrap()
+                .codec
+        };
+        let legacy = codec_for(Role::I64);
+        let checked = codec_for(Role::CheckedByteRead);
+        assert_ne!(legacy, checked);
+        for fact in &image.scalar_preflights {
+            assert_eq!(
+                fact.codec,
+                if fact.role.host_parameter(ModuleId::new(0)).is_some() {
+                    checked
+                } else {
+                    legacy
+                }
+            );
+        }
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
         drop(image);
         drop(compiled);
         drop(tree);
         let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        let restored = decode().restore(&mut TypeWorkBudget::default()).unwrap();
+        let restored = decode()
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
         assert_eq!(
-            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
             "true"
         );
         fn data_parameters(image: &PureImage) -> usize {
-            image
-                .types
+            let fact = image
+                .scalar_preflights
                 .iter()
-                .find_map(|record| match record.tag {
-                    TypeTag::Forall { parameters } if parameters.len == 2 => {
-                        Some(parameters.start as usize)
-                    }
-                    _ => None,
-                })
-                .expect("canonical Data declaration has both ordered formals")
+                .find(|fact| fact.role == Role::DataOf)
+                .unwrap();
+            match image.types[usize::try_from(fact.annotation.ty).unwrap()].tag {
+                TypeTag::Forall { parameters } if parameters.len == 2 => parameters.start as usize,
+                _ => panic!("canonical Data declaration has both ordered formals"),
+            }
         }
         let mutations: &[fn(&mut PureImage)] = &[
             |image| {
@@ -6381,8 +6461,10 @@ main () = {
                     | Role::CopyBytes
                     | Role::CopyNul
                     | Role::ExtentValue
-                    | Role::CheckedByteRead | Role::CheckedByteWrite
-                    | Role::CheckedCopyBytes | Role::CheckedCopyNul => Role::I64,
+                    | Role::CheckedByteRead
+                    | Role::CheckedByteWrite
+                    | Role::CheckedCopyBytes
+                    | Role::CheckedCopyNul => Role::I64,
                 }
             },
             |image| image.scalar_preflights[0].annotation.provenance = u32::MAX,
@@ -6398,6 +6480,43 @@ main () = {
             },
             |image| {
                 image.call_codecs.push(image.call_codecs[0]);
+            },
+            |image| {
+                let checked = image
+                    .scalar_preflights
+                    .iter()
+                    .find(|f| f.role == Role::CheckedByteRead)
+                    .unwrap()
+                    .codec;
+                let reminted = index(image.call_codecs.len()).unwrap();
+                image
+                    .call_codecs
+                    .push(image.call_codecs[usize::try_from(checked).unwrap()]);
+                image
+                    .scalar_preflights
+                    .iter_mut()
+                    .find(|f| f.role == Role::CheckedCopyNul)
+                    .unwrap()
+                    .codec = reminted;
+            },
+            |image| {
+                image
+                    .scalar_preflights
+                    .retain(|f| f.role != Role::CheckedByteRead);
+            },
+            |image| {
+                let legacy = image
+                    .scalar_preflights
+                    .iter()
+                    .find(|f| f.role == Role::I64)
+                    .unwrap()
+                    .codec;
+                image
+                    .scalar_preflights
+                    .iter_mut()
+                    .find(|f| f.role == Role::CheckedCopyNul)
+                    .unwrap()
+                    .codec = legacy;
             },
             |image| {
                 let builtin = image
@@ -6419,14 +6538,16 @@ main () = {
                 *module = u32::MAX;
             },
             |image| {
-                image.nodes[0].effects = Some(0);
+                image.nodes[0].effects = Some(u32::MAX);
             },
         ];
         for (case, mutate) in mutations.iter().enumerate() {
             let mut corrupted = decode();
             mutate(&mut corrupted);
             assert!(
-                corrupted.restore(&mut TypeWorkBudget::default()).is_err(),
+                corrupted
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
                 "forged case {case}"
             );
         }

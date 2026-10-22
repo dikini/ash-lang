@@ -91,3 +91,45 @@ This establishes source checking and summary construction only. Body-free
 consumer/re-export, linked independent Core/transforms, passive private-image
 validation, window/host/original hostile controls and remaining bounds/regressions
 are still pending. No checked runtime, native call or image startup ran.
+
+## Connected consumer/Core checkpoint and startup blocker
+
+`candidate-connected-core` first passed source checking and summary construction
+for both consumer graphs, then stopped at an opaque-owner-specific Callee prose
+assertion reused by the byte fixture. Its legacy image test also stopped at an
+obsolete Pure-view premise. Pinned-artifact controls confirmed that same Pure
+premise in the inert-import image and scalar/NUL component tests. These were
+test premises, not source or image permission failures; their raw logs remain.
+The current specification selects Effect Core for retained effectful schemes,
+including the four new latent-Host primitive schemes. No selector was changed.
+
+After the test-only corrections, `candidate-connected-effect-images` passes
+7/7: genuine all-four source/summary, direct and facade body-free consumers,
+exact native/header/access original retention, linked independent default Core,
+all four flow-proved calls/intrinsics, identity and fold. The following cached
+commands share its 591 equal input map `a4d83627`; the exact three-file test
+overlay is against `2f5f3c61` and artifact SHA256 is
+`e06fe797949a9f104772f1e0bc23ebe7f4cdac7d8a28def4a3ead9bc769c37b3`.
+
+| Control | Actual result |
+| --- | --- |
+| Passive codec image | Canonical Effect encode/restore/evaluate succeeds; tamper loop stops at an invalid DataOf quantifier test locator. No complete hostile-image pass. |
+| Foreign-free default Pure image | Passes compilation, Pure encoding/restoration and evaluation. |
+| Legacy host image controls | Inert legacy import roundtrip and checked empty-host activation refusal pass; two image-subset fixtures stop at stale 23-versus-31 formal counts. |
+| Scalar and NUL atomicity | Both pass unchanged semantic/atomicity/budget assertions on the selected Effect representation. |
+| Normal buffer startup probes | Both fail Resource at unchanged 327680; imported-buffer reconstruction reaches 327632 before refusal. |
+| Dependent discard startup | Fails Resource at unchanged cumulative allowance. |
+
+The startup regressions are delivery blockers. No allowance or fixture was
+changed. A read-only pinned GDB measurement finds full codec reauthentication
+14 times per scalar-preflight registry pass: ten legacy calls cost 17/18 units
+each, four checked calls cost 436/450 each, subtotal 1914/1980 per pass. The
+`codec-table-costs` script/log retains this diagnostic, which is not a test pass.
+Any operation-local proof sharing must preserve every fact's original/projection
+checks, family pointer continuity and independent fresh-registry authentication.
+No such optimization is included at this checkpoint.
+
+Window/Host/owner/original hostile controls, complete passive-image tamper
+coverage, remaining bounds and affected regressions remain pending. The
+327680 startup blocker must be repaired without a waiver. No checked runtime,
+native execution or image activation follows from these static results.
