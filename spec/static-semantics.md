@@ -1046,9 +1046,9 @@ identity, nullable acquisition and consumed/retained void teardown relations.
 Passive binding creates no source owner. Legacy binding and source resources
 using `scope` or `acquired_only` still refuse checked contracts.
 
-The explicit static profile admits a dependency-free opaque State<H,R> without
-retained dependencies in a source resource with `owned R`, `host H` and
-`codec checked_scope`. The exact original Type formal H differs from R and
+The explicit static profile admits a dependency-free opaque or initialized-byte
+State<H,R> without retained dependencies in a source resource with `owned R`,
+`host H` and `codec checked_scope`. The exact original Type formal H differs from R and
 occupies the State owner's original host position. Acquisition retains the
 structural Acquired(State,D)/Refused(I) relation. Completion uses canonical
 `Foreign.CheckedFinish<State,E>` and the report uses canonical
@@ -1065,8 +1065,9 @@ owning resource's direct handler may request that Borrow, with exact interpreted
 membership and matching State/H/R actuals. Checked acquisition, finish and
 ordinary callable contexts supply no Borrow permission. The independent
 BoundaryFailed alternative grants no private finish witness and cannot transport
-Current through the handler's result. Byte/window/dependency and general helper
-transport remain excluded from this static subset.
+Current through the handler's result. Declared owner dependencies and general
+helper transport remain excluded. Initialized-byte and window primitives have
+the separate static requirements below.
 
 The admitted checked finish request is a void teardown whose sole native operand
 is the exact Current State. It has no scalar/NUL operand conversion or native
@@ -1085,8 +1086,8 @@ are unavailable. Current may occur only in the matching FinishedRetained report
 transport. Required independent source effects and the post-request continuation
 remain; native outcome classification grants no discard permission. Report E
 retains the dependencies of the latest private data, including handler updates.
-This is static correspondence: checked evaluator/native/image execution,
-K realization, checked bytes/copy and declared owner dependencies remain outside
+This is static correspondence: checked evaluator/native execution, executable
+checked builds, K realization and declared owner dependencies remain outside
 this subset and refuse explicitly.
 
 Each symbol has one outer pure source arrow and a complete ordered parameter
@@ -1274,6 +1275,42 @@ live view in a direct provider window. `Foreign.Extent<V>` is opaque,
 unconstructible and tied to that exact view. `extent_value<V> :
 Foreign.Extent<V> -> Int` exposes only an independent copied length. Compatible
 types, donor extents or ordinary generic instantiation supply no authority.
+
+The checked profile supplies separate canonical builtin identities:
+
+```ash
+Foreign.checked_byte_read<H, S> : (S, Int) -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>}
+Foreign.checked_byte_write<H, S> : (S, Int, Int) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>}
+Foreign.checked_copy_bytes<H, V> : (V, Foreign.Extent<V>) -> Foreign.CheckedCall<Bytes> ! {Foreign.NativeHost<H>}
+Foreign.checked_copy_nul<H, V> : (V, Int) -> Foreign.CheckedCall<Bytes> ! {Foreign.NativeHost<H>}
+```
+
+The explicit first Type actual H must equal the host selected by the exact
+original checked State S or view V owner contract. The result codec and
+latent row retain canonical `CheckedCall` and `NativeHost<H>` identities.
+Compatible types, arbitrary H and equal-shaped client declarations supply no
+permission. The legacy byte/copy identities above cannot authorize checked
+State or views; their signatures and existing-profile behavior remain unchanged.
+
+Checked byte read/write require the original initialized-byte acquisition and
+its exact fresh State in acquisition or Current State in an admitted handler or
+finish phase, before any teardown attempt. Index and write-value inputs must be
+independent of State authority. Checked copy requires the exact live view in its
+own direct `copy_window`, the original access family and complete ordered
+Type/Row actuals. A bytes extent belongs to that same view and producing keys;
+a donor extent, window or owner cannot replace it. Nul copying requires that
+family's nul convention and an independent bound. Windows retain their existing
+non-suspension and no-escape rules. None of these primitives permits State/view
+transport through an ordinary helper or calls outside its admitted phase.
+
+Source checking, body-free summaries, linking and independent Core validation
+retain these original primitive, owner, access, initialized-range and Host
+relations. Private static-image reconstruction restores them from bytes and
+independently reauthenticates the original source, header, complete contracts
+and copied forests. Static reconstruction grants no executable checked build,
+runtime native activation or evaluator permission; those boundaries still refuse checked
+execution.
+
 `Foreign.data_of<S, D> : S -> D` and `Foreign.replace_data<S, D> : (S, D) -> Unit`
 use only the exact descriptor-supplied State/private-data relation in an admitted
 phase. They grant no State transport or native-call permission to helpers.

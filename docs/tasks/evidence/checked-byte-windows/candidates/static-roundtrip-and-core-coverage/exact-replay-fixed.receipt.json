@@ -1,0 +1,43 @@
+{
+  "command": [
+    "timeout",
+    "--signal=TERM",
+    "--kill-after=10s",
+    "180s",
+    "gdb",
+    "-q",
+    "-batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "set confirm off",
+    "-ex",
+    "set debuginfod enabled off",
+    "-ex",
+    "set breakpoint pending on",
+    "-ex",
+    "source /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-exact-replay/phase.py",
+    "-ex",
+    "run",
+    "--args",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_body_free_consumer_core_and_transforms",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 12.816,
+  "inputs_equal": true,
+  "count": 596,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "8f765d6cdbdf66df69a20b3e1c8aefae6d57834c0adb97d7f5e289d72e0acb2b",
+  "log_sha256": "8add766e67837cafc2ce901a531275d2fc9a56c6d8b13019b1118278e47899f7",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}
