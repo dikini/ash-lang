@@ -733,13 +733,14 @@ owner-free; all four whole-F3 criteria stay unchecked. Root assigns F-core only
 when the real generated-host F3/F4/F6 path and accepted F2 are ready. A concrete
 semantic omission or O/K conflict returns to CP/design, never a local rule.
 
-Initial [product candidate evidence](../evidence/checked-byte-windows/candidates/README.md)
-now retains three reconstructed frozen source maps. The third candidate compiles
-and passes preparation, default refusal, isolated checked Bytes-owner binding
-and the four new builtin-name resolution controls. Its connected source/summary
-control still refuses generic source-template admission (`Source Argument`,
-resource span 3347..7619). No specific symbolic-flow predicate is yet identified;
-the pinned first-invalid debugger probe did not reach that flow error helper.
-An exact passive image quantifier decoder-list correction follows that run and
-is unexecuted at this checkpoint. All connected and later delivery gates remain
-pending; no runtime or image activation permission follows.
+[Product candidate evidence](../evidence/checked-byte-windows/candidates/README.md)
+retains reconstructible compile failures and preflow failures. Exact diagnostics
+identified separate codec-family identity and missing defining-H scheme-kind
+correspondence, without relaxing source ordering, flow or lexical scope checks.
+The current frozen five-test candidate passes actual initialized-State/view
+preparation, default refusal, binding/inventory and all-four source/summary.
+Two additional controls pass family remint refusal and paid complete-formal kind
+lookup. Both commands share 591 equal inputs, aggregate `c74e45c0`.
+Body-free consumer/re-export, independent Core/transforms, passive image
+validation, hostile controls and affected bounds/regressions remain pending.
+No runtime or image activation permission follows.

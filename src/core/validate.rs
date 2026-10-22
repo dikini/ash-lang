@@ -11802,16 +11802,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let mut found = None;
             for (_, fact) in self.program.registry.scalar_preflights() {
                 self.charge_type_work(1)?;
-                if (fact.role().borrowed_parameter(fact.module()) == Some(identity)
-                    || fact.role().data_parameter(fact.module()) == Some(identity))
-                    && let Type::Forall(parameters, _) = fact.core_signature()
+                if let Some(kind) = fact
+                    .parameter_kind_with_charge(identity, |amount| self.charge_type_work(amount))?
                 {
                     // Registry authentication established this sealed defining
-                    // declaration. This admits its scheme kind only; lexical
-                    // scope still rejects an unbound S or a forged application.
-                    let index =
-                        usize::from(fact.role().data_parameter(fact.module()) == Some(identity));
-                    found = parameters.get(index).map(|(_, kind)| kind);
+                    // declaration. Its full scheme includes checked H before
+                    // S/V; this grants no lexical TypeAbstraction binder.
+                    if let Some(previous) = found
+                        && !self.same_kind_charged(previous, kind)?
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                    found = Some(kind);
                 }
             }
             if found.is_some() {

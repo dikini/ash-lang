@@ -379,16 +379,18 @@ implements all four distinct checked primitives with real initialized State,
 view/Extent/window and any required declared dependency lineage. Source, body-free
 import/re-export, independent Core/transforms and static private-image validation
 must precede closure claims. Existing runtime activation remains refused. The
-first expected-positive checked preparation/admission gate has not run; root's
-F2 pipeline currently owns Cargo. No inspected code exclusion is reported as a
-red test. Whole F3 and its remaining generated-host/runtime/full-gate obligations
+first expected-positive preparation/admission gates and their actual failures
+are retained in the test-first evidence below. Whole F3 and its remaining generated-host/runtime/full-gate obligations
 stay open.
 
 The byte/window checkpoint's [test-first evidence](evidence/checked-byte-windows/test-first/README.md)
-records genuine initialized State and view/extent contract preparation, the
-missing checked builtin export, and a separately isolated checked Bytes-owner
-binding refusal. An initial product candidate now compiles and passes the binding and builtin
-inventory controls; its actual source/summary positive still refuses generic
-source-template admission. The [candidate receipts](evidence/checked-byte-windows/candidates/README.md)
-retain exact reconstructed inputs and distinguish compile-only failures. Body-free
-metadata, Core, static images and hostile/budget gates remain assigned delivery work.
+records genuine initialized State and view/extent preparation, missing checked
+builtin exports and the isolated checked Bytes-owner binding refusal. The
+[candidate evidence](evidence/checked-byte-windows/candidates/README.md) retains
+reconstructible compile/preflow failures and the exact codec-family and defining-H
+kind repairs. The current candidate passes all five focused controls, including
+real all-four source checking and summary construction; two paid family/kind
+controls also pass on the same 591-input map (`c74e45c0`). Body-free import/
+re-export, linked independent Core/transforms, passive images, hostile controls,
+bounds and affected regressions remain assigned delivery work. No runtime or
+image activation claim follows.

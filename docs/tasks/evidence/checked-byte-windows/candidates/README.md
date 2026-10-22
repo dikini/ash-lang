@@ -56,5 +56,38 @@ The current repair mints one checked codec reference independently of the
 legacy codec, forwards each within its exact family, and retains pointer
 continuity against family anchors 11 and 0. A new control independently
 authenticates a same-shaped reminted fact before requiring family rejection.
-These repair bytes and the new control are unexecuted at this checkpoint;
+At checkpoint `6940a4a6`, these repair bytes and the new control were unexecuted;
 the all-four connected positive and all later delivery gates remain pending.
+
+## Complete defining scheme kinds
+
+The next frozen candidate (`candidate-codec-families`) still passed 4/5, but its
+same-family remint control passed. Both 591-input maps equal `26ee7509`.
+Pinned artifact `9eb46b9e` then showed both OriginalTemplate registry phases
+passing. The next first rejection was exact BuiltinForeign defining H local23,
+Kind Type, missing at `valid_core_type_kind`. The old external scheme lookup
+recognized only borrowed/data parameter positions and omitted checked H.
+The retained stage and missing-kind value logs establish that narrower cause;
+this was not a symbolic-flow or source-order failure.
+
+The paid complete-formal lookup now matches an exact identity within the
+registered authenticated role's complete ordered quantifiers. OriginalTemplate
+scope and ordinary lexical binder checks remain unchanged. Unknown, generated,
+wrong-namespace and genuine donor-graph identities supply no kind authority.
+
+`candidate-complete-scheme-kinds` passes all five controls, including the first
+actual all-four initialized-State/real-window source and summary positive.
+`candidate-complete-scheme-kind-controls` passes both codec-remint and complete
+scheme-kind controls, including exact/prefix/short/spent/fresh work checks.
+Both commands have 591 identical before/after inputs, aggregate
+`c74e45c050075d4deb78f974b5fe73ce823454266595513b8fd89521079cbcfe`.
+Raw SHA256 values are `aa6096a3d8b7210767ecc725d73b2e39bba65a3cefb922e6db43f32e1a72ea13`
+and `0b8150f35d05ad8315f6d62652b19d4088691d5b6a389fa0a233292d12339290`.
+Their exact three-file overlay is against `6940a4a6`; artifact SHA256 is
+`3abf0f294b10d6133586f8885ebbf6de9076786646867b166fb4c5427f25d939`.
+The selected F2 compiler remains unchanged at `5dca1b62`.
+
+This establishes source checking and summary construction only. Body-free
+consumer/re-export, linked independent Core/transforms, passive private-image
+validation, window/host/original hostile controls and remaining bounds/regressions
+are still pending. No checked runtime, native call or image startup ran.

@@ -325,6 +325,26 @@ impl CheckedForeignScalarPreflight {
     pub(crate) fn matches_parameters(&self, parameters: &[(TypeVariableId, Kind)]) -> bool {
         self.role.matches_parameters(self.module(), parameters)
     }
+    /// Scheme-kind lookup only: callers must still enforce lexical type scope.
+    pub(crate) fn parameter_kind_with_charge<E>(
+        &self,
+        identity: TypeVariableId,
+        mut charge: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<&Kind>, E> {
+        let Type::Forall(parameters, _) = self.core_signature() else {
+            return Ok(None);
+        };
+        charge(parameters.len())?;
+        // The sealed fact retains its exact defining role, module and complete
+        // ordered formals. Never infer kind authority from a builtin namespace.
+        if !self.matches_parameters(parameters) {
+            return Ok(None);
+        }
+        Ok(parameters
+            .iter()
+            .find(|(parameter, _)| *parameter == identity)
+            .map(|(_, kind)| kind))
+    }
     pub(crate) fn call_codec(&self) -> &Arc<CheckedForeignCallCodec> {
         &self.call_codec
     }

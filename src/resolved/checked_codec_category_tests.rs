@@ -223,3 +223,70 @@ fn checked_memory_preflight_codecs_keep_exact_family_originals() {
             .unwrap();
     }
 }
+
+#[test]
+fn checked_memory_scheme_kinds_require_exact_complete_original_formals() {
+    let view = original_view();
+    let donor = original_view();
+    let donor_module = donor.scalar_preflights.values().next().unwrap().module();
+    view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+        .unwrap();
+    for (_, fact) in view.scalar_preflights() {
+        let Type::Forall(parameters, _) = fact.core_signature() else {
+            continue;
+        };
+        assert!(fact.matches_parameters(parameters));
+        for (identity, expected) in parameters {
+            let mut measured = TypeWorkBudget::default();
+            assert_eq!(
+                fact.parameter_kind_with_charge(*identity, |n| measured.charge(n))
+                    .unwrap(),
+                Some(expected)
+            );
+            let cost = measured.used();
+            assert_eq!(cost, parameters.len());
+            for prefix in [0, 7] {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert_eq!(
+                    fact.parameter_kind_with_charge(*identity, |n| exact.charge(n))
+                        .unwrap(),
+                    Some(expected)
+                );
+                assert_eq!(exact.used(), prefix + cost);
+                assert!(
+                    fact.parameter_kind_with_charge(*identity, |n| exact.charge(n))
+                        .is_err()
+                );
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert!(
+                    fact.parameter_kind_with_charge(*identity, |n| short.charge(n))
+                        .is_err()
+                );
+            }
+            for _ in 0..2 {
+                let mut fresh = TypeWorkBudget::with_limit(cost);
+                assert_eq!(
+                    fact.parameter_kind_with_charge(*identity, |n| fresh.charge(n))
+                        .unwrap(),
+                    Some(expected)
+                );
+            }
+        }
+        // Same spelling/local number in another module is not this declaration.
+        for unknown in [
+            TypeVariableId::resolved(fact.module(), 999),
+            TypeVariableId::resolved(ModuleId::new(999), 23),
+            TypeVariableId::resolved(donor_module, 23),
+            TypeVariableId::Generated(999),
+        ] {
+            let mut work = TypeWorkBudget::default();
+            assert_eq!(
+                fact.parameter_kind_with_charge(unknown, |n| work.charge(n))
+                    .unwrap(),
+                None
+            );
+        }
+    }
+}
