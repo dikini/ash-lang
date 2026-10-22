@@ -982,3 +982,44 @@ fn checked_owner_lifecycle_constructed_call_result_does_not_prove_finish_attempt
 
 #[path = "checked_scalar_borrow_tests.rs"]
 mod checked_scalar_borrow_tests;
+
+/// Shared test-only entry into the existing explicit checked-source pipeline.
+/// This never changes the default driver profile or any build/runtime guard.
+pub(crate) fn checked_owner_passive_program() -> (
+    crate::core::ValidatedEffectProgram,
+    Vec<(crate::module::ModuleId, Arc<crate::source::SourceFile>)>,
+) {
+    let graph = graph(PRODUCER, true);
+    let checked = check_graph(&graph).expect("genuine checked source and body-free summaries");
+    assert_producer_originals(&checked);
+    let linked = link_modules(checked, graph.entry()).expect("genuine checked module link");
+    let linked = crate::evidence_validation::validate_interface_evidence(linked)
+        .expect("genuine checked module evidence");
+    let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+    let typed = elaborator
+        .synthesize_effect_module_program(&linked)
+        .unwrap();
+    let program = elaborator.finish(typed.node).unwrap();
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let core = crate::core::validate_effect_modules(program, &sources, &modules)
+        .expect("independent default checked lifecycle Core before passive controls");
+    // Retain the literal loaded SourceFile allocations, never equal-text donors.
+    let mut work = TypeWorkBudget::default();
+    work.charge(graph.modules().len().checked_mul(2).unwrap())
+        .unwrap();
+    let mut provenance = Vec::new();
+    provenance.try_reserve_exact(graph.modules().len()).unwrap();
+    for module in graph.modules() {
+        provenance.push((module.id(), Arc::clone(module.retained_source())));
+    }
+    (core, provenance)
+}

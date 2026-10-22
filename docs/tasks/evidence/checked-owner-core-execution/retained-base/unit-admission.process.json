@@ -1,0 +1,15 @@
+{
+  "pid": 1455133,
+  "pgid": 1445411,
+  "runner_pid": 1445411,
+  "started_unix": 1792695811.0310798,
+  "argv": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--lib",
+    "build::checked_admission::tests::"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive"
+}

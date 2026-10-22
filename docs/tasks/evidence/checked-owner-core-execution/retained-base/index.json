@@ -1,0 +1,89 @@
+{
+  "base": "bd725c97ad2807779fad8654b5bda985db34dd3f",
+  "tested_map": "c3114a82f7f13ec066f0f00f1c0aecb17914401e20fc9762bab20596c0bbf23b",
+  "input_count": 3668,
+  "records": [
+    {
+      "stem": "unit-finish-first",
+      "raw_sha256": "4f309e393fcd915c782d54d6678922e87e8e9ddf58c752e21f16598ef6ab9b78",
+      "exit": 0,
+      "selected": 1,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-units-retry"
+    },
+    {
+      "stem": "unit-ledger",
+      "raw_sha256": "85fb161c6ebde9b429535bb5db50dd5684aa7621ba85c59111a56fd221819a4e",
+      "exit": 0,
+      "selected": 5,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-units-retry"
+    },
+    {
+      "stem": "unit-admission",
+      "raw_sha256": "adf2dd598c04345310fb484b2a3765cc8eac7aae179fad883c1a341ced63fadd",
+      "exit": 0,
+      "selected": 5,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-units-retry"
+    },
+    {
+      "stem": "reg-owner-lifecycle",
+      "raw_sha256": "7b90e5e9e499b506a8787ccb285483b13a43d1067456d51977cbe3a2f0188489",
+      "exit": 0,
+      "selected": 26,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-regressions"
+    },
+    {
+      "stem": "reg-bridges",
+      "raw_sha256": "77085c429a31b215f0af62ff80dad16d79d2ff9587dcecd4b62bea92bd7f87f5",
+      "exit": 0,
+      "selected": 5,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-regressions"
+    },
+    {
+      "stem": "reg-native-image-startup",
+      "raw_sha256": "240aa8da8c7e890cb6e0a8cdfad8f2bd828c30cf355193cfe4efe0dfebe10aa6",
+      "exit": 0,
+      "selected": 3,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-regressions"
+    },
+    {
+      "stem": "reg-opaque_owner_metadata_restores_shared_identity_without_owner_execution",
+      "raw_sha256": "44705061834764076c7efc539e7880fa49d2f5dc22b5d6281cc4a597d37653c6",
+      "exit": 0,
+      "selected": 1,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-regressions"
+    },
+    {
+      "stem": "reg-access_image_restores_original_family_and_result_roles_without_pointer_execution",
+      "raw_sha256": "57eb78c3bc078e7228b8bb675c1d4cca5cf708a15e109b828d282bc19f3f68d4",
+      "exit": 0,
+      "selected": 1,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-regressions"
+    },
+    {
+      "stem": "reg-initialized_byte_owner_image_preserves_extent_and_rejects_changed_original_facts",
+      "raw_sha256": "cf03224076cf44e4af12591f234bb1b0634da073741b17f293119d07f4195296",
+      "exit": 0,
+      "selected": 1,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-regressions"
+    },
+    {
+      "stem": "reg-scalar_preflight_image_reconstructs_authority_and_refuses_forged_records",
+      "raw_sha256": "79c251573910af822ca7acb0e08dd49628393ff964890e49d7b52cd1762e8bb7",
+      "exit": 0,
+      "selected": 1,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-regressions"
+    },
+    {
+      "stem": "reg-clippy",
+      "raw_sha256": "46ac6bd2e993cc9e8b7919bc86a5958bf350e2b67cb1df32683ee81892e82613",
+      "exit": 0,
+      "selected": null,
+      "original_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-retained-regressions"
+    }
+  ],
+  "post_test_qualification": "Two task/plan prose files and this new evidence directory are post-test changes; seven Rust outputs unchanged.",
+  "interrupted_attempt": {
+    "raw_sha256": "c752aeaabb34ef25984dd3f18446977fcc87d9510c96165d0ea5a9c1a1158b7a",
+    "behavioral_credit": false
+  }
+}

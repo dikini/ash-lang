@@ -1,0 +1,48 @@
+{
+  "status": "prepared evidence only; immutable checkpoint pending dynamic review",
+  "base": "a3c2bac83cd2e8447b002507996390e547a19143",
+  "records": [
+    {
+      "stem": "setup-failure",
+      "raw_sha256": "f910fd7c07763c89be095855547028b5ab60df865ad4857af23edb79ddbb739b",
+      "map": "46dac4c9ce349141889182543445c89a8167bb3f442b273ef82898db157207ac",
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-units",
+      "selected": 1,
+      "exit": 101
+    },
+    {
+      "stem": "retry-finish-first",
+      "raw_sha256": "89db62349bb793ec736052ca5a003e602ee56b48ae26405984fe0a93b0dd335d",
+      "map": "d9a565135127b15c8656d133057a4ce4a3227b8a948f434ca5e4f475651f5fdb",
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-fixture-retry",
+      "selected": 1,
+      "exit": 0
+    },
+    {
+      "stem": "retry-ledger",
+      "raw_sha256": "c15f255d2326f662b124543c6b5f59b3dcce56ea05ca0b60818ef5a906bd16f5",
+      "map": "d9a565135127b15c8656d133057a4ce4a3227b8a948f434ca5e4f475651f5fdb",
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-fixture-retry",
+      "selected": 5,
+      "exit": 0
+    },
+    {
+      "stem": "retry-admission",
+      "raw_sha256": "5dad95b8c102661332ecea4a58a940dd0a80aa3375ee5a0fb225cadeb5cc7a4c",
+      "map": "d9a565135127b15c8656d133057a4ce4a3227b8a948f434ca5e4f475651f5fdb",
+      "original": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-passive-fixture-retry",
+      "selected": 5,
+      "exit": 0
+    }
+  ],
+  "maps": {
+    "46dac4c9ce349141889182543445c89a8167bb3f442b273ef82898db157207ac": {
+      "file": "inputs-46dac4c9ce34.json.gz",
+      "count": 3645
+    },
+    "d9a565135127b15c8656d133057a4ce4a3227b8a948f434ca5e4f475651f5fdb": {
+      "file": "inputs-d9a565135127.json.gz",
+      "count": 3645
+    }
+  }
+}

@@ -7,6 +7,7 @@
 
 mod artifacts;
 mod bridge;
+mod checked_admission;
 mod emit;
 mod gas;
 mod host;

@@ -1,0 +1,188 @@
+{
+  "base": "bd725c97ad2807779fad8654b5bda985db34dd3f",
+  "tested_source": "72ceb402d7337b009cb9ec8641c753c5bb8d1a22",
+  "tested_parent": "a3c2bac83cd2e8447b002507996390e547a19143",
+  "source_files": [
+    {
+      "path": "src/foreign.rs",
+      "before": {
+        "size": 93103,
+        "sha256": "b97b8802f0fc7fcff88133c214500e1ef46971ed6b75c553f6fee4d9815ea40b"
+      },
+      "after": {
+        "size": 93124,
+        "sha256": "ac1fe1093548de5da7ba66c4958b455452db00fb4c1def2e32236c84dab0b22e"
+      },
+      "tested72": {
+        "size": 93124,
+        "sha256": "ac1fe1093548de5da7ba66c4958b455452db00fb4c1def2e32236c84dab0b22e"
+      },
+      "method": "only authored 72-a3 changes projected onto retained blob"
+    },
+    {
+      "path": "src/foreign/checked_control.rs",
+      "before": null,
+      "after": {
+        "size": 27393,
+        "sha256": "84fe17927f5f676b2383f1c47daae8a007572209c71a6696e191c33d8e9e4028"
+      },
+      "tested72": {
+        "size": 27393,
+        "sha256": "84fe17927f5f676b2383f1c47daae8a007572209c71a6696e191c33d8e9e4028"
+      },
+      "method": "new authored private module, exact tested bytes"
+    },
+    {
+      "path": "src/build/mod.rs",
+      "before": {
+        "size": 19920,
+        "sha256": "502f83463386316e3c7672460def1f3101df6e130f3d1122be7fcd917ab5626b"
+      },
+      "after": {
+        "size": 19943,
+        "sha256": "f61136f78f067eec6b225fdcd39ded72a32742ae2c85d04f8e08255ae1d18861"
+      },
+      "tested72": {
+        "size": 20177,
+        "sha256": "cad83d37fe755e0ddc0584e6e62920bd31a02d0e4f9a26002cb9a1130cd5ba36"
+      },
+      "method": "only authored 72-a3 changes projected onto retained blob"
+    },
+    {
+      "path": "src/build/bridge.rs",
+      "before": {
+        "size": 51960,
+        "sha256": "e78a9d8d8a90a019b2865a8d16773d59988ec902c419f5517001fe31798a67fd"
+      },
+      "after": {
+        "size": 53120,
+        "sha256": "137467a61d9b53131aa3e3526bd81ec2f867cbab5ff0312cfece38bf629e3570"
+      },
+      "tested72": {
+        "size": 53120,
+        "sha256": "137467a61d9b53131aa3e3526bd81ec2f867cbab5ff0312cfece38bf629e3570"
+      },
+      "method": "only authored 72-a3 changes projected onto retained blob"
+    },
+    {
+      "path": "src/build/checked_admission.rs",
+      "before": null,
+      "after": {
+        "size": 18617,
+        "sha256": "9c03b28c13b62f232aa10670865a76da1caabb93894b5be01c86b69528233dbf"
+      },
+      "tested72": {
+        "size": 18617,
+        "sha256": "9c03b28c13b62f232aa10670865a76da1caabb93894b5be01c86b69528233dbf"
+      },
+      "method": "new authored private module, exact tested bytes"
+    },
+    {
+      "path": "src/elaborate.rs",
+      "before": {
+        "size": 1779136,
+        "sha256": "c111554d56fbb8acb9c27d667aca70e039d0219d5c3a2d3333f722c620582ef7"
+      },
+      "after": {
+        "size": 1779226,
+        "sha256": "5f12b964fdbad48d103fc3044d1e9d93611076208afb770eb6ed3190702e4fe6"
+      },
+      "tested72": {
+        "size": 1779611,
+        "sha256": "f0aa982dd5ff0bc6b742017972015018448a3bc5c2b50a1bc384a8c8e9958ad1"
+      },
+      "method": "only authored 72-a3 changes projected onto retained blob"
+    },
+    {
+      "path": "src/elaborate/checked_owner_lifecycle_tests.rs",
+      "before": {
+        "size": 40816,
+        "sha256": "9e3d6eb285bf4cd05f81ffb273acb73e464204c4f9d6411624849fa4614547f3"
+      },
+      "after": {
+        "size": 42580,
+        "sha256": "ee7f7027ac607837696dd2e5525d9e691942a02904de0199e24e9a669a65eed8"
+      },
+      "tested72": {
+        "size": 42653,
+        "sha256": "491a0a293be57095f882cae05f8ee11d145dc5843cf8783c3f37a27bf4aab6d2"
+      },
+      "method": "only authored 72-a3 changes projected onto retained blob"
+    }
+  ],
+  "context_edits": [
+    {
+      "path": "src/foreign.rs",
+      "edits": [
+        {
+          "kind": "insert at unique retained context",
+          "added": {
+            "size": 21,
+            "sha256": "eb098b4934826aa77f4e43e7d12f2f2113f661009b67b67f2fbcb82ab23038a2"
+          }
+        }
+      ],
+      "base_equals_prior": true
+    },
+    {
+      "path": "src/build/mod.rs",
+      "edits": [
+        {
+          "kind": "insert at unique retained context",
+          "added": {
+            "size": 23,
+            "sha256": "334e91f298534deecc633b807cbe053b8d599e36d1d2890562f43359e53ff778"
+          }
+        }
+      ],
+      "base_equals_prior": false
+    },
+    {
+      "path": "src/build/bridge.rs",
+      "edits": [
+        {
+          "kind": "insert at unique retained context",
+          "added": {
+            "size": 94,
+            "sha256": "b88cbe35f6948b8773c065fea010c3ad1a85d75657485c2576d499df3c2a9298"
+          }
+        },
+        {
+          "kind": "insert at unique retained context",
+          "added": {
+            "size": 1066,
+            "sha256": "6dc936ae40a3439d232adea071cfcf1b2a664ad534d527224271d84df82650a7"
+          }
+        }
+      ],
+      "base_equals_prior": true
+    },
+    {
+      "path": "src/elaborate.rs",
+      "edits": [
+        {
+          "kind": "insert at unique retained context",
+          "added": {
+            "size": 90,
+            "sha256": "532a6832ed69570b0383622db062d12071b18cbac80964c088bb7bc534573d14"
+          }
+        }
+      ],
+      "base_equals_prior": false
+    },
+    {
+      "path": "src/elaborate/checked_owner_lifecycle_tests.rs",
+      "edits": [
+        {
+          "kind": "append exact authored adapter to retained EOF, after scalar-borrow child (not PR101 byte child)",
+          "added": {
+            "size": 1764,
+            "sha256": "406e8230467e4855a2addf2972bca09b981f6e067494a5d92228ec6f502a5a9d"
+          }
+        }
+      ],
+      "base_equals_prior": false
+    }
+  ],
+  "source_execution_on_new_base": false
+}

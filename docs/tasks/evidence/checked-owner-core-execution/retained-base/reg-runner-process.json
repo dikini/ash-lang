@@ -1,0 +1,8 @@
+{
+  "pid": 1459414,
+  "pgid": 1459414,
+  "started_unix": 1792696055.188863,
+  "argv": [
+    ".worktree/generic-cells/target/checked-owner-passive-retained-regressions/run.py"
+  ]
+}

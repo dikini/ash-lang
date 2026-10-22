@@ -11,6 +11,7 @@
 //! use ash::foreign::sqlite_manifest;
 //! ```
 mod arena;
+mod checked_control;
 // Historical manifest data is needed by generic registration unit tests only.
 // Production SQLite interfaces come from passive Ash source declarations.
 #[cfg(test)]
