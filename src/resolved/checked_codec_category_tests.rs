@@ -165,3 +165,61 @@ fn checked_codec_category_does_not_accept_a_legacy_outer_call_for_checked_teardo
         "expected exact binding refusal, not a resource or syntax failure: {error:?}"
     );
 }
+
+#[test]
+fn checked_memory_preflight_codecs_keep_exact_family_originals() {
+    let view = original_view();
+    view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+        .expect("genuine original preflight table authenticates before pointer mutations");
+    let module = view.scalar_preflights.values().next().unwrap().module();
+    let legacy = &view.scalar_preflights[&BinderId::resolved(module, 0)];
+    let checked = &view.scalar_preflights[&BinderId::resolved(module, 11)];
+    assert_ne!(
+        legacy.call_codec().ids().call,
+        checked.call_codec().ids().call
+    );
+    for fact in view.scalar_preflights.values() {
+        let expected = if fact.role().host_parameter(module).is_some() {
+            checked
+        } else {
+            legacy
+        };
+        assert!(Arc::ptr_eq(fact.call_codec(), expected.call_codec()));
+    }
+    for local in [2, 14] {
+        let mut candidate = original_view();
+        // Each graph has its own admitted module identity: select the genuine
+        // defining function from this candidate rather than transplanting IDs.
+        let function = candidate
+            .scalar_preflights
+            .keys()
+            .find(|id| id.local() == local)
+            .copied()
+            .unwrap();
+        let fact = Arc::clone(&candidate.scalar_preflights[&function]);
+        let mut work = TypeWorkBudget::default();
+        let codec = crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
+            fact.module(),
+            fact.source(),
+            fact.call_codec().ids(),
+            &candidate,
+            &mut work,
+        )
+        .unwrap();
+        let reminted = crate::foreign::scalar_preflight::CheckedForeignScalarPreflight::from_original(
+            fact.role(), fact.source(), fact.origin(), fact.annotation(), Arc::new(codec), &mut work,
+        ).expect("same defining shape is valid independently; original pointer continuity must still refuse");
+        reminted
+            .authenticate(&candidate, &mut TypeWorkBudget::default())
+            .expect("the reminted fact is independently valid before family continuity rejects it");
+        candidate
+            .scalar_preflights
+            .insert(function, Arc::new(reminted));
+        assert_eq!(
+            candidate.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+        view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+            .unwrap();
+    }
+}

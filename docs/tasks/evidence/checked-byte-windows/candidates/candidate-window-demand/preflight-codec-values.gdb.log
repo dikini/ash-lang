@@ -1,0 +1,18 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x8877d7d: file src/resolved.rs, line 21588.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 409316)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 409316)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::resolved::ResolvedRegistry::authenticate_scalar_preflights (self=0x7ffff00e5990, work=0x7ffff7bd3000) at src/resolved.rs:21588
+21588	                return Err(ResolvedBuildFailure::InvalidState);
+$1 = ash::resolved::BinderId::Resolved{module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, local: 14}
+$2 = ash::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedCopyNul
+$3 = ash::foreign::scalar_preflight::ForeignScalarPreflightRole::I64
+$4 = (*mut alloc::sync::ArcInner<ash::foreign::checked_source::CheckedForeignCallCodec>) 0x7ffff0057560
+$5 = (*mut alloc::sync::ArcInner<ash::foreign::checked_source::CheckedForeignCallCodec>) 0x7ffff00574d0

@@ -1,0 +1,28 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x5659c86: src/core/validate.rs:9478. (2 locations)
+Breakpoint 2 at 0x5659e97: src/core/validate.rs:9487. (2 locations)
+Breakpoint 3 at 0x56415ea: src/core/validate.rs:11289. (2 locations)
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 396296)]
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_all_four_primitives_check_actual_source_and_summary' (396296) panicked at src/elaborate/checked_byte_window_tests.rs:256:10:
+all four checked primitives need genuine initialized State and actual lexical view/extent window source admission: Source(TypeDiagnostic { diagnostic: Diagnostic { reason: Argument, primary: SourceLabel { span: Span { source: SourceId(0), range: ByteRange { start: 3347, end: 7619 } }, message: "source resource lifecycle and handlers must preserve the admitted owner flow" }, related: [], expected: None, found: None, help: None }, context: Plain })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_all_four_primitives_check_actual_source_and_summary ... FAILED
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_all_four_primitives_check_actual_source_and_summary
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2105 filtered out; finished in 0.10s
+
+[Thread 0x7ffff7bff6c0 (LWP 396296) exited]
+[Inferior 1 (process 396274) exited with code 0145]
+No stack.
+No frame selected.

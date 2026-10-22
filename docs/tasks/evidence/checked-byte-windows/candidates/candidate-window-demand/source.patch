@@ -1,0 +1,106 @@
+diff --git a/src/core/provider/row/demand.rs b/src/core/provider/row/demand.rs
+index 0ad79a99..08b79d6c 100644
+--- a/src/core/provider/row/demand.rs
++++ b/src/core/provider/row/demand.rs
+@@ -1003,7 +1003,32 @@ impl DirectDemandProof {
+                         body = proof.remove(&body, interpretation.effect(), true, work)?;
+                     }
+                     if !body.atoms.is_empty() {
+-                        return Err(invalid(equation.node));
++                        let host = crate::foreign::source_access::checked_window_host_instance(
++                            scope.family(),
++                            scope.arguments(),
++                            &program.registry,
++                            work,
++                        )
++                        .map_err(|error| {
++                            if error.is_resource_exhaustion() {
++                                resource()
++                            } else {
++                                invalid(equation.node)
++                            }
++                        })?
++                        .ok_or_else(|| invalid(equation.node))?;
++                        charge(work, 1)?;
++                        let expected = proof.ordinary(&EffectRow::singleton(host), work)?;
++                        charge(
++                            work,
++                            body.atoms
++                                .len()
++                                .checked_add(expected.atoms.len())
++                                .ok_or_else(resource)?,
++                        )?;
++                        if body.atoms != expected.atoms {
++                            return Err(invalid(equation.node));
++                        }
+                     }
+                     // The state expression executes before the native window.
+                     // Its requests are never interpreted by the window body.
+@@ -1014,6 +1039,9 @@ impl DirectDemandProof {
+                         .flatten()
+                         .ok_or_else(|| invalid(equation.node))?;
+                     expression = Self::copy(&proof.nodes[state.0], work)?;
++                    // Only the exact sealed Host residual crosses this window;
++                    // the window interprets native members, never Host itself.
++                    expression = proof.union(expression, &body, work)?;
+                 }
+                 EffectExprKind::Operation(EffectOperation::Discard(_)) => {
+                     let RowEquationOperation::Discard { capture } = equation.operation else {
+diff --git a/src/core/provider/row/realize.rs b/src/core/provider/row/realize.rs
+index ce2896fc..a2f124cb 100644
+--- a/src/core/provider/row/realize.rs
++++ b/src/core/provider/row/realize.rs
+@@ -223,7 +223,28 @@ impl HandlerRowRecipeDraft {
+                             body = remove(&body, &actual, true, work)?;
+                         }
+                         if !body.is_empty() {
+-                            return Err(invalid(equation.node));
++                            let host = crate::foreign::source_access::checked_window_host_instance(
++                                scope.family(),
++                                scope.arguments(),
++                                &program.registry,
++                                work,
++                            )
++                            .map_err(|error| {
++                                if error.is_resource_exhaustion() {
++                                    resource()
++                                } else {
++                                    invalid(equation.node)
++                                }
++                            })?
++                            .ok_or_else(|| invalid(equation.node))?;
++                            let host = instance(&host, work)?;
++                            charge(work, 1)?;
++                            let expected = EffectRow::singleton(host);
++                            if !crate::types::same_effect_rows_with_budget(&body, &expected, work)
++                                .map_err(|()| resource())?
++                            {
++                                return Err(invalid(equation.node));
++                            }
+                         }
+                         let state = self
+                             .node_equations
+@@ -231,7 +252,7 @@ impl HandlerRowRecipeDraft {
+                             .copied()
+                             .flatten()
+                             .ok_or_else(|| invalid(equation.node))?;
+-                        row = copy(&values[state.0], work)?;
++                        row = union(&values[state.0], &body, work)?;
+                     }
+                     RowEquationOperation::NativeInterpret => {
+                         let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =
+diff --git a/src/foreign/source_access.rs b/src/foreign/source_access.rs
+index b6e914f4..c22b17be 100644
+--- a/src/foreign/source_access.rs
++++ b/src/foreign/source_access.rs
+@@ -797,9 +797,9 @@ pub(crate) fn checked_window_host_instance(
+     if !super::checked_builtins::is_canonical_native_host(declaration, registry, work)? {
+         return Err(invalid());
+     }
++    charge(work, 2, span)?;
+     let host = crate::types::clone_type_with_budget(host, work)
+         .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, span))?;
+-    charge(work, 2, span)?;
+     Ok(Some(EffectInstance::new(
+         EffectId::new(
+             declaration.id.module(),

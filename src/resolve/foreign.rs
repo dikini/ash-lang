@@ -173,6 +173,30 @@ impl Resolver {
             )
         })?;
         let codec = Arc::new(codec);
+        // Mint one immutable original per exact canonical codec family. Every
+        // callable in that family forwards this same reference through exports.
+        let checked_call = NominalTypeId::new(self.module, 12);
+        let checked_codec = CheckedForeignCallCodec::authenticate(
+            self.module,
+            span,
+            ForeignCallCodecIds {
+                call: checked_call,
+                returned: ConstructorId::new(checked_call, 0),
+                conversion_failed: ConstructorId::new(checked_call, 1),
+                conversion_error: NominalTypeId::new(self.module, 0),
+            },
+            registry,
+            &mut self.type_work,
+        )
+        .map_err(source_admission_failure)?;
+        self.type_work.charge(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "checked primitive codec storage exceeded work",
+            )
+        })?;
+        let checked_codec = Arc::new(checked_codec);
         let metadata = declarations.definitions.get(10).and_then(|definition| {
             if let ResolvedDefinitionKind::Equational(global) = &definition.kind {
                 Some(global)
@@ -253,40 +277,18 @@ impl Resolver {
                     "builtin scalar preflight binder inventory is invalid",
                 ));
             }
-            let selected_codec = if role.host_parameter(self.module).is_some() {
-                let checked_call = NominalTypeId::new(self.module, 12);
-                self.type_work.charge(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "checked primitive codec retention exceeded work",
-                    )
-                })?;
-                Arc::new(
-                    CheckedForeignCallCodec::authenticate(
-                        self.module,
-                        span,
-                        ForeignCallCodecIds {
-                            call: checked_call,
-                            returned: ConstructorId::new(checked_call, 0),
-                            conversion_failed: ConstructorId::new(checked_call, 1),
-                            conversion_error: NominalTypeId::new(self.module, 0),
-                        },
-                        registry,
-                        &mut self.type_work,
-                    )
-                    .map_err(source_admission_failure)?,
+            self.type_work.charge(1).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "primitive codec retention exceeded work",
                 )
+            })?;
+            let selected_codec = Arc::clone(if role.host_parameter(self.module).is_some() {
+                &checked_codec
             } else {
-                self.type_work.charge(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "primitive codec retention exceeded work",
-                    )
-                })?;
-                Arc::clone(&codec)
-            };
+                &codec
+            });
             let fact = CheckedForeignScalarPreflight::from_original(
                 role,
                 span,
