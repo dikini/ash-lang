@@ -371,3 +371,15 @@ unused lexical-host source-order limitation remains visible; no census guard
 was relaxed. [Borrow evidence](evidence/checked-scalar-borrow/README.md) retains
 all failed prerequisites and precise attribution. Exact-head review, root-assigned
 GitHub integration and partial acceptance follow; whole F3 and F-core remain open.
+
+PR #98 is retained at `c8a1fee5`; actual retention/partial acceptance and PM
+confirmation are complete. The next authorized
+[checked byte/copy window checkpoint](plans/checked-ffi-contract-carriers.md#checked-byte-and-copy-window-checkpoint)
+implements all four distinct checked primitives with real initialized State,
+view/Extent/window and any required declared dependency lineage. Source, body-free
+import/re-export, independent Core/transforms and static private-image validation
+must precede closure claims. Existing runtime activation remains refused. The
+first expected-positive checked preparation/admission gate has not run; root's
+F2 pipeline currently owns Cargo. No inspected code exclusion is reported as a
+red test. Whole F3 and its remaining generated-host/runtime/full-gate obligations
+stay open.
