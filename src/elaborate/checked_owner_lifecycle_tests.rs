@@ -982,3 +982,6 @@ fn checked_owner_lifecycle_constructed_call_result_does_not_prove_finish_attempt
 
 #[path = "checked_scalar_borrow_tests.rs"]
 mod checked_scalar_borrow_tests;
+
+#[path = "checked_byte_window_tests.rs"]
+mod checked_byte_window_tests;

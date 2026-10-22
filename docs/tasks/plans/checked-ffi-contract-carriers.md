@@ -660,10 +660,13 @@ ordinary rows. Existing initialized State, original access families, exact view/
 extent keys, direct provider windows and non-suspension rules supply the native
 lineage. The four checked functions are absent, and the checked binding subset
 still rejects the needed initialized-byte owner and access-producing shapes.
-Those are inspected exclusions, not observed test failures. First run genuine
-checked preparation and canonical expected-positive resolution/source controls
-when root assigns the Cargo slot; preserve the actual first refusal and inputs
-before changing product code. Legacy canonical controls must remain valid.
+The [test-first evidence](../evidence/checked-byte-windows/test-first/README.md)
+now records genuine preparation success. Initial resolution stops at the absent
+`checked_byte_read` export. A resolver-only spelling isolation then reaches the
+unchanged checked library and fails `ForeignContract / InvalidLibrary`: the
+checked owner gate requires Opaque and refuses this Bytes State. That control
+never source-checks legacy calls or grants checked permission. No product change
+preceded these receipts. Legacy canonical controls must remain valid.
 
 Use existing builtin declaration/fact, source-owner/access, primitive-call/window,
 summary/original publication, specialization and independent Core/image carriers.
@@ -718,7 +721,8 @@ The first required red gate is real checked contract preparation followed by
 expected-positive initialized owner/primitive resolution or source admission;
 record whichever precise boundary actually refuses. A separate builtin inventory
 probe may establish missing declarations but cannot replace connected lineage
-positives. No result is claimed before the sole assigned Cargo run.
+positives. The first two commands above establish preparation and the separate
+inventory/binding refusals only; connected source and later gates remain pending.
 
 Runtime/native/checked image execution, K/quarantine implementation, arbitrary
 raw pointers, general callbacks/helpers, privileged lifecycle transport,
