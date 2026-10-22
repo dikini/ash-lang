@@ -3733,6 +3733,7 @@ pub(crate) fn check_source_resource_structure(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn check_source_resource_structure_with_globals(
     program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
@@ -3752,6 +3753,7 @@ fn check_source_resource_structure_with_globals(
         globals,
         None,
         None,
+        None,
         work,
     )
 }
@@ -3766,12 +3768,16 @@ fn check_source_resource_structure_with_handler_graph(
     globals: Option<&super::source_resource::SourceResourceGlobals>,
     handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
     original_provider: Option<&crate::elaborate::provider::SourceOriginalProviderContext<'_>>,
+    coordinate_loan: Option<&DeclarationCoordinateLoan<'_>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
     if handler_graph.is_some_and(|graph| !answer || !graph.authenticates(program, original)) {
         return Err(ValidationError::new(ValidationReason::Registry, None));
     }
     let mut validator = Validator::new_modules(program, sources, module_sources)?;
+    // Retain syntax only from the same live reconstruction arena. Conditional
+    // graphs and provider contexts still receive complete fresh authentication.
+    validator.source_coordinate_loan = coordinate_loan;
     validator.source_handler_graph = handler_graph;
     validator.source_original_provider = original_provider;
     validator.provider_external_types = globals.map(|globals| &**globals);
@@ -3911,6 +3917,7 @@ impl<'context> SourceResourceStructureSession<'context> {
                 Some(globals),
                 handler_graph,
                 self.original_provider,
+                self.coordinate_loan,
                 work,
             );
         }
@@ -3918,13 +3925,16 @@ impl<'context> SourceResourceStructureSession<'context> {
         // their graph-local provider instances. Those contexts keep their full
         // fresh registry check; the receipt carries no lexical exemption.
         if !program.method_evidence.lexical_owners().is_empty() {
-            return check_source_resource_structure_with_globals(
+            return check_source_resource_structure_with_handler_graph(
                 program,
                 original,
                 answer,
                 sources,
                 module_sources,
                 Some(globals),
+                None,
+                None,
+                self.coordinate_loan,
                 work,
             );
         }

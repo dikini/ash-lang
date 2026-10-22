@@ -391,6 +391,18 @@ fn assert_connected_byte_core(graph: &ModuleGraph) {
         .collect::<Vec<_>>();
     let core = crate::core::validate_effect_modules(program, &sources, &modules)
         .expect("independent default byte/window Core");
+    // Mutate actual copied primitive type applications only after the genuine
+    // source/body-free/link pipeline and independent canonical Core succeed.
+    for local in 11..=14 {
+        let mut changed = crate::core::transform::identity_effect_traversal(&core).unwrap();
+        crate::core::source_resource::checked_byte_window_core_tests::mutate_primitive_first_host(
+            &mut changed, local,
+        );
+        let error = crate::core::validate_effect_modules(changed, &sources, &modules)
+            .expect_err("wrong first H on actual checked primitive must refuse independent Core");
+        assert_ne!(error.reason(), crate::core::ValidationReason::Resource,
+            "no Resource credit for checked primitive local {local}");
+    }
     let image_provenance = graph.modules().iter()
         .map(|m| (m.id(), Arc::new(m.source().clone())))
         .collect::<Vec<_>>();
@@ -534,8 +546,7 @@ fn checked_byte_window_selective_facade_does_not_publish_dependency_names() {
     }
 }
 
-// Append inside elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests.
-// STAGED, UNBUILT, UNEXECUTED. Canonical gate includes real source/summary checks.
+// Canonical gates include real source/summary checks; no native execution.
 fn byte_window_replace_once(source: &str, from: &str, to: &str) -> String {
     assert_eq!(
         source.matches(from).count(),
@@ -547,8 +558,10 @@ fn byte_window_replace_once(source: &str, from: &str, to: &str) -> String {
 
 fn byte_window_source_refuses(source: &str) {
     check_graph(&fixture()).expect("genuine unchanged byte/window source first");
-    let error = check_graph(&graph_with_entry(source, None))
-        .expect_err("hostile connected byte/window source must refuse");
+    let error = match check_graph(&graph_with_entry(source, None)) {
+        Ok(_) => panic!("hostile connected byte/window source was accepted"),
+        Err(error) => error,
+    };
     assert!(
         matches!(error, TypeError::Source(_)),
         "semantic source refusal required, not setup/contract/internal/resource: {error:?}"
@@ -678,4 +691,204 @@ main () = 42
         .expect("zero-assumption source reaches independent Core");
     let provenance = graph.modules().iter().map(|module| (module.id(), Arc::new(module.source().clone()))).collect::<Vec<_>>();
     crate::build::checked_zero_assumption_scalar_image_controls(&core, &provenance);
+}
+
+fn checked_primitive_wrong_first_host(annotation: &str) {
+    check_graph(&fixture()).expect("genuine all-four source and summaries before first-H mutation");
+    assert!(annotation.contains("Foreign.NativeHost<H>"));
+    let wrong = annotation.replace("Foreign.NativeHost<H>", "Foreign.NativeHost<Int>");
+    byte_window_source_refuses(&byte_window_replace_once(SOURCE, annotation, &wrong));
+}
+
+#[test]
+fn checked_byte_read_rejects_arbitrary_first_host_with_genuine_state() {
+    checked_primitive_wrong_first_host("let action : (State<H, R>, Int) -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>} = Foreign.checked_byte_read");
+}
+
+#[test]
+fn checked_byte_write_rejects_arbitrary_first_host_with_genuine_state() {
+    checked_primitive_wrong_first_host("let action : (State<H, R>, Int, Int) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_byte_write");
+}
+
+#[test]
+fn checked_copy_bytes_rejects_arbitrary_first_host_with_genuine_view_and_extent() {
+    checked_primitive_wrong_first_host("let action : (ByteView<W, H, R>, Foreign.Extent<ByteView<W, H, R>>) -> Foreign.CheckedCall<Bytes> ! {Foreign.NativeHost<H>} = Foreign.checked_copy_bytes");
+}
+
+#[test]
+fn checked_copy_nul_rejects_arbitrary_first_host_with_genuine_view() {
+    checked_primitive_wrong_first_host("let action : (NulView<W, H, R>, Int) -> Foreign.CheckedCall<Bytes> ! {Foreign.NativeHost<H>} = Foreign.checked_copy_nul");
+}
+
+fn checked_byte_window_independent_helper() -> String {
+    let source = byte_window_replace_once(SOURCE, "resource Probe<H, R> {", "ignore<T> : T -> Unit\nignore ignored = ()\n\nresource Probe<H, R> {");
+    byte_window_replace_once(&source,
+        "read (access, index) => {",
+        "read (access, index) => {\n            let ignored = ignore 7")
+}
+
+#[test]
+fn checked_byte_window_ordinary_helper_accepts_independent_payload_but_not_current_state() {
+    let canonical = checked_byte_window_independent_helper();
+    check_graph(&graph_with_entry(&canonical, None))
+        .expect("same ordinary generic helper accepts an independent Int in direct handler");
+    let hostile = byte_window_replace_once(&canonical, "let ignored = ignore 7", "let ignored = ignore state");
+    byte_window_source_refuses(&hostile);
+}
+
+#[test]
+fn checked_byte_window_ordinary_helper_cannot_accept_live_window_view() {
+    let canonical = checked_byte_window_independent_helper();
+    let canonical = byte_window_replace_once(&canonical,
+        "Copied (action (view, extent))",
+        "let ignored = ignore 7\n                            Copied (action (view, extent))");
+    check_graph(&graph_with_entry(&canonical, None))
+        .expect("same generic helper accepts independent Int inside actual window");
+    let hostile = byte_window_replace_once(&canonical,
+        "let ignored = ignore 7\n                            Copied (action (view, extent))",
+        "let ignored = ignore view\n                            Copied (action (view, extent))");
+    byte_window_source_refuses(&hostile);
+}
+
+fn byte_window_independent_core(
+    source: &str,
+) -> Result<crate::core::ValidatedEffectProgram, crate::core::ValidationError> {
+    let graph = graph_with_entry(source, Some(BYTE_CONSUMER));
+    let checked = check_graph(&graph).expect("qualifier source and body-free consumer check");
+    let linked =
+        link_modules(checked, graph.entry()).expect("qualifier links real producer and consumer");
+    let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+    let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+    let typed = elaborator
+        .synthesize_effect_module_program(&linked)
+        .unwrap();
+    let program = elaborator.finish(typed.node).unwrap();
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    crate::core::validate_effect_modules(program, &sources, &modules)
+}
+
+fn checked_primitive_application_count(core: &crate::core::ValidatedEffectProgram) -> usize {
+    use crate::core::dialect::{PureComputation, PureExprKind};
+    core.nodes()
+        .iter()
+        .filter(|node| {
+            let crate::core::effect::EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::TypeApplication(application),
+            )) = &node.kind
+            else {
+                return false;
+            };
+            let function = &core.nodes()[application.function().value() as usize];
+            let Type::Forall(parameters, _) = &function.ty else {
+                return false;
+            };
+            core.registry().scalar_preflights().any(|(_, fact)| {
+                fact.role().host_parameter(fact.module()).is_some()
+                    && fact.matches_parameters(parameters)
+            })
+        })
+        .count()
+}
+
+#[test]
+fn checked_byte_window_unused_generic_definition_gets_no_uncovered_core_permission() {
+    let canonical =
+        byte_window_independent_core(SOURCE).expect("genuine all-four independent Core first");
+    let applications = checked_primitive_application_count(&canonical);
+    assert!(
+        applications >= 4,
+        "actual checked primitives retained in the canonical scope"
+    );
+    let helper = "
+outside<H, S> : (S, Int) -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>}
+outside input = {
+    let action : (S, Int) -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>} = Foreign.checked_byte_read
+    action input
+}
+";
+    let source = byte_window_replace_once(
+        SOURCE,
+        "resource Probe<H, R> {",
+        &format!(
+            "{helper}
+resource Probe<H, R> {{"
+        ),
+    );
+    match byte_window_independent_core(&source) {
+        Err(error) => {
+            assert_ne!(error.reason(), crate::core::ValidationReason::Resource);
+            eprintln!(
+                "unused generic primitive body refused at independent Core: {:?}",
+                error.reason()
+            );
+        }
+        Ok(core) => {
+            // Source acceptance of an unused definition grants no extra call
+            // permission when lowering erases its body.
+            assert_eq!(
+                checked_primitive_application_count(&core),
+                applications,
+                "no uncovered primitive application may survive independent Core"
+            );
+            eprintln!("unused generic primitive definition has no additional retained call");
+        }
+    }
+}
+
+#[test]
+fn checked_byte_window_reachable_ordinary_primitive_helper_has_no_phase_permission() {
+    let plain = "
+outside : Int -> Foreign.CheckedCall<Int>
+outside input = Foreign.CheckedReturned input
+";
+    let mut canonical = byte_window_replace_once(
+        SOURCE,
+        "resource Probe<H, R> {",
+        &format!(
+            "{plain}
+resource Probe<H, R> {{"
+        ),
+    );
+    canonical = byte_window_replace_once(
+        &canonical,
+        "run () = handle (foreign host H {
+    resource",
+        "run () = handle (foreign host H {
+    let action : Int -> Foreign.CheckedCall<Int> = outside
+    let independent = action 7
+    resource",
+    );
+    byte_window_independent_core(&canonical)
+        .expect("reachable ordinary independent-Int helper completes source/link/Core first");
+    let primitive = "
+outside<H> : Int -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>}
+outside input = {
+    let read : (Int, Int) -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>} = Foreign.checked_byte_read
+    read (input, 0)
+}
+";
+    let hostile = byte_window_replace_once(&canonical, plain, primitive);
+    let hostile = byte_window_replace_once(
+        &hostile,
+        "let action : Int -> Foreign.CheckedCall<Int> = outside",
+        "let action : Int -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>} = outside",
+    );
+    let error = match byte_window_independent_core(&hostile) {
+        Ok(_) => panic!("reachable ordinary helper gained uncovered primitive permission"),
+        Err(error) => error,
+    };
+    assert_ne!(error.reason(), crate::core::ValidationReason::Resource);
+    eprintln!(
+        "reachable ordinary primitive helper refused at independent Core: {:?}",
+        error.reason()
+    );
 }

@@ -216,12 +216,22 @@ impl ForeignScalarPreflightRole {
 }
 
 /// Canonical checking dependencies only; this iterator authenticates no fact.
-pub(crate) fn checked_inventory_dependencies(module: ModuleId) -> impl Iterator<Item = (crate::types::NominalTypeId, &'static crate::module::ForeignNominalCoordinates, bool)> {
-    (0..crate::module::ForeignCheckedNominalRole::ViolationCause.local() + 1).map(move |local| (
-        crate::types::NominalTypeId::new(module, local),
-        &crate::module::foreign_nominal_coordinates()[local as usize],
-        !matches!(local, 0 | 5),
-    ))
+pub(crate) fn checked_inventory_dependencies(
+    module: ModuleId,
+) -> impl Iterator<
+    Item = (
+        crate::types::NominalTypeId,
+        &'static crate::module::ForeignNominalCoordinates,
+        bool,
+    ),
+> {
+    (0..crate::module::ForeignCheckedNominalRole::ViolationCause.local() + 1).map(move |local| {
+        (
+            crate::types::NominalTypeId::new(module, local),
+            &crate::module::foreign_nominal_coordinates()[local as usize],
+            !matches!(local, 0 | 5),
+        )
+    })
 }
 
 pub(crate) struct CheckedForeignScalarPreflight {
@@ -878,6 +888,30 @@ impl CheckedForeignScalarPreflight {
     }
 }
 
+/// Paid canonical identities only; this ordering grants no fact authority.
+fn ordered_registry_preflights(
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<crate::resolved::ImageRegistryItem>, ForeignAdmissionError> {
+    use crate::resolved::ImageRegistryItem;
+    let mut rows = Vec::new();
+    let Some((_, first)) = registry.scalar_preflights().next() else {
+        return Ok(rows);
+    };
+    let source = first.source;
+    for (function, fact) in registry.scalar_preflights() {
+        charge(work, 1, fact.source)?;
+        rows.try_reserve(1)
+            .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
+        rows.push(ImageRegistryItem::Preflight(function));
+    }
+    // The existing fixed merge passes charge a cardinality-derived bound for
+    // scratch, comparisons, writes and copy-back, independent of hash order.
+    crate::resolved::sort_image_registry_items(&mut rows, work)
+        .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, source))?;
+    Ok(rows)
+}
+
 /// Authenticate this immutable registry table, sharing only identical codec
 /// reconstruction within this call. No completed proof escapes the operation.
 pub(crate) fn authenticate_registry_families(
@@ -885,7 +919,15 @@ pub(crate) fn authenticate_registry_families(
     work: &mut TypeWorkBudget,
 ) -> Result<(), ForeignAdmissionError> {
     let mut proved = Vec::<BinderId>::new();
-    for (function, fact) in registry.scalar_preflights() {
+    for row in ordered_registry_preflights(registry, work)? {
+        let crate::resolved::ImageRegistryItem::Preflight(function) = row else {
+            unreachable!("only preflight identities were collected")
+        };
+        // Lookup stays paid; ordering retains identities, never fact proofs.
+        let fact = registry
+            .scalar_preflight(function)
+            .expect("immutable registry key");
+        charge(work, 1, fact.source)?;
         charge(work, 1, fact.source)?;
         if function != fact.function() {
             return Err(failure(
@@ -945,7 +987,14 @@ pub(crate) fn admit_projected_preflights(
     work: &mut TypeWorkBudget,
 ) -> Result<ResolvedRegistry, ForeignAdmissionError> {
     let mut proved = Vec::<&Arc<CheckedForeignCallCodec>>::new();
-    for (function, fact) in registry.scalar_preflights() {
+    for row in ordered_registry_preflights(&registry, work)? {
+        let crate::resolved::ImageRegistryItem::Preflight(function) = row else {
+            unreachable!("only preflight identities were collected")
+        };
+        let fact = registry
+            .scalar_preflight(function)
+            .expect("immutable registry key");
+        charge(work, 1, fact.source)?;
         charge(work, 1, fact.source)?;
         if function != fact.function() {
             return Err(failure(

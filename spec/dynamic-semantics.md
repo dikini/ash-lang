@@ -622,11 +622,13 @@ owner-disposition rules are unchanged.
 
 ## Source resource execution with native owners
 
-The explicit checked-host profile and `checked_scope` have static source/Core
-correspondence only. Evaluator and executable/private-image admission refuse
-that codec and checked host metadata before acquisition. The rules in this
-section describe ordinary executable owner resources; they do not implement
-checked native outcomes, K discharge or host disposal.
+The explicit checked-host profile, `checked_scope` and checked byte/copy
+primitives have static source/Core correspondence and private static-image
+reconstruction only. Public checked building, executable native admission and
+evaluation remain unavailable; evaluation refuses `checked_scope` before its
+initializer runs. The rules in this section describe ordinary executable owner
+resources; they do not implement checked native outcomes, checked memory access,
+K discharge or host disposal.
 
 The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.

@@ -254,14 +254,16 @@ fn checked_memory_scheme_kinds_require_exact_complete_original_formals() {
                     Some(expected)
                 );
                 assert_eq!(exact.used(), prefix + cost);
-                assert!(fact
-                    .parameter_kind_with_charge(*identity, |n| exact.charge(n))
-                    .is_err());
+                assert!(
+                    fact.parameter_kind_with_charge(*identity, |n| exact.charge(n))
+                        .is_err()
+                );
                 let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
                 short.charge(prefix).unwrap();
-                assert!(fact
-                    .parameter_kind_with_charge(*identity, |n| short.charge(n))
-                    .is_err());
+                assert!(
+                    fact.parameter_kind_with_charge(*identity, |n| short.charge(n))
+                        .is_err()
+                );
             }
             for _ in 0..2 {
                 let mut fresh = TypeWorkBudget::with_limit(cost);
@@ -441,16 +443,20 @@ fn checked_memory_family_proofs_are_distinct_across_genuine_builtin_graphs() {
         .effect(crate::types::EffectId::new(second, 0))
         .unwrap();
     let mut full = TypeWorkBudget::default();
-    assert!(crate::foreign::checked_builtins::is_canonical_native_host(
-        second_host,
-        &uncovered,
-        &mut full
-    )
-    .unwrap());
+    assert!(
+        crate::foreign::checked_builtins::is_canonical_native_host(
+            second_host,
+            &uncovered,
+            &mut full
+        )
+        .unwrap()
+    );
     let mut fallback = TypeWorkBudget::default();
-    assert!(proof
-        .is_canonical_native_host(second_host, &uncovered, &mut fallback)
-        .unwrap());
+    assert!(
+        proof
+            .is_canonical_native_host(second_host, &uncovered, &mut fallback)
+            .unwrap()
+    );
     assert!(fallback.used() >= full.used());
     drop(proof);
     let mut malformed = uncovered.clone();
@@ -471,9 +477,11 @@ fn checked_memory_family_proofs_are_distinct_across_genuine_builtin_graphs() {
     let second_host = malformed
         .effect(crate::types::EffectId::new(second, 0))
         .unwrap();
-    assert!(!proof
-        .is_canonical_native_host(second_host, &malformed, &mut TypeWorkBudget::default())
-        .unwrap());
+    assert!(
+        !proof
+            .is_canonical_native_host(second_host, &malformed, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
     let mut changed = view.clone();
     changed
         .constructors
@@ -594,9 +602,11 @@ fn checked_memory_owned_projection_authenticates_before_publication_and_refuses_
         let projected = empty()
             .with_scalar_preflights(partial(), &mut TypeWorkBudget::default())
             .expect("pointwise projection does not invent an unselected family anchor");
-        assert!(projected
-            .scalar_preflight(BinderId::resolved(fact.module(), missing))
-            .is_none());
+        assert!(
+            projected
+                .scalar_preflight(BinderId::resolved(fact.module(), missing))
+                .is_none()
+        );
         assert_eq!(
             projected.scalar_preflights().count(),
             standalone.scalar_preflights().count()
@@ -927,9 +937,11 @@ fn scalar_owner_host_chain_requires_exact_checked_family_and_fresh_host_projecti
     let chain = |registry: &ResolvedRegistry, work: &mut TypeWorkBudget| {
         let scalar = registry.authenticate_scalar_preflights_for_owners(work)?;
         let host_proof = registry.authenticate_owner_definitions_with_preflights(scalar, work)?;
-        assert!(host_proof
-            .is_canonical_native_host(host, registry, work)
-            .unwrap());
+        assert!(
+            host_proof
+                .is_canonical_native_host(host, registry, work)
+                .unwrap()
+        );
         Ok::<(), ResolvedBuildFailure>(())
     };
     let mut full = TypeWorkBudget::default();
@@ -943,32 +955,44 @@ fn scalar_owner_host_chain_requires_exact_checked_family_and_fresh_host_projecti
         .authenticate_owner_definitions_with_preflights(scalar, &mut TypeWorkBudget::default())
         .unwrap();
     let mut projected = TypeWorkBudget::default();
-    assert!(proof
-        .is_canonical_native_host(host, &view, &mut projected)
-        .unwrap());
+    assert!(
+        proof
+            .is_canonical_native_host(host, &view, &mut projected)
+            .unwrap()
+    );
     assert!(projected.used() < full.used());
     let equal = view.clone();
-    assert!(proof
-        .is_canonical_native_host(host, &equal, &mut TypeWorkBudget::default())
-        .is_err());
+    assert!(
+        proof
+            .is_canonical_native_host(host, &equal, &mut TypeWorkBudget::default())
+            .is_err()
+    );
     let mut wrong = host.clone();
     wrong.parameters[0].id = TypeVariableId::resolved(module, 23);
-    assert!(!proof
-        .is_canonical_native_host(&wrong, &view, &mut TypeWorkBudget::default())
-        .unwrap());
-    assert!(proof
-        .is_canonical_native_host(host, &view, &mut TypeWorkBudget::default())
-        .unwrap());
+    assert!(
+        !proof
+            .is_canonical_native_host(&wrong, &view, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
+    assert!(
+        proof
+            .is_canonical_native_host(host, &view, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
     let mut wrong_span = host.clone();
     wrong_span.span = host.origin.primary_span();
-    assert!(!proof
-        .is_canonical_native_host(&wrong_span, &view, &mut TypeWorkBudget::default())
-        .unwrap());
+    assert!(
+        !proof
+            .is_canonical_native_host(&wrong_span, &view, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
     let mut wrong_origin = host.clone();
     wrong_origin.parameters[0].origin = host.origin.clone();
-    assert!(!proof
-        .is_canonical_native_host(&wrong_origin, &view, &mut TypeWorkBudget::default())
-        .unwrap());
+    assert!(
+        !proof
+            .is_canonical_native_host(&wrong_origin, &view, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
     let mut wrong_mirror = view.clone();
     wrong_mirror
         .type_variables
@@ -997,10 +1021,12 @@ fn scalar_owner_host_chain_requires_exact_checked_family_and_fresh_host_projecti
         let proof = view
             .authenticate_owner_definitions_with_preflights(scalar, &mut short)
             .unwrap();
-        assert!(proof
-            .is_canonical_native_host(host, &view, &mut short)
-            .unwrap_err()
-            .is_resource_exhaustion());
+        assert!(
+            proof
+                .is_canonical_native_host(host, &view, &mut short)
+                .unwrap_err()
+                .is_resource_exhaustion()
+        );
     }
     for _ in 0..2 {
         let mut fresh = TypeWorkBudget::default();
@@ -1020,9 +1046,11 @@ fn scalar_owner_host_chain_requires_exact_checked_family_and_fresh_host_projecti
             .unwrap();
         let declaration = uncovered.effect(host.id).unwrap();
         let mut fallback = TypeWorkBudget::default();
-        assert!(proof
-            .is_canonical_native_host(declaration, &uncovered, &mut fallback)
-            .unwrap());
+        assert!(
+            proof
+                .is_canonical_native_host(declaration, &uncovered, &mut fallback)
+                .unwrap()
+        );
         assert!(
             fallback.used() >= full.used(),
             "uncovered tables must pay the full inventory proof"
@@ -1036,13 +1064,15 @@ fn scalar_owner_source_host_legacy_table_pays_full_checked_inventory_fallback() 
     view.scalar_preflights
         .retain(|_, fact| fact.role().host_parameter(fact.module()).is_none());
     let module = view.scalar_preflights.values().next().unwrap().module();
-    assert!(view
-        .scalar_preflights
-        .contains_key(&BinderId::resolved(module, 0)));
-    assert!(view
-        .scalar_preflights
-        .values()
-        .all(|fact| fact.call_codec().ids().call.declaration() == 1));
+    assert!(
+        view.scalar_preflights
+            .contains_key(&BinderId::resolved(module, 0))
+    );
+    assert!(
+        view.scalar_preflights
+            .values()
+            .all(|fact| fact.call_codec().ids().call.declaration() == 1)
+    );
     view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
         .unwrap();
     let scalar = view
@@ -1077,12 +1107,14 @@ fn scalar_owner_source_host_legacy_table_pays_full_checked_inventory_fallback() 
         .authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default())
         .unwrap();
     let host = view.effect(crate::types::EffectId::new(module, 0)).unwrap();
-    assert!(!crate::foreign::checked_builtins::is_canonical_native_host(
-        host,
-        &view,
-        &mut TypeWorkBudget::default()
-    )
-    .unwrap());
+    assert!(
+        !crate::foreign::checked_builtins::is_canonical_native_host(
+            host,
+            &view,
+            &mut TypeWorkBudget::default()
+        )
+        .unwrap()
+    );
     assert!(
         !crate::foreign::checked_builtins::is_canonical_native_host_with_preflights(
             host,
@@ -1096,4 +1128,79 @@ fn scalar_owner_source_host_legacy_table_pays_full_checked_inventory_fallback() 
     fresh
         .authenticate_scalar_preflights(&mut TypeWorkBudget::default())
         .unwrap();
+}
+
+#[test]
+fn checked_memory_preflight_work_is_canonical_across_fresh_tables_and_insertion_orders() {
+    use crate::foreign::checked_source::ForeignAdmissionReason;
+    let mut expected = [None, None];
+    // Independent genuine producer graphs, then fresh map seeds and different
+    // insertion orders. Fact and codec allocation identities remain original.
+    for _ in 0..2 {
+        let original = original_view();
+        original
+            .authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+            .unwrap();
+        let mut rows = original
+            .scalar_preflights()
+            .map(|(id, fact)| (id, Arc::clone(fact)))
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|(id, _)| *id); // Test setup, outside measured admission.
+        assert_eq!(rows.len(), 14);
+        for order in 0..3 {
+            let mut candidate = original.clone();
+            candidate.scalar_preflights = HashMap::new();
+            let count = rows.len();
+            for index in 0..count {
+                let selected = match order {
+                    0 => index,
+                    1 => count - index - 1,
+                    _ => (index + 5) % count,
+                };
+                let (id, fact) = &rows[selected];
+                candidate.scalar_preflights.insert(*id, Arc::clone(fact));
+            }
+            for (mode, pointwise) in [false, true].into_iter().enumerate() {
+                let run = |work: &mut TypeWorkBudget| {
+                    if pointwise {
+                        crate::foreign::scalar_preflight::admit_projected_preflights(
+                            candidate.clone(),
+                            work,
+                        )
+                        .map(drop)
+                    } else {
+                        crate::foreign::scalar_preflight::authenticate_registry_families(
+                            &candidate, work,
+                        )
+                    }
+                };
+                let mut measured = TypeWorkBudget::default();
+                run(&mut measured).unwrap();
+                let cost = measured.used();
+                assert!(cost > 0);
+                assert_eq!(*expected[mode].get_or_insert(cost), cost);
+                for prefix in [0, 7] {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                    exact.charge(prefix).unwrap();
+                    run(&mut exact).unwrap();
+                    assert_eq!(exact.used(), prefix + cost);
+                    assert_eq!(
+                        run(&mut exact).unwrap_err().reason(),
+                        ForeignAdmissionReason::WorkExhausted
+                    );
+                    let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                    short.charge(prefix).unwrap();
+                    assert_eq!(
+                        run(&mut short).unwrap_err().reason(),
+                        ForeignAdmissionReason::WorkExhausted
+                    );
+                }
+                for _ in 0..2 {
+                    let mut fresh = TypeWorkBudget::with_limit(cost);
+                    run(&mut fresh).unwrap();
+                    assert_eq!(fresh.used(), cost);
+                }
+            }
+        }
+    }
 }

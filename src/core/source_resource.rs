@@ -8810,3 +8810,7 @@ pub(crate) mod checked_borrow_core_tests;
 #[cfg(test)]
 #[path = "source_resource/checked_byte_window_core_tests.rs"]
 pub(crate) mod checked_byte_window_core_tests;
+
+#[cfg(test)]
+#[path = "source_resource/coordinate_reuse_tests.rs"]
+pub(crate) mod coordinate_reuse_tests;

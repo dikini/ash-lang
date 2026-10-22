@@ -150,3 +150,49 @@ pub(crate) fn mutate(program: &mut UnvalidatedEffectProgram, mutation: Mutation)
     // Whole Core is the required rejecting boundary. A claimed request row need
     // not be rejected by scope-only authentication; never assert that phase.
 }
+
+/// Changes first H on the actual canonical primitive instantiation, not a
+/// neighboring QueryBytes request. The immutable original and all S/V actuals,
+/// copied node types, rows, operand, application and correspondence maps remain.
+pub(crate) fn mutate_primitive_first_host(program: &mut UnvalidatedEffectProgram, local: u32) {
+    assert!((11..=14).contains(&local));
+    let (index, scope) = program.nodes.iter().enumerate().find_map(|(index, node)| {
+        match &node.kind {
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope))
+                if matches!(scope.header().codec.report, SourceResourceReportCodec::CheckedScope { .. }) => Some((index, scope)),
+            _ => None,
+        }
+    }).expect("actual checked resource scope");
+    scope.authenticate(NodeId::new(program.arena, u32::try_from(index).unwrap()),
+        program, &mut TypeWorkBudget::default()).expect("canonical scope before first-H mutation");
+    let template = Arc::clone(scope.original());
+    let mut application = None;
+    scope.visit_byte_calls(|call, _| {
+        if call.function.module().is_some_and(|module| module.is_builtin_foreign())
+            && call.function.local() == local && call.apply.is_some() {
+            assert!(application.replace(call.application).is_none(), "one genuine primitive application");
+        }
+        Ok(())
+    }, &mut TypeWorkBudget::default()).unwrap();
+    let application = application.expect("flow-proved copied canonical primitive type application");
+    let stored = &mut program.nodes[application.index().unwrap()];
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(node))) = &mut stored.kind else {
+        panic!("actual checked primitive TypeApplication");
+    };
+    assert_eq!(node.arguments().len(), 2, "ordered H then complete S/V");
+    assert!(matches!(node.arguments()[0], Type::Variable(_)));
+    let mut work = TypeWorkBudget::default();
+    let mut arguments = node.arguments().iter().map(|ty| {
+        crate::types::clone_type_with_budget(ty, &mut work).unwrap()
+    }).collect::<Vec<_>>();
+    let old = std::mem::replace(&mut arguments[0], Type::Int);
+    crate::types::discard_type_iteratively(old);
+    let rows = node.row_arguments().iter().map(|row| {
+        crate::types::clone_effect_row_with_budget(row, &mut work).unwrap()
+    }).collect::<Vec<_>>();
+    *node = crate::core::type_ops::TypeApplicationNode::new_with_row_arguments(node.function(), arguments, rows);
+    let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &program.nodes[index].kind else {
+        unreachable!()
+    };
+    assert!(Arc::ptr_eq(scope.original(), &template));
+}

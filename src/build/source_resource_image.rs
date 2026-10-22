@@ -4619,7 +4619,10 @@ pub(super) fn checked_window_static_image_controls(
     let canonical = decode();
     canonical.compare_native_expectations(&expected, &mut TypeWorkBudget::default()).unwrap();
     let mut measured = TypeWorkBudget::default();
-    canonical.restore_effect(&mut measured).expect("whole checked image independent source/template/Core reconstruction");
+    let restored = canonical.restore_effect(&mut measured).expect("whole checked image independent source/template/Core reconstruction");
+    crate::core::source_resource::coordinate_reuse_tests::assert_handler_coordinate_reuse(
+        &restored.program, &restored.sources, &restored.modules,
+    );
     super::checked_prepared_image::checked_projection_hostile_controls(&canonical);
     let cost = measured.used();
     assert!(cost > 0);
