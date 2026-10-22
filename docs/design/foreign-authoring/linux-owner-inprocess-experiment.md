@@ -87,7 +87,7 @@ production; it is an experiment artifact, not a new supported build mode.
 | Observation/admission item | Proposed finite bound |
 | --- | --- |
 | Whole static image | 128 MiB; refuse oversize before copy/inspection |
-| Each source/entry/generated text record | 1 MiB; report excess as unsupported |
+| Each adapted Ash source/entry or generated experiment text record | 1 MiB; report excess as unsupported |
 | Producer receipt | 256 KiB |
 | Independent experiment approval | 64 KiB |
 | Closure manifest | 4096 records, 4 MiB encoded total |
@@ -96,6 +96,34 @@ production; it is an experiment artifact, not a new supported build mode.
 | Build/relink diagnostic window | 20 minutes per assigned command, one build job |
 | Optional later execution | 30-second child deadline, 16 KiB combined output |
 | Baseline native allocation | One requested 8-byte malloc; not a native-memory quota |
+
+The 1 MiB text-record bound applies to adapted Ash experiment inputs and
+generated experiment text. The entire pre-existing selected repository snapshot, including compiler,
+documentation, proof, historical evidence and archive blobs, is separate
+producer input: retain every selected Git blob in a complete
+per-file manifest and verify full size/hash/path-set equality before and after
+each build phase. Do not omit or truncate compiler files to satisfy the record
+bound, or substitute the smaller build.rs fingerprint census for the complete
+snapshot. At selected commit 1a8ecef0b03ddc75a45254543bd8f6f0bb10969c,
+all 2784 Git blobs are pinned; the separate build.rs content census has 177
+inputs. Compiler files src/resolved.rs (1,793,508 bytes), src/elaborate.rs
+(1,779,136 bytes) and src/core/validate.rs (1,688,770 bytes) exceed 1 MiB.
+Five other selected snapshot blobs also exceed 1 MiB: KERNEL.md (1,674,762),
+SourceScheduledCleanupInterfaces.lean (3,001,334), historical
+resource-calibration/build-and-source.tar.gz (2,617,276),
+lifecycle-postattempt-syntax-corrected-red.log (1,479,865), and
+lifecycle-public-codec-semantic-controls.log (1,515,703 bytes). Full paths and
+size/hash records for all eight, and all other blobs, remain in the complete
+2784-entry producer manifest (96,452,672 file-content bytes). No old snapshot
+blob is silently excluded from the prospective category. Their exact full
+hashes/sizes remain assigned producer inputs. This prospective clarification must be reviewed and retained before assigning that build.
+
+Tool executables and ordinary build intermediates are separate from the final
+candidate. Stream tool/input hashing against frozen expected sizes and hashes;
+do not apply the 128 MiB final-image limit to tools/intermediates. The observed
+cached compiler is 589,362,808 bytes and is not approved for reuse. Keep all
+experiment text, manifest, receipt, log/map and final-image bounds unchanged.
+Sampled storage monitoring is not a quota or a zero-overshoot guarantee.
 
 These are experiment record/tool bounds, not promises of host memory/CPU
 containment or new product gas coefficients. Inspect bounded ELF headers and
@@ -210,3 +238,7 @@ guard, quarantine and completion implementation. F7 additionally requires the
 external trusted credential setup and actual restricted worker/root/storage/
 filter/limit/quota/fault/termination evidence. SQLite, C-to-S dependencies,
 checked bytes/windows, whole F2/M1 and Main remain separate gates.
+
+The [trusted-build preparation record](linux-owner-inprocess-probe/README.md)
+retains the monitor, safe controls and selected-source correspondence. It is
+informative preparation and does not assign a build or approve startup.

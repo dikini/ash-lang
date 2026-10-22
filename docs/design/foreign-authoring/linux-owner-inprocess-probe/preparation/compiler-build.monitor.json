@@ -1,0 +1,67 @@
+{
+  "argv": [
+    "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "build",
+    "-p",
+    "ash",
+    "--locked",
+    "--offline",
+    "--jobs",
+    "1",
+    "--bin",
+    "ash",
+    "--target-dir",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target"
+  ],
+  "executable_pin": {
+    "size": 42839824,
+    "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953"
+  },
+  "cwd": "/tmp/ash-owner-build-snapshot-1a8ecef0/source",
+  "output_parent": "/tmp/ash-owner-packaging-1a8ecef0",
+  "watch_root": "/tmp/ash-owner-packaging-1a8ecef0",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "CARGO_HOME": "/home/dikini/.cargo",
+    "RUSTC": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "input_files": [
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/runtime-content-inputs.json",
+      "size": 30707,
+      "sha256": "81cb83ee6bb03a8c4d9c28f0bc041cf722313058b8650c373aac499e898c883f"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/selected-source.json",
+      "size": 5032,
+      "sha256": "1c1cdc7e5058fd746e5e62044ee5a1b1261bf01d7ea65adfc50d46ae5b269ceb"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+      "size": 6923,
+      "sha256": "7e95c8961f0786037353b303c5501a562f45c874dcf883f59debe536e591dd8e"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/owner.ash",
+      "size": 2671,
+      "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/entry.ash",
+      "size": 148,
+      "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/linux-owner-inprocess-experiment.proposed.md",
+      "size": 15011,
+      "sha256": "d448eee197e11028ff0088c8a73b6455a49ce9a307bbd4ef78cd5f84e204bc22"
+    }
+  ],
+  "artifact_files": []
+}

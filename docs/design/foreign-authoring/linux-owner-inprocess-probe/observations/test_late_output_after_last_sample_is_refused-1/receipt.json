@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "0cfbbb2883fbd077fe569b398c714e3f56ce56e9e9dd166ec506cbc9eec87e1a",
+  "monitor": {
+    "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "size_before": 18877,
+    "size_after": 18877,
+    "hashed_bytes": 18877,
+    "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 5341
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-h5dmkzws/build-run-t9a9z5xa",
+  "output_path": "/tmp/ash-build-monitor-test-h5dmkzws/build-run-t9a9z5xa/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "from pathlib import Path; import os,time\nwhile not Path(\"late-ready\").exists(): time.sleep(.001)\nos.write(1,b\"x\"*2048)"
+  ],
+  "child_pid": 11,
+  "child_exit": 0,
+  "reason": "output_limit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 2048,
+  "retained_output_bytes": 1024,
+  "output_truncated": true,
+  "watched_files": [],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 11,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "limits": {
+    "deadline_seconds": 2,
+    "output_bytes": 1024,
+    "sidefile_bytes": 16384
+  },
+  "environment_keys": [],
+  "executable": {
+    "path": "/usr/bin/python3.14",
+    "size_before": 7477160,
+    "size_after": 7477160,
+    "hashed_bytes": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347805
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 11,
+  "child_session": 11,
+  "final_limit_failures": [
+    "output_limit"
+  ],
+  "elapsed_seconds": 0.0491228119999505,
+  "observed_output_sha256": "1d1801f753ccd9fa57966c46f360585caf83337a394a5f238d4e4e7d6005788d",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-h5dmkzws/build-run-t9a9z5xa/output.log",
+    "size_before": 1024,
+    "size_after": 1024,
+    "hashed_bytes": 1024,
+    "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 13667
+  }
+}
