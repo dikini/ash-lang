@@ -348,3 +348,13 @@ cases, broader witness helper transport, declared C-to-S owner dependencies and
 remaining declaration closure stay visible. Checked runtime/native/image
 execution, K realization, deployment, F4/F6, Main and F-core remain separate.
 The existing generated-host connected F3/F4/F6 trigger still schedules F-core.
+
+PR #97 is retained at `73a982f0` after independent retained-result/readback audit
+and PM-confirmed partial acceptance. The next authorized
+[scalar Current Borrow checkpoint](plans/checked-ffi-contract-carriers.md#static-scalar-current-borrow-checkpoint)
+adds one opaque Current-to-scalar checked native request solely through its
+owning resource's direct handler. A genuine prepared-positive/binding red
+precedes implementation. Body-free import/re-export, independent Core/transforms,
+exact original/Host/assumption facts and hostile/budget controls are required.
+No byte/window/dependency/runtime or deployment permission follows; whole F3
+and the existing F-core/Main gates remain pending.

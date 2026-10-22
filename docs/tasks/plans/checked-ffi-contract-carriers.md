@@ -571,3 +571,57 @@ checked Borrow/byte/window roles, declared C-to-S owner dependencies and broader
 declaration closure remain outside the delivery. Runtime/native/image execution,
 K realization, F4/F6, deployment, Main and whole-F3 acceptance remain pending.
 The F-core trigger remains the connected generated-host F3/F4/F6 path.
+
+### Static scalar Current Borrow checkpoint
+
+Start from retained PR #97 at `73a982f012f370cb9f2fb808b6b5d6f01490c9e4`.
+Its connected dependency-free lifecycle and private finish lineage are accepted
+as a partial delivery. This checkpoint implements the next bounded part of
+CP-0024 and TASK-0051 Work 2–4 / Slices 4–5: one opaque Current scalar Borrow
+inside its owning resource's direct handler. It does not expand owner transport.
+
+The shared owner binder already validates scalar Current Borrow signatures, but
+the checked symbol entry currently excludes that role. First establish a real
+prepared contract and observe its actual explicit-profile binding refusal. A
+code exclusion alone is not red evidence. Use the PR #97 State<H,R> library with
+an additional `Read<H,R>: State<H,R> -> Foreign.CheckedCall<Int>`, a scalar C ABI
+result and one Current operand. Keep exact H, owned R, complete formal vectors,
+original native/owner/assumption identities and canonical CheckedCall. The
+resource lists Read<H,R>; its direct read handler performs that request on its
+Current and resumes the complete checked result, without source State forwarding.
+
+1. Publish this focused plan in an early individual draft PR under #59/#52/#51.
+   Record genuine preparation facts, then the binding red on frozen inputs
+   before product changes. Legacy/default profile remains refusal.
+2. Repair only the demonstrated checked-role gap using existing canonical owner
+   binding and phase rules. Checked acquisition, finish and no-resource-context
+   Borrow remain refusals; preserve legacy phase behavior. Admit no Access
+   result, byte representation, view,
+   window, initialized extent, dependent owner or general helper transport.
+   Pay exact role/signature/identity checks and publish no partial permission.
+3. Require actual checked source, summary, body-free import and re-export, linked
+   independent Core, identity and fold positives. Preserve hidden State and
+   provider facts without publishing names; retain native and Host rows through
+   exact resource interpretation and host completion. Check original Read,
+   State, H/R and role-linked assumptions at each existing carrier boundary.
+4. After canonical positives, test wrong H/R/State, wrong or erased Read original,
+   missing interpreted membership, fake codec and erased native/assumption/Host
+   facts. Ordinary handlers cannot simulate native authority, and direct calls
+   outside the owning phase remain refused. Existing post-finish Current
+   retirement, finish outcome and source-continuation controls must stay green.
+   Independently mutate retained Core operation/vector/row/original facts.
+5. Preserve default work limits and bounded traversal. Cover exact, nonzero
+   prefix, one-short, spent, fresh and refusal-atomicity behavior for newly
+   admitted binding/phase paths, then affected foreign/owner/import/resource/
+   capture regressions, both original startup defaults, images and Clippy.
+   Freeze complete inputs and raw receipts; obtain independent exact-head
+   review before root assigns GitHub integration and partial acceptance.
+
+The direct-handler scalar result is the only new supported owner operation in
+this checkpoint. Checked byte/copy operations, Access/view/window results,
+C-to-S dependencies, general callbacks/helpers/State forwarding, lifecycle
+outcome expansion, checked evaluator/native/image execution, K realization,
+deployment, SQLite and F4/F6 are excluded. AD-0015 remains owner-free. Broader
+declaration closure and whole F3 stay pending. The existing generated-host
+connected F3/F4/F6 trigger for F-core and separate Main integration are unchanged.
+A concrete semantic gap returns to CP/design rather than selecting local rules.
