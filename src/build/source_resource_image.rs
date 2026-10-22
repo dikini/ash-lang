@@ -69,7 +69,8 @@ pub(super) struct ResourceHeaderRecord {
     completion: ResolvedTypeRecord,
     result: ResolvedTypeRecord,
     answer: u32,
-    codec_scope: bool,
+    codec: u8,
+    host: Option<ResourceHostRecord>,
     codec_span: SpanRecord,
     provider: InterfaceIdentity,
     provider_spelling: Slice,
@@ -80,6 +81,11 @@ pub(super) struct ResourceHeaderRecord {
     interpreted: Slice,
     windows: Slice,
     origin: u32,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ResourceHostRecord {
+    position: u32,
+    span: SpanRecord,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ResourceWindowRecord {
@@ -253,7 +259,8 @@ wire_struct!(
     completion,
     result,
     answer,
-    codec_scope,
+    codec,
+    host,
     codec_span,
     provider,
     provider_spelling,
@@ -265,6 +272,7 @@ wire_struct!(
     windows,
     origin
 );
+wire_struct!(ResourceHostRecord, position, span);
 wire_struct!(HandlerRecord, id, body, effect, clauses, root, registration);
 wire_struct!(
     HookRootRecord,
@@ -679,14 +687,6 @@ impl Encoder<'_> {
         header: &Arc<SourceResourceTypeFact>,
     ) -> Result<u32, ImageFailure> {
         charge(self.work, 1)?;
-        if header.host.is_some()
-            || matches!(
-                header.codec.kind,
-                crate::surface::SurfaceResourceReportCodecKind::CheckedScope
-            )
-        {
-            return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
-        }
         if let Some((pointer, slot)) = self.source_headers.get(&header.id) {
             return if *pointer == Arc::as_ptr(header) {
                 Ok(*slot)
@@ -763,7 +763,14 @@ impl Encoder<'_> {
             completion: self.resolved_type_record(&header.completion)?,
             result: self.resolved_type_record(&header.result)?,
             answer,
-            codec_scope: header.codec.kind == crate::surface::SurfaceResourceReportCodecKind::Scope,
+            codec: match header.codec.kind {
+                crate::surface::SurfaceResourceReportCodecKind::AcquiredOnly => 0,
+                crate::surface::SurfaceResourceReportCodecKind::Scope => 1,
+                crate::surface::SurfaceResourceReportCodecKind::CheckedScope => 2,
+            },
+            host: header.host.map(|host| -> Result<_, ImageFailure> {
+                Ok(ResourceHostRecord { position: index(host.position)?, span: self.span(host.span)? })
+            }).transpose()?,
             codec_span: self.span(header.codec.span)?,
             provider: self.interface_identity(header.provider.interface.id)?,
             provider_spelling: append(
@@ -1588,7 +1595,12 @@ impl Decoder<'_> {
             parameters: parameters.into_boxed_slice(),
             owned_position,
             owned_origin: owned_origin.take(),
-            host: None,
+            host: record.host.map(|host| -> Result<_, ImageFailure> {
+                Ok(crate::resolved::SourceResourceHost {
+                    position: usize::try_from(host.position).map_err(|_| ImageFailure::InvalidRecord)?,
+                    span: self.span(host.span)?,
+                })
+            }).transpose()?,
             input: input.take(),
             state: state.take(),
             data: data.take(),
@@ -1597,10 +1609,11 @@ impl Decoder<'_> {
             result: result.take(),
             answer,
             codec: crate::surface::SurfaceResourceReportCodec {
-                kind: if record.codec_scope {
-                    crate::surface::SurfaceResourceReportCodecKind::Scope
-                } else {
-                    crate::surface::SurfaceResourceReportCodecKind::AcquiredOnly
+                kind: match record.codec {
+                    0 => crate::surface::SurfaceResourceReportCodecKind::AcquiredOnly,
+                    1 => crate::surface::SurfaceResourceReportCodecKind::Scope,
+                    2 => crate::surface::SurfaceResourceReportCodecKind::CheckedScope,
+                    _ => return Err(ImageFailure::InvalidRecord),
                 },
                 span: codec_span,
             },
@@ -4575,4 +4588,78 @@ Buffer.Success (Buffer.Success 7)
             "payload helper image restoration exact work={cost}; prefix/one-short/two retries and four loan/copy refusals"
         );
     }
+}
+
+#[cfg(test)]
+pub(super) fn checked_window_static_image_controls(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(super::ModuleId, Arc<super::SourceFile>)],
+) {
+    use super::*;
+    assert!(matches!(encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut TypeWorkBudget::default()),
+        Err(NativeImageFailure::Image(ImageFailure::Unsupported(Unsupported::EffectOperation)))),
+        "static reconstruction must not enable public checked build admission");
+    let mut work = TypeWorkBudget::default();
+    let encoder = encode_program(program, provenance, &mut work, true, |encoder| {
+        for node in program.nodes() {
+            charge(encoder.work, 1)?;
+            if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) = &node.kind {
+                encoder.encode_source_registry_view(scope.original(), program.registry())?;
+            }
+        }
+        Ok(())
+    }, |encoder, kind| encoder.encode_effect_node(kind)).expect("genuine checked window static image encodes");
+    let image = encoder.image;
+    let slot = image.resource_headers.iter().position(|h| h.codec == 2).expect("actual CheckedScope header");
+    assert!(image.resource_headers[slot].host.is_some());
+    assert!(image.resource_headers[slot].windows.len > 0);
+    let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+    let expected = image.encode_native_expectations(&mut TypeWorkBudget::default()).unwrap();
+    let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+    let canonical = decode();
+    canonical.compare_native_expectations(&expected, &mut TypeWorkBudget::default()).unwrap();
+    let mut measured = TypeWorkBudget::default();
+    canonical.restore_effect(&mut measured).expect("whole checked image independent source/template/Core reconstruction");
+    let cost = measured.used();
+    assert!(cost > 0);
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+        exact.charge(prefix).unwrap();
+        canonical.restore_effect(&mut exact).unwrap();
+        assert_eq!(exact.used(), prefix + cost);
+        assert!(canonical.restore_effect(&mut exact).is_err(), "spent operation refuses");
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        match canonical.restore_effect(&mut short) {
+            Err(ImageFailure::Resource) => {},
+            Err(ImageFailure::Validation(error)) if error.reason() == crate::core::ValidationReason::Resource => {},
+            _ => panic!("one-short must be actual Resource refusal"),
+        }
+    }
+    for _ in 0..2 { canonical.restore_effect(&mut TypeWorkBudget::with_limit(cost)).unwrap(); }
+    for mutation in 0..5 {
+        let mut hostile = decode();
+        match mutation {
+            0 => hostile.resource_headers[slot].host = None,
+            1 => { let owned = hostile.resource_headers[slot].owned_position; hostile.resource_headers[slot].host.as_mut().unwrap().position = owned; },
+            2 => hostile.resource_headers[slot].codec = 1,
+            3 => hostile.resource_headers[slot].codec = 255,
+            4 => hostile.resource_headers[slot].windows.len = 0,
+            _ => unreachable!(),
+        }
+        let error = match hostile.restore_effect(&mut TypeWorkBudget::default()) {
+            Ok(_) => panic!("actual header mutation must refuse independent restore"),
+            Err(error) => error,
+        };
+        match error {
+            ImageFailure::Resource => panic!("no budget failure credit"),
+            ImageFailure::Validation(error) => assert_ne!(error.reason(), crate::core::ValidationReason::Resource),
+            ImageFailure::CoreAdmission(error) => panic!("builder setup failure is not independent semantic refusal: {error:?}"),
+            ImageFailure::Unsupported(feature) => panic!("unsupported coverage is not hostile rejection evidence: {feature:?}"),
+            _ => {},
+        }
+    }
+    let mut old = bytes;
+    old[PRIVATE_MAGIC.len() - 1] = 0x11;
+    assert!(PureImage::decode_bytes(&old, &mut TypeWorkBudget::default()).is_err(), "old wire version must not reinterpret the new header layout");
 }

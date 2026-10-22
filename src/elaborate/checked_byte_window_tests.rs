@@ -391,6 +391,10 @@ fn assert_connected_byte_core(graph: &ModuleGraph) {
         .collect::<Vec<_>>();
     let core = crate::core::validate_effect_modules(program, &sources, &modules)
         .expect("independent default byte/window Core");
+    let image_provenance = graph.modules().iter()
+        .map(|m| (m.id(), Arc::new(m.source().clone())))
+        .collect::<Vec<_>>();
+    crate::build::checked_window_static_image_controls(&core, &image_provenance);
     // Insert after canonical `let core = validate_effect_modules(...).expect(...)`
     // in assert_connected_byte_core. Parent core/source_resource declaration:
     // #[cfg(test)] pub(crate) mod checked_byte_window_core_tests;
