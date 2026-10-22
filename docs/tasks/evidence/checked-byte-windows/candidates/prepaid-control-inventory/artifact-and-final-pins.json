@@ -1,0 +1,17 @@
+{
+  "base": "eb108fced3439a25225df5b834f40a13ad7440e4",
+  "artifact": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "size": 850754264,
+  "sha256": "78a5cffd9886386a560ae8d5da8919b8f5cefb0dff6b4e021d0d500752086926",
+  "files": {
+    "src/core/capture.rs": "78f6981bac35f81a7970e8c7fc2179347d2dcbe5359a88efb80a3d5aad689506",
+    "src/core/capture/control.rs": "79482b86c51395fd6dd829b73ab735a3a4d9bf3be6fca1726447dca44103a5a1"
+  },
+  "receipts": {
+    "buffer-startups.receipt.json": "c7d18a47916c48f4218f136bf90372ac42ea86561ab3ef63c8a454f198f536ec",
+    "complete-inventory.receipt.json": "eaa9b623d667a38180624197a39457db6052c25f9f5cff0ec46a82576e7eedcb",
+    "dependent-startup.receipt.json": "850a9c0caef1250e249b20ff383a9ec082a15b03428c0ba36c860f42652af92c",
+    "full-static.receipt.json": "4f1f0679ab00463f2d2805dc782d3fbc5ed12e51e688ac228a6835513c8aebb2",
+    "prepaid-controls.receipt.json": "b45ad3d08adf855d505ef1bd351c2f3980e4fa09f7eaed636e8288f52b8a0409"
+  }
+}

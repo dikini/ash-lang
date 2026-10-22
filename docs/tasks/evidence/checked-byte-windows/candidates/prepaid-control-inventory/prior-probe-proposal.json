@@ -1,0 +1,54 @@
+{
+  "status": "Prepared only; do not execute before root assigns current frozen artifact and slot.",
+  "test": "build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+  "script": "/tmp/ash-checked-capture-code-inventory-probe/probe.py",
+  "script_sha256": "accfee5701a7506d740746bbbd5bdfd644793381c2931fb1724291d4882cf81a",
+  "argv_proposal": [
+    "timeout",
+    "--signal=TERM",
+    "--kill-after=10s",
+    "180s",
+    "gdb",
+    "-q",
+    "-batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "set confirm off",
+    "-ex",
+    "set debuginfod enabled off",
+    "-ex",
+    "set breakpoint pending on",
+    "-ex",
+    "source /tmp/ash-checked-capture-code-inventory-probe/probe.py",
+    "-ex",
+    "run",
+    "--args",
+    "ACTUAL_FROZEN_EXISTING_TEST_BINARY_PENDING",
+    "build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "limits": {
+    "deadline_seconds": 180,
+    "rows": 80,
+    "source_read_bytes_each": 4194304,
+    "graph_code_entries": 65536,
+    "ancestor_frames": 24,
+    "failure_stack_frames": 12,
+    "raw_log_retention_bytes": 1048576
+  },
+  "hypothesis": "Same immutable SummaryGraph code is scanned by root gate and ControlCodeInventory::prepare before from_code_inventory. Measure graph pointer and code length plus exact meter bounds and calls, not semantic proof/candidate reuse.",
+  "required_before_assignment": [
+    "Pin final post-byte-patch source map and existing shared artifact hash; no rebuild/copy.",
+    "Revalidate the two refused source branch locations against that exact binary/source.",
+    "Operator retains exact argv/env/source/script/artifact before-and-after and bounded raw stdout/stderr."
+  ],
+  "readback_gates": [
+    "No observer_error or row overflow; exact target armed, one restore.",
+    "Same root_gate/prepare/from_inventory SummaryGraph pointer and code length; phase calls matched; open_root_windows zero.",
+    "Original default limit unchanged and first refused charge correlated to candidate entry; inferior actual outcome retained.",
+    "Inclusive costs overlap and must not be blindly summed; code length is finite scan work, not proved removable net work."
+  ]
+}

@@ -1606,9 +1606,80 @@ struct ControlCodeInventory<'a> {
     owner_rows: Vec<&'a EffectRow>,
 }
 
+/// Unused traversal payment from this root call's short-circuit control gate.
+/// This is neither an owner-row inventory nor a semantic admission result.
+/// Keep it lexical: the caller only filters queries on the same unmoved meter
+/// before consuming it. No meter replacement, reset or submeter is permitted.
+pub(super) struct PrepaidControlCodeScan<'a> {
+    graph: &'a SummaryGraph,
+    prefix: usize,
+    unused: usize,
+    meter: *const TypeWorkBudget,
+    used: usize,
+}
+
+impl<'a> PrepaidControlCodeScan<'a> {
+    pub(super) fn for_roots(
+        graph: &'a SummaryGraph,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Self>, Failure> {
+        let count = graph.code.len();
+        // Preserve the old no-control path: full structural payment, but no
+        // owner-row traversal, allocation or validation at all.
+        charge(budget, count)?;
+        let Some(first) = graph.code.iter().position(|code| {
+            matches!(
+                code,
+                Control::Discard { .. }
+                    | Control::Resource { .. }
+                    | Control::Registration { .. }
+                    | Control::Cleanup { .. }
+            )
+        }) else {
+            return Ok(None);
+        };
+        let prefix = first.checked_add(1).ok_or(Failure::Resource)?;
+        let unused = count.checked_sub(prefix).ok_or(Failure::Invalid)?;
+        charge(budget, 1)?;
+        Ok(Some(Self {
+            graph,
+            prefix,
+            unused,
+            meter: std::ptr::from_ref(budget),
+            used: budget.used(),
+        }))
+    }
+
+    fn into_inventory(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<ControlCodeInventory<'a>, Failure> {
+        charge(budget, 1)?;
+        if !std::ptr::eq(self.meter, std::ptr::from_ref(budget))
+            || budget.used() < self.used
+            || self.prefix.checked_add(self.unused) != Some(self.graph.code.len())
+        {
+            return Err(Failure::Invalid);
+        }
+        // The first gate spent prefix visits; only unused visits remain paid.
+        // Pay the repeated prefix so the complete fresh scan below is covered.
+        charge(budget, self.prefix)?;
+        ControlCodeInventory::from_paid_scan(self.graph, budget)
+    }
+}
+
 impl<'a> ControlCodeInventory<'a> {
     fn prepare(graph: &'a SummaryGraph, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
         charge(budget, graph.code.len())?;
+        Self::from_paid_scan(graph, budget)
+    }
+
+    // Enter only after full payment above or consumption of one lexical gate
+    // receipt. Every original row is visited in unchanged code/member order.
+    fn from_paid_scan(
+        graph: &'a SummaryGraph,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
         let mut has_resource = false;
         let mut owner_rows = Vec::new();
         for code in &graph.code {
@@ -1667,6 +1738,14 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         Self::from_code_inventory(ControlCodeInventory::prepare(graph, budget)?, seed, budget)
+    }
+
+    pub(super) fn from_prepaid_control_scan(
+        scan: PrepaidControlCodeScan<'a>,
+        seed: Option<&'a Type>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        Self::from_code_inventory(scan.into_inventory(budget)?, seed, budget)
     }
 
     fn from_code_inventory(
@@ -8053,6 +8132,213 @@ mod tests {
     }
 
     #[test]
+    fn prepaid_control_scan_keeps_no_control_rows_and_queries_unobserved() {
+        let source = SourceFile::new("no-control-scan", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let instance = EffectInstance::new_kinded(
+            EffectId::new(ModuleId::new(0), 0),
+            Box::new([KindedArgument::RowArg(EffectRow::open(
+                EffectRowVariable::rigid(TypeVariableId::new(0)),
+                Box::new([]),
+            ))]),
+        );
+        let request = Request::effect(&instance, span, &mut TypeWorkBudget::unbounded()).unwrap();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::NativeInterpret {
+                    body: usize::MAX,
+                    effects: vec![request.clone()],
+                },
+                Control::Handler {
+                    body: usize::MAX,
+                    effect: request,
+                    clauses: Vec::new(),
+                    owning_resource: None,
+                },
+            ],
+        };
+        // These rows need more work if prepared, and their unreachable bodies
+        // are not valid query roots. The historical no-control path reads neither.
+        assert!(matches!(
+            ControlCodeInventory::prepare(
+                &graph,
+                &mut TypeWorkBudget::with_limit(graph.code.len())
+            ),
+            Err(Failure::Resource)
+        ));
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + graph.code.len() - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(
+                super::super::check_control_roots_with_rows(
+                    &graph,
+                    vec![usize::MAX],
+                    true,
+                    &mut short
+                ),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + graph.code.len());
+                exact.charge(prefix).unwrap();
+                assert!(
+                    super::super::check_control_roots_with_rows(
+                        &graph,
+                        vec![usize::MAX],
+                        true,
+                        &mut exact
+                    )
+                    .unwrap()
+                    .is_empty()
+                );
+                assert_eq!(exact.used(), prefix + graph.code.len());
+                assert!(matches!(
+                    PrepaidControlCodeScan::for_roots(&graph, &mut exact),
+                    Err(Failure::Resource)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn prepaid_control_scan_keeps_discard_gate_distinct_and_literal_meters_bound() {
+        let source = SourceFile::new("discard-control-scan", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::Return,
+                Control::Discard {
+                    owner: 0,
+                    node: 0,
+                    local: true,
+                    row_type: 0,
+                    source: span,
+                },
+            ],
+        };
+        let donor = SummaryGraph {
+            effects: false,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![Control::Return],
+        };
+        let mut work = TypeWorkBudget::unbounded();
+        let scan = PrepaidControlCodeScan::for_roots(&graph, &mut work)
+            .unwrap()
+            .unwrap();
+        let inventory = scan.into_inventory(&mut work).unwrap();
+        assert!(std::ptr::eq(inventory.graph, &graph));
+        assert!(!std::ptr::eq(inventory.graph, &donor));
+        assert!(
+            !inventory.has_resource,
+            "Discard alone must not require a Value graph"
+        );
+        Analysis::from_code_inventory(inventory, None, &mut work).unwrap();
+        Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
+
+        let mut original = TypeWorkBudget::unbounded();
+        let scan = PrepaidControlCodeScan::for_roots(&graph, &mut original)
+            .unwrap()
+            .unwrap();
+        let original_used = original.used();
+        let mut other = TypeWorkBudget::unbounded();
+        assert!(matches!(
+            scan.into_inventory(&mut other),
+            Err(Failure::Invalid)
+        ));
+        assert_eq!(
+            original.used(),
+            original_used,
+            "a refusal does not refund gate work"
+        );
+        assert_eq!(other.used(), 1, "the rejected consume is itself paid");
+        let scan = PrepaidControlCodeScan::for_roots(&graph, &mut original)
+            .unwrap()
+            .unwrap();
+        Analysis::from_prepaid_control_scan(scan, None, &mut original).unwrap();
+    }
+
+    #[test]
+    fn prepaid_control_scan_preserves_native_prefix_rows_and_pruned_root_checks() {
+        let source = SourceFile::new("native-prefix-control-scan", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let instance = EffectInstance::new_kinded(
+            EffectId::new(ModuleId::new(0), 0),
+            Box::new([KindedArgument::RowArg(EffectRow::open(
+                EffectRowVariable::rigid(TypeVariableId::new(0)),
+                Box::new([]),
+            ))]),
+        );
+        let request = Request::effect(&instance, span, &mut TypeWorkBudget::unbounded()).unwrap();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::Return,
+                Control::NativeInterpret {
+                    body: 0,
+                    effects: vec![request],
+                },
+                Control::Discard {
+                    owner: 0,
+                    node: 0,
+                    local: true,
+                    row_type: 0,
+                    source: span,
+                },
+            ],
+        };
+        let mut work = TypeWorkBudget::unbounded();
+        let standalone = ControlCodeInventory::prepare(&graph, &mut work).unwrap();
+        assert_eq!(standalone.owner_rows.len(), 1);
+        let scan = PrepaidControlCodeScan::for_roots(&graph, &mut work)
+            .unwrap()
+            .unwrap();
+        let prepaid = scan.into_inventory(&mut work).unwrap();
+        assert_eq!(prepaid.owner_rows.len(), standalone.owner_rows.len());
+        assert!(std::ptr::eq(
+            prepaid.owner_rows[0],
+            standalone.owner_rows[0]
+        ));
+
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::Return,
+                Control::Resource {
+                    body: 0,
+                    effect: Request::unknown(span),
+                },
+            ],
+        };
+        // Return is pruned, but an empty query list still constructs Analysis.
+        // The missing required Value graph must therefore remain a refusal.
+        assert!(matches!(
+            super::super::check_control_roots_with_rows(
+                &graph,
+                vec![0],
+                false,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(Failure::Invalid)
+        ));
+    }
+
+    #[test]
     fn complete_code_inventory_preserves_nested_owner_rows_and_hidden_resource_gates() {
         let module = ModuleId::new(0);
         let source = SourceFile::new("code-inventory", "x").unwrap();
@@ -8162,6 +8448,37 @@ mod tests {
         };
         let mut measured = TypeWorkBudget::unbounded();
         run(&mut measured).unwrap();
+        let prepaid_run = |budget: &mut TypeWorkBudget| {
+            let scan = PrepaidControlCodeScan::for_roots(&graph, budget)?.unwrap();
+            assert_eq!(scan.prefix, 4);
+            assert_eq!(scan.unused, graph.code.len() - 4);
+            let inventory = scan.into_inventory(budget)?;
+            assert!(std::ptr::eq(inventory.graph, &graph));
+            assert!(inventory.has_resource);
+            assert_eq!(inventory.owner_rows.len(), expected_rows.len());
+            for (actual, expected) in inventory.owner_rows.iter().zip(&expected_rows) {
+                assert!(std::ptr::eq(*actual, *expected));
+            }
+            Ok::<(), Failure>(())
+        };
+        let mut prepaid_measured = TypeWorkBudget::unbounded();
+        prepaid_run(&mut prepaid_measured).unwrap();
+        // The standalone inventory already pays E. The gate adds P repeated
+        // visits and its two receipt operations, rather than a second full E.
+        assert_eq!(prepaid_measured.used(), measured.used() + 4 + 2);
+        for prefix in [0, 7] {
+            let cost = prepaid_measured.used();
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(prepaid_run(&mut short), Err(Failure::Resource)));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                prepaid_run(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+                assert!(matches!(prepaid_run(&mut exact), Err(Failure::Resource)));
+            }
+        }
         for prefix in [0, 9] {
             for available in 0..measured.used() {
                 let mut short = TypeWorkBudget::with_limit(prefix + available);

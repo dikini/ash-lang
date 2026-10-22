@@ -839,3 +839,13 @@ patch because accepted slot contexts need not belong to the interned path set;
 a complete paid fallback would erase its measured gross saving. Keep fresh
 semantic admission, remaining startup and affected regression gates open. This
 unmerged candidate does not complete PR101, whole F3 or runtime activation.
+
+The bounded prepaid control-inventory candidate passes three new payment/gate
+controls, the complete ordered owner-row control and the actual full static
+roundtrip. It preserves no-control skipped work and fresh semantic inventory;
+only unused structural payment is carried across the same lexical root call.
+See [the candidate evidence](../evidence/checked-byte-windows/candidates/prepaid-control-inventory/README.md).
+Startup remains 2/3: nested cleanup uses 320640 and dependent discard uses
+324967; two-owner still reports Resource at 327680. Measure its current actual
+prefix and failure phase before choosing another repair. No full regression,
+PR101 completion or runtime activation is claimed.
