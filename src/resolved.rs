@@ -19230,6 +19230,18 @@ fn authenticate_foreign_interfaces(
     Ok(())
 }
 
+/// A single-use proof of the scalar table for this exact immutable registry.
+/// It carries no source-table, owner, native or executable authority.
+pub(crate) struct ScalarPreflightOwnerAuthentication<'registry> {
+    registry: &'registry ResolvedRegistry,
+}
+
+impl<'registry> ScalarPreflightOwnerAuthentication<'registry> {
+    pub(crate) fn into_registry(self) -> &'registry ResolvedRegistry {
+        self.registry
+    }
+}
+
 /// Immutable resolved metadata for one source file.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResolvedRegistry {
@@ -21051,6 +21063,30 @@ impl ResolvedRegistry {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
         self.authenticate_scalar_preflights(budget)?;
+        self.authenticate_owner_definitions_after_preflights(budget)
+    }
+
+    pub(crate) fn authenticate_owner_definitions_with_preflights<'registry>(
+        &self,
+        authentication: ScalarPreflightOwnerAuthentication<'registry>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<
+        crate::foreign::scalar_preflight::ScalarOwnerHostAuthentication<'registry>,
+        ResolvedBuildFailure,
+    > {
+        let host = crate::foreign::scalar_preflight::consume_owner_scalar_authentication(
+            self,
+            authentication,
+            budget,
+        )?;
+        self.authenticate_owner_definitions_after_preflights(budget)?;
+        Ok(host)
+    }
+
+    fn authenticate_owner_definitions_after_preflights(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
         self.authenticate_native_contracts(budget)?;
         self.authenticate_owner_signature_coverage(
             self.owner_definitions
@@ -21659,6 +21695,16 @@ impl ResolvedRegistry {
     ) -> Result<(), ResolvedBuildFailure> {
         crate::foreign::scalar_preflight::authenticate_registry_families(self, work)
             .map_err(scalar_preflight_failure)
+    }
+
+    pub(crate) fn authenticate_scalar_preflights_for_owners(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ScalarPreflightOwnerAuthentication<'_>, ResolvedBuildFailure> {
+        self.authenticate_scalar_preflights(work)?;
+        work.charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        Ok(ScalarPreflightOwnerAuthentication { registry: self })
     }
 
     // Insert in impl ResolvedRegistry. Call after new_with_budget,

@@ -3,9 +3,9 @@
 use super::*;
 use crate::{
     foreign::source_contract::{
-        CheckedNativeAssumption, PreparedAccessResult, PreparedAddressRepresentation,
-        PreparedForeignExtent, PreparedOwnerArgument, PreparedOwnerCall,
-        prepare_checked_foreign_library,
+        prepare_checked_foreign_library, CheckedNativeAssumption, PreparedAccessResult,
+        PreparedAddressRepresentation, PreparedForeignExtent, PreparedOwnerArgument,
+        PreparedOwnerCall,
     },
     resolve::{DependencyExports, ResolveModuleError, ResolveReason},
     resolved::ResolvedModule,
@@ -102,11 +102,9 @@ fn assert_prepared(graph: &ModuleGraph) {
         assert_eq!(selected.member_index(), symbol.member_index());
         assert_eq!(selected.host_parameter(), if index < 2 { 0 } else { 1 });
         assert_eq!(selected.assumption_members(), &[callee.member_index()]);
-        assert!(
-            selected
-                .minimum_assumptions()
-                .contains(&CheckedNativeAssumption::NativeOwnerLifetimeAndDisposition)
-        );
+        assert!(selected
+            .minimum_assumptions()
+            .contains(&CheckedNativeAssumption::NativeOwnerLifetimeAndDisposition));
         if index >= 2 {
             assert_eq!(
                 symbol
@@ -291,12 +289,10 @@ fn assert_connected_byte_core(graph: &ModuleGraph) {
     assert_eq!(header.original.host.unwrap().position, 0);
     assert_eq!(header.original.owned_position, 1);
     assert_eq!(header.original.parameters.len(), 2);
-    assert!(
-        producer
-            .exports()
-            .source_resource_facts()
-            .any(|fact| Arc::ptr_eq(fact, &header.original))
-    );
+    assert!(producer
+        .exports()
+        .source_resource_facts()
+        .any(|fact| Arc::ptr_eq(fact, &header.original)));
     let originals = ["Allocate", "Free", "QueryBytes", "ByteLength", "QueryNul"].map(|name| {
         let effect = producer
             .registry()
@@ -340,11 +336,9 @@ fn assert_connected_byte_core(graph: &ModuleGraph) {
             callee.description(),
             "the admitted native owner, initialized interval and view contracts hold"
         );
-        assert!(
-            selected
-                .assumption_members()
-                .contains(&callee.member_index())
-        );
+        assert!(selected
+            .assumption_members()
+            .contains(&callee.member_index()));
     }
     let accesses = producer
         .registry()
@@ -397,6 +391,25 @@ fn assert_connected_byte_core(graph: &ModuleGraph) {
         .collect::<Vec<_>>();
     let core = crate::core::validate_effect_modules(program, &sources, &modules)
         .expect("independent default byte/window Core");
+    // Insert after canonical `let core = validate_effect_modules(...).expect(...)`
+    // in assert_connected_byte_core. Parent core/source_resource declaration:
+    // #[cfg(test)] pub(crate) mod checked_byte_window_core_tests;
+    use crate::core::source_resource::checked_byte_window_core_tests::{self as hostile, Mutation};
+    for mutation in [
+        Mutation::RequestHostActual,
+        Mutation::RequestHostRow,
+        Mutation::NativeOrder,
+    ] {
+        let mut changed = crate::core::transform::identity_effect_traversal(&core).unwrap();
+        hostile::mutate(&mut changed, mutation);
+        let error = crate::core::validate_effect_modules(changed, &sources, &modules)
+            .expect_err("actual copied byte-window authority mutation must fail independent Core");
+        assert_ne!(
+            error.reason(),
+            crate::core::ValidationReason::Resource,
+            "no budget failure credit for {mutation:?}"
+        );
+    }
     let mut calls = Vec::new();
     let mut intrinsics = Vec::new();
     for node in core.nodes() {
@@ -515,4 +528,116 @@ fn checked_byte_window_selective_facade_does_not_publish_dependency_names() {
             "{error:?}"
         );
     }
+}
+
+// Append inside elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests.
+// STAGED, UNBUILT, UNEXECUTED. Canonical gate includes real source/summary checks.
+fn byte_window_replace_once(source: &str, from: &str, to: &str) -> String {
+    assert_eq!(
+        source.matches(from).count(),
+        1,
+        "exact source mutation anchor"
+    );
+    source.replacen(from, to, 1)
+}
+
+fn byte_window_source_refuses(source: &str) {
+    check_graph(&fixture()).expect("genuine unchanged byte/window source first");
+    let error = check_graph(&graph_with_entry(source, None))
+        .expect_err("hostile connected byte/window source must refuse");
+    assert!(
+        matches!(error, TypeError::Source(_)),
+        "semantic source refusal required, not setup/contract/internal/resource: {error:?}"
+    );
+}
+
+#[test]
+fn checked_byte_window_legacy_primitives_do_not_authorize_checked_state_or_views() {
+    for (checked, legacy) in [
+        ("Foreign.checked_byte_read", "Foreign.byte_read"),
+        ("Foreign.checked_byte_write", "Foreign.byte_write"),
+        ("Foreign.checked_copy_bytes", "Foreign.copy_bytes"),
+        ("Foreign.checked_copy_nul", "Foreign.copy_nul"),
+    ] {
+        byte_window_source_refuses(&byte_window_replace_once(SOURCE, checked, legacy));
+    }
+}
+
+#[test]
+fn checked_byte_window_extent_query_requires_the_original_view_key() {
+    let source = byte_window_replace_once(
+        SOURCE,
+        "perform QueryBytes<W, H, R>.call (state, key)",
+        "perform QueryBytes<W, H, R>.call (state, 0)",
+    );
+    let source = byte_window_replace_once(
+        &source,
+        "perform ByteLength<W, H, R>.call (state, key, view)",
+        "perform ByteLength<W, H, R>.call (state, 0, view)",
+    );
+    check_graph(&graph_with_entry(&source, None))
+        .expect("same known producing/query key is valid first");
+    byte_window_source_refuses(&byte_window_replace_once(
+        &source,
+        "perform ByteLength<W, H, R>.call (state, 0, view)",
+        "perform ByteLength<W, H, R>.call (state, 1, view)",
+    ));
+}
+
+#[test]
+fn checked_byte_window_cannot_suspend_for_an_ordinary_trace_request() {
+    byte_window_source_refuses(&byte_window_replace_once(
+        SOURCE,
+        "let copied = copy_window ByteView<W, H, R> from state {",
+        "let copied = copy_window ByteView<W, H, R> from state {\n                let ignored = perform Trace.note ()",
+    ));
+}
+
+#[test]
+fn checked_byte_window_current_read_after_finish_attempt_has_no_permission() {
+    byte_window_source_refuses(&byte_window_replace_once(
+        SOURCE,
+        "let outcome = perform Free<H, R>.call state",
+        "let outcome = perform Free<H, R>.call state\n        let action : (State<H, R>, Int) -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>} = Foreign.checked_byte_read\n        let ignored = action (state, 0)",
+    ));
+}
+
+#[test]
+fn checked_byte_window_boundary_failure_does_not_restore_current_permission() {
+    // Only this actual finish BoundaryFailed branch changes. The original reason
+    // remains forwarded after the attempted Current read; no constructor forgery.
+    byte_window_source_refuses(&byte_window_replace_once(
+        SOURCE,
+        "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason",
+        "Foreign.BoundaryFailed(reason) => {\n                let action : (State<H, R>, Int) -> Foreign.CheckedCall<Int> ! {Foreign.NativeHost<H>} = Foreign.checked_byte_read\n                let ignored = action (state, 0)\n                Foreign.FinishedBoundary reason\n            }",
+    ));
+}
+
+// Append alongside source-tests.fragment.rs. STAGED/UNBUILT/UNEXECUTED.
+// One window, two actual same-family view queries with distinct key expressions.
+// The donor's own extent/view pair MUST check before swapping only its view.
+#[test]
+fn checked_byte_window_same_family_donor_extent_cannot_authorize_another_view() {
+    check_graph(&fixture()).expect("unchanged source first");
+    // The actual inner ByteLength request is replaced by a second genuine view
+    // query. Its completed result still lives inside the same copy_window.
+    let anchor = "Foreign.CheckedReturned(Foreign.Readable(Foreign.NonNull(view))) => match perform ByteLength<W, H, R>.call (state, key, view) {";
+    let donor = "Foreign.CheckedReturned(Foreign.Readable(Foreign.NonNull(view))) => match perform QueryBytes<W, H, R>.call (state, 1) {\n                    Foreign.CheckedReturned(Foreign.Readable(Foreign.NonNull(donor_view))) => match perform ByteLength<W, H, R>.call (state, 1, donor_view) {";
+    let source = byte_window_replace_once(SOURCE, anchor, donor);
+    let tail = "Foreign.BoundaryFailed(reason) => Copied (Foreign.BoundaryFailed reason)\n                    }\n                    Foreign.CheckedReturned(_) => NoView";
+    let donor_tail = "Foreign.BoundaryFailed(reason) => Copied (Foreign.BoundaryFailed reason)\n                    }\n                    Foreign.CheckedReturned(_) => NoView\n                    Foreign.CheckedConversionFailed(error) => Copied (Foreign.CheckedConversionFailed error)\n                    Foreign.BoundaryFailed(reason) => Copied (Foreign.BoundaryFailed reason)\n                    }\n                    Foreign.CheckedReturned(_) => NoView";
+    let source = byte_window_replace_once(&source, tail, donor_tail);
+    let valid = byte_window_replace_once(
+        &source,
+        "Copied (action (view, extent))",
+        "Copied (action (donor_view, extent))",
+    );
+    check_graph(&graph_with_entry(&valid, None))
+        .expect("real same-family donor view paired with its own completed extent checks");
+    let hostile = byte_window_replace_once(
+        &valid,
+        "Copied (action (donor_view, extent))",
+        "Copied (action (view, extent))",
+    );
+    byte_window_source_refuses(&hostile);
 }

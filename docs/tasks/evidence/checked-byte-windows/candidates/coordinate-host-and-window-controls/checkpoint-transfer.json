@@ -1,0 +1,14 @@
+{
+  "tested_map": "c359929d52bb22bdcfe18ceaa559439c298fe24122c81b4adee49035a80f33cf",
+  "differences": {
+    "docs/tasks/plans/checked-ffi-contract-carriers.md": {
+      "tested": "747620ba20d7ff3a64cd52de3d4f0f756cc25e6092d47bb331997d64ef3b643a",
+      "checkpoint": "ee76573ad24d9e3d74e713764df38391d5375f04836cdaeaa6dbf5da33aeaf19"
+    },
+    "src/core/source_resource/checked_byte_window_core_tests.rs": {
+      "tested": "1df5bfe13c772f6bc5d50ac11e3e7bed89f0e851fb85a7d608ca9cb2bfc73ccb",
+      "checkpoint": "48f29f300ea56e762b57d3a395afd2f3918f55962d7c78089b926f2685198ffa"
+    }
+  },
+  "rust_delta": "Only module documentation changes staged/unbuilt wording to canonical-first description; executable statements/assertions unchanged."
+}

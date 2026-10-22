@@ -13,6 +13,61 @@ use crate::{
     types::{ConstructorId, Kind, Type, TypeVariableId, TypeWorkBudget, discard_type_iteratively},
 };
 
+/// Operation-local Host projection derived from complete scalar-table admission.
+/// It supplies no owner/native/executable authority and cannot be converted back
+/// into the single-use owner proof. The enclosing owner method returns it only
+/// after its independent native and owner checks succeed.
+pub(crate) struct ScalarOwnerHostAuthentication<'registry> {
+    registry: &'registry ResolvedRegistry,
+}
+
+pub(crate) fn consume_owner_scalar_authentication<'registry>(
+    registry: &ResolvedRegistry,
+    authentication: crate::resolved::ScalarPreflightOwnerAuthentication<'registry>,
+    work: &mut TypeWorkBudget,
+) -> Result<ScalarOwnerHostAuthentication<'registry>, crate::resolved::ResolvedBuildFailure> {
+    work.charge(2)
+        .map_err(|()| crate::resolved::ResolvedBuildFailure::TypeResource)?;
+    let proven = authentication.into_registry();
+    if !std::ptr::eq(registry, proven) {
+        return Err(crate::resolved::ResolvedBuildFailure::InvalidState);
+    }
+    Ok(ScalarOwnerHostAuthentication { registry: proven })
+}
+
+impl ScalarOwnerHostAuthentication<'_> {
+    pub(crate) fn is_canonical_native_host(
+        &self,
+        effect: &crate::resolved::ResolvedEffectDeclaration,
+        registry: &ResolvedRegistry,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ForeignAdmissionError> {
+        charge(work, 6, effect.span)?;
+        if !std::ptr::eq(registry, self.registry) {
+            return Err(failure(ForeignAdmissionReason::InvalidCodec, effect.span));
+        }
+        let module = effect.id.module();
+        if let Some(anchor) = registry.scalar_preflight(BinderId::resolved(module, 11))
+            && anchor.function() == BinderId::resolved(module, 11)
+            && anchor.module() == module
+            && anchor.role() == ForeignScalarPreflightRole::CheckedByteRead
+            && anchor.source() == effect.span
+            && anchor.call_codec().ids().call == crate::types::NominalTypeId::new(module, 12)
+        {
+            // Complete strict-table admission proved this exact checked codec
+            // against the same immutable registry. Every Host row is fresh.
+            return super::checked_builtins::host_matches(
+                effect,
+                registry,
+                module,
+                anchor.source(),
+                work,
+            );
+        }
+        super::checked_builtins::is_canonical_native_host(effect, registry, work)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ForeignScalarPreflightRole {
     I64,

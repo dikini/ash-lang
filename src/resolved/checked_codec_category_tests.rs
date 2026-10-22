@@ -426,6 +426,62 @@ fn checked_memory_family_proofs_are_distinct_across_genuine_builtin_graphs() {
         .1
         .module();
     assert_ne!(first, second);
+
+    // A checked proof for the first graph cannot cover an unlisted checked
+    // family in the second graph, even though its legacy table is valid.
+    let mut uncovered = view.clone();
+    uncovered
+        .scalar_preflights
+        .retain(|_, fact| fact.module() != second || fact.role().host_parameter(second).is_none());
+    let scalar = uncovered
+        .authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default())
+        .unwrap();
+    let proof = uncovered
+        .authenticate_owner_definitions_with_preflights(scalar, &mut TypeWorkBudget::default())
+        .unwrap();
+    let second_host = uncovered
+        .effect(crate::types::EffectId::new(second, 0))
+        .unwrap();
+    let mut full = TypeWorkBudget::default();
+    assert!(
+        crate::foreign::checked_builtins::is_canonical_native_host(
+            second_host,
+            &uncovered,
+            &mut full
+        )
+        .unwrap()
+    );
+    let mut fallback = TypeWorkBudget::default();
+    assert!(
+        proof
+            .is_canonical_native_host(second_host, &uncovered, &mut fallback)
+            .unwrap()
+    );
+    assert!(fallback.used() >= full.used());
+    drop(proof);
+    let mut malformed = uncovered.clone();
+    let boundary =
+        crate::types::ConstructorId::new(crate::types::NominalTypeId::new(second, 12), 2);
+    malformed
+        .constructors
+        .iter_mut()
+        .find(|row| row.id == boundary)
+        .unwrap()
+        .payload = Some(Type::Unit);
+    let scalar = malformed
+        .authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default())
+        .expect("independent first checked family and second legacy family remain valid");
+    let proof = malformed
+        .authenticate_owner_definitions_with_preflights(scalar, &mut TypeWorkBudget::default())
+        .unwrap();
+    let second_host = malformed
+        .effect(crate::types::EffectId::new(second, 0))
+        .unwrap();
+    assert!(
+        !proof
+            .is_canonical_native_host(second_host, &malformed, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
     let mut changed = view.clone();
     changed
         .constructors
@@ -763,4 +819,241 @@ fn checked_memory_selective_summary_rejects_erased_codec_dependencies() {
         &original,
         summary.terms["selected"].scalar_preflight.as_ref().unwrap()
     ));
+}
+
+#[test]
+fn scalar_owner_authentication_is_single_registry_bound_and_freshly_paid() {
+    let view = original_view();
+    let equal = view.clone();
+    let independent = original_view();
+    for registry in [&view, &equal, &independent] {
+        registry
+            .authenticate_owner_definitions(&mut TypeWorkBudget::default())
+            .unwrap();
+    }
+    let mut measured = TypeWorkBudget::default();
+    let authentication = view
+        .authenticate_scalar_preflights_for_owners(&mut measured)
+        .unwrap();
+    let used = measured.used();
+    view.authenticate_owner_definitions_with_preflights(
+        authentication,
+        &mut TypeWorkBudget::default(),
+    )
+    .unwrap();
+    let combined = |work: &mut TypeWorkBudget| {
+        let authentication = view.authenticate_scalar_preflights_for_owners(work)?;
+        view.authenticate_owner_definitions_with_preflights(authentication, work)
+            .map(drop)
+    };
+    let mut complete = TypeWorkBudget::default();
+    combined(&mut complete).unwrap();
+    let complete_cost = complete.used();
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + complete_cost);
+        exact.charge(prefix).unwrap();
+        combined(&mut exact).unwrap();
+        assert_eq!(exact.used(), prefix + complete_cost);
+        assert_eq!(
+            combined(&mut exact),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        let mut short = TypeWorkBudget::with_limit(prefix + complete_cost - 1);
+        short.charge(prefix).unwrap();
+        assert_eq!(
+            combined(&mut short),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+    }
+    for _ in 0..2 {
+        let mut fresh = TypeWorkBudget::default();
+        combined(&mut fresh).unwrap();
+        assert_eq!(fresh.used(), complete_cost);
+    }
+
+    for other in [&equal, &independent] {
+        let authentication = view
+            .authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default())
+            .unwrap();
+        assert_eq!(
+            other
+                .authenticate_owner_definitions_with_preflights(
+                    authentication,
+                    &mut TypeWorkBudget::default()
+                )
+                .map(drop),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+    }
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + used);
+        exact.charge(prefix).unwrap();
+        let authentication = view
+            .authenticate_scalar_preflights_for_owners(&mut exact)
+            .unwrap();
+        assert_eq!(exact.used(), prefix + used);
+        view.authenticate_owner_definitions_with_preflights(
+            authentication,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+    }
+    for limit in [used - 1, 0] {
+        assert!(matches!(
+            view.authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::with_limit(limit)),
+            Err(ResolvedBuildFailure::TypeResource)
+        ));
+    }
+    let authentication = view
+        .authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default())
+        .unwrap();
+    assert_eq!(
+        view.authenticate_owner_definitions_with_preflights(
+            authentication,
+            &mut TypeWorkBudget::with_limit(0)
+        )
+        .map(drop),
+        Err(ResolvedBuildFailure::TypeResource)
+    );
+    for _ in 0..2 {
+        let mut fresh = TypeWorkBudget::default();
+        let authentication = view
+            .authenticate_scalar_preflights_for_owners(&mut fresh)
+            .unwrap();
+        assert_eq!(fresh.used(), used);
+        view.authenticate_owner_definitions_with_preflights(
+            authentication,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn scalar_owner_host_chain_requires_exact_checked_family_and_fresh_host_projection() {
+    let view = original_view();
+    let module = view.scalar_preflights.values().next().unwrap().module();
+    let host = view.effect(crate::types::EffectId::new(module, 0)).unwrap();
+    let chain = |registry: &ResolvedRegistry, work: &mut TypeWorkBudget| {
+        let scalar = registry.authenticate_scalar_preflights_for_owners(work)?;
+        let host_proof = registry.authenticate_owner_definitions_with_preflights(scalar, work)?;
+        assert!(
+            host_proof
+                .is_canonical_native_host(host, registry, work)
+                .unwrap()
+        );
+        Ok::<(), ResolvedBuildFailure>(())
+    };
+    let mut full = TypeWorkBudget::default();
+    assert!(
+        crate::foreign::checked_builtins::is_canonical_native_host(host, &view, &mut full).unwrap()
+    );
+    let scalar = view
+        .authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default())
+        .unwrap();
+    let proof = view
+        .authenticate_owner_definitions_with_preflights(scalar, &mut TypeWorkBudget::default())
+        .unwrap();
+    let mut projected = TypeWorkBudget::default();
+    assert!(
+        proof
+            .is_canonical_native_host(host, &view, &mut projected)
+            .unwrap()
+    );
+    assert!(projected.used() < full.used());
+    let equal = view.clone();
+    assert!(
+        proof
+            .is_canonical_native_host(host, &equal, &mut TypeWorkBudget::default())
+            .is_err()
+    );
+    let mut wrong = host.clone();
+    wrong.parameters[0].id = TypeVariableId::resolved(module, 23);
+    assert!(
+        !proof
+            .is_canonical_native_host(&wrong, &view, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
+    assert!(
+        proof
+            .is_canonical_native_host(host, &view, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
+    let mut wrong_span = host.clone();
+    wrong_span.span = host.origin.primary_span();
+    assert!(
+        !proof
+            .is_canonical_native_host(&wrong_span, &view, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
+    let mut wrong_origin = host.clone();
+    wrong_origin.parameters[0].origin = host.origin.clone();
+    assert!(
+        !proof
+            .is_canonical_native_host(&wrong_origin, &view, &mut TypeWorkBudget::default())
+            .unwrap()
+    );
+    let mut wrong_mirror = view.clone();
+    wrong_mirror
+        .type_variables
+        .get_mut(&TypeVariableId::resolved(module, 22))
+        .unwrap()
+        .kind = Kind::EffectRow;
+    assert!(matches!(
+        wrong_mirror.authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default()),
+        Err(ResolvedBuildFailure::InvalidState)
+    ));
+    let mut measured = TypeWorkBudget::default();
+    chain(&view, &mut measured).unwrap();
+    let cost = measured.used();
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+        exact.charge(prefix).unwrap();
+        chain(&view, &mut exact).unwrap();
+        assert_eq!(exact.used(), prefix + cost);
+        assert!(chain(&view, &mut exact).is_err());
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        // The final Host projection also uses the same cumulative meter.
+        let scalar = view
+            .authenticate_scalar_preflights_for_owners(&mut short)
+            .unwrap();
+        let proof = view
+            .authenticate_owner_definitions_with_preflights(scalar, &mut short)
+            .unwrap();
+        assert!(
+            proof
+                .is_canonical_native_host(host, &view, &mut short)
+                .unwrap_err()
+                .is_resource_exhaustion()
+        );
+    }
+    for _ in 0..2 {
+        let mut fresh = TypeWorkBudget::default();
+        chain(&view, &mut fresh).unwrap();
+        assert_eq!(fresh.used(), cost);
+    }
+    for empty in [false, true] {
+        let mut uncovered = view.clone();
+        uncovered
+            .scalar_preflights
+            .retain(|_, fact| !empty && fact.role().host_parameter(fact.module()).is_none());
+        let scalar = uncovered
+            .authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default())
+            .unwrap();
+        let proof = uncovered
+            .authenticate_owner_definitions_with_preflights(scalar, &mut TypeWorkBudget::default())
+            .unwrap();
+        let declaration = uncovered.effect(host.id).unwrap();
+        let mut fallback = TypeWorkBudget::default();
+        assert!(
+            proof
+                .is_canonical_native_host(declaration, &uncovered, &mut fallback)
+                .unwrap()
+        );
+        assert!(
+            fallback.used() >= full.used(),
+            "uncovered tables must pay the full inventory proof"
+        );
+    }
 }

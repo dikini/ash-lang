@@ -10,6 +10,7 @@ use crate::source::ByteRange;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ForeignNominalCoordinates {
     pub(crate) declaration: ByteRange,
+    pub(crate) name: ByteRange,
     formals: [ByteRange; 3],
     formal_count: usize,
     constructors: [ByteRange; 6],
@@ -40,6 +41,7 @@ const fn range(start: usize, end: usize) -> ByteRange {
 const EMPTY_RANGE: ByteRange = range(0, 0);
 const EMPTY_NOMINAL: ForeignNominalCoordinates = ForeignNominalCoordinates {
     declaration: EMPTY_RANGE,
+    name: EMPTY_RANGE,
     formals: [EMPTY_RANGE; 3],
     formal_count: 0,
     constructors: [EMPTY_RANGE; 6],
@@ -148,6 +150,7 @@ const fn nominal_table() -> [ForeignNominalCoordinates; 18] {
             "invalid Foreign nominal name"
         );
         let mut row = EMPTY_NOMINAL;
+        row.name = range(name, name + NAMES[local].len());
         if text[cursor] == b'<' {
             cursor += 1;
             loop {

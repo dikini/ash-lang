@@ -1,0 +1,58 @@
+{
+  "candidate-host-proof-chain-controls": {
+    "inputs": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30.inputs.json",
+    "raw": "candidate-host-proof-chain-controls.log.gz",
+    "uncompressed_sha256": "1f6fe8aea342b6c7f2d698a9ff09e34f53307830e123400f0ab07e4b5209c9af",
+    "raw_bytes": 764,
+    "scope": "actual original command"
+  },
+  "candidate-host-proof-chain-factory": {
+    "inputs": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30.inputs.json",
+    "raw": "candidate-host-proof-chain-factory.log.gz",
+    "uncompressed_sha256": "931c92540f8f241c487740fae378c5adffb887edd9ae8b139f8647578a890549",
+    "raw_bytes": 653,
+    "scope": "actual original command"
+  },
+  "candidate-host-proof-chain-two-graphs": {
+    "inputs": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30.inputs.json",
+    "raw": "candidate-host-proof-chain-two-graphs.log.gz",
+    "uncompressed_sha256": "019c1c8b792c284ba410840d9e2b0dcc97877a7df5b1aa1259841f5417ef1600",
+    "raw_bytes": 442,
+    "scope": "actual original command"
+  },
+  "candidate-host-proof-chain-startups": {
+    "inputs": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30.inputs.json",
+    "raw": "candidate-host-proof-chain-startups.log.gz",
+    "uncompressed_sha256": "efbe11da73f44be969e99ce495d7a0ea53361322acfc788a48466341200ab366",
+    "raw_bytes": 1771,
+    "scope": "actual original command"
+  },
+  "candidate-host-proof-chain-dependent-startup": {
+    "inputs": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30.inputs.json",
+    "raw": "candidate-host-proof-chain-dependent-startup.log.gz",
+    "uncompressed_sha256": "bbebed988c580971a10d1e20cec3a5bc1b10fb48047a046617e3ca4007cd1821",
+    "raw_bytes": 1057,
+    "scope": "actual original command"
+  },
+  "hostile-known-key-controls": {
+    "inputs": "c359929d52bb22bdcfe18ceaa559439c298fe24122c81b4adee49035a80f33cf.inputs.json",
+    "raw": "hostile-known-key-controls.log.gz",
+    "uncompressed_sha256": "f3a06f26774f291b1187422ff55ab85ad9e3cdd97ce60d8ce080fff2dd1221e6",
+    "raw_bytes": 2741,
+    "scope": "actual original command"
+  },
+  "candidate-host-chain-two-owner-diagnostic": {
+    "inputs": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30.inputs.json",
+    "raw": "candidate-host-chain-two-owner-diagnostic.log.gz",
+    "uncompressed_sha256": "098bfa296d67c266300cc36f2fbb17474bc418e7b9bda9fc8ed7b32c3b759d21",
+    "raw_bytes": 64512,
+    "scope": "diagnostic alternate cap only"
+  },
+  "candidate-host-chain-dependent-diagnostic": {
+    "inputs": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30.inputs.json",
+    "raw": "candidate-host-chain-dependent-diagnostic.log.gz",
+    "uncompressed_sha256": "b6f39424d46e0c4f00e4ffcf7a4b07f00131dfcdc0003e0fcbca6bf9bbc12d68",
+    "raw_bytes": 111772,
+    "scope": "diagnostic alternate cap only"
+  }
+}
