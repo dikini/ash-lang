@@ -1,0 +1,2595 @@
+{
+  "scope": "Static packaging/passive inspection only",
+  "initial_plan_originals": 33,
+  "initial_plan_bytes": 259446,
+  "actual_exact_originals": 47,
+  "actual_exact_original_bytes": 393998,
+  "originals": [
+    {
+      "retained_path": "stage3/tuple.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/tuple.json",
+        "size": 18429,
+        "sha256": "e7172095ba95ef46c62f59cf2d37472d137d276467b2f10117278e07ee41816f"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/relink.monitor.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink.monitor.json",
+        "size": 6987,
+        "sha256": "c4e0763be4cf0dae15ecd276b55311f2f1dc7ed4015556e0ddf702f73a18bcf8"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/inspection.monitor.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection.monitor.json",
+        "size": 2116,
+        "sha256": "84d6fed91fe8306959b76ad0bce1a88dd3d223b63fa62e6e1ccfced7d0953924"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/manifest.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/manifest.json",
+        "size": 2523,
+        "sha256": "ee19ff5609c8fa53bced9b84d5a490267be1436b0b5379da2935d25005fff0e7"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/preflight-inputs.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/preflight-inputs.json",
+        "size": 24563,
+        "sha256": "14cbf020adce26fba69d34a5f05e9abc7172f1b6f337e47e524e618b0436b9f6"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/verify_inputs.py",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+        "size": 4726,
+        "sha256": "0acefa6762571928b12d5e9a48f32b6d732755424da6ada203b10d8bbdfb929d"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/prepare_candidate.py",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py",
+        "size": 5779,
+        "sha256": "7d43928376bc5cf86b73a3bcbf6fc0f99288c4cf86d9b0d0dba5731b40904d2e"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/finalize_static.py",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py",
+        "size": 8011,
+        "sha256": "2c464d38c851150dbe7c99fd1edaa986533093212ccb9c5e68ee8db287cfa412"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/provenance.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/provenance.json",
+        "size": 10076,
+        "sha256": "bd4aa8455a6ad97f86f7352e61a64d366b0ae6d0931c1bf89ff48013e294a895"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/output-location.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/output-location.json",
+        "size": 1037,
+        "sha256": "9dbc5efdc25dd9da5871bf836e52745408fa05130b9f227bb4f1d6ee75021ad2"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/readonly-check-command.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/readonly-check-command.json",
+        "size": 601,
+        "sha256": "5579866a6e5a1bb106c46f825e87d4ca43403b7613ada422a40cf6a847a8db77"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/preparation-readback.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/preparation-readback.json",
+        "size": 432,
+        "sha256": "40e2288dea08a3f9296334bf3144cdfedc44ffcd491da6f428fa3ec3247d8828"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/preparation-readback.stderr",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/preparation-readback.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/execution-readback.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-readback.json",
+        "size": 9862,
+        "sha256": "c9c4ff4c9c02b84727a299bf73c3619e8a4367b7071974a203a0a53f8065bf70"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/actual-handoff.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/actual-handoff.json",
+        "size": 4707,
+        "sha256": "3d5b52631d5996dd6beaaca6eca5584a4a1d49f530fd234a7c2330c32cf1a2ff"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/execution-manifest.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+        "size": 6367,
+        "sha256": "c5ed0c3fd5255cbbbf854ab3964cafe76b81006c92fc087e9a296ed3a015ec83"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/snapshot-before.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-before.json",
+        "size": 425,
+        "sha256": "54397bc816635ac486b1ec76124172e393b29dc93309f812bbb21819fd081d95"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/snapshot-before.json.stderr",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-before.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/snapshot-after.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-after.json",
+        "size": 424,
+        "sha256": "434dc21fb9982fd8a6d740f1ef9d190e54728d1f4eac1a2dc82824b95f2a3a90"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/snapshot-after.json.stderr",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-after.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/relink-response.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink-response.json",
+        "size": 169,
+        "sha256": "91bad2b11f93b26908ba8e0e84d46835682bd419b587ae4b1ffb741764087a0e"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/relink-response.json.stderr",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink-response.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/candidate-record.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/candidate-record.json",
+        "size": 4128,
+        "sha256": "4f887db3d72c45b09a5f9d2bdd12c40e2bcce8ff99ec931f70ee441dc389886c"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/candidate-record.json.stderr",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/candidate-record.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/inspection-response.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection-response.json",
+        "size": 169,
+        "sha256": "aecf44c13a3fd29073ebcbaf9f2ebc72e338d8282ba7a69e4bdd4d91873d4c7c"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/inspection-response.json.stderr",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection-response.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/static-receipt.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+        "size": 1946,
+        "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/static-receipt.json.stderr",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/static-manifest.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-manifest.json",
+        "size": 48307,
+        "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/build-run-f8k7r2nj/output.log",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj/output.log",
+        "size": 2787,
+        "sha256": "a656e20a7fa4d0de4fc4e87d4b3563052263a51c2ce995b243926c8f684e6b6b"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/build-run-f8k7r2nj/receipt.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj/receipt.json",
+        "size": 5639,
+        "sha256": "64d9b1cb792d8130136a0c5bdcbb99c0fce2550ad38698b4723c12d2d5303e6f"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/build-run-ymqweo36/output.log",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-ymqweo36/output.log",
+        "size": 76540,
+        "sha256": "4ba60c94cfcbc31c98ae614443b76b22d4c563ed28dae1870ff5520da63ebefb"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "stage3/build-run-ymqweo36/receipt.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-ymqweo36/receipt.json",
+        "size": 12696,
+        "sha256": "507e23a81da27429c8fe9df7a432c9fc0f390d694dcaf5b465fc89f4a21b900d"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/build_monitor.py",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/build_monitor.py",
+        "size": 20746,
+        "sha256": "62adc0d5264b0d08835079174a19db49de954b0fa51e97ede216d036e549c914"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/test_monitor.py",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/test_monitor.py",
+        "size": 17598,
+        "sha256": "d786829c5aa6834334d7630a5d0b64a7276acb2bcc678638876a7f4159504cb0"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/schema2.json",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/schema2.json",
+        "size": 1749,
+        "sha256": "81ab2f3ba7290118ee6bfde748fa8e4fa0652440ce72a26bc79de9411c303933"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/source-delta.patch",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/source-delta.patch",
+        "size": 1512,
+        "sha256": "2c8ec49cd9e8b965a0353088de378d2a985e31db03c295aa260ceb51c63ef99c"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/manifest.json",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/manifest.json",
+        "size": 52255,
+        "sha256": "4f8b90323e66b30ff72e7b347deeb5b4d4f45db668c7d426f7aac341962b3f4e"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/handoff.json",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/handoff.json",
+        "size": 902,
+        "sha256": "51cfad1bbdc4e50056f852454589057e12a8b47f42a2425f43545b6cd1232acf"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/run_benign_verification.py",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/run_benign_verification.py",
+        "size": 6663,
+        "sha256": "9b2edcf000ae5b64271250c84fb99a23cb6ab2bc46297aaa3f9aa7964f84bf0c"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/verification-run/verification-receipt.json",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/verification-receipt.json",
+        "size": 237,
+        "sha256": "0832e3c18f40f9d0cc656465d4dcf0507a2817d63916bbde0be5197828a8de7d"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/verification-run/before.json",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/before.json",
+        "size": 1866,
+        "sha256": "194e34f602361cd8a7766583f06bfe220626ff2230790dde0ffe17e58c6ddc39"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/verification-run/after.json",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/after.json",
+        "size": 1866,
+        "sha256": "194e34f602361cd8a7766583f06bfe220626ff2230790dde0ffe17e58c6ddc39"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/verification-run/suite-command.json",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/suite-command.json",
+        "size": 418,
+        "sha256": "95a677b25447180782c7a96105b7d87779533ad03d1fccfa31f74cdd2884bba5"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/verification-run/suite-receipt.json",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/suite-receipt.json",
+        "size": 26185,
+        "sha256": "cd2a6a756151039815fb07a08fe76ebc930c2d38ba8c92dbde15dfbe9c67abdf"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/verification-run/suite-stdout.log",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/suite-stdout.log",
+        "size": 87,
+        "sha256": "4e762a739d107e6efa8561990236c10c3c41360545c8c11a8ada1da693832665"
+      },
+      "retention": "exact-original-bytes"
+    },
+    {
+      "retained_path": "monitor128/verification-run/suite-stderr.log",
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/suite-stderr.log",
+        "size": 2468,
+        "sha256": "b1dd5d6e4fcdc2b47dd42ba48963aa39ff5a37ab9029e2d1297f5b8e4e50f4aa"
+      },
+      "retention": "exact-original-bytes"
+    }
+  ],
+  "external_omissions": [
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/README.md",
+        "size": 2886,
+        "sha256": "cf1360388d73f7bad867039a34f115bdb3115dd3d54c844b33e13ed482004324"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj/watched-0.log",
+        "size": 100345205,
+        "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-ymqweo36/watched-0.log",
+        "size": 100345205,
+        "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/default-linker-inputs.json",
+        "size": 4096,
+        "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+        "size": 20440,
+        "sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/handoff.json",
+        "size": 3572,
+        "sha256": "ded05c7d5e2aa9afbb8e2d01359c713860a1a6fe7d2a4c0f5e6fd862824d3287"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/map-detail-evidence.json",
+        "size": 2815,
+        "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+        "size": 71022184,
+        "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/whole-static.map",
+        "size": 100345205,
+        "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b"
+      },
+      "inventory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/execution-manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/README.md",
+        "size": 4456,
+        "sha256": "180dca3ff0dc936de43ebc28767baf62be7d734b83561fc3b1695731496f4116"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-0/config.json",
+        "size": 557,
+        "sha256": "08fd0c9dfba4573f5ead48f4abbdcc3ee5f2beb520e914225c26aa777c56eed8"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-0/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-0/monitor-stdout.log",
+        "size": 111,
+        "sha256": "10982a935be9d43890b2f019778faa9e2c13dae7e88a73ab7c7f5508c8cc7490"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-0/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-0/receipt.json",
+        "size": 1875,
+        "sha256": "5f4cfa4494fb78710f6388c426c03ae71c3b7ff4a9857283c9881a0978c00c21"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-0/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-1/config.json",
+        "size": 555,
+        "sha256": "16c444ab11acfabe2a9a617cefa2e6201a12ca182ea00dca743d8a84195827f0"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-1/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-1/monitor-stdout.log",
+        "size": 111,
+        "sha256": "30148f9051a80a2bff8f7c00ae667977deaf7f7d1c0cbd503be7b2d9fdf8978b"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-1/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-1/receipt.json",
+        "size": 1876,
+        "sha256": "fc4672a5c6d35b87d1f2ec73b790ec15b062b03df1c28b95715cc3548a42a698"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-1/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-10/config.json",
+        "size": 577,
+        "sha256": "7862da0da0014d3465cc334970be4ba09e6a99d49b2cddf1b093d0364e72e080"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-10/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-10/monitor-stdout.log",
+        "size": 111,
+        "sha256": "216e38e7e2f7ca6141521e7bda64f52fbe131256492aa5183447dec07e639abd"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-10/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-10/receipt.json",
+        "size": 1875,
+        "sha256": "957211f4e39be6b039a895014cd37293469adf18c0fd1d8b7fcbbdc908875258"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-10/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-11/config.json",
+        "size": 578,
+        "sha256": "9b6b60597bbc47b6463086c9db40e2b87861049c9a307f54da16d0e344420612"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-11/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-11/monitor-stdout.log",
+        "size": 111,
+        "sha256": "a0fb2e601d9ad410c117939ee9991bd5051b052f790fccd9d9e3869b66d87790"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-11/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-11/receipt.json",
+        "size": 1876,
+        "sha256": "ab48e44422c190fc02b1bf82cd332b204969b717f6e2f3527a75422de7f7215e"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-11/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-12/config.json",
+        "size": 577,
+        "sha256": "c43c7b0990767359a448974db0a03722ff3e1f6f1b2f5a56d80bec10b6d58f33"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-12/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-12/monitor-stdout.log",
+        "size": 111,
+        "sha256": "4f7503cd61b5d54a5be8763f96ee39af41627f86ac9a4af00e2fbafcdbad0b4d"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-12/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-12/receipt.json",
+        "size": 1875,
+        "sha256": "95b11d7b15d2ad8f24887f63126e39625eaf103d7fafe881587e689ff83570b0"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-12/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-13/config.json",
+        "size": 571,
+        "sha256": "9a2731e17ebdf9bc5c73388b89152898d1ec014ee98ce555c9c5e75c781d887b"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-13/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-13/monitor-stdout.log",
+        "size": 111,
+        "sha256": "20855e94c09a18db90c4e3ee99ccf130ceb58708f3257c802d4f4322a8e9c4be"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-13/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-13/receipt.json",
+        "size": 1873,
+        "sha256": "aa4b9d558de3678b6b75aa7b604e7751b3ca49342f8e629390db5792f8d573dc"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-13/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-14/config.json",
+        "size": 582,
+        "sha256": "66aae153db30dd25ab3773e78fca33b6cd42222a7d92499fd17fcabc3ff5be80"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-14/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-14/monitor-stdout.log",
+        "size": 111,
+        "sha256": "ec77b8ff0995cd3bc900ea3de7f2dc0a5784f69d3e79238a63e637aa5378ac7e"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-14/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-14/receipt.json",
+        "size": 1876,
+        "sha256": "235f51b373d05f1cd02cbb256b13a59404aaa2fffdccd57e4a057697219ae87d"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-14/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-15/config.json",
+        "size": 581,
+        "sha256": "bbb4d88ebdd9ac458954b8dcc9010c3f84b00ddb3979b82c37ede7a9498dacab"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-15/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-15/monitor-stdout.log",
+        "size": 111,
+        "sha256": "e19ac6834292b8a2c917b2f0106e426d43891277a3822c8355dabc46e5fd782f"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-15/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-15/receipt.json",
+        "size": 1895,
+        "sha256": "ff7bdcc261e014b4f81fc962d39feb29e921c56b2b50347006f0f921253b8462"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-15/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-16/config.json",
+        "size": 596,
+        "sha256": "e0462f0a4e1605ee3e0f8fd661756cfa09a24eca3d6b06f4745be3613f891f22"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-16/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-16/monitor-stdout.log",
+        "size": 111,
+        "sha256": "09f39b53c58c33bc8a7564f2b73fa8b43f6ff0c004f47a84514a9dc4a54c718c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-16/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-16/receipt.json",
+        "size": 1877,
+        "sha256": "962347817a4135d487fc640cf0788e1cd49d73dfd63569ca4923cf8bdffbc04b"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-16/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-2/config.json",
+        "size": 557,
+        "sha256": "5659a9f6712f559cd2745d33706b8364aba49c47ec93cd4fbf4b51ac53790498"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-2/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-2/monitor-stdout.log",
+        "size": 111,
+        "sha256": "af2cf0d7801b70ec6c5e0ef527db4b6d94defecf18e2f4eb319e0f087cff7f86"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-2/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-2/receipt.json",
+        "size": 1875,
+        "sha256": "289cae184062d66a8b91378264a6b2b7c35a75ad2c71678d9faae24e3ecf5cb7"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-2/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-3/config.json",
+        "size": 555,
+        "sha256": "7a24572d7be0119ddfac19fa89aabc90f20ca636009cb3db16723977255363d4"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-3/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-3/monitor-stdout.log",
+        "size": 111,
+        "sha256": "8864d423f108a8c8621939ba867dbd288ea214cd0ffbb1ad72458a830cc3e209"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-3/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-3/receipt.json",
+        "size": 1876,
+        "sha256": "4fe2c69ef0fcf807b28880c4827ec05f50fa52461bf01a980efb54911722c52a"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-3/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-4/config.json",
+        "size": 555,
+        "sha256": "d6bfe3bc50e4f9508c99fcacded23d5bd177f28b34bd31ff05b6e11d14e6f510"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-4/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-4/monitor-stdout.log",
+        "size": 111,
+        "sha256": "b942bfb20cbf87fc9d9103836f33b06ac6f9d7033afee387ca009e2ba74ad3e5"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-4/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-4/receipt.json",
+        "size": 1876,
+        "sha256": "dde43ef2e64b40c7ba1fb4ad231697adec26bc83ec840ea8c5c5cb786688cd61"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-4/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-5/config.json",
+        "size": 555,
+        "sha256": "18e1d1e383c9207c412535b039c1cac821016a65ebfb781368cd2153b33c6fad"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-5/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-5/monitor-stdout.log",
+        "size": 111,
+        "sha256": "0dbfa633f6c3c9f99ed60f97edf1458e72eb8a7dfd5c6f1c031c4b61c2848637"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-5/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-5/receipt.json",
+        "size": 1876,
+        "sha256": "126b326862d6480ebd568bacea2dcc129e90aa9c63019ce58e8b15927faab46e"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-5/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-6/config.json",
+        "size": 576,
+        "sha256": "a818302726eb8e8c0d2c9f816cecdaf62b6bb1ec1cb86a4bcd6f608c850939a8"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-6/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-6/monitor-stdout.log",
+        "size": 111,
+        "sha256": "2f0f225fd1e5fe97696f1889864454876b70ffa22bfb66c933317c26f595acdf"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-6/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-6/receipt.json",
+        "size": 1875,
+        "sha256": "2d964fac0eaef67a41ce36eb5f9fbd577d4b9d9e6015093913e17f36b9a3b079"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-6/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-7/config.json",
+        "size": 574,
+        "sha256": "429b356517d4a1d78abfbe83b501948588219c8d22b3730a3670d83a38d44c81"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-7/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-7/monitor-stdout.log",
+        "size": 111,
+        "sha256": "23aeddb26ae89281e2e8cb73c83043cf805afa5e127fba780d169a480626d5b1"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-7/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-7/receipt.json",
+        "size": 1875,
+        "sha256": "ee94f63d086e196989c0ccde3e3c70fbde9d419fa62718a355c06a5383a39293"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-7/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-8/config.json",
+        "size": 579,
+        "sha256": "e7b28af1e368f7e61f0527aad19721e1a36f34ee69b03cb59208a49c2f3c5279"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-8/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-8/monitor-stdout.log",
+        "size": 111,
+        "sha256": "39fc0907233992efa6acfbfd4b976101c2af036128df49ce09c0ff621860d171"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-8/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-8/receipt.json",
+        "size": 1875,
+        "sha256": "67a8c433f095046f444bf6ff6b19d61873d3fd2d2e506f155e8ffe41b4ef924d"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-8/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-9/config.json",
+        "size": 573,
+        "sha256": "191f82f0660670f8bf6898827baa9412536af236af3ea931d222f4bddcd7ed53"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-9/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-9/monitor-stdout.log",
+        "size": 111,
+        "sha256": "922b265df686ae136afaa1e0a43de22eeff3350b8a3b1195bf8b8ab9278aff04"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-9/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-9/receipt.json",
+        "size": 1875,
+        "sha256": "5da28a3051af0c21ad8d96c84005240a3eee1f2685681647de536890c65408c2"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-9/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/config.json",
+        "size": 580,
+        "sha256": "d34fb2b76d08c1d476b65423f4561ae61da34a593f77f8f692169ee51c25c017"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/monitor-stdout.log",
+        "size": 116,
+        "sha256": "f555323383ded18872757c9b874d13a0f9138f7cdcb211e27da2240d316664b5"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/receipt.json",
+        "size": 3186,
+        "sha256": "1bbf90b7240c3f941381040cb1eb6293bc50013a9afa576d1dde407f62852a25"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/watched-0.log",
+        "size": 1024,
+        "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/config.json",
+        "size": 643,
+        "sha256": "5e471a668ac049c980877b62488abcc691c7dfd9401cc4a31ae140cc412cdbc3"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/monitor-stdout.log",
+        "size": 102,
+        "sha256": "6015e84ec1b09c1c881de7d5ea99b450a92ed805e19ecd863b83bfd92090e100"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/receipt.json",
+        "size": 3159,
+        "sha256": "7b5a825b2bdd145e88d94475d985beb83f149a5c29b4dc9a401a95ebeb3bb262"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/test-outcome.json",
+        "size": 51,
+        "sha256": "1bbb4c989ae7e47563844c33d7cad63ae7cfdb86d72ff41c115dd3fbe6f2ed2b"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/watched-0.log",
+        "size": 2048,
+        "sha256": "eb713cc9f22b9109e0cac0bed025d0a6ba2d2d342a436fbac8c9a5937967c73d"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/config.json",
+        "size": 672,
+        "sha256": "68265f25c535f881d6ef1ba34c723ce3cf757eabde04db1903805e817e14b32c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/monitor-stdout.log",
+        "size": 116,
+        "sha256": "13d802be2b73bf37f59dbc221f95701045d62e3aa087151878bda8c3d10231fc"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/receipt.json",
+        "size": 3230,
+        "sha256": "4b9d833d0c4c8f2880189d70eb8a3cf7718047ef61dd80cc3d7977ade8137603"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/watched-0.log",
+        "size": 4096,
+        "sha256": "13baaad085152f5bd8c0691f5b959fb47959ec5ef2d4d7ea89519ba28d4a02dd"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/config.json",
+        "size": 687,
+        "sha256": "1a5b0b76c972a3fce86ae310df807ef077992286f0940f42afa5f594d34ccf20"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/monitor-stdout.log",
+        "size": 116,
+        "sha256": "7f4584d2ea899b8bf614acd9205720463ff6fd9f94f30f02f4bf896a69e13bf7"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/receipt.json",
+        "size": 3238,
+        "sha256": "0081a53f69734e6ac1b322f57fafefd1c107e085d6d691529e7c1b47e457bc50"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/watched-0.log",
+        "size": 1024,
+        "sha256": "dc6c1454f164473addd2ca83afbf0450d8c3597a481e27f85a20490203dae4ed"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_output_after_last_sample_is_refused-21/config.json",
+        "size": 598,
+        "sha256": "e98d172417c7ea6f18c4a0191704c2a1885e01ca12b55cf001b835b432d48f9d"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_output_after_last_sample_is_refused-21/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_output_after_last_sample_is_refused-21/monitor-stdout.log",
+        "size": 110,
+        "sha256": "2ea958a5758419cdf2c007cac1969f61f75081e975006ee39abff824e3fe167c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_output_after_last_sample_is_refused-21/output.log",
+        "size": 1024,
+        "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_output_after_last_sample_is_refused-21/receipt.json",
+        "size": 2643,
+        "sha256": "c29780fc560555d008f0fa1f3feb9971a3232be60f7217791c1b77880aa0f83f"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_output_after_last_sample_is_refused-21/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/config.json",
+        "size": 624,
+        "sha256": "ffbdff69273b4304fbdf013ef76491d1de3d8122ed5a5ac61eebf682bb8d54bf"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/monitor-stdout.log",
+        "size": 116,
+        "sha256": "f1f58e84d800b7d808bb3040f52b754c4015a63b30e153ca1b9574852f27f5f1"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/receipt.json",
+        "size": 3230,
+        "sha256": "801f180301a7d529263e8adf6e36989e257d03a1030f28cea5c635c8f94d076e"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/watched-0.log",
+        "size": 1024,
+        "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/config.json",
+        "size": 644,
+        "sha256": "de57bd5c5760f899b2e3ecc18246aff9286b629f64862806d7b1d13fbc4992a4"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/monitor-stdout.log",
+        "size": 116,
+        "sha256": "dc06a3fd0a1655ea4f980be99441b30f2d67e2838bd030e1854a95da1a94fab3"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/receipt.json",
+        "size": 3197,
+        "sha256": "9bda2aa807df4dcac5c0c590e37b561d67eb29842fb9b5b18b287c0ed853f536"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/watched-0.log",
+        "size": 1024,
+        "sha256": "dc6c1454f164473addd2ca83afbf0450d8c3597a481e27f85a20490203dae4ed"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-24/config.json",
+        "size": 524,
+        "sha256": "26e52d3a4ca6962de765dc9acafb900b6bd1cb8cab282ef07858cdb7361ed8a1"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-24/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-24/monitor-stdout.log",
+        "size": 102,
+        "sha256": "306c12b3eed7e4da3b60912400daf355339c23158f9d06f0aa464e65b0dc9e94"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-24/output.log",
+        "size": 14,
+        "sha256": "0f0f5fca882f90859766c4f3410417c773798d99b5123c1d088e5b8cbf78ee4a"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-24/receipt.json",
+        "size": 2531,
+        "sha256": "feea6360b565d20d96a24a59d03211a8a90f289a1bc3575c81708dc2187a6a6a"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-24/test-outcome.json",
+        "size": 51,
+        "sha256": "1bbb4c989ae7e47563844c33d7cad63ae7cfdb86d72ff41c115dd3fbe6f2ed2b"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-25/config.json",
+        "size": 524,
+        "sha256": "24c5958eae1695ec71dcbdbe526441ef915d92fa40b07df83c6c24ef4406e64a"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-25/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-25/monitor-stdout.log",
+        "size": 102,
+        "sha256": "16644f51a0501b4034445d46532926afe496a32283f254b18b9dbd5c873c874e"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-25/output.log",
+        "size": 14,
+        "sha256": "0f0f5fca882f90859766c4f3410417c773798d99b5123c1d088e5b8cbf78ee4a"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-25/receipt.json",
+        "size": 2532,
+        "sha256": "a39cc798a1fe93fb12171ec073f88c6b2fae23f7b8c0d5c3f2b5fb8861576f45"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-25/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/config.json",
+        "size": 644,
+        "sha256": "daf0abbc58aaf91dfad36466f363910c0fc0b2122fcfa3198799b3eb2e3c63e3"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/monitor-stdout.log",
+        "size": 116,
+        "sha256": "91b13276600fa68a89cc8cad9417128cffba3ab8402e9ba2ee56c4805fd05842"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/receipt.json",
+        "size": 3196,
+        "sha256": "cc29b0c0ebfb196b4474a57e28710052f688c24e71723a74c0622bf3160bc045"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/watched-0.log",
+        "size": 1024,
+        "sha256": "789dfbfa23930abe15f7e701e57726c95b9896484481071abec0a87d7a30d0a5"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_output_bound-27/config.json",
+        "size": 529,
+        "sha256": "beb2bb5b2a90e46021221f1e0cd71a7472befcece7ee50c51d50406de694ead3"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_output_bound-27/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_output_bound-27/monitor-stdout.log",
+        "size": 110,
+        "sha256": "bd4088a78a20c255bb64260c8920356863f2ee016c5a0a0c51a5ef61a302a630"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_output_bound-27/output.log",
+        "size": 1024,
+        "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_output_bound-27/receipt.json",
+        "size": 2576,
+        "sha256": "8b6ae75fb8e64fe138b0c1b33d2e80423cf12e06da289100b3977c2bd80f1fe7"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_output_bound-27/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_owned_escaped_descendant_is_refused_and_reaped-28/config.json",
+        "size": 551,
+        "sha256": "80b117e91ffc28545dbd1302c72bd5205b2e5355a3bb23f63690c1a77abb09e1"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_owned_escaped_descendant_is_refused_and_reaped-28/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_owned_escaped_descendant_is_refused_and_reaped-28/monitor-stdout.log",
+        "size": 122,
+        "sha256": "b962844d34c3c63c8d85fd945ae7648429d5bb994e3488671b6c9916133d9cc8"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_owned_escaped_descendant_is_refused_and_reaped-28/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_owned_escaped_descendant_is_refused_and_reaped-28/receipt.json",
+        "size": 2703,
+        "sha256": "d79818fa859a9a32e80b0b489376e2a93425ec413421b22548633a824afeaf28"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_owned_escaped_descendant_is_refused_and_reaped-28/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_postspawn_setup_failure_reaps-29/config.json",
+        "size": 502,
+        "sha256": "dfb16068543d85474d86b0c62ccb083c86ba2f2a0046d7ffa3efaa7656b3e3fa"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_postspawn_setup_failure_reaps-29/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_postspawn_setup_failure_reaps-29/monitor-stdout.log",
+        "size": 111,
+        "sha256": "fbcb392dd746feabe3d4957c1ad7aa1b4ade41f15685f16aabbddb36e81a3b80"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_postspawn_setup_failure_reaps-29/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_postspawn_setup_failure_reaps-29/receipt.json",
+        "size": 2544,
+        "sha256": "8e44c4aa0ce61f7deb7f506b231f239fa41bd6d6fc9bec7693a4dafb8cccf2da"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_postspawn_setup_failure_reaps-29/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_setup_refusal_starts_no_child-30/config.json",
+        "size": 523,
+        "sha256": "14337423f2d53d9503afa5d8744f745c4e80c85c55c01fe9a0faa7377d3953b4"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_setup_refusal_starts_no_child-30/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_setup_refusal_starts_no_child-30/monitor-stdout.log",
+        "size": 111,
+        "sha256": "1c3263d56e85ed9208330437710117e454e16b6e23418d546a24fb33c479db34"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_setup_refusal_starts_no_child-30/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_setup_refusal_starts_no_child-30/receipt.json",
+        "size": 1994,
+        "sha256": "cad2df21ee64ac942b432f59dc7e099b4b5c7a5d472cb7d287d7ed2834c3eef8"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_setup_refusal_starts_no_child-30/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_successful_leader_cannot_leave_descendants-31/config.json",
+        "size": 551,
+        "sha256": "54ad83333cb196326944494dd9f9566f36aceae2524fc86e3ff4aae405ca1ebe"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_successful_leader_cannot_leave_descendants-31/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_successful_leader_cannot_leave_descendants-31/monitor-stdout.log",
+        "size": 126,
+        "sha256": "86e7ca292ccd653dfb66ace67b4ee9c86671fd2d0b26e6a1b6f3b8d1b9bbf65d"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_successful_leader_cannot_leave_descendants-31/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_successful_leader_cannot_leave_descendants-31/receipt.json",
+        "size": 2661,
+        "sha256": "99a151a357ab7fbd4680e2320e590b9ecfc22a5f9c44ee6b079e8e48a28f56d0"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_successful_leader_cannot_leave_descendants-31/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_timeout_reaps_descendant-32/config.json",
+        "size": 524,
+        "sha256": "1ee2d9afcdf99fd794f683560ddc4ff6fb2b4a2fc71e0a06a4014d48a85cadf2"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_timeout_reaps_descendant-32/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_timeout_reaps_descendant-32/monitor-stdout.log",
+        "size": 106,
+        "sha256": "ca3e9b8aeead091d6705d9f71acd2bc016068d9efa2dd7d4cbf9fc9825bf7b54"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_timeout_reaps_descendant-32/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_timeout_reaps_descendant-32/receipt.json",
+        "size": 2616,
+        "sha256": "1f8f60338755e26c9c6600cb940d9102d63e09cb01fe5ae176e80ece9b0f1f26"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_timeout_reaps_descendant-32/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unrelated_owned_control_group_is_not_signalled-33/config.json",
+        "size": 504,
+        "sha256": "8c7acc618af2b1f2358b003f91401eb3e624c0eef443850dec130ae3d745f2c3"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unrelated_owned_control_group_is_not_signalled-33/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unrelated_owned_control_group_is_not_signalled-33/monitor-stdout.log",
+        "size": 106,
+        "sha256": "900161ed0c343c73eaaaf587cd50bac913cd4e9a4509729d32a1de9a70b15ec3"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unrelated_owned_control_group_is_not_signalled-33/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unrelated_owned_control_group_is_not_signalled-33/receipt.json",
+        "size": 2510,
+        "sha256": "af09d4d2c4b71776991aa4fc9d8182a865c11fbf302d77c2bbae11c2c1a46be4"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unrelated_owned_control_group_is_not_signalled-33/test-outcome.json",
+        "size": 51,
+        "sha256": "21978221604d5533302d8d077cd0c7cce8e07862e2a336f26464dc234d936974"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unsupported_subreaper_refuses_before_spawn-34/config.json",
+        "size": 517,
+        "sha256": "691d8667fe2f1ed20caae3695a5b16af4f304db2fb674d8e22cc181934992114"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unsupported_subreaper_refuses_before_spawn-34/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unsupported_subreaper_refuses_before_spawn-34/monitor-stdout.log",
+        "size": 111,
+        "sha256": "e0b36b8aea53c799590fb3f1fb139780dc616e9b2017c6bf35aad8596c7f1422"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unsupported_subreaper_refuses_before_spawn-34/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unsupported_subreaper_refuses_before_spawn-34/receipt.json",
+        "size": 2308,
+        "sha256": "276751398d3a569a1dbef512aeb2e16f92ef30827f30333e7e903569cf8b311e"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unsupported_subreaper_refuses_before_spawn-34/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_wrong_tool_pin_refuses_before_spawn-35/config.json",
+        "size": 517,
+        "sha256": "ed24d679b1bc41d80769862ceddea8e75d8ea4b419e6792ac98d8b636c1c1fa0"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_wrong_tool_pin_refuses_before_spawn-35/monitor-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_wrong_tool_pin_refuses_before_spawn-35/monitor-stdout.log",
+        "size": 111,
+        "sha256": "ec85bf5305dc946cd1392d74da3615c3e3e1246bb729c5a4ed3b7544542ef84b"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_wrong_tool_pin_refuses_before_spawn-35/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_wrong_tool_pin_refuses_before_spawn-35/receipt.json",
+        "size": 2305,
+        "sha256": "367aa0ead9f018a000c5e74d180251fc46ae8f0d593e8e1649027e0d6ff1cd37"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_wrong_tool_pin_refuses_before_spawn-35/test-outcome.json",
+        "size": 52,
+        "sha256": "793acc874611d3323ba4f07319cc6d490fa8563b8ab0e04ab77e6721d5c2774c"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/production-noop/command.json",
+        "size": 530,
+        "sha256": "ca4646751804f20c04f23f489919e591da8674c64886700d050e7a88cbd35e12"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/production-noop/config.json",
+        "size": 581,
+        "sha256": "e1b6ead653f56ab8f98ec55f741d0c962d36a1b01c171ecf3b7d69b6bce17386"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/production-noop/outcome.json",
+        "size": 327,
+        "sha256": "d648f055f5852d0ba64ccec27b551c3a10d5ce805edc389afc00dfe992053616"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/production-noop/output.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/production-noop/receipt.json",
+        "size": 2604,
+        "sha256": "89f4e43d0ae24043b60414ba68fa231d587aca8048ae6e00650bcb9f3a354731"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/production-noop/stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-map128-monitor/verification-run/production-noop/stdout.log",
+        "size": 129,
+        "sha256": "1a40f858d5ea50c001b406c73eee677266fad6403e9cbf98f128d8ae80a43274"
+      },
+      "inventory": "/tmp/ash-owner-map128-monitor/manifest.json",
+      "reason": "Externally retained complete map/image or apparatus evidence not duplicated in this compact delivery. Exact input/record hashes are preserved; repository alone does not reconstruct missing external bytes."
+    }
+  ],
+  "external_artifact_qualification": "Map and image remain complete local files with observed hashes; omission from Git is deliberate. Absent linker temporary objects were never retained and prevent fully hashed closure. No candidate execution or architecture authority follows."
+}

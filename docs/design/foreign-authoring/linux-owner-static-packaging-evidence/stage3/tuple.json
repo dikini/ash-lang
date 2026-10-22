@@ -1,0 +1,370 @@
+{
+  "status": "FIFTH_MAP128_PROJECT_DISK_REVIEW_ONLY_NOT_ASSIGNED",
+  "contract_commit": "5cb93a9fd03d963377b0a79bc2e18404c54c2c47",
+  "contract_sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd",
+  "selected_source_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "stage2_generation_receipt": {
+    "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+    "resolved": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+    "size": 2809,
+    "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+  },
+  "stage2_generated_manifest": {
+    "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+    "resolved": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+    "size": 2248,
+    "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+  },
+  "historical_cli": {
+    "record": {
+      "path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "size": 3442,
+      "sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48"
+    },
+    "used_by_stage3": false,
+    "note": "CLI5dca produced stored Stage2 inputs; current mutable cache/debug/ash is neither required nor frozen."
+  },
+  "interpreter": {
+    "path": "/usr/bin/python3.14",
+    "resolved": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "monitor": {
+    "path": "/tmp/ash-owner-map128-monitor/build_monitor.py",
+    "resolved": "/tmp/ash-owner-map128-monitor/build_monitor.py",
+    "size": 20746,
+    "sha256": "62adc0d5264b0d08835079174a19db49de954b0fa51e97ede216d036e549c914"
+  },
+  "relink_config": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink.monitor.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink.monitor.json",
+    "size": 6987,
+    "sha256": "c4e0763be4cf0dae15ecd276b55311f2f1dc7ed4015556e0ddf702f73a18bcf8"
+  },
+  "inspection_config": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection.monitor.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection.monitor.json",
+    "size": 2116,
+    "sha256": "84d6fed91fe8306959b76ad0bce1a88dd3d223b63fa62e6e1ccfced7d0953924"
+  },
+  "preflight": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/preflight-inputs.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/preflight-inputs.json",
+    "size": 24563,
+    "sha256": "14cbf020adce26fba69d34a5f05e9abc7172f1b6f337e47e524e618b0436b9f6"
+  },
+  "verifier": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+    "size": 4726,
+    "sha256": "0acefa6762571928b12d5e9a48f32b6d732755424da6ada203b10d8bbdfb929d"
+  },
+  "outer_environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "working_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128",
+  "sequence": [
+    {
+      "phase": "before",
+      "name": "before-relink",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+        "before-relink"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-before.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-before.json.stderr"
+    },
+    {
+      "phase": "relink",
+      "name": "static-relink",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map128-monitor/build_monitor.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink-response.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink-response.json.stderr"
+    },
+    {
+      "phase": "after",
+      "name": "after-relink",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+        "after-relink"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-after.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-after.json.stderr"
+    },
+    {
+      "phase": "passive-inspection",
+      "name": "prepare-candidate",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/candidate-record.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/candidate-record.json.stderr"
+    },
+    {
+      "phase": "passive-inspection",
+      "name": "readelf-metadata",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map128-monitor/build_monitor.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection-response.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection-response.json.stderr"
+    },
+    {
+      "phase": "passive-inspection",
+      "name": "finalize-static-receipt",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/candidate-record.json",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json.stderr"
+    }
+  ],
+  "operator_anchor": "Verify external reviewed tuple/manifest/verifier/collector/config/monitor/interpreter hashes before launching trusted subprocesses with exact env. No file self-approval. Sole shared-cache slot must be assigned; no concurrent Cargo.",
+  "success": "Every step0, bothmonitors exit/child0/allreaped/no pending/escape/truncation/limits, full source/generated/tool before-after equal, fresh actual root Cargo artifact, static candidate<=128MiB/ELF64LE/x86-64ET_EXEC/PH<=64/noINTERP/DYNAMIC/unsupporteddependency metadata. Unknown format or any failure stops without fallback/retry/widening. Complete map<=128MiB must match settled monitor full hash (no prefix), recognized GNU/BFD framing, nonempty LOAD and exact pinned libc.a. Logs/output<=16MiB; observed free-space floor is not storage reservation.",
+  "limits": {
+    "command_seconds": 1200,
+    "each_output_retention_bytes": 16777216,
+    "final_candidate_bytes": 134217728,
+    "ELF_program_headers": 64,
+    "text_record_bytes": 1048576,
+    "manifest_records": 4096,
+    "manifest_bytes": 4194304,
+    "receipt_bytes": 262144,
+    "complete_map_bytes": 134217728,
+    "each_other_watched_sidefile_or_log_bytes": 16777216,
+    "known_output_footprint_bytes": 583532544
+  },
+  "stop": "Packaging/inspection only. No owner/native/image execution, memfd startup, approval/store/context provisioning, architecture acceptance or host-policy change.",
+  "candidate_collector": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py",
+    "size": 5779,
+    "sha256": "7d43928376bc5cf86b73a3bcbf6fc0f99288c4cf86d9b0d0dba5731b40904d2e"
+  },
+  "receipt_collector": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py",
+    "size": 8011,
+    "sha256": "2c464d38c851150dbe7c99fd1edaa986533093212ccb9c5e68ee8db287cfa412"
+  },
+  "explicit_passive_readelf_child_argv": [
+    "/usr/bin/x86_64-linux-gnu-readelf",
+    "-W",
+    "-h",
+    "-l",
+    "-d",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host"
+  ],
+  "diagnostic_only_change": {
+    "unchanged_options": [
+      "-C link-arg=-Wl,--no-print-map-discarded",
+      "-C link-arg=-Wl,--no-demangle"
+    ],
+    "fifth_delta": "Retained map-only128MiB amendment; independently reviewed monitor128; fresh private project-disk outputs. Logs16/image128 unchanged. Same semantic/static flags and both diagnostic options; no execution assignment or predicted fit."
+  },
+  "prior_failures": [
+    {
+      "inventory": {
+        "path": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+        "resolved": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+        "size": 6078,
+        "sha256": "dd6798e80d0d19c3fabeefdd29c4f348fba5ceed25b76b909ecf0373f3ab5857"
+      },
+      "sequence": {
+        "path": "/tmp/ash-owner-static-stage3/execution-readback.json",
+        "resolved": "/tmp/ash-owner-static-stage3/execution-readback.json",
+        "size": 3159,
+        "sha256": "5bcc9c16131102b628bcf41ab8dff4acbafdac8ba565c672b62081d77a6b17ef"
+      },
+      "monitor_receipt": {
+        "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+        "resolved": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+        "size": 9633,
+        "sha256": "3ee3aa6574144d1aabbfe21314a58bd680de8478b35a27b8727b2a184a2a3566"
+      },
+      "exact_bounded_prefix": {
+        "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+        "resolved": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+        "size": 16777216,
+        "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5"
+      },
+      "full_map_hash_claimed": false,
+      "remains_refused": true
+    },
+    {
+      "inventory": {
+        "path": "/tmp/ash-owner-static-stage3-map-detail/execution-manifest.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map-detail/execution-manifest.json",
+        "size": 4185,
+        "sha256": "34ae188c6e255524b16458a181610cd1a9b9b64a0bddd592aa93188a330b8b68"
+      },
+      "sequence": {
+        "path": "/tmp/ash-owner-static-stage3-map-detail/execution-readback.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map-detail/execution-readback.json",
+        "size": 3313,
+        "sha256": "3521592052c0e3636d21e7d1dfaeb952f8dccf8550ff6109e3b9b349e6bc6d6b"
+      },
+      "monitor_receipt": {
+        "path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/receipt.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/receipt.json",
+        "size": 11748,
+        "sha256": "0281568d84d0da673d94b42fea3694d300ee630ca1f797f25217b946826321d6"
+      },
+      "exact_bounded_prefix": {
+        "path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/watched-0.log",
+        "resolved": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/watched-0.log",
+        "size": 16777216,
+        "sha256": "cb91bca15d2f3469175d7c1a2e9a6f67530a1ac7fb4028b68316823bc10453c9"
+      },
+      "full_map_hash_claimed": false,
+      "remains_refused": true
+    },
+    {
+      "inventory": {
+        "path": "/tmp/ash-owner-static-stage3-map64/execution-manifest.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map64/execution-manifest.json",
+        "size": 5653,
+        "sha256": "0e8c27baf81cee14df242ab547f88dfbbb92e1d977d472fa5ecbaf93494c3363"
+      },
+      "sequence": {
+        "path": "/tmp/ash-owner-static-stage3-map64/execution-readback.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map64/execution-readback.json",
+        "size": 3350,
+        "sha256": "67ee130a263ddff720a3e18d430c86bee13f86eb91e4f31c10f55701d9d2f783"
+      },
+      "monitor_receipt": {
+        "path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/receipt.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/receipt.json",
+        "size": 12160,
+        "sha256": "8700c90915aca2d1837d1b200f0040eb41cd0b5312a7bd251288e28dd04f2b1f"
+      },
+      "exact_bounded_prefix": {
+        "path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log",
+        "resolved": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log",
+        "size": 67108864,
+        "sha256": "0e62a016e6bca947d2ce30ae523a0ff1e429eb45bffa7f85b477a1275dad94ab"
+      },
+      "full_map_hash_claimed": false,
+      "remains_refused": true
+    },
+    {
+      "inventory": {
+        "path": "/tmp/ash-owner-static-stage3-mangled/execution-manifest.json",
+        "resolved": "/tmp/ash-owner-static-stage3-mangled/execution-manifest.json",
+        "size": 6248,
+        "sha256": "a7333c85f1173a9ce528175b47bba15096b0fe8ac240317eaf907957522c5982"
+      },
+      "sequence": {
+        "path": "/tmp/ash-owner-static-stage3-mangled/execution-readback.json",
+        "resolved": "/tmp/ash-owner-static-stage3-mangled/execution-readback.json",
+        "size": 3378,
+        "sha256": "379bfa877fcc4e3a758f3676bb18d5babd5b30644bb444953d404aeb6d6b3a96"
+      },
+      "monitor_receipt": {
+        "path": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/receipt.json",
+        "resolved": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/receipt.json",
+        "size": 12227,
+        "sha256": "3019a9f70a834f259efc183b8d350886afd15def3dca4777437473a5caa1efd5"
+      },
+      "exact_bounded_prefix": {
+        "path": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/watched-0.log",
+        "resolved": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/watched-0.log",
+        "size": 67108864,
+        "sha256": "af27c6e1f59f1d26c56d996989500bab10274e839702d0a3e9af0f11aca6d1d5"
+      },
+      "full_map_hash_claimed": false,
+      "remains_refused": true
+    }
+  ],
+  "provenance": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/provenance.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/provenance.json",
+    "size": 10076,
+    "sha256": "bd4aa8455a6ad97f86f7352e61a64d366b0ae6d0931c1bf89ff48013e294a895"
+  },
+  "map_policy": {
+    "exact_relative_map_path": "whole-static.map",
+    "monitor_receipt_schema": 2,
+    "qualified_observed_peaks_not_hard_quota": true,
+    "collector_complete_map_matches_monitor_record": true,
+    "map128_log16": true
+  },
+  "historical_generation_contract_sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+  "read_caps_bytes": {
+    "preflight_and_config": 262144,
+    "each_monitor_receipt": 4194304,
+    "each_combined_tool_output": 16777216,
+    "complete_link_map": 134217728,
+    "candidate_and_producer_receipt": 262144,
+    "static_manifest": 4194304,
+    "generated_experiment_text": 1048576,
+    "final_candidate_copy": 134217728,
+    "ELF_header": 64,
+    "ELF_program_header_table": 3584
+  }
+}

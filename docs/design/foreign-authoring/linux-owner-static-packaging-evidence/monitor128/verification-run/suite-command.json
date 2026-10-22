@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/tmp/ash-owner-map128-monitor/test_monitor.py"
+  ],
+  "cwd": "/tmp/ash-owner-map128-monitor",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "stdin": "DEVNULL",
+  "deadline_seconds": 180,
+  "scope": "21 benign test methods only"
+}

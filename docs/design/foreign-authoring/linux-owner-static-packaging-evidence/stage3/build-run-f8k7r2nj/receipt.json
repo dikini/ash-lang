@@ -1,0 +1,164 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "84d6fed91fe8306959b76ad0bce1a88dd3d223b63fa62e6e1ccfced7d0953924",
+  "monitor": {
+    "path": "/tmp/ash-owner-map128-monitor/build_monitor.py",
+    "size_before": 20746,
+    "size_after": 20746,
+    "hashed_bytes": 20746,
+    "sha256": "62adc0d5264b0d08835079174a19db49de954b0fa51e97ede216d036e549c914",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 67511
+  },
+  "run_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj",
+  "output_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj/output.log",
+  "argv": [
+    "/usr/bin/x86_64-linux-gnu-readelf",
+    "-W",
+    "-h",
+    "-l",
+    "-d",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host"
+  ],
+  "child_pid": 46,
+  "child_exit": 0,
+  "reason": "exit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 2787,
+  "retained_output_bytes": 2787,
+  "output_truncated": false,
+  "watched_files": [
+    {
+      "relative_path": "whole-static.map",
+      "observed_peak_bytes": 100345205,
+      "file_class": "link_map",
+      "limit_bytes": 134217728,
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/whole-static.map",
+      "size_before": 100345205,
+      "size_after": 100345205,
+      "hashed_bytes": 100345205,
+      "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555251,
+      "retained_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj/watched-0.log"
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+      "size_before": 4726,
+      "size_after": 4726,
+      "hashed_bytes": 4726,
+      "sha256": "0acefa6762571928b12d5e9a48f32b6d732755424da6ada203b10d8bbdfb929d",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555211
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py",
+      "size_before": 5779,
+      "size_after": 5779,
+      "hashed_bytes": 5779,
+      "sha256": "7d43928376bc5cf86b73a3bcbf6fc0f99288c4cf86d9b0d0dba5731b40904d2e",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555212
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py",
+      "size_before": 8011,
+      "size_after": 8011,
+      "hashed_bytes": 8011,
+      "sha256": "2c464d38c851150dbe7c99fd1edaa986533093212ccb9c5e68ee8db287cfa412",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555213
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+      "size_before": 20440,
+      "size_after": 20440,
+      "hashed_bytes": 20440,
+      "sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555214
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+      "size_before": 71022184,
+      "size_after": 71022184,
+      "hashed_bytes": 71022184,
+      "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555256
+    }
+  ],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 46,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "map_relative_path": "whole-static.map",
+  "limits": {
+    "deadline_seconds": 1200,
+    "output_bytes": 16777216,
+    "sidefile_bytes": 16777216,
+    "map_bytes": 134217728
+  },
+  "environment_keys": [
+    "LANG",
+    "LC_ALL",
+    "PATH"
+  ],
+  "executable": {
+    "path": "/usr/bin/x86_64-linux-gnu-readelf",
+    "size_before": 818312,
+    "size_after": 818312,
+    "hashed_bytes": 818312,
+    "sha256": "c857339616bbbfa5eba32733e22365048903fbaf6ed2126b897dd138bcb741fc",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347444
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 46,
+  "child_session": 46,
+  "final_limit_failures": [],
+  "elapsed_seconds": 0.008160377001331653,
+  "observed_output_sha256": "a656e20a7fa4d0de4fc4e87d4b3563052263a51c2ce995b243926c8f684e6b6b",
+  "output_file": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj/output.log",
+    "size_before": 2787,
+    "size_after": 2787,
+    "hashed_bytes": 2787,
+    "sha256": "a656e20a7fa4d0de4fc4e87d4b3563052263a51c2ce995b243926c8f684e6b6b",
+    "hash_is_prefix": false,
+    "device": 66309,
+    "inode": 49555262
+  }
+}

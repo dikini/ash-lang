@@ -1,0 +1,180 @@
+{
+  "argv": [
+    "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "rustc",
+    "--offline",
+    "--locked",
+    "--jobs",
+    "1",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--target-dir",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "--bin",
+    "ash-host-6-0",
+    "-vv",
+    "--message-format=json-render-diagnostics",
+    "--",
+    "-C",
+    "target-feature=+crt-static",
+    "-C",
+    "relocation-model=static",
+    "-C",
+    "linker=/usr/bin/cc",
+    "-C",
+    "link-arg=-fuse-ld=bfd",
+    "-C",
+    "link-arg=-static",
+    "-C",
+    "link-arg=-no-pie",
+    "-C",
+    "strip=debuginfo",
+    "-C",
+    "link-arg=-v",
+    "-C",
+    "link-arg=/usr/lib/x86_64-linux-gnu/libc.a",
+    "-C",
+    "link-arg=-Wl,-Map,/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/whole-static.map",
+    "-C",
+    "link-arg=-Wl,--no-print-map-discarded",
+    "-C",
+    "link-arg=-Wl,--no-demangle"
+  ],
+  "executable_pin": {
+    "size": 42839824,
+    "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953"
+  },
+  "cwd": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0",
+  "output_parent": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128",
+  "watch_root": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "CARGO_HOME": "/home/dikini/.cargo",
+    "RUSTC": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "input_files": [
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "size": 3442,
+      "sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "size": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/native-build.log",
+      "size": 1156,
+      "sha256": "232dc2ed1ea1a11723b1e25df8eb6604184abe35e0a957ef125be539455c30c8"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.lock",
+      "size": 10121,
+      "sha256": "c1eb4441f3a039e3757d67e9f05012c4b1f199d3c90ea1f7694e6f0086a9590e"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/rust-toolchain.toml",
+      "size": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+      "size": 246,
+      "sha256": "686ad5d17be305bcc228093d089868de78e43a468a985129c92b5e04a14a2902"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+      "size": 17310,
+      "sha256": "4fff8df2dfb0ac63ec78179b74bba872f3e1b317a2c86dc46659e5bd6485df26"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+      "size": 4726,
+      "sha256": "0acefa6762571928b12d5e9a48f32b6d732755424da6ada203b10d8bbdfb929d"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py",
+      "size": 5779,
+      "sha256": "7d43928376bc5cf86b73a3bcbf6fc0f99288c4cf86d9b0d0dba5731b40904d2e"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py",
+      "size": 8011,
+      "sha256": "2c464d38c851150dbe7c99fd1edaa986533093212ccb9c5e68ee8db287cfa412"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/map-detail-evidence.json",
+      "size": 2815,
+      "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838"
+    },
+    {
+      "path": "/usr/share/man/man1/ld.bfd.1.gz",
+      "size": 49180,
+      "sha256": "2f7c363d588b25cf60ac64322f3cd30eb01c7807e6bddaa82580d256dbdd1e9e"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+      "size": 6078,
+      "sha256": "dd6798e80d0d19c3fabeefdd29c4f348fba5ceed25b76b909ecf0373f3ab5857"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/execution-readback.json",
+      "size": 3159,
+      "sha256": "5bcc9c16131102b628bcf41ab8dff4acbafdac8ba565c672b62081d77a6b17ef"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+      "size": 9633,
+      "sha256": "3ee3aa6574144d1aabbfe21314a58bd680de8478b35a27b8727b2a184a2a3566"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+      "size": 16777216,
+      "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+      "size": 20440,
+      "sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd"
+    }
+  ],
+  "artifact_files": [],
+  "map_relative_path": "whole-static.map"
+}

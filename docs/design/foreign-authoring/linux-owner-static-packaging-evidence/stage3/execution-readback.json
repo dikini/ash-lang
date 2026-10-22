@@ -1,0 +1,185 @@
+{
+  "status": "SUCCESS_STATIC_PACKAGING_NO_STARTUP",
+  "anchors": {
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/tuple.json": "e7172095ba95ef46c62f59cf2d37472d137d276467b2f10117278e07ee41816f",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink.monitor.json": "c4e0763be4cf0dae15ecd276b55311f2f1dc7ed4015556e0ddf702f73a18bcf8",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection.monitor.json": "84d6fed91fe8306959b76ad0bce1a88dd3d223b63fa62e6e1ccfced7d0953924",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/manifest.json": "ee19ff5609c8fa53bced9b84d5a490267be1436b0b5379da2935d25005fff0e7",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/preflight-inputs.json": "14cbf020adce26fba69d34a5f05e9abc7172f1b6f337e47e524e618b0436b9f6",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py": "0acefa6762571928b12d5e9a48f32b6d732755424da6ada203b10d8bbdfb929d",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py": "7d43928376bc5cf86b73a3bcbf6fc0f99288c4cf86d9b0d0dba5731b40904d2e",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py": "2c464d38c851150dbe7c99fd1edaa986533093212ccb9c5e68ee8db287cfa412",
+    "/tmp/ash-owner-map128-monitor/build_monitor.py": "62adc0d5264b0d08835079174a19db49de954b0fa51e97ede216d036e549c914",
+    "/usr/bin/python3.14": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "steps": [
+    {
+      "name": "before-relink",
+      "phase": "before",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+        "before-relink"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-before.json",
+      "stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-before.json.stderr",
+      "started_unix": 1792665745.819914,
+      "pid": 4,
+      "exit": 0,
+      "finished_unix": 1792665747.4131043,
+      "stdout_sha256": "54397bc816635ac486b1ec76124172e393b29dc93309f812bbb21819fd081d95",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "static-relink",
+      "phase": "relink",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map128-monitor/build_monitor.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink-response.json",
+      "stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink-response.json.stderr",
+      "started_unix": 1792665747.4137635,
+      "pid": 5,
+      "exit": 0,
+      "finished_unix": 1792665756.8668542,
+      "stdout_sha256": "91bad2b11f93b26908ba8e0e84d46835682bd419b587ae4b1ffb741764087a0e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "monitor_receipt": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-ymqweo36/receipt.json",
+        "size": 12696,
+        "sha256": "507e23a81da27429c8fe9df7a432c9fc0f390d694dcaf5b465fc89f4a21b900d"
+      },
+      "monitor_success_checked": true
+    },
+    {
+      "name": "after-relink",
+      "phase": "after",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+        "after-relink"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-after.json",
+      "stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/snapshot-after.json.stderr",
+      "started_unix": 1792665756.8681526,
+      "pid": 43,
+      "exit": 0,
+      "finished_unix": 1792665758.1997223,
+      "stdout_sha256": "434dc21fb9982fd8a6d740f1ef9d190e54728d1f4eac1a2dc82824b95f2a3a90",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "prepare-candidate",
+      "phase": "passive-inspection",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/relink-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/candidate-record.json",
+      "stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/candidate-record.json.stderr",
+      "started_unix": 1792665758.2002575,
+      "pid": 44,
+      "exit": 0,
+      "finished_unix": 1792665758.3887658,
+      "stdout_sha256": "4f887db3d72c45b09a5f9d2bdd12c40e2bcce8ff99ec931f70ee441dc389886c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "readelf-metadata",
+      "phase": "passive-inspection",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map128-monitor/build_monitor.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection-response.json",
+      "stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection-response.json.stderr",
+      "started_unix": 1792665758.389465,
+      "pid": 45,
+      "exit": 0,
+      "finished_unix": 1792665758.6194644,
+      "stdout_sha256": "aecf44c13a3fd29073ebcbaf9f2ebc72e338d8282ba7a69e4bdd4d91873d4c7c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "monitor_receipt": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj/receipt.json",
+        "size": 5639,
+        "sha256": "64d9b1cb792d8130136a0c5bdcbb99c0fce2550ad38698b4723c12d2d5303e6f"
+      },
+      "monitor_success_checked": true
+    },
+    {
+      "name": "finalize-static-receipt",
+      "phase": "passive-inspection",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/candidate-record.json",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/inspection-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+      "stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json.stderr",
+      "started_unix": 1792665758.6204286,
+      "pid": 47,
+      "exit": 0,
+      "finished_unix": 1792665760.800208,
+      "stdout_sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "scope": "Root-assigned Stage3 packaging/passive inspection only; no startup",
+  "image_executed": false,
+  "external_anchors_equal": true,
+  "reviewed_manifest_all_equal": true,
+  "private_directory_identities_equal_before_spawn": true
+}

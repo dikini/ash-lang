@@ -1,0 +1,27 @@
+{
+  "parent": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging",
+  "stage": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128",
+  "directory_identities": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging",
+      "device": 66309,
+      "inode": 49554020,
+      "uid": 1000,
+      "mode": 448
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128",
+      "device": 66309,
+      "inode": 49554080,
+      "uid": 1000,
+      "mode": 448
+    }
+  ],
+  "ignore_proof": ".gitignore:2:/target/ from read-only git check-ignore -v in generic-cells; no new cache/checkout",
+  "parent_was_absent": true,
+  "all_ancestors_no_symlink": true,
+  "available_bytes": 206916780032,
+  "known_output_floor_bytes": 583532544,
+  "observed_not_reserved": true,
+  "header_proposal_paused": "/tmp/ash-owner-header-discovery"
+}
