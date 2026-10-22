@@ -6108,18 +6108,52 @@ impl Resolver {
                     "scalar preflight codec retention exceeded its work budget",
                 )
             })?;
-            let call = summary
-                .nominal_fact(preflight.call_codec().ids().call)
-                .ok_or_else(|| {
+            preflight
+                .authenticate_original(&mut self.type_work)
+                .map_err(|failure| {
+                    error(
+                        if failure.is_resource_exhaustion() {
+                            ResolveReason::TypeResourceExhausted
+                        } else {
+                            ResolveReason::InternalState
+                        },
+                        span,
+                        "selected preflight original authentication failed",
+                    )
+                })?;
+            // A checked codec authenticates its complete builtin inventory.
+            // Retain those exact checking dependencies, never extra name routes.
+            for (id, _, constructor_family) in preflight.codec_nominal_dependencies() {
+                self.type_work.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "preflight dependency traversal exceeded work",
+                    )
+                })?;
+                let fact = summary.nominal_fact(id).ok_or_else(|| {
                     error(
                         ResolveReason::InternalState,
                         span,
-                        "scalar preflight signature lost its original call codec",
+                        "scalar preflight lost an original codec dependency",
                     )
                 })?;
-            // Retain checking roles only. Source names still come exclusively
-            // from the selected import channels; the private error stays opaque.
-            self.retain_imported_constructor_family(call, summary, span)?;
+                if constructor_family {
+                    self.retain_imported_constructor_family(fact, summary, span)?;
+                } else {
+                    self.retain_scheme_nominal_fact(fact, span)?;
+                }
+            }
+            if let Some(host) = preflight.codec_host_dependency() {
+                let fact = summary.effect_by_id(host).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "scalar preflight lost its original host dependency",
+                    )
+                })?;
+                self.retain_imported_effect(fact, span)?;
+            }
         }
         if capture_graph_visits
             .visit(&exported.capture, &mut self.type_work)

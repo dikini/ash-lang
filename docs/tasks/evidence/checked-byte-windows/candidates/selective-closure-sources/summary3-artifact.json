@@ -1,0 +1,8 @@
+{
+  "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "size": 847541344,
+  "mtime_ns": 1792669397159490788,
+  "sha256": "9e1b5aad5d6a14b7f998df335ff3adbb7b228f7295b810809d878cea8aeb40de",
+  "qualification": "Observed after the summary3 build completed; this is the green third candidate artifact, not the prior accepted-erasure red.",
+  "association": "candidate-selective-closure-summary3"
+}

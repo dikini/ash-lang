@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 7 tests
+test resolved::checked_codec_category_tests::checked_memory_selective_summary_rejects_erased_codec_dependencies ... ok
+test resolved::checked_codec_category_tests::checked_memory_family_authentication_rechecks_each_fresh_registry_and_budget ... ok
+test resolved::checked_codec_category_tests::checked_memory_selective_summary_keeps_private_codec_dependencies_and_limits ... ok
+test resolved::checked_codec_category_tests::checked_memory_owned_projection_authenticates_before_publication_and_refuses_collisions ... ok
+test resolved::checked_codec_category_tests::checked_memory_family_proofs_are_distinct_across_genuine_builtin_graphs ... ok
+test resolved::checked_codec_category_tests::checked_memory_scheme_kinds_require_exact_complete_original_formals ... ok
+test resolved::checked_codec_category_tests::checked_memory_preflight_codecs_keep_exact_family_originals ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2111 filtered out; finished in 0.11s
+

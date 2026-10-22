@@ -1,0 +1,16 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+error[E0599]: no method named `pop` found for struct `Box<[types::ConstructorId]>` in the current scope
+   --> src/resolved/checked_codec_category_tests.rs:723:37
+    |
+723 |     assert_eq!(nominal.constructors.pop(), Some(tail));
+    |                                     ^^^ method not found in `Box<[types::ConstructorId]>`
+
+error[E0599]: no method named `push` found for struct `Box<[types::ConstructorId]>` in the current scope
+   --> src/resolved/checked_codec_category_tests.rs:731:26
+    |
+731 |     nominal.constructors.push(tail);
+    |                          ^^^^ method not found in `Box<[types::ConstructorId]>`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `ash` (lib test) due to 2 previous errors

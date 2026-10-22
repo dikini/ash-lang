@@ -708,6 +708,39 @@ impl CheckedForeignScalarPreflight {
         Ok(())
     }
 
+    /// Checking dependencies of this sealed original, not source name routes.
+    /// Callers authenticate the original and fetch the actual exporting facts.
+    pub(crate) fn codec_nominal_dependencies(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            crate::types::NominalTypeId,
+            &'static crate::module::ForeignNominalCoordinates,
+            bool,
+        ),
+    > {
+        let checked = self.role.host_parameter(self.module()).is_some();
+        let range = if checked {
+            0..crate::module::ForeignCheckedNominalRole::ViolationCause.local() + 1
+        } else {
+            1..2
+        };
+        let module = self.module();
+        range.map(move |local| {
+            (
+                crate::types::NominalTypeId::new(module, local),
+                &crate::module::foreign_nominal_coordinates()[local as usize],
+                !matches!(local, 0 | 5),
+            )
+        })
+    }
+
+    pub(crate) fn codec_host_dependency(&self) -> Option<crate::types::EffectId> {
+        self.role.host_parameter(self.module()).map(|_| {
+            crate::types::EffectId::new(self.module(), crate::module::FOREIGN_NATIVE_HOST_LOCAL)
+        })
+    }
+
     pub(crate) fn authenticate(
         &self,
         registry: &ResolvedRegistry,
