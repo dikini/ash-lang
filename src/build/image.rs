@@ -12263,6 +12263,15 @@ impl PureImage {
             work,
         )
         .map_err(ImageFailure::Validation)?;
+        // One root-owned byte predicate. It carries no registry/context proof;
+        // every nested validator checks its own complete live module relation.
+        let restored_builtin_bytes = if self.source_templates.is_empty() {
+            None
+        } else {
+            Some(crate::core::validate::RestoreBuiltinForeignBytes::new(
+                &source_arena, &module_arena, work,
+            ).map_err(ImageFailure::Validation)?)
+        };
         let mut decoder = Decoder {
             image,
             expected_fact_prefixes,
@@ -12274,7 +12283,7 @@ impl PureImage {
             work,
         };
         let templates =
-            decoder.source_templates(&registry, &symbols, &binder_ids, &coordinate_loan)?;
+            decoder.source_templates(&registry, &symbols, &binder_ids, &coordinate_loan, restored_builtin_bytes.as_ref())?;
         let catalog = decoder.method_catalog(
             self.main_method_catalog
                 .ok_or(ImageFailure::InvalidRecord)?,
@@ -12350,6 +12359,7 @@ impl PureImage {
         drop(module_sources);
         drop(decoder);
         drop(coordinate_loan);
+        drop(restored_builtin_bytes);
         let sources = source_arena;
         let modules = module_arena;
         Ok(RestoredEffectImage {

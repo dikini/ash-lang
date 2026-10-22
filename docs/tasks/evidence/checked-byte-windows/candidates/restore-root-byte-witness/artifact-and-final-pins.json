@@ -1,0 +1,21 @@
+{
+  "base": "e12c3e2dbfe85d57efb4b76e4c44b98cddbef160",
+  "artifact": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "size": 850666488,
+  "sha256": "3896e9922b5c01173ad9bed6fce4e2169c673449237b64303a96e012906677a9",
+  "files": {
+    "src/build/image.rs": "29c2f85d4b8e664102bd9dbedff263ffe3657ff889aa963aa56e5211170d750b",
+    "src/build/source_resource_image.rs": "38618b3d11b622410191ee2159a819b195562b087633a663cfed4ca48682c247",
+    "src/core/validate.rs": "d6932638aee2ef0f4aa4ea363cf8665e7efca65fb7de87e7405b4087d2a90a0f",
+    "src/core/validate/source_declarations.rs": "5076ef7b951def5e3461ebd6cf0708db18c1e8e4fd2423a0a0aa217c6bc1a148",
+    "src/core/validate/source_declarations/builtin_operation.rs": "c6cededbfd8cbb20ede8ea8cce3cbcd568593f04691a440f5e9f04be70de36d0"
+  },
+  "receipts": {
+    "buffer-startups.receipt.json": "1d12dd7d849ee2796b9c657bac7b4d8890a2ab759a44eddf16e3510118ed321b",
+    "coordinate-loan.receipt.json": "1d72f96a475e3e500b9d04f1449c6eb04f50a6146c1a9fd5cc951d1983e2bf26",
+    "dependent-startup.receipt.json": "fa0bddd032ca8f22fb3c0ad092dc16f35b4440299f47d1c059e3075d0377c120",
+    "fresh-operation.receipt.json": "f55735facd1c78e232744716b184d3e5b7daca3d11a9ea53e96ffcdfd0379c3f",
+    "full-static.receipt.json": "7916a413bf1171fa4e8e676e1f600cb5d4ca669cc458846079f2117e025fc61e",
+    "new-controls.receipt.json": "5217354dca4a84c13fb00d6b8d7b749ef66e5cf05cf24a348e33175d4e0b7c46"
+  }
+}

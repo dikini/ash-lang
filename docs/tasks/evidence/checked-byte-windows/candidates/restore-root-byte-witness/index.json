@@ -1,0 +1,74 @@
+[
+  {
+    "stem": "compile-only",
+    "map": "883f7204347fd5984bb9f52645015673eaecc5703ab6867830b02b3c4b613d58.inputs.json.gz",
+    "raw_sha256": "9e7674a64e9c93921c944be2aea5d403bfec47c78f84a561b83652b8bb26077d",
+    "exit_code": 101
+  },
+  {
+    "stem": "new-controls",
+    "map": "ac507a9baaa22303516315cdc984cdbcab0e47d53a8d0a54f213ae81441a7d6f.inputs.json.gz",
+    "raw_sha256": "750c67fef831125e593015165ee350fa63c3362cacf9084144fe92200485752e",
+    "exit_code": 0
+  },
+  {
+    "stem": "fresh-operation",
+    "map": "ac507a9baaa22303516315cdc984cdbcab0e47d53a8d0a54f213ae81441a7d6f.inputs.json.gz",
+    "raw_sha256": "17566a151e523e981db343fee60c7eb6e7d07cabf679ea06f6764b2bd2c84c32",
+    "exit_code": 0
+  },
+  {
+    "stem": "coordinate-loan",
+    "map": "ac507a9baaa22303516315cdc984cdbcab0e47d53a8d0a54f213ae81441a7d6f.inputs.json.gz",
+    "raw_sha256": "82e067d56dc9609c79f5d67ab7a93bda3372b38997491395010d0489300ca4ca",
+    "exit_code": 0
+  },
+  {
+    "stem": "full-static",
+    "map": "ac507a9baaa22303516315cdc984cdbcab0e47d53a8d0a54f213ae81441a7d6f.inputs.json.gz",
+    "raw_sha256": "61e8f8ed043948d524d02d14d0636f1f3c88103c52b3ec8c2641f318c111591c",
+    "exit_code": 0
+  },
+  {
+    "stem": "buffer-startups",
+    "map": "ac507a9baaa22303516315cdc984cdbcab0e47d53a8d0a54f213ae81441a7d6f.inputs.json.gz",
+    "raw_sha256": "383d75991ccf9f3cdee8a18c3c615a0409e2e6756921ebe8e25aab48b61e86a4",
+    "exit_code": 101
+  },
+  {
+    "stem": "dependent-startup",
+    "map": "ac507a9baaa22303516315cdc984cdbcab0e47d53a8d0a54f213ae81441a7d6f.inputs.json.gz",
+    "raw_sha256": "377dc13bdb7feb8add5db668e87b1bfc58aa997350a71e129314e4e5cffe6812",
+    "exit_code": 0
+  },
+  {
+    "stem": "two-owner",
+    "map": "eecc1e8f1916bf8b280d4cf41bba0750c06713b049b4a57757416de51a53abfe.inputs.json.gz",
+    "raw_sha256": "82b36855e2558210dccebfbe284871f81472f74f32c99b77171e809cebdb12ed",
+    "exit_code": 0
+  },
+  {
+    "stem": "dependent",
+    "map": "eecc1e8f1916bf8b280d4cf41bba0750c06713b049b4a57757416de51a53abfe.inputs.json.gz",
+    "raw_sha256": "e446fe353d2c978e4da5d3dd6f16cd0dd2a887a54835be57ca207e125ceda157",
+    "exit_code": 0
+  },
+  {
+    "stem": "dependent-domain",
+    "map": "eecc1e8f1916bf8b280d4cf41bba0750c06713b049b4a57757416de51a53abfe.inputs.json.gz",
+    "raw_sha256": "a467c276b68a6f9ad8313ae2543253ce70c6fe97cc6dfdc08f7de844d760c6e6",
+    "exit_code": 0
+  },
+  {
+    "stem": "topology",
+    "map": "eecc1e8f1916bf8b280d4cf41bba0750c06713b049b4a57757416de51a53abfe.inputs.json.gz",
+    "raw_sha256": "66043d88ae656f6cf3b34191726fc3808307f548db1d5e07b4f37e7e9d5a4a8e",
+    "exit_code": 0
+  },
+  {
+    "stem": "topology-typed",
+    "map": "eecc1e8f1916bf8b280d4cf41bba0750c06713b049b4a57757416de51a53abfe.inputs.json.gz",
+    "raw_sha256": "7f4ec338b6cd9a6daa4fdd5792ba206724629bac9a7108ca2dbfdcc8727ed775",
+    "exit_code": 0
+  }
+]
