@@ -290,3 +290,166 @@ fn checked_memory_scheme_kinds_require_exact_complete_original_formals() {
         }
     }
 }
+
+#[test]
+fn checked_memory_family_authentication_rechecks_each_fresh_registry_and_budget() {
+    let view = original_view();
+    let mut measured = TypeWorkBudget::default();
+    view.authenticate_scalar_preflights(&mut measured).unwrap();
+    let cost = measured.used();
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+        exact.charge(prefix).unwrap();
+        view.authenticate_scalar_preflights(&mut exact).unwrap();
+        assert_eq!(exact.used(), prefix + cost);
+        assert_eq!(
+            view.authenticate_scalar_preflights(&mut exact),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        assert_eq!(
+            view.authenticate_scalar_preflights(&mut short),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+    }
+    let module = view.scalar_preflights.values().next().unwrap().module();
+    for local in [0, 11] {
+        let mut changed = view.clone();
+        changed
+            .scalar_preflights
+            .remove(&BinderId::resolved(module, local))
+            .unwrap();
+        assert_eq!(
+            changed.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+    }
+    for change in 0..3 {
+        let mut changed = view.clone();
+        if change == 0 {
+            changed
+                .effects
+                .iter_mut()
+                .find(|effect| {
+                    effect.id
+                        == crate::types::EffectId::new(
+                            module,
+                            crate::module::FOREIGN_NATIVE_HOST_LOCAL,
+                        )
+                })
+                .unwrap()
+                .public = false;
+        } else if change == 1 {
+            changed
+                .constructors
+                .iter_mut()
+                .find(|ctor| {
+                    ctor.id
+                        == crate::types::ConstructorId::new(
+                            crate::types::NominalTypeId::new(module, 12),
+                            2,
+                        )
+                })
+                .unwrap()
+                .payload = Some(Type::Int);
+        } else {
+            let fact = changed
+                .scalar_preflights
+                .remove(&BinderId::resolved(module, 14))
+                .unwrap();
+            changed
+                .scalar_preflights
+                .insert(BinderId::resolved(module, 999), fact);
+        }
+        for _ in 0..2 {
+            assert_eq!(
+                changed.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            let mut fresh = TypeWorkBudget::with_limit(cost);
+            view.authenticate_scalar_preflights(&mut fresh).unwrap();
+            assert_eq!(fresh.used(), cost);
+        }
+    }
+}
+
+#[test]
+fn checked_memory_family_proofs_are_distinct_across_genuine_builtin_graphs() {
+    fn completed() -> Vec<CheckedModule> {
+        let graph = graph("import @builtin.foreign as Foreign\nmain : Unit -> Int\nmain () = 42\n");
+        let mut checked = Vec::<CheckedModule>::new();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|m| m.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved =
+                crate::resolve::resolve_checked_foreign_module(loaded, &dependencies).unwrap();
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
+        checked
+    }
+    let mut checked = completed();
+    checked.extend(completed());
+    let view = ResolvedRegistry::combine_checked(
+        &checked,
+        &mut TypeWorkBudget::default(),
+        &mut crate::interface::InterfaceConstraintBudget::default(),
+    )
+    .unwrap();
+    view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+        .expect("both genuine graph families authenticate together before the mutation");
+    let first = view
+        .scalar_preflights()
+        .find(|(_, fact)| fact.role().host_parameter(fact.module()).is_some())
+        .unwrap()
+        .1
+        .module();
+    let second = view
+        .scalar_preflights()
+        .find(|(_, fact)| {
+            fact.role().host_parameter(fact.module()).is_some() && fact.module() != first
+        })
+        .unwrap()
+        .1
+        .module();
+    assert_ne!(first, second);
+    let mut changed = view.clone();
+    changed
+        .constructors
+        .iter_mut()
+        .find(|ctor| {
+            ctor.id
+                == crate::types::ConstructorId::new(crate::types::NominalTypeId::new(second, 12), 2)
+        })
+        .unwrap()
+        .payload = Some(Type::Int);
+    assert_eq!(
+        changed
+            .scalar_preflights()
+            .find(|(_, fact)| fact.role().host_parameter(fact.module()).is_some())
+            .unwrap()
+            .1
+            .module(),
+        first,
+        "the good family's local11 proof precedes the corrupted other graph's checked family"
+    );
+    assert_eq!(
+        changed.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
+        Err(ResolvedBuildFailure::InvalidState)
+    );
+    view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+        .unwrap();
+}

@@ -43,15 +43,15 @@ fn foreign_registry() -> ResolvedRegistry {
     }
     let linked = crate::elaborate::link_modules(checked, graph.entry()).unwrap();
     let registry = linked.registry().as_ref().clone();
-    assert_eq!(registry.type_variables.len(), 23);
-    assert_eq!(registry.global_parameter_rows.len(), 7);
+    assert_eq!(registry.type_variables.len(), 31);
+    assert_eq!(registry.global_parameter_rows.len(), 11);
     assert_eq!(
         registry
             .global_parameter_rows
             .iter()
             .map(|row| row.parameters.len())
             .sum::<usize>(),
-        9
+        17
     );
     registry
 }

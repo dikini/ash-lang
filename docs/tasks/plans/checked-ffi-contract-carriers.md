@@ -753,3 +753,9 @@ fixtures need test-premise corrections. More materially, both buffer and the
 dependent-discard startup probes now exhaust the unchanged 327680 allowance;
 these are delivery blockers, with measured repeated codec proof work retained.
 No budget, startup fixture or activation guard may be relaxed to close them.
+
+The first measured operation-local family codec proof sharing preserves connected
+7/7, family controls 3/3 and image-subset 2/2, but default startup still exhausts
+the unchanged allowance. A second exact duplicate full-inventory replay through
+per-row Host checks is measured and a projection-preserving repair is authored,
+not executed. Its future results must not inherit the first candidate's passes.

@@ -721,6 +721,16 @@ impl CheckedForeignScalarPreflight {
             registry,
             work,
         )?;
+        self.authenticate_registry_projection(registry, work)
+    }
+
+    // Only the whole-table entry below shares a codec proof. Standalone fact
+    // admission above always reconstructs that proof in the actual registry.
+    fn authenticate_registry_projection(
+        &self,
+        registry: &ResolvedRegistry,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ForeignAdmissionError> {
         if self.role.host_parameter(self.module()).is_some() {
             charge(work, 1, self.source)?;
             let host = registry
@@ -729,7 +739,17 @@ impl CheckedForeignScalarPreflight {
                     crate::module::FOREIGN_NATIVE_HOST_LOCAL,
                 ))
                 .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, self.source))?;
-            if !super::checked_builtins::is_canonical_native_host(host, registry, work)? {
+            // The fresh checked codec proof above (or this table's identical
+            // family proof) already authenticated the full builtin inventory.
+            // Recheck this row's Host declaration/formal projection without
+            // repeating that same complete inventory walk.
+            if !super::checked_builtins::host_matches(
+                host,
+                registry,
+                self.module(),
+                self.source,
+                work,
+            )? {
                 return Err(failure(
                     ForeignAdmissionReason::InvalidSignature,
                     self.source,
@@ -759,6 +779,65 @@ impl CheckedForeignScalarPreflight {
         }
         Ok(())
     }
+}
+
+/// Authenticate this immutable registry table, sharing only identical codec
+/// reconstruction within this call. No completed proof escapes the operation.
+pub(crate) fn authenticate_registry_families(
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ForeignAdmissionError> {
+    let mut proved = Vec::<BinderId>::new();
+    for (function, fact) in registry.scalar_preflights() {
+        charge(work, 1, fact.source)?;
+        if function != fact.function() {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidSignature,
+                fact.source,
+            ));
+        }
+        fact.authenticate_original(work)?;
+        let anchor = BinderId::resolved(
+            fact.module(),
+            if fact.role.host_parameter(fact.module()).is_some() {
+                11
+            } else {
+                0
+            },
+        );
+        charge(work, 1, fact.source)?;
+        let common = registry
+            .scalar_preflight(anchor)
+            .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, fact.source))?;
+        if common.function() != anchor || !Arc::ptr_eq(common.call_codec(), fact.call_codec()) {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidSignature,
+                fact.source,
+            ));
+        }
+        charge(work, proved.len(), fact.source)?;
+        let fresh = !proved.contains(&anchor);
+        if fresh {
+            CheckedForeignCallCodec::authenticate(
+                fact.module(),
+                fact.source,
+                fact.call_codec.ids(),
+                registry,
+                work,
+            )?;
+        }
+        // Every row still authenticates its own Host and ConversionError
+        // projections; the common codec proof alone is shared.
+        fact.authenticate_registry_projection(registry, work)?;
+        if fresh {
+            charge(work, 1, fact.source)?;
+            proved
+                .try_reserve(1)
+                .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
+            proved.push(anchor);
+        }
+    }
+    Ok(())
 }
 
 mod checked_memory;
