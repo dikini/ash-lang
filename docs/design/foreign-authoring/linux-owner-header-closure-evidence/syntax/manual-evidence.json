@@ -1,0 +1,17 @@
+{
+  "manual": {
+    "path": "/usr/share/man/man1/x86_64-linux-gnu-gcc-15.1.gz",
+    "resolved": "/usr/share/man/man1/x86_64-linux-gnu-gcc-15.1.gz",
+    "size": 423730,
+    "sha256": "42759d4899154564579b875744b85f429c2985ae201b42ec0ddf8c7582a8b310"
+  },
+  "decompressed_bytes": 1618216,
+  "decompressed_sha256": "24ab532ecfc3417718a120ecb6721aab0a69ecede56239950dcfabd8db2eced8",
+  "source": "Installed GCC15 manual, no compiler query",
+  "interpretation": {
+    "-M": "Dependency rule only; driver implies preprocessing -E, no object or linking. Does not type-check _Static_assert expressions.",
+    "-MF": "Dependency text goes to separate fixed watched file, avoiding verbose/debug output mixing.",
+    "-B": "Pins first compiler-subprogram prefix; actual verbose cc1 command must match after assigned query. Prefix/include is absent to prevent implicit extra include root.",
+    "-nostdinc/-isystem": "Disable default header roots; explicitly list the three installed GCC/multiarch/system include roots. This is conditional installed-header configuration, not default-build/header or library-implementation proof."
+  }
+}

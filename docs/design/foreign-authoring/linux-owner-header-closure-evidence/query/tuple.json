@@ -1,0 +1,191 @@
+{
+  "status": "HEADER_DEPENDENCY_QUERY_PREPARATION_ONLY_NOT_ASSIGNED",
+  "contract_commit": "5cb93a9fd03d963377b0a79bc2e18404c54c2c47",
+  "contract_sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd",
+  "working_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+  "outer_environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "sequence": [
+    {
+      "name": "before-query",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+        "before-query"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/known-before.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/known-before.json.stderr"
+    },
+    {
+      "name": "dependency-query",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query-response.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query-response.json.stderr"
+    },
+    {
+      "name": "after-query",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+        "after-query"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/known-after.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/known-after.json.stderr"
+    },
+    {
+      "name": "collect-discovered-headers",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json.stderr"
+    }
+  ],
+  "actual_GCC_child_argv": [
+    "/usr/bin/x86_64-linux-gnu-gcc-15",
+    "-B/usr/libexec/gcc/x86_64-linux-gnu/15/",
+    "-m64",
+    "-std=c11",
+    "-fno-builtin",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-pedantic-errors",
+    "-nostdinc",
+    "-isystem",
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include",
+    "-isystem",
+    "/usr/include/x86_64-linux-gnu",
+    "-isystem",
+    "/usr/include",
+    "-v",
+    "-M",
+    "-MF",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "-MT",
+    "owner_header_abi",
+    "-x",
+    "c",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/owner-header-abi.c"
+  ],
+  "actual_GCC_child_environment": {
+    "PATH": "/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "known_tool_source_pins": [
+    {
+      "path": "/usr/bin/x86_64-linux-gnu-gcc-15",
+      "resolved": "/usr/bin/x86_64-linux-gnu-gcc-15",
+      "size": 1305304,
+      "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88"
+    },
+    {
+      "path": "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1",
+      "resolved": "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1",
+      "size": 37475472,
+      "sha256": "30510b346885152c4fce41d2b501751c95d3690b1c34eaa04ebb970e70eae620"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "resolved": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+    },
+    {
+      "path": "/usr/bin/python3.14",
+      "resolved": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/owner-header-abi.c",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/owner-header-abi.c",
+      "size": 686,
+      "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694"
+    }
+  ],
+  "preflight": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/preflight-inputs.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/preflight-inputs.json",
+    "size": 10716,
+    "sha256": "738c146a7094719dab9836cafef7e48f3bce1bc3a019e7b5b9b15a576e57b023"
+  },
+  "config": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query.monitor.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query.monitor.json",
+    "size": 5742,
+    "sha256": "f6685ed58846c4aac8c38e58bdc10329cfe80216198bcacf0f67c12c21b66dd5"
+  },
+  "verifier": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+    "size": 2350,
+    "sha256": "4f83fbef2b08d27a818d161175feef56f6399cd68436405f1b075244584bf473"
+  },
+  "collector": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+    "size": 7288,
+    "sha256": "b9fad73d35df9767f73d4b0a450f33eecd9ba9ed07768ecdad29e0a3c10d6e57"
+  },
+  "limits": {
+    "seconds": 1200,
+    "sampled_stdout_other_watched_sidefile_bytes": 16777216,
+    "admitted_raw_dependency_bytes": 1048576,
+    "dependency_records": 4096,
+    "manifest_bytes": 4194304,
+    "receipt_bytes": 262144
+  },
+  "unknown": "Full transitive header path set and bytes remain unknown until assigned dependency query. Post-query snapshot is not retrospective byte-used proof. Built-in compiler specs bound by driver identity; absent external specs paths checked, exact cc1 and include roots must be observed. Dynamic tool dependencies remain normal installed-tool trust, not closed-tool proof.",
+  "success": "Every phase0; query monitor exit/child0/allreaped/no escape/pending/truncation/limits; known inputs before/after equal; exact verbose cc1 -E path and explicit include roots; supported complete dependency rule within caps; bounded post-query dependency manifest. Stop on unknown format or any mismatch; no fallback/retry.",
+  "separate_future_gate": "Freeze/review discovered closure first. A later separately assigned -fsyntax-only prototype/target check must before/after pin all discovered headers and preserve dependency-set equality. No type/static-assert success from -M; no libc implementation/full ABI/no-loading/ownerful architecture/startup claim.",
+  "operator_anchor": "Independently compare external tuple/config/manifest/verifier/collector/interpreter/monitor hashes before any child; tuple is not self-approval. Exact env, no inherited compiler/include/loader variables, no shell.",
+  "no_execution": "No query run while preparing; future -M preprocesses trusted C headers only, no object/link/image or native owner execution. No automatic syntax command.",
+  "dependency_producer_correspondence": "Before decoding, <=1MiB admitted bytes must equal exactly one canonical settled sidefile_log/16MiB native-build.log monitor record with stable full sizes/hash/device/inode and no prefix. Same admitted byte pin and object rechecked before final receipt."
+}

@@ -321,3 +321,8 @@ The [successful fifth packaging record](linux-owner-static-packaging-evidence/RE
 retains the later complete-map/static-ELF observation and small original
 receipts. It records no candidate execution, ABI/native-closure completion,
 ownerful architecture selection or whole-F2 acceptance.
+
+The [header and proposed closure record](linux-owner-header-closure-evidence/README.md)
+retains separately assigned dependency-discovery and syntax-only observations.
+It supplies conditional header/target correspondence and proposed ownerful
+trust applicability, not architecture acceptance, native startup or whole F2.

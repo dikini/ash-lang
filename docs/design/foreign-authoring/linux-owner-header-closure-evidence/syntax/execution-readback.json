@@ -1,0 +1,142 @@
+{
+  "status": "SUCCESS_HEADER_SYNTAX_ONLY_CONDITIONAL_CHECK",
+  "steps": [
+    {
+      "name": "before-syntax",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+        "before-syntax"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "started_unix": 1792667220.489432,
+      "pid": 4,
+      "exit": 0,
+      "stdout": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-before.json",
+        "size": 174,
+        "sha256": "e87ff6fb801dd675d86ceb7dfdec986a39344d9aad580fc5752c8b881c9a0415"
+      },
+      "stderr": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-before.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "finished_unix": 1792667220.5754383
+    },
+    {
+      "name": "syntax-only",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "started_unix": 1792667220.5756812,
+      "pid": 5,
+      "exit": 0,
+      "stdout": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-response.json",
+        "size": 174,
+        "sha256": "dd7ab152be2b529b470ba7e7403f6b5f4811f81d8644dff3c0470c4a45ebb6c6"
+      },
+      "stderr": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-response.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "finished_unix": 1792667220.703242,
+      "monitor_receipt": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn/receipt.json",
+        "size": 19520,
+        "sha256": "24c5748e63f44ad86624925a1b133ab0592cca000b86d86f2fc497b11f142d2b"
+      }
+    },
+    {
+      "name": "after-syntax",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+        "after-syntax"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "started_unix": 1792667220.70402,
+      "pid": 8,
+      "exit": 0,
+      "stdout": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-after.json",
+        "size": 173,
+        "sha256": "b4d47ef4b4a149a81d3e336fc924645c5dd77e9660a5a68665930a20c8a360f1"
+      },
+      "stderr": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-after.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "finished_unix": 1792667220.7879846
+    },
+    {
+      "name": "collect-syntax",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "started_unix": 1792667220.7882514,
+      "pid": 9,
+      "exit": 0,
+      "stdout": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+        "size": 2941,
+        "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+      },
+      "stderr": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "finished_unix": 1792667220.8304749
+    }
+  ],
+  "anchors": {
+    "tuple.json": "d772443ea8955100fc44f14ac0e2426b1170a4f961be5b71310ae8b6a67373d8",
+    "syntax.monitor.json": "badcd7aec2613202ae9be80fe6b07dc31399a3034ce73be6a3cf2af2be94ac1f",
+    "manifest.json": "af9125cde7b212ab8ce31631f31027a78602bbb28a43043fb8c72d5e162fb197",
+    "collect_syntax.py": "2446f36f2b7a63d245436ba6b5058ea255f337b5a554785252e609e4f45a9edd",
+    "verify_inputs.py": "35e4d224be4d5f208e631ee48f2d37bacaa681fea0618437bdffbef6661b13c9"
+  },
+  "scope": "Assigned syntax-only header/target/prototype check; no object/link/image/native startup"
+}

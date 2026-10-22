@@ -1,0 +1,49 @@
+{
+  "tuple": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/tuple.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/tuple.json",
+    "size": 10415,
+    "sha256": "a0508c640cb40fd28638dae16ff6b0d404dc7cba4e84cd41053f62046dc90e30"
+  },
+  "config": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query.monitor.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query.monitor.json",
+    "size": 5742,
+    "sha256": "f6685ed58846c4aac8c38e58bdc10329cfe80216198bcacf0f67c12c21b66dd5"
+  },
+  "manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/manifest.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/manifest.json",
+    "size": 2559,
+    "sha256": "3fcf0266384913819c67ad18e4bc3c569da81b9c4059654db3eaf26b10c3d715"
+  },
+  "verifier": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+    "size": 2350,
+    "sha256": "4f83fbef2b08d27a818d161175feef56f6399cd68436405f1b075244584bf473"
+  },
+  "collector": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+    "size": 7288,
+    "sha256": "b9fad73d35df9767f73d4b0a450f33eecd9ba9ed07768ecdad29e0a3c10d6e57"
+  },
+  "tests": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py",
+    "size": 3106,
+    "sha256": "eb5567dce665cf6ca0ab2a6a6cf4537e973c158af5a3eba54133b95f37c80871"
+  },
+  "safe_test_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/association-test-receipt.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/association-test-receipt.json",
+    "size": 2667,
+    "sha256": "882db683a66c9f9f426b9d47bd54e6017d0c7814edc51f9e00d67241d4bc3c8a"
+  },
+  "root": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+  "status": "REPAIRED_PREPARATION_ONLY_NO_QUERY",
+  "readonly_verifier_exit": 0,
+  "headers_unknown": true,
+  "historical_unexecuted_first": "/tmp/ash-owner-header-unexecuted-first"
+}

@@ -1,0 +1,154 @@
+{
+  "argv": [
+    "/usr/bin/x86_64-linux-gnu-gcc-15",
+    "-B/usr/libexec/gcc/x86_64-linux-gnu/15/",
+    "-m64",
+    "-std=c11",
+    "-fno-builtin",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-pedantic-errors",
+    "-nostdinc",
+    "-isystem",
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include",
+    "-isystem",
+    "/usr/include/x86_64-linux-gnu",
+    "-isystem",
+    "/usr/include",
+    "-v",
+    "-M",
+    "-MF",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "-MT",
+    "owner_header_abi",
+    "-x",
+    "c",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/owner-header-abi.c"
+  ],
+  "executable_pin": {
+    "size": 1305304,
+    "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88"
+  },
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+  "output_parent": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+  "watch_root": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "input_files": [
+    {
+      "path": "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1",
+      "size": 37475472,
+      "sha256": "30510b346885152c4fce41d2b501751c95d3690b1c34eaa04ebb970e70eae620"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+    },
+    {
+      "path": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/owner-header-abi.c",
+      "size": 686,
+      "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694"
+    },
+    {
+      "path": "/usr/include/stdlib.h",
+      "size": 42963,
+      "sha256": "936ffcdf6161aa702d9fe433879e59b039731effebea7a9c02506da183a99d02"
+    },
+    {
+      "path": "/usr/include/stdc-predef.h",
+      "size": 2462,
+      "sha256": "383ff8bd7dcc87deefedd062637f4afe28f85f8be443beda8b41d15e45ef1679"
+    },
+    {
+      "path": "/usr/include/features.h",
+      "size": 19773,
+      "sha256": "f6d015d0248056a3091de489abcbadbbd93d7aaf95753d7426f779765f067118"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "size": 4286,
+      "sha256": "9ec1af1a58b5d6431708a7ca71ef65944622921ca6fce878ae2ab486f3145296"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+      "size": 14134,
+      "sha256": "472a84e536689fc48e861b2415b229742e133d09bbf1c8fd8e0fe89ab5712f04"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+      "size": 443,
+      "sha256": "64ab730bb09eba38f01a62174fb8371ef281778ac33f141a6fa4217a9b39466a"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+      "size": 6507,
+      "sha256": "c1db59d8d8a54dbc7e7dbc5ce2f25fd0451f8e01794e7964a15a3e6cc17566d3"
+    },
+    {
+      "path": "/usr/share/man/man1/x86_64-linux-gnu-gcc-15.1.gz",
+      "size": 423730,
+      "sha256": "42759d4899154564579b875744b85f429c2985ae201b42ec0ddf8c7582a8b310"
+    },
+    {
+      "path": "/var/lib/dpkg/info/cpp-15-x86-64-linux-gnu.list",
+      "size": 442,
+      "sha256": "071efc4a0b823c3f6a533cb7d6e3be5b1833888a40d863d85ec88edf867c363d"
+    },
+    {
+      "path": "/var/lib/dpkg/info/gcc-15-x86-64-linux-gnu.list",
+      "size": 1993,
+      "sha256": "af1ee388e97182d45f6f30c20c32b8b511b582c0429ca57702473b287b498288"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "size": 6238972,
+      "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+      "size": 2350,
+      "sha256": "4f83fbef2b08d27a818d161175feef56f6399cd68436405f1b075244584bf473"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+      "size": 7288,
+      "sha256": "b9fad73d35df9767f73d4b0a450f33eecd9ba9ed07768ecdad29e0a3c10d6e57"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/manual-evidence.json",
+      "size": 1125,
+      "sha256": "ce7fd39c9d38570ce97a5a2e47720fdf3edd9b1b0ab12fb8ad242a97b5ccdf49"
+    }
+  ],
+  "artifact_files": []
+}

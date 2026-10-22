@@ -1,0 +1,366 @@
+{
+  "kind": "PROPOSED_OWNERFUL_INPROCESS_APPLICABILITY_RECORD",
+  "record_version": 1,
+  "status": "PROPOSED_DATA_ONLY_NOT_APPROVED_NOT_ACTIVATABLE",
+  "policy_version": "owner-malloc-free-closure-v1-PROPOSED",
+  "authority": "Existing producer receipt plus independent protected approval only. This example is neither a new registry nor a proof carrier/self-authorization. AD0015 excludes owners; this record does not extend it. Ownerful architectural selection and per-image approval remain separate.",
+  "scope": {
+    "target": "x86_64-unknown-linux-gnu",
+    "mode": "in-process",
+    "baseline": "Exact existing-profile dependency-free opaque malloc/free owner experiment only; not checked host runtime",
+    "entry": "Allocate 8, source handler returns independent stored 8, Free current pointer void/consuming; no native byte read or Access/window/dependency callback.",
+    "excluded": "No checked runtime/O/K/group reservation/copy semantics, C-to-S dependencies, bytes/windows, SQLite, arbitrary symbols/plugins/source callbacks or isolation accepted."
+  },
+  "exact_artifact_binding": {
+    "static_receipt": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+      "size": 1946,
+      "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+    },
+    "static_manifest": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-manifest.json",
+      "size": 48307,
+      "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+    },
+    "image": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+      "size": 71022184,
+      "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+    },
+    "complete_map": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/whole-static.map",
+      "size": 100345205,
+      "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b"
+    },
+    "source_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+    "source_tree": "e4ab5e35b50d64326e548fc54cf264a4af170832",
+    "source_manifest": {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+      "size": 814765,
+      "sha256": "a17ca66398d6cb9d4f46d2cf2fa82b0197682b8b5c76dd9624995c2733c1160b"
+    },
+    "runtime_fingerprint": "6ed612090a3fadfbcc982c0cf41b210cb02e2d01af7db5a5958e63a6fc527a47",
+    "Stage2_receipt": {
+      "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+    },
+    "Stage2_generated_manifest": {
+      "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+    },
+    "generated_bridge": {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd"
+    },
+    "private_program_payload": {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+      "size": 17310,
+      "sha256": "4fff8df2dfb0ac63ec78179b74bba872f3e1b317a2c86dc46659e5bd6485df26"
+    },
+    "private_expected_facts": {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301"
+    },
+    "tool_native_census": {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+      "size": 6923,
+      "sha256": "7e95c8961f0786037353b303c5501a562f45c874dcf883f59debe536e591dd8e"
+    },
+    "libc_archive": {
+      "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "size": 6238972,
+      "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+    },
+    "fixed_owner_source": {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/owner.ash",
+      "size": 2671,
+      "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde"
+    },
+    "fixed_entry_source": {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/entry.ash",
+      "size": 148,
+      "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878"
+    }
+  },
+  "headers": {
+    "query_receipt": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json",
+      "size": 2976,
+      "sha256": "b89b81b854765f86df14d82cbd3d73a87fbb97b6b81d0413df4689fb1e0d5b03"
+    },
+    "query_manifest": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+      "size": 9529,
+      "sha256": "9b73bbf5f051cbf2c78d00ed8aaacc07072bfdef57c45ae1eae2a644baad5dcb"
+    },
+    "syntax_receipt": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+      "size": 2941,
+      "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+    },
+    "syntax_manifest": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-manifest.json",
+      "size": 9467,
+      "sha256": "ac39a7983404cb285cfe7c3e2a663db23789c41c93adb0eec43feea2db717ab3"
+    },
+    "frozen_inputs": [
+      {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+        "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+        "size": 686,
+        "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694"
+      },
+      {
+        "path": "/usr/include/stdlib.h",
+        "resolved": "/usr/include/stdlib.h",
+        "size": 42963,
+        "sha256": "936ffcdf6161aa702d9fe433879e59b039731effebea7a9c02506da183a99d02"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+        "size": 4286,
+        "sha256": "9ec1af1a58b5d6431708a7ca71ef65944622921ca6fce878ae2ab486f3145296"
+      },
+      {
+        "path": "/usr/include/features.h",
+        "resolved": "/usr/include/features.h",
+        "size": 19773,
+        "sha256": "f6d015d0248056a3091de489abcbadbbd93d7aaf95753d7426f779765f067118"
+      },
+      {
+        "path": "/usr/include/features-time64.h",
+        "resolved": "/usr/include/features-time64.h",
+        "size": 1532,
+        "sha256": "c7c33cddd4ffbbca1eb0de042131a51201a42f29139820d0a36c1e1dd0d16ba5"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+        "size": 398,
+        "sha256": "948177c0fc84c4746588f62252029880ec4c6f88b743ba55d952f980303ebfbb"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+        "size": 1109,
+        "sha256": "9d075412fa9c84e68a59e22944daad36905cb2eb19c3a7613d652b85ece4f207"
+      },
+      {
+        "path": "/usr/include/stdc-predef.h",
+        "resolved": "/usr/include/stdc-predef.h",
+        "size": 2462,
+        "sha256": "383ff8bd7dcc87deefedd062637f4afe28f85f8be443beda8b41d15e45ef1679"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+        "size": 35168,
+        "sha256": "a5a71b01109709190529d0c3532751869d05db6a5e8ce01c8c73229b797cfb83"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+        "size": 970,
+        "sha256": "9b3fe370666b72e74d2c19c9fa44bd18a72f671e5ca24fbf4cca6a29b114459d"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+        "size": 384,
+        "sha256": "ef444295a0a9e8f5c40918399a00cc91ba0bd79774110cdf6e652baa6cfadb2e"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+        "size": 481,
+        "sha256": "0b6ab3e2ed3ba79b30fe6ba81a68fc41f57965b8d56662763633431b703c9289"
+      },
+      {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+        "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+        "size": 14134,
+        "sha256": "472a84e536689fc48e861b2415b229742e133d09bbf1c8fd8e0fe89ab5712f04"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+        "size": 4929,
+        "sha256": "00524c02db9c4aa6dce6cdee90183bfca40fb254a93f0ea22a397f3355711d1f"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+        "size": 10325,
+        "sha256": "8d5c5517e58c6d7ac4c915037f3af518fadc41ceb47999ee3387e4fb91cb4eaa"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+        "size": 1115,
+        "sha256": "8900ab8d754778a6df25a040202726097d29f65954c4525de4542abef79c0c01"
+      },
+      {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+        "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+        "size": 443,
+        "sha256": "64ab730bb09eba38f01a62174fb8371ef281778ac33f141a6fa4217a9b39466a"
+      },
+      {
+        "path": "/usr/include/stdint.h",
+        "resolved": "/usr/include/stdint.h",
+        "size": 8268,
+        "sha256": "fbd21c7a64b876eddd4e179172fb58a4921fd616d103b8107a28a54cf687289b"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/types.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/types.h",
+        "size": 8806,
+        "sha256": "3fcf066dbf9fac9c5a15ff6327ca6a437e955e9aa571de1c3347cd0f4da4f93d"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+        "size": 3737,
+        "sha256": "a52fb9d6cca3d305618b036183fe11fbb1789afea64f5436197bbb058e5edf0f"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+        "size": 1340,
+        "sha256": "c502af2b2d265699b53ccb52e7a20521ab3ec4d346deb1366f494d1e22354ff9"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+        "size": 1906,
+        "sha256": "9a3e6e246753da1e142227f6a81a9d0064cbb3189073c367263a491b4044373f"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+        "size": 1037,
+        "sha256": "ed15fd5be7a39b8145b2beb08fd4a316bb72f0bd5ebca707399b4f5b0c0bf304"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+        "size": 1049,
+        "sha256": "f0d1ad8c0effab436bebd7a4c177a28a567f0faaae69877e9ccbe3d631a7cd68"
+      },
+      {
+        "path": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+        "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+        "size": 1305,
+        "sha256": "24c527a005947517a1d3032fdf161577e5a62184f4419066a2112a79ab2da788"
+      },
+      {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+        "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+        "size": 6507,
+        "sha256": "c1db59d8d8a54dbc7e7dbc5ce2f25fd0451f8e01794e7964a15a3e6cc17566d3"
+      },
+      {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+        "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+        "size": 445,
+        "sha256": "9409a59233daef9339a757c58b3dd1cee980a65f1ef2590040fe5e106222a4bc"
+      },
+      {
+        "path": "/usr/include/limits.h",
+        "resolved": "/usr/include/limits.h",
+        "size": 5839,
+        "sha256": "7505220f742ab30ef635baa0849f26e1dfdb4fb22f2b506f4f2b0f4879f82dfb"
+      }
+    ],
+    "claim": "Fixed GNU installed-header/target/source assertions and frozen 28-input set/hash before/after only. Query snapshots were post-query, not prior byte-used proof. No libc implementation/complete arbitrary ABI proof."
+  },
+  "native_build_evidence": {
+    "LOAD_record_count": 78,
+    "hashed_existing_records": 68,
+    "existing_paths": 67,
+    "absent_temporary_records": [
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/rustchms3my/symbols.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/rustchms3my/symbols.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.192a5sefl3yuyijcnuf004yd4.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.192a5sefl3yuyijcnuf004yd4.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.2tqcr9kxyi137krbypwvjq950.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.2tqcr9kxyi137krbypwvjq950.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.6ofmy1l3fgk1pyq1u4vsu83ov.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.6ofmy1l3fgk1pyq1u4vsu83ov.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.72rxedew88uyt0a55n96qmofq.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.72rxedew88uyt0a55n96qmofq.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.a0a5wumeea6mp8n5ayz84f0ga.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.a0a5wumeea6mp8n5ayz84f0ga.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.b503wuz3tdr9qkwvia0fjnndi.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.b503wuz3tdr9qkwvia0fjnndi.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.d1y7fxs1bdhosojsr0q5j5qty.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.d1y7fxs1bdhosojsr0q5j5qty.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.elz1q72eoft1rw7oo890zo6zh.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.elz1q72eoft1rw7oo890zo6zh.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      },
+      {
+        "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.alg0nzdkfsbq31guxnpty7fw2.1385msp.rcgu.o",
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.alg0nzdkfsbq31guxnpty7fw2.1385msp.rcgu.o",
+        "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+      }
+    ],
+    "qualification": "Ten absent linker temporaries prevent a fully hashed closure. Existing full map records/source/tool/private payload pins support producer correspondence, not formal source-to-native correctness."
+  },
+  "required_residual_premises": {
+    "producer_runtime_native": "Exact pinned producer/source/build/stdlib/native correspondence and memory integrity are trusted. Digests bind review inputs, never prove these premises. Distribution import patches-unapplied, no reviewed malloc.c implementation here and Rust source/precompiled-stdlib correspondence remain limits.",
+    "native_malloc_free": "Synchronous malloc with size_t value 8 returns null or a valid fresh 8-byte allocation with allocator-defined alignment and lifetime; free accepts only its still-live exact compatible pointer once and conforms to declared consuming void disposition. No native-result truth guarantee is manufactured by report shape.",
+    "allocator_paths": "Pinned allocation/free runtime, initialization, arenas/thread/TLS, locking/reentrancy, failure/diagnostic/abort and shutdown obey fixed closure/context. No unreviewed allocator plugin/debug/tunable configuration.",
+    "locale_loading": "Preserve built-in C locale in global and every thread. No direct/indirect runtime module loading, plugins, NSS dispatch, arbitrary charset conversion, locale replacement, unknown native callbacks or unreviewed registrations. Scalar gettext/strerror source result is conditional support, not whole ownerful proof.",
+    "startup_error_shutdown": "Conform through _start/_init/_fini, preinit/init/fini arrays, IFUNC/TLS, libc/Rust startup, known constructors, signals/thread entries/registered cleanup, panic/error/allocation/IO/unwind and shutdown. Old scalar array counts do not enumerate fifth-image entries.",
+    "owner_reporting_cleanup": "Exact guard preparation/arming, native-return recording, source-report/refusal/abandonment/drop and consuming teardown obey pinned runtime. Native return is distinct from source completion. Host termination/corruption may prevent destructor or report; process reaping does not prove native cleanup.",
+    "host_authority_and_loss": "In-process host authority/address space and supplementary groups retained. Native corruption, crash, abort, nonreturning calls or host loss may defeat availability/recovery. No filesystem/syscall/address-space/resource containment promise.",
+    "checked_group_boundary": "Later checked runtime must reserve/account connected owner groups before acquisition and enforce exactH/R/generation/dependencies, one-attempt/quarantine/copy/completion/O-K rules. Legacy storage/guard behavior does not establish those gates."
+  },
+  "prospective_launch_requirements": {
+    "administrator_context_association": null,
+    "protected_store": "Not provisioned; F6 must establish administrator-controlled user/mount/filesystem association and independent protected approvals. Caller/producer receipt cannot authorize itself.",
+    "argv": "Not selected; a future diagnostic must freeze exact single argv0 separately.",
+    "environment": {},
+    "immutable_image": "Future approved startup must copy to executable memfd, seal writes/grow/shrink/seal changes, then hash/inspect final object and match applicable exact approval before executing same fd. No pathname reopen.",
+    "status": "NO_STARTUP_COMMAND_OR_APPROVAL_EXISTS_IN_THIS_RECORD"
+  },
+  "refusal_predicate": "Absent/malformed/unknown/mismatched policy,premise,context,version,receipt,image,target,mode,operation/bridge/native/header association or exhausted validation budget must refuse before native startup/initialization/acquisition. This describes required future enforcement, not implemented enforcement here.",
+  "approval_requirements": [
+    "Independent owner decision must review and explicitly accept applicable residual premises before selecting ownerful architecture; no AD ID allocated here.",
+    "Each strict executable approval must bind exact receipt/image/premise/context/policy versions and actual checked contract/operation/wrapper/assumption closure when applicable. Existing legacy baseline lacks that checked closure.",
+    "No old scalar or possible-loading diagnostic approval applies. A separate possible-loading trusted experiment, if proposed, must say so and cannot claim strict approval.",
+    "Future diagnostic expected bytes/deadline/output/fd/cleanup bounds must be separately frozen/reviewed/assigned; this delivery starts none."
+  ],
+  "remaining": "F2 ownerful decision/native closure/startup evidence, F4 checked accounting/completion, F6 immutable receipt/admission/store/context enforcement, F7 credential/isolation/fault/quota evidence and full FFI remain open."
+}

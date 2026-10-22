@@ -1,0 +1,197 @@
+{
+  "scope": "Actual conditional header target/prototype syntax-only evidence, no object/link/startup",
+  "files": [
+    {
+      "relative_path": "README.md",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/README.md",
+      "size": 2478,
+      "sha256": "49eb2a834542caf9e64265382b8ff40bcf32f532480b096f61c05f2d4fed5774"
+    },
+    {
+      "relative_path": "build-run-knemvgvn/output.log",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn/output.log",
+      "size": 4648,
+      "sha256": "a5325612b0080e311861a6b64e676dc93777cce01a5014040f92ed424f04eac6"
+    },
+    {
+      "relative_path": "build-run-knemvgvn/receipt.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn/receipt.json",
+      "size": 19520,
+      "sha256": "24c5748e63f44ad86624925a1b133ab0592cca000b86d86f2fc497b11f142d2b"
+    },
+    {
+      "relative_path": "build-run-knemvgvn/watched-0.log",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn/watched-0.log",
+      "size": 1368,
+      "sha256": "13a4483867656718f402bbc9d6262ce070cef48e10dc2e67ed028414358d41fa"
+    },
+    {
+      "relative_path": "collect_syntax.py",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+      "size": 7721,
+      "sha256": "2446f36f2b7a63d245436ba6b5058ea255f337b5a554785252e609e4f45a9edd"
+    },
+    {
+      "relative_path": "execution-readback.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/execution-readback.json",
+      "size": 6258,
+      "sha256": "4f4a5517009cc5e73bbd92d4f17c28829f3e51a779e37c913387ec7919ef1bee"
+    },
+    {
+      "relative_path": "frozen-after.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-after.json",
+      "size": 173,
+      "sha256": "b4d47ef4b4a149a81d3e336fc924645c5dd77e9660a5a68665930a20c8a360f1"
+    },
+    {
+      "relative_path": "frozen-after.json.stderr",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-after.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "frozen-before.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-before.json",
+      "size": 174,
+      "sha256": "e87ff6fb801dd675d86ceb7dfdec986a39344d9aad580fc5752c8b881c9a0415"
+    },
+    {
+      "relative_path": "frozen-before.json.stderr",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-before.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "handoff.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/handoff.json",
+      "size": 2684,
+      "sha256": "2856eaf273fa44aa3f441cdaf272b4bd28acc82219a5102335db1dce6b6a4f54"
+    },
+    {
+      "relative_path": "manifest.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/manifest.json",
+      "size": 2519,
+      "sha256": "af9125cde7b212ab8ce31631f31027a78602bbb28a43043fb8c72d5e162fb197"
+    },
+    {
+      "relative_path": "manual-evidence.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/manual-evidence.json",
+      "size": 1125,
+      "sha256": "ce7fd39c9d38570ce97a5a2e47720fdf3edd9b1b0ab12fb8ad242a97b5ccdf49"
+    },
+    {
+      "relative_path": "native-build.log",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/native-build.log",
+      "size": 1368,
+      "sha256": "13a4483867656718f402bbc9d6262ce070cef48e10dc2e67ed028414358d41fa"
+    },
+    {
+      "relative_path": "owner-header-abi.c",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+      "size": 686,
+      "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694"
+    },
+    {
+      "relative_path": "preflight-inputs.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/preflight-inputs.json",
+      "size": 25115,
+      "sha256": "127b3898510f29a61371bd8a8e333972fccc43d8a817e01ef37e0e0cf573eb17"
+    },
+    {
+      "relative_path": "preparation-readback.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/preparation-readback.json",
+      "size": 181,
+      "sha256": "4889e445fe2345f5832745f2d69560eefdb107bb7ab9b6c1d52e8d5a1c56ab3b"
+    },
+    {
+      "relative_path": "preparation-readback.stderr",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "readonly-command.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/readonly-command.json",
+      "size": 514,
+      "sha256": "f2b7887ab85943bd46674bb8a7338d2d5a50b0c39602473cf9e20227f5377ae2"
+    },
+    {
+      "relative_path": "safe-test-command.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/safe-test-command.json",
+      "size": 1916,
+      "sha256": "7126d0498d85649d56c3b9f689d41f0d2d9b4c0419132a131f6e4402507a7eb8"
+    },
+    {
+      "relative_path": "safe-test-receipt.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/safe-test-receipt.json",
+      "size": 2201,
+      "sha256": "e5755686dc248e62a18bda97a35548965f87cffb33f0e7a54ef000b26dd0455f"
+    },
+    {
+      "relative_path": "safe-tests.stderr",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/safe-tests.stderr",
+      "size": 1303,
+      "sha256": "d53275f10ab7c96feb04f5488665a20d5e27c357d6c150cf021a22cca52c38f5"
+    },
+    {
+      "relative_path": "safe-tests.stdout",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/safe-tests.stdout",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "syntax-manifest.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-manifest.json",
+      "size": 9467,
+      "sha256": "ac39a7983404cb285cfe7c3e2a663db23789c41c93adb0eec43feea2db717ab3"
+    },
+    {
+      "relative_path": "syntax-receipt.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+      "size": 2941,
+      "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+    },
+    {
+      "relative_path": "syntax-receipt.json.stderr",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "syntax-response.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-response.json",
+      "size": 174,
+      "sha256": "dd7ab152be2b529b470ba7e7403f6b5f4811f81d8644dff3c0470c4a45ebb6c6"
+    },
+    {
+      "relative_path": "syntax-response.json.stderr",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-response.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "syntax.monitor.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json",
+      "size": 10313,
+      "sha256": "badcd7aec2613202ae9be80fe6b07dc31399a3034ce73be6a3cf2af2be94ac1f"
+    },
+    {
+      "relative_path": "test_syntax_correspondence.py",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/test_syntax_correspondence.py",
+      "size": 3658,
+      "sha256": "883df1207bb2d42f2e0836881ac133ea30d52c9bd3091d3504bf54cdab7b7f6f"
+    },
+    {
+      "relative_path": "tuple.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/tuple.json",
+      "size": 8867,
+      "sha256": "d772443ea8955100fc44f14ac0e2426b1170a4f961be5b71310ae8b6a67373d8"
+    },
+    {
+      "relative_path": "verify_inputs.py",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+      "size": 2388,
+      "sha256": "35e4d224be4d5f208e631ee48f2d37bacaa681fea0618437bdffbef6661b13c9"
+    }
+  ]
+}
