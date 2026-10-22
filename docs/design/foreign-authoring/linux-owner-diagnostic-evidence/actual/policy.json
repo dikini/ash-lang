@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "status": "PREPARED_ONLY_NO_APPROVAL_OR_STARTUP",
+  "kind": "trusted-existing-profile-owner-diagnostic",
+  "purpose": "observe-fixed-legacy-owner-acquire-stored-read-teardown-report",
+  "context": "trusted-operator-host-authority-empty-env-fixed-fd-v1",
+  "mode": "in-process",
+  "source_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "image": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65",
+    "size_bytes": 71022184
+  },
+  "receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+    "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+  },
+  "premise": {
+    "path": "/tmp/ash-owner-header-closure-delivery/payload/docs/design/foreign-authoring/linux-owner-header-closure-evidence/ownerful-premise.proposed.json",
+    "sha256": "9e4ca3f8f46d61e8a8e8c5a0508d10dfd5cf5c6948ceacc61ade558e8aee882e",
+    "status": "Proposed reviewed-input applicability data, not accepted ownerful architecture or permission. Diagnostic must independently accept host/loading uncertainty."
+  },
+  "limits": {
+    "image_bytes": 134217728,
+    "receipt_bytes": 262144,
+    "approval_bytes": 65536,
+    "program_headers": 64,
+    "combined_output_bytes": 16384,
+    "child_deadline_seconds": 30
+  },
+  "argv": [
+    "ash-owner-malloc-free-diagnostic"
+  ],
+  "environment": {},
+  "memfd": {
+    "create_flags": 19,
+    "required_seals": 15,
+    "mode_octal": "0500"
+  },
+  "expected_acquired_output_utf8": "Completed(8, Closed)\n",
+  "expected_nullable_output_utf8": "NotAcquired(())\n",
+  "nullable_note": "Conforming malloc-null refusal is recorded but is NOT acquired-lifecycle diagnostic success.",
+  "reaping_policy": "30s termination-request deadline; post-fork setup/refusal/timeout/output failures kill own direct child and actually wait/reap, pending persisted first. No authored child/thread creation or hostile containment. Kernel wait may delay.",
+  "diagnostic_premises": [
+    "Exact trusted evaluator/bridge/payload/facts/libc malloc/free owner baseline under host authority; not checked O/K/group execution.",
+    "Native allocation validity/compatible exact free once/synchronous truthful consuming return and runtime memory integrity trusted. Source stored8 is not a native read.",
+    "Known retained loader/localization/gconv and broader runtime-loading uncertainty explicitly accepted for diagnostic only; not strict no-loading success.",
+    "Startup/error/panic/unwind/destruction/host-loss behavior and ten missing link temporaries remain stated trust limits; process report/reaping does not prove native free or source completion on faults.",
+    "Kernel/Python/operator/fd/syscall correctness trusted; no process/credential/group/filesystem/syscall isolation or policy changes."
+  ],
+  "strict_no_runtime_loading_profile_accepted": false,
+  "architecture_accepted": false,
+  "checked_runtime_authority": false,
+  "approval_store_provisioned": false
+}

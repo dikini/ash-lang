@@ -1,0 +1,30 @@
+{
+  "status": "APPROVED_TOOL_LAUNCHER_SETUP_FAILURE_BEFORE_DIAGNOSTIC_SPAWN",
+  "human_authorization_readback": "Root relayed direct user answer: Approve one host run, for exact reviewed image/proposal/bounds.",
+  "normal_tool_escalation": "Approved; isolated Python launcher started and exited1",
+  "command": "/usr/bin/python3.14 -I -S -B /tmp/execute-owner-diagnostic-host.py",
+  "launcher": {
+    "path": "/tmp/execute-owner-diagnostic-host.py",
+    "size": 3640,
+    "sha256": "cdefa2dce925972f08b5de94c15a2d32b3593ff389aefa5c3fd228b3ea93e750"
+  },
+  "stderr": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launcher-setup-failure.stderr",
+    "size": 360,
+    "sha256": "144a437303c58f9cdeb8c97829f99329ae358d4b4a4d1797a67a618e9b5191fb"
+  },
+  "exit": 1,
+  "cause": "Operator pin helper requires Path, but sandbox provenance loop passed string at line21. This precedes any subprocess.Popen and host output creation.",
+  "proposal": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launch-proposal.json",
+    "size": 5607,
+    "sha256": "57fff96d43acbefdbe95c4a6fe27a0478e9d944e62d274f1f8f441599146e449"
+  },
+  "all_artifact_interpreter_pins_still_equal": true,
+  "sandbox_inventory_and_prior_rejection_unchanged": true,
+  "host_diagnostic_spawned": false,
+  "candidate_or_native_execution": false,
+  "host_outputs_or_new_case_created": false,
+  "automatic_repair_retry_or_workaround": false,
+  "next": "Stop. Root must separately authorize review of the narrow launcher fix and any fresh assignment; no further command follows from this record."
+}

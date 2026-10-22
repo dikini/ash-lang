@@ -326,3 +326,8 @@ The [header and proposed closure record](linux-owner-header-closure-evidence/REA
 retains separately assigned dependency-discovery and syntax-only observations.
 It supplies conditional header/target correspondence and proposed ownerful
 trust applicability, not architecture acceptance, native startup or whole F2.
+
+The [trusted owner diagnostic record](linux-owner-diagnostic-evidence/README.md)
+retains the later sandbox refusal, separate approval/setup history and one
+explicitly approved host result. It observes the fixed legacy report under
+trusted premises, not native truth, checked runtime or architecture acceptance.

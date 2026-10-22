@@ -1,0 +1,42 @@
+{
+  "harness": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/diagnostic.py",
+    "size": 22555,
+    "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+  },
+  "policy": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/policy.json",
+    "size": 3172,
+    "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+  },
+  "tests": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/test_diagnostic.py",
+    "size": 11826,
+    "sha256": "7afdb884a5412f6bbedfe30eca489741258fbd413e883838feeeccfb6dec6113"
+  },
+  "safe_receipt": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/safe-receipt.json",
+    "size": 3964,
+    "sha256": "7d76b750c3ffad82f2ad6c607b741b3d3936a4415e05c45e91ac7ccfb7c54795"
+  },
+  "proposal": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/proposal.json",
+    "size": 6269,
+    "sha256": "e74019623651729339a04b32768499ff22bcd60cad5252bc1c3c96d2167bd272"
+  },
+  "manifest": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/manifest.json",
+    "size": 2036,
+    "sha256": "f24d47c2c7ec4921b29a4cbce59a996b72811a83ef7c6b03a5fb06405e4c8b5e"
+  },
+  "source_delta": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/scalar-to-owner.patch",
+    "size": 25424,
+    "sha256": "e85ae6ddfb9ebed64f1516bdd489eedc0a294c80bc61a45d98608faabfaea23d"
+  },
+  "root": "/tmp/ash-owner-diagnostic-preparation",
+  "status": "PREPARATION_ONLY",
+  "safe_methods": 14,
+  "no_candidate_execution": true,
+  "no_valid_approval_written": true
+}

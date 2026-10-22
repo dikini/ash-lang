@@ -1,0 +1,59 @@
+{
+  "scope": "Actual one sandbox diagnostic refusal only, no host fallback",
+  "files": [
+    {
+      "relative_path": "case-p__lm011/lifecycle.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011/lifecycle.json",
+      "size": 241,
+      "sha256": "6dd7793e8430f7564acde8112c50d7a22b44377aaa5517953c703d4d747c6423"
+    },
+    {
+      "relative_path": "case-p__lm011/result.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011/result.json",
+      "size": 3039,
+      "sha256": "82108e918d6dd7745818c0d49406bb056ab39a829c2b029a04454193a18b4089"
+    },
+    {
+      "relative_path": "diagnostic.py",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/diagnostic.py",
+      "size": 22555,
+      "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+    },
+    {
+      "relative_path": "launch-proposal.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/launch-proposal.json",
+      "size": 3776,
+      "sha256": "a165be2f6fc49885753fe8f7c5c95d2561bf37d690eacc8014ffb01227303eea"
+    },
+    {
+      "relative_path": "policy.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/policy.json",
+      "size": 3172,
+      "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+    },
+    {
+      "relative_path": "root-approval.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json",
+      "size": 1495,
+      "sha256": "24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd"
+    },
+    {
+      "relative_path": "sandbox-execution.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-execution.json",
+      "size": 6194,
+      "sha256": "65f7df12ce654684ad8d705b36b02213c0ff816120b7e6723a29fbff2248f507"
+    },
+    {
+      "relative_path": "sandbox-stderr.log",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stderr.log",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "sandbox-stdout.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stdout.json",
+      "size": 3173,
+      "sha256": "271ae62e980700879479f10e4f2ff00288278dabc8b71f40fd73753c6fefb2d3"
+    }
+  ]
+}

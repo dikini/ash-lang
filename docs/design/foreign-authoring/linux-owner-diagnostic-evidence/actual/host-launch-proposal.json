@@ -1,0 +1,103 @@
+{
+  "status": "HOST_ESCALATION_PROPOSAL_ONLY_NOT_ASSIGNED",
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/diagnostic.py",
+    "--approval",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "interpreter": {
+    "path": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "pins": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/diagnostic.py",
+      "size": 22555,
+      "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/policy.json",
+      "size": 3172,
+      "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json",
+      "size": 1495,
+      "sha256": "24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+      "size": 71022184,
+      "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+      "size": 1946,
+      "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+    },
+    {
+      "path": "/tmp/ash-owner-header-closure-delivery/payload/docs/design/foreign-authoring/linux-owner-header-closure-evidence/ownerful-premise.proposed.json",
+      "size": 23612,
+      "sha256": "9e4ca3f8f46d61e8a8e8c5a0508d10dfd5cf5c6948ceacc61ade558e8aee882e"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-manifest.json",
+      "size": 48307,
+      "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+      "size": 2941,
+      "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+    }
+  ],
+  "output_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stdout.json",
+  "output_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stderr.log",
+  "run_scope": "One separate host-tool invocation only, after independent review and explicit root assignment through normal tool approval. No automatic fallback/retry/restart or host security/policy change.",
+  "before_after": "Verify all exact pins before and after, retain process exit and all case/result/lifecycle outputs; preserve any refusal",
+  "root_approval": "Existing exact root approval remains unchanged and explicitly requires separate host assignment; this proposal is not that assignment.",
+  "directory": {
+    "mode": "0o700",
+    "uid": 1000,
+    "device": 66309,
+    "inode": 49555204
+  },
+  "storage": "Case temporary copy stays under existing ignored project target, removed by reviewed harness after actual cleanup; no image/map duplication in Git",
+  "sandbox_provenance": {
+    "inventory": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/execution-manifest.json",
+      "size": 2852,
+      "sha256": "b257a33b93b9b89e5a4d820ef68cec0fdb9e0daf4cb5cb435f07e0540cb002b0"
+    },
+    "execution": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-execution.json",
+      "size": 6194,
+      "sha256": "65f7df12ce654684ad8d705b36b02213c0ff816120b7e6723a29fbff2248f507"
+    },
+    "stdout": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stdout.json",
+      "size": 3173,
+      "sha256": "271ae62e980700879479f10e4f2ff00288278dabc8b71f40fd73753c6fefb2d3"
+    },
+    "actual_handoff": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/actual-handoff.json",
+      "size": 3376,
+      "sha256": "1114d83eabdc2ed5bcaf517d56a9e738ab5f354293f794a11864c2d9c9646844"
+    },
+    "observed_boundary": "Harness78, child125, setup/exec errno13, reaped; no successful image/native-owner result. Preserve exact sandbox records.",
+    "before_after_pins_equal": true
+  },
+  "new_case": "Unchanged harness creates a fresh private random case under the same canonical 0700 root; prior case-p__lm011 remains untouched.",
+  "gate": "Wait for independent actual-sandbox and host-proposal review, fresh explicit root assignment and normal tool escalation approval. No candidate execution occurred while preparing this proposal."
+}

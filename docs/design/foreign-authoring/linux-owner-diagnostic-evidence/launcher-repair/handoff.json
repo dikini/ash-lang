@@ -1,0 +1,24 @@
+{
+  "status": "READY_FOR_NARROW_REVIEW_NOT_NATIVE_ASSIGNMENT",
+  "launcher": {
+    "path": "/tmp/ash-owner-launcher-repair/execute-host.py",
+    "size": 4855,
+    "sha256": "e52be075e7b3a92b5492aa5dc1644c9718e3be27364477f94d8cadb5b5fe40ef"
+  },
+  "diff": {
+    "path": "/tmp/ash-owner-launcher-repair/launcher.patch",
+    "size": 2376,
+    "sha256": "d376c9fa94b2da430225a301f2300149736a7a99aa806b1398dba1439868c931"
+  },
+  "receipt": {
+    "path": "/tmp/ash-owner-launcher-repair/receipt.json",
+    "size": 2166,
+    "sha256": "ecf401fa4855fe0d5f926c62fada2df9da7e777b02ac64dd5b73c9aa960f00e3"
+  },
+  "manifest": {
+    "path": "/tmp/ash-owner-launcher-repair/manifest.json",
+    "size": 1254,
+    "sha256": "b30d468689e348eb6e266b61a22f68053fac10109ccbdfc5d4287594f7be54d6"
+  },
+  "approval_harness_policy_proposal_unchanged": true
+}
