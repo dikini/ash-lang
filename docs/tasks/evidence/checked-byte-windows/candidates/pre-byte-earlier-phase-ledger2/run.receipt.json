@@ -1,0 +1,37 @@
+{
+  "runner_sha256": "3a6b0fbc8a04d5c77221e69487dfbb99da6de62c3e3b99774b7e9f16cabb98a1",
+  "command": [
+    "gdb",
+    "-q",
+    "--batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "set breakpoint pending on",
+    "-ex",
+    "set environment ASH_CAPTURE_PROFILE 1",
+    "-ex",
+    "source /tmp/ash-checked-byte-windows/exclusive-profile/phase-ledger.py",
+    "-ex",
+    "run",
+    "--args",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 78.979,
+  "inputs_equal": true,
+  "count": 588,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "dc10d60982b6b00f72c01f30f03a47c933541fe794d4c1e5077c2e07c92aa8be",
+  "log_sha256": "eb950fbe59fbe46540091d1e064bc708b39306929928a9043e2e644810444841",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

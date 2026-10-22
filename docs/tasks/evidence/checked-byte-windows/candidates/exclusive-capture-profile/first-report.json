@@ -1,0 +1,2681 @@
+{
+  "ops": [
+    "unclassified",
+    "state_copy",
+    "state_key",
+    "normalize",
+    "prune",
+    "copy_segment",
+    "requested_clause",
+    "discover_call",
+    "control_roots",
+    "build_graph",
+    "dispatch",
+    "unused"
+  ],
+  "overflow": true,
+  "sessions": [
+    {
+      "after": 4334,
+      "before": 2873,
+      "graph": 28,
+      "id": 0,
+      "limit": 6193600,
+      "meter": 134143633371840,
+      "reconciles": true,
+      "restore": false,
+      "roots": 15,
+      "sizes": [],
+      "units": 1461
+    },
+    {
+      "after": 4363,
+      "before": 4334,
+      "graph": 29,
+      "id": 1,
+      "limit": 6193600,
+      "meter": 134143633371840,
+      "reconciles": true,
+      "restore": false,
+      "roots": 17,
+      "sizes": [],
+      "units": 29
+    },
+    {
+      "after": 77783,
+      "before": 75443,
+      "graph": 35,
+      "id": 2,
+      "limit": 6193600,
+      "meter": 134143633371840,
+      "reconciles": true,
+      "restore": false,
+      "roots": 4,
+      "sizes": [],
+      "units": 2340
+    },
+    {
+      "after": 77856,
+      "before": 77783,
+      "graph": 73,
+      "id": 3,
+      "limit": 6193600,
+      "meter": 134143633371840,
+      "reconciles": true,
+      "restore": false,
+      "roots": 7,
+      "sizes": [],
+      "units": 73
+    },
+    {
+      "after": 84171,
+      "before": 84170,
+      "graph": 1,
+      "id": 4,
+      "limit": 6193600,
+      "meter": 134143633371840,
+      "reconciles": true,
+      "restore": false,
+      "roots": 0,
+      "sizes": [],
+      "units": 1
+    },
+    {
+      "after": 162378,
+      "before": 145057,
+      "graph": 268,
+      "id": 5,
+      "limit": 6193600,
+      "meter": 134143633371840,
+      "reconciles": true,
+      "restore": false,
+      "roots": 1,
+      "sizes": [],
+      "units": 17321
+    },
+    {
+      "after": 225655,
+      "before": 208247,
+      "graph": 268,
+      "id": 6,
+      "limit": 6193600,
+      "meter": 134143633371840,
+      "reconciles": true,
+      "restore": false,
+      "roots": 1,
+      "sizes": [],
+      "units": 17408
+    },
+    {
+      "after": 259139,
+      "before": 226072,
+      "graph": 414,
+      "id": 7,
+      "limit": 6193600,
+      "meter": 134143633371840,
+      "reconciles": true,
+      "restore": false,
+      "roots": 12,
+      "sizes": [
+        {
+          "calls": 360,
+          "max_cells": 0,
+          "max_heap": 17,
+          "max_prefix": 0,
+          "op": 1
+        },
+        {
+          "calls": 447,
+          "max_cells": 0,
+          "max_heap": 17,
+          "max_prefix": 0,
+          "op": 2
+        },
+        {
+          "calls": 55,
+          "max_cells": 0,
+          "max_heap": 18,
+          "max_prefix": 0,
+          "op": 3
+        },
+        {
+          "calls": 102,
+          "max_cells": 0,
+          "max_heap": 18,
+          "max_prefix": 0,
+          "op": 4
+        },
+        {
+          "calls": 6,
+          "max_cells": 0,
+          "max_heap": 16,
+          "max_prefix": 7,
+          "op": 5
+        },
+        {
+          "calls": 3,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 7,
+          "op": 6
+        },
+        {
+          "calls": 33,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 11,
+          "op": 7
+        },
+        {
+          "calls": 22,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 0,
+          "op": 10
+        }
+      ],
+      "units": 33067
+    },
+    {
+      "after": 75531,
+      "before": 57313,
+      "graph": 331,
+      "id": 8,
+      "limit": 6193600,
+      "meter": 134143633388288,
+      "reconciles": true,
+      "restore": false,
+      "roots": 0,
+      "sizes": [],
+      "units": 18218
+    },
+    {
+      "after": 18305,
+      "before": 0,
+      "graph": 331,
+      "id": 9,
+      "limit": 2604534,
+      "meter": 134143633377568,
+      "reconciles": true,
+      "restore": false,
+      "roots": 0,
+      "sizes": [],
+      "units": 18305
+    },
+    {
+      "after": 78161,
+      "before": 18721,
+      "graph": 413,
+      "id": 10,
+      "limit": 2604534,
+      "meter": 134143633377568,
+      "reconciles": true,
+      "restore": false,
+      "roots": 14,
+      "sizes": [
+        {
+          "calls": 672,
+          "max_cells": 0,
+          "max_heap": 17,
+          "max_prefix": 0,
+          "op": 1
+        },
+        {
+          "calls": 858,
+          "max_cells": 0,
+          "max_heap": 17,
+          "max_prefix": 0,
+          "op": 2
+        },
+        {
+          "calls": 88,
+          "max_cells": 0,
+          "max_heap": 18,
+          "max_prefix": 0,
+          "op": 3
+        },
+        {
+          "calls": 165,
+          "max_cells": 0,
+          "max_heap": 18,
+          "max_prefix": 0,
+          "op": 4
+        },
+        {
+          "calls": 10,
+          "max_cells": 0,
+          "max_heap": 16,
+          "max_prefix": 7,
+          "op": 5
+        },
+        {
+          "calls": 5,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 7,
+          "op": 6
+        },
+        {
+          "calls": 54,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 27,
+          "op": 7
+        },
+        {
+          "calls": 31,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 0,
+          "op": 10
+        }
+      ],
+      "units": 59440
+    },
+    {
+      "after": 17578,
+      "before": 0,
+      "graph": 331,
+      "id": 11,
+      "limit": 65736,
+      "meter": 134143633438000,
+      "reconciles": true,
+      "restore": true,
+      "roots": 0,
+      "sizes": [],
+      "units": 17578
+    },
+    {
+      "after": 65731,
+      "before": 17994,
+      "graph": 413,
+      "id": 12,
+      "limit": 65736,
+      "meter": 134143633438000,
+      "reconciles": true,
+      "restore": true,
+      "roots": 14,
+      "sizes": [
+        {
+          "calls": 523,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 0,
+          "op": 1
+        },
+        {
+          "calls": 686,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 0,
+          "op": 2
+        },
+        {
+          "calls": 75,
+          "max_cells": 0,
+          "max_heap": 18,
+          "max_prefix": 0,
+          "op": 3
+        },
+        {
+          "calls": 126,
+          "max_cells": 0,
+          "max_heap": 18,
+          "max_prefix": 0,
+          "op": 4
+        },
+        {
+          "calls": 7,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 7,
+          "op": 5
+        },
+        {
+          "calls": 4,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 7,
+          "op": 6
+        },
+        {
+          "calls": 24,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 23,
+          "op": 7
+        },
+        {
+          "calls": 24,
+          "max_cells": 0,
+          "max_heap": 15,
+          "max_prefix": 0,
+          "op": 10
+        }
+      ],
+      "units": 47737
+    }
+  ],
+  "sites": [
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 5944,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 43
+    },
+    {
+      "calls": 56,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6145,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 56
+    },
+    {
+      "calls": 56,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6288,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 78
+    },
+    {
+      "calls": 23,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 674,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 45
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 913,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 0
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3137,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 28
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1646,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 0
+    },
+    {
+      "calls": 50,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1547,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 50
+    },
+    {
+      "calls": 99,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1529,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 99
+    },
+    {
+      "calls": 28,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3174,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 28
+    },
+    {
+      "calls": 28,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3438,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 28
+    },
+    {
+      "calls": 81,
+      "failures": 0,
+      "file": "src/core/capture/control.rs",
+      "line": 499,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 174
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1375,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 13
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1383,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 24
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1485,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 0
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1505,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 0
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1791,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 12
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1849,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 12
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1954,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 12
+    },
+    {
+      "calls": 87,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1618,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 87
+    },
+    {
+      "calls": 9,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1641,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 20
+    },
+    {
+      "calls": 53,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1523,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 53
+    },
+    {
+      "calls": 51,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1525,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 102
+    },
+    {
+      "calls": 17,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1687,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 17
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1599,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 12
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1983,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 41
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1988,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 17
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1900,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 0
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1923,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 12
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1831,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 48
+    },
+    {
+      "calls": 17,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2131,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 29
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1591,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 1
+    },
+    {
+      "calls": 4,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1675,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 4
+    },
+    {
+      "calls": 4,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1676,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 4
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3301,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 17
+    },
+    {
+      "calls": 45,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3374,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 45
+    },
+    {
+      "calls": 16,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3419,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 16
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 440,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 1
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3389,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 29
+    },
+    {
+      "calls": 28,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3450,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 28
+    },
+    {
+      "calls": 109,
+      "failures": 0,
+      "file": "src/types.rs",
+      "line": 122,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 109
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3499,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 0
+    },
+    {
+      "calls": 56,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3506,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 56
+    },
+    {
+      "calls": 11,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3508,
+      "op": 9,
+      "requested": 0,
+      "session": 0,
+      "units": 11
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6437,
+      "op": 8,
+      "requested": 0,
+      "session": 1,
+      "units": 29
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 5944,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 39
+    },
+    {
+      "calls": 14,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 550,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 27
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 561,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 58
+    },
+    {
+      "calls": 76,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 674,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 102
+    },
+    {
+      "calls": 38,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 643,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 14
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 5992,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 2
+    },
+    {
+      "calls": 105,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6145,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 105
+    },
+    {
+      "calls": 105,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6288,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 49
+    },
+    {
+      "calls": 9,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 616,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 9
+    },
+    {
+      "calls": 9,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 602,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 9
+    },
+    {
+      "calls": 9,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 631,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 0
+    },
+    {
+      "calls": 36,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 654,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 36
+    },
+    {
+      "calls": 36,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 663,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 0
+    },
+    {
+      "calls": 107,
+      "failures": 0,
+      "file": "src/core/capture/control.rs",
+      "line": 499,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 206
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 913,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 0
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3137,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 35
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1646,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 0
+    },
+    {
+      "calls": 24,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1547,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 24
+    },
+    {
+      "calls": 22,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1529,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 22
+    },
+    {
+      "calls": 35,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3174,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 35
+    },
+    {
+      "calls": 66,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3438,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 66
+    },
+    {
+      "calls": 4,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2200,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 8
+    },
+    {
+      "calls": 9,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2092,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 9
+    },
+    {
+      "calls": 17,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1567,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 17
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1375,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 4
+    },
+    {
+      "calls": 30,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1383,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 60
+    },
+    {
+      "calls": 30,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1485,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 30
+    },
+    {
+      "calls": 11,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1450,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 11
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1505,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 11
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1791,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 2
+    },
+    {
+      "calls": 30,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1849,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 30
+    },
+    {
+      "calls": 30,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1954,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 30
+    },
+    {
+      "calls": 23,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1591,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 23
+    },
+    {
+      "calls": 30,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1599,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 30
+    },
+    {
+      "calls": 30,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1983,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 60
+    },
+    {
+      "calls": 30,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1988,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 0
+    },
+    {
+      "calls": 30,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1900,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 28
+    },
+    {
+      "calls": 28,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1913,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 28
+    },
+    {
+      "calls": 27,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1618,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 27
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1923,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 2
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1831,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 8
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1576,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 2
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1475,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 2
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1641,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 2
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3301,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 0
+    },
+    {
+      "calls": 14,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3323,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 27
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3338,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 1
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 854,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 142
+    },
+    {
+      "calls": 127,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 154,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 127
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 899,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 17
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 909,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 13
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 919,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 0
+    },
+    {
+      "calls": 14,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3354,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 210
+    },
+    {
+      "calls": 63,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3374,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 63
+    },
+    {
+      "calls": 10,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3419,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 10
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 440,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 1
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3389,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 36
+    },
+    {
+      "calls": 29,
+      "failures": 0,
+      "file": "src/core/capture/control.rs",
+      "line": 366,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 29
+    },
+    {
+      "calls": 28,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 2476,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 28
+    },
+    {
+      "calls": 132,
+      "failures": 0,
+      "file": "src/types.rs",
+      "line": 122,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 132
+    },
+    {
+      "calls": 35,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3450,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 35
+    },
+    {
+      "calls": 3,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 2404,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 3
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3499,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 0
+    },
+    {
+      "calls": 144,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3506,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 144
+    },
+    {
+      "calls": 28,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3508,
+      "op": 9,
+      "requested": 0,
+      "session": 2,
+      "units": 60
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6437,
+      "op": 8,
+      "requested": 0,
+      "session": 3,
+      "units": 73
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 5944,
+      "op": 9,
+      "requested": 0,
+      "session": 4,
+      "units": 1
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 5944,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 269
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 550,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 3
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 561,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 140
+    },
+    {
+      "calls": 174,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 674,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 180
+    },
+    {
+      "calls": 22,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 643,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 3
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 5992,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 12
+    },
+    {
+      "calls": 536,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6145,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 536
+    },
+    {
+      "calls": 536,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6288,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 60
+    },
+    {
+      "calls": 18,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 616,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 18
+    },
+    {
+      "calls": 150,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 654,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 150
+    },
+    {
+      "calls": 150,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 663,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 0
+    },
+    {
+      "calls": 4,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 6271,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 12
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 631,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 0
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 913,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 15
+    },
+    {
+      "calls": 5,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 931,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 5
+    },
+    {
+      "calls": 5,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 968,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 5
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3137,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 268
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1646,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 0
+    },
+    {
+      "calls": 208,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1547,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 208
+    },
+    {
+      "calls": 229,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1529,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 229
+    },
+    {
+      "calls": 268,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3174,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 268
+    },
+    {
+      "calls": 378,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3438,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 378
+    },
+    {
+      "calls": 544,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 993,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 544
+    },
+    {
+      "calls": 544,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 998,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 18
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 542,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 268
+    },
+    {
+      "calls": 14,
+      "failures": 0,
+      "file": "src/core/source_resource.rs",
+      "line": 133,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 400
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 576,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1
+    },
+    {
+      "calls": 548,
+      "failures": 0,
+      "file": "src/core/capture/control.rs",
+      "line": 499,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1133
+    },
+    {
+      "calls": 17,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1375,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 27
+    },
+    {
+      "calls": 511,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1383,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1022
+    },
+    {
+      "calls": 511,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1010,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 511
+    },
+    {
+      "calls": 511,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1485,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 582
+    },
+    {
+      "calls": 123,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1450,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 123
+    },
+    {
+      "calls": 17,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1505,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 131
+    },
+    {
+      "calls": 17,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1791,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 17
+    },
+    {
+      "calls": 282,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1849,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 282
+    },
+    {
+      "calls": 282,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1954,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 282
+    },
+    {
+      "calls": 167,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1591,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 167
+    },
+    {
+      "calls": 1409,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1618,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1409
+    },
+    {
+      "calls": 90,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1675,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 90
+    },
+    {
+      "calls": 90,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1676,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 71
+    },
+    {
+      "calls": 616,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1523,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 616
+    },
+    {
+      "calls": 403,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1525,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 806
+    },
+    {
+      "calls": 234,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1687,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 234
+    },
+    {
+      "calls": 266,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1983,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 661
+    },
+    {
+      "calls": 266,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1988,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 129
+    },
+    {
+      "calls": 266,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1900,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 265
+    },
+    {
+      "calls": 265,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1913,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 265
+    },
+    {
+      "calls": 208,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1599,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 208
+    },
+    {
+      "calls": 15,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1923,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 15
+    },
+    {
+      "calls": 17,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1831,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 68
+    },
+    {
+      "calls": 12,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 533,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 12
+    },
+    {
+      "calls": 53,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1641,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 116
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 598,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 268
+    },
+    {
+      "calls": 8,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 615,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 8
+    },
+    {
+      "calls": 4,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 618,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 12
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 638,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1
+    },
+    {
+      "calls": 25,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 691,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 25
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2200,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 2
+    },
+    {
+      "calls": 13,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2081,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 28
+    },
+    {
+      "calls": 36,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2092,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 36
+    },
+    {
+      "calls": 85,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1567,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 85
+    },
+    {
+      "calls": 8,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1576,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 18
+    },
+    {
+      "calls": 4,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 695,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 4
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2696,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 6
+    },
+    {
+      "calls": 22,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2252,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 56
+    },
+    {
+      "calls": 21,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1475,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 21
+    },
+    {
+      "calls": 32,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1648,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 52
+    },
+    {
+      "calls": 32,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1649,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 52
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 768,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2756,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 2
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2808,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 2
+    },
+    {
+      "calls": 14,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1595,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 14
+    },
+    {
+      "calls": 8,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1348,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 8
+    },
+    {
+      "calls": 8,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1414,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 16
+    },
+    {
+      "calls": 38,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1439,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 38
+    },
+    {
+      "calls": 8,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1572,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 8
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1875,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 2
+    },
+    {
+      "calls": 16,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1957,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 16
+    },
+    {
+      "calls": 16,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1963,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 17
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1926,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 16
+    },
+    {
+      "calls": 4,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1747,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 7
+    },
+    {
+      "calls": 4,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 1755,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 4
+    },
+    {
+      "calls": 8,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 1457,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 8
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 2403,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3301,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 3
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3323,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 3
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3338,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 854,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 205
+    },
+    {
+      "calls": 184,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 154,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 184
+    },
+    {
+      "calls": 5,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 233,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 9
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 899,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 17
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 909,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 15
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 919,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 0
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3354,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 8
+    },
+    {
+      "calls": 128,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3374,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 128
+    },
+    {
+      "calls": 67,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3419,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 67
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 440,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 1
+    },
+    {
+      "calls": 1,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3389,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 269
+    },
+    {
+      "calls": 73,
+      "failures": 0,
+      "file": "src/core/capture/control.rs",
+      "line": 366,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 73
+    },
+    {
+      "calls": 469,
+      "failures": 0,
+      "file": "src/types.rs",
+      "line": 122,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 469
+    },
+    {
+      "calls": 63,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 2476,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 63
+    },
+    {
+      "calls": 268,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3450,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 268
+    },
+    {
+      "calls": 35,
+      "failures": 0,
+      "file": "src/core/effect.rs",
+      "line": 2440,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 0
+    },
+    {
+      "calls": 13,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 3163,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 13
+    },
+    {
+      "calls": 65,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 2404,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 65
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 2850,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 22
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3476,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 2
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3484,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 2
+    },
+    {
+      "calls": 8,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3503,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 8
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture/value.rs",
+      "line": 3508,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 2
+    },
+    {
+      "calls": 2,
+      "failures": 0,
+      "file": "src/core/capture.rs",
+      "line": 2895,
+      "op": 9,
+      "requested": 0,
+      "session": 5,
+      "units": 4
+    },
+    {
+      "calls": 1099,
+      "failures": 0,
+      "file": "overflow",
+      "line": 0,
+      "op": 0,
+      "requested": 0,
+      "session": 5,
+      "units": 1354
+    },
+    {
+      "calls": 13994,
+      "failures": 0,
+      "file": "overflow",
+      "line": 0,
+      "op": 0,
+      "requested": 0,
+      "session": 6,
+      "units": 17408
+    },
+    {
+      "calls": 20831,
+      "failures": 0,
+      "file": "overflow",
+      "line": 0,
+      "op": 0,
+      "requested": 0,
+      "session": 7,
+      "units": 33067
+    },
+    {
+      "calls": 14316,
+      "failures": 0,
+      "file": "overflow",
+      "line": 0,
+      "op": 0,
+      "requested": 0,
+      "session": 8,
+      "units": 18218
+    },
+    {
+      "calls": 14378,
+      "failures": 0,
+      "file": "overflow",
+      "line": 0,
+      "op": 0,
+      "requested": 0,
+      "session": 9,
+      "units": 18305
+    },
+    {
+      "calls": 36196,
+      "failures": 0,
+      "file": "overflow",
+      "line": 0,
+      "op": 0,
+      "requested": 0,
+      "session": 10,
+      "units": 59440
+    },
+    {
+      "calls": 13396,
+      "failures": 0,
+      "file": "overflow",
+      "line": 0,
+      "op": 0,
+      "requested": 0,
+      "session": 11,
+      "units": 17578
+    },
+    {
+      "calls": 30397,
+      "failures": 1,
+      "file": "overflow",
+      "line": 0,
+      "op": 0,
+      "requested": 16,
+      "session": 12,
+      "units": 47737
+    }
+  ]
+}

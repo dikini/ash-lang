@@ -1,0 +1,12 @@
+{
+  "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "size": 847849504,
+  "sha256": "8733b9e5723b0893418e1489a98afdad86e4965d9c14ddf12cee0ab944f6d3d8",
+  "association": [
+    "candidate-capture-exclusive-restore-profile",
+    "candidate-capture-observer-off",
+    "candidate-capture-observer-on-repeat",
+    "candidate-capture-observer-off-repeat"
+  ],
+  "qualification": "All paired commands were cached Finished tests; no intervening build or source mutation."
+}
