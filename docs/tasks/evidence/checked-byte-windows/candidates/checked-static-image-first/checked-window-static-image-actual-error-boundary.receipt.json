@@ -1,0 +1,36 @@
+{
+  "command": [
+    "timeout",
+    "--kill-after=10s",
+    "180s",
+    "gdb",
+    "-q",
+    "--batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "source /tmp/ash-checked-byte-windows/static-image-candidate/restore-first-error.py",
+    "-ex",
+    "run",
+    "--args",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_body_free_consumer_core_and_transforms",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 46.982,
+  "inputs_equal": true,
+  "count": 592,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "2202cc193209c11af0aa76a4008d5f0b6588089666af030d006b720887fe4f94",
+  "log_sha256": "27bbe038f811859f2a4c20eca9ec2f3c9e357933a84a136a8287c510b21af88b",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

@@ -360,6 +360,7 @@ enum NodeTag {
     NativeInterpret {
         body: u32,
         interpretations: Slice,
+        host: Option<ForeignHostRecord>,
     },
     TypeAbstraction {
         parameters: Slice,
@@ -1572,7 +1573,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x11";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x12";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2196,10 +2197,12 @@ impl Wire for NodeTag {
             Self::NativeInterpret {
                 body,
                 interpretations,
+                host,
             } => {
                 14u8.write(writer)?;
                 body.write(writer)?;
-                interpretations.write(writer)
+                interpretations.write(writer)?;
+                host.write(writer)
             }
             Self::TypeAbstraction { parameters, body } => {
                 15u8.write(writer)?;
@@ -2377,6 +2380,7 @@ impl Wire for NodeTag {
             14 => Self::NativeInterpret {
                 body: Wire::read(reader)?,
                 interpretations: Wire::read(reader)?,
+                host: Wire::read(reader)?,
             },
             15 => Self::TypeAbstraction {
                 parameters: Wire::read(reader)?,
@@ -7702,6 +7706,12 @@ struct CallCodecRecord {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct ForeignHostRecord {
+    identity: TypeVariableIdentity,
+    effect: EffectIdentity,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct NativeInterpretationRecord {
     effect: u32,
     symbol: u32,
@@ -7905,6 +7915,7 @@ wire_struct!(
     codec
 );
 wire_struct!(NativeInterpretationRecord, effect, symbol);
+wire_struct!(ForeignHostRecord, identity, effect);
 
 impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
     const MINIMUM: usize = 1;
@@ -10639,14 +10650,15 @@ impl Encoder<'_> {
                 })
             }
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
-                // Static host authority is not executable image admission.
-                if boundary.host().is_some() {
-                    return Err(ImageFailure::Unsupported(Unsupported::EffectOperation));
-                }
                 let start = self.image.interpretations.len();
                 for interpretation in boundary.interpretations() {
                     charge(self.work, 1)?;
                     admit_closed_native_instance(interpretation.effect(), self.work)?;
+                    if boundary.host().is_some() {
+                        if interpretation.symbol().prepared().checked_contract().is_none() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                    } else {
                     // Fixed literals retain their original role; they cannot
                     // introduce an ordinary address or owner interpreter.
                     charge(self.work, interpretation.symbol().symbol().operands().len())?;
@@ -10686,6 +10698,7 @@ impl Encoder<'_> {
                             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                         }
                     }
+                    }
                     let effect =
                         self.encode_structural(StructuralInput::Instance(interpretation.effect()))?;
                     let symbol = self.encode_native_symbol(interpretation.symbol())?;
@@ -10698,6 +10711,12 @@ impl Encoder<'_> {
                 Ok(NodeTag::NativeInterpret {
                     body: self.node(boundary.body())?,
                     interpretations: Slice::of(&self.image.interpretations, start)?,
+                    host: boundary.host().map(|host| -> Result<_, ImageFailure> {
+                        Ok(ForeignHostRecord {
+                            identity: self.type_variable(host.identity())?,
+                            effect: self.effect_identity(host.effect())?,
+                        })
+                    }).transpose()?,
                 })
             }
             _ => Err(ImageFailure::Unsupported(Unsupported::EffectOperation)),
@@ -12611,6 +12630,7 @@ impl Decoder<'_> {
             NodeTag::NativeInterpret {
                 body,
                 interpretations,
+                host,
             } => {
                 let body = *get(nodes, body)?;
                 let records = interpretations.get(&self.image.interpretations)?;
@@ -12624,6 +12644,11 @@ impl Decoder<'_> {
                     let effect = self.structural(record.effect)?.instance()?;
                     admit_closed_native_instance(&effect, self.work)?;
                     let symbol = get(symbols, record.symbol)?;
+                    if host.is_some() {
+                        if symbol.prepared().checked_contract().is_none() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                    } else {
                     charge(self.work, symbol.symbol().operands().len())?;
                     if symbol.owner().is_some()
                         || !matches!(
@@ -12661,16 +12686,24 @@ impl Decoder<'_> {
                             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                         }
                     }
+                    }
                     interpretations.push(crate::core::NativeInterpretation::new(
                         effect,
                         Arc::clone(symbol),
                     ));
                 }
+                let host = host.map(|host| -> Result<_, ImageFailure> {
+                    Ok(crate::core::effect::ForeignHostIdentity {
+                        identity: self.type_variable(host.identity)?,
+                        effect: self.effect_identity(host.effect)?,
+                    })
+                }).transpose()?;
                 return builder
                     .with_caller_type_work(self.work, |builder| {
-                        builder.native_interpret(
+                        builder.native_interpret_with_host(
                             body,
                             interpretations.into_boxed_slice(),
+                            host,
                             ty.into_inner(),
                             effects,
                             origin.take(),
@@ -13199,4 +13232,12 @@ pub(crate) fn encode_effect_for_build(
         bridges,
         libraries,
     })
+}
+
+#[cfg(test)]
+pub(crate) fn checked_window_static_image_controls(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(ModuleId, Arc<SourceFile>)],
+) {
+    source_resource_image::checked_window_static_image_controls(program, provenance);
 }

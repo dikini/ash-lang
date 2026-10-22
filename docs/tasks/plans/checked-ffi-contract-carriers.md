@@ -807,3 +807,11 @@ cost diagnostics measure deficits 6748 and 10443; they confer no default pass.
 Next work addresses repeated exact source/inventory proof within one immutable
 admission, then actual checked-owner static-image and remaining hostile/bounds
 and affected regression gates. PR101 and whole F3 remain incomplete.
+
+The first genuine checked-window static-image candidate compiles and encodes,
+but canonical restoration refuses at normalized prepared-library reconstruction,
+before owner/symbol rebinding or hostile image cases. See the
+[exact red record](../evidence/checked-byte-windows/candidates/checked-static-image-first/README.md).
+The next image repair must retain the full checked profile, assumptions and
+Host/member relations through fresh original-source reconstruction; the legacy
+wire/profile guards remain intact. This is not private-image completion.
