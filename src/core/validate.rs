@@ -8987,6 +8987,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn validate_reserved_builtin_sources(&self) -> Result<(), ValidationError> {
+        self.validate_reserved_builtin_sources_with_operation(None)
+    }
+    fn validate_reserved_builtin_sources_with_operation(
+        &self, operation: Option<&source_declarations::BuiltinForeignSourceAuthentication<'_, '_>>,
+    ) -> Result<(), ValidationError> {
         let authenticate = |module: ModuleId, source: SourceId| {
             self.charge_type_work(1)?;
             if !module.is_builtin_foreign() {
@@ -8996,6 +9001,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .sources
                 .get(&source)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            if let Some(operation) = operation {
+                let mut work = TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+                let result = operation.covers(&self.program.registry, module, source, &mut work);
+                self.charge_type_work(work.used())?;
+                if result? { return Ok(()); }
+            }
             self.charge_type_work(source.text().len())?;
             if source.text() != crate::module::foreign_builtin_source_text() {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -16215,6 +16226,18 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         ),
         ValidationError,
     > {
+        // One literal operation owns these proofs. They are never stored in
+        // Validator, the template session, or the syntax coordinate loan.
+        let original_context = matches!(self.source_resource_context, SourceResourceValidationContext::OriginalTemplate { .. });
+        let source_operation = if original_context {
+            let mut work = TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+            let modules = self.module_sources.as_ref().ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            let result = source_declarations::BuiltinForeignSourceAuthentication::new(
+                &self.program.registry, &self.sources, modules, &self.source_resource_context, &mut work);
+            self.charge_type_work(work.used())?;
+            Some(result?)
+        } else { None };
+        let early_preflights = if original_context { Some(self.validate_scalar_preflight_registry()?) } else { None };
         let original = if matches!(
             self.source_resource_context,
             SourceResourceValidationContext::OriginalTemplate { .. }
@@ -16226,22 +16249,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 .module_sources
                 .as_ref()
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            let result = if let Some(loan) = self.source_coordinate_loan {
-                source_declarations::authenticate_with_coordinate_loan(
-                    &self.program.registry,
-                    &self.sources,
-                    modules,
-                    &mut work,
-                    loan,
-                )
-            } else {
-                source_declarations::authenticate(
-                    &self.program.registry,
-                    &self.sources,
-                    modules,
-                    &mut work,
-                )
-            };
+            let result = source_declarations::authenticate_with_builtin_operation(
+                &self.program.registry, &self.sources, modules, &mut work,
+                self.source_coordinate_loan, source_operation.as_ref().expect("original operation"),
+                early_preflights.as_ref().expect("completed scalar table"), &self.source_resource_context);
             self.charge_type_work(work.used())?;
             let original = result?;
             let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
@@ -16255,8 +16266,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         } else {
             None
         };
-        self.validate_reserved_builtin_sources()?;
-        let preflights = self.validate_scalar_preflight_registry()?;
+        self.validate_reserved_builtin_sources_with_operation(source_operation.as_ref())?;
+        let preflights = match early_preflights { Some(proof) => proof, None => self.validate_scalar_preflight_registry()? };
         let mut owners = self.validate_registry_contents(original.as_ref())?;
         self.validate_effect_registry_with_preflights(
             self.module_sources.as_ref(),

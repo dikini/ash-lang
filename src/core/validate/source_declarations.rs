@@ -4,6 +4,8 @@
 //! particular, a retained nominal/effect ID cannot choose its defining slot.
 
 mod coordinate_loan;
+mod builtin_operation;
+pub(super) use builtin_operation::BuiltinForeignSourceAuthentication;
 mod resource_selectors;
 
 pub(crate) use coordinate_loan::DeclarationCoordinateLoan;
@@ -562,12 +564,19 @@ impl DeclarationCoordinates {
         source: &SourceFile,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
+        Self::from_module_source_with_byte_proof(module, source, work, None)
+    }
+    fn from_module_source_with_byte_proof(
+        module: ModuleId, source: &SourceFile, work: &mut TypeWorkBudget,
+        operation: Option<(&BuiltinForeignSourceAuthentication<'_, '_>, &ResolvedRegistry)>,
+    ) -> Result<Self, ValidationError> {
         if !module.is_builtin_foreign() {
             return Self::from_source(source, work);
         }
-        charge(work, source.text().len())?;
-        if source.text() != crate::module::foreign_builtin_source_text() {
-            return Err(registry());
+        let covered = operation.map(|(proof, registry)| proof.covers(registry, module, source, work)).transpose()?.unwrap_or(false);
+        if !covered {
+            charge(work, source.text().len())?;
+            if source.text() != crate::module::foreign_builtin_source_text() { return Err(registry()); }
         }
         let mut result = Self::default();
         for (owner, coordinates) in crate::module::foreign_nominal_coordinates()
@@ -939,15 +948,17 @@ pub(super) struct OriginalDeclarationProvenance {
     pub(super) omitted_builtin_formals: HashSet<TypeVariableId>,
 }
 
+#[cfg(test)]
 pub(super) fn authenticate(
     registry: &ResolvedRegistry,
     sources: &HashMap<SourceId, &SourceFile>,
     modules: &HashMap<ModuleId, SourceId>,
     work: &mut TypeWorkBudget,
 ) -> Result<OriginalDeclarationProvenance, ValidationError> {
-    authenticate_with_coordinates(registry, sources, modules, work, None)
+    authenticate_with_coordinates(registry, sources, modules, work, None, None)
 }
 
+#[cfg(test)]
 pub(super) fn authenticate_with_coordinate_loan(
     registry: &ResolvedRegistry,
     sources: &HashMap<SourceId, &SourceFile>,
@@ -955,7 +966,19 @@ pub(super) fn authenticate_with_coordinate_loan(
     work: &mut TypeWorkBudget,
     loan: &DeclarationCoordinateLoan<'_>,
 ) -> Result<OriginalDeclarationProvenance, ValidationError> {
-    authenticate_with_coordinates(registry, sources, modules, work, Some(loan))
+    authenticate_with_coordinates(registry, sources, modules, work, Some(loan), None)
+}
+
+pub(super) fn authenticate_with_builtin_operation(
+    registry: &ResolvedRegistry, sources: &HashMap<SourceId, &SourceFile>,
+    modules: &HashMap<ModuleId, SourceId>, work: &mut TypeWorkBudget,
+    loan: Option<&DeclarationCoordinateLoan<'_>>,
+    operation: &BuiltinForeignSourceAuthentication<'_, '_>,
+    preflights: &crate::resolved::ScalarPreflightOwnerAuthentication<'_>,
+    context: &super::SourceResourceValidationContext,
+) -> Result<OriginalDeclarationProvenance, ValidationError> {
+    operation.context_matches(registry, sources, modules, context, work)?;
+    authenticate_with_coordinates(registry, sources, modules, work, loan, Some((operation, preflights)))
 }
 
 fn authenticate_with_coordinates(
@@ -964,17 +987,20 @@ fn authenticate_with_coordinates(
     modules: &HashMap<ModuleId, SourceId>,
     work: &mut TypeWorkBudget,
     loan: Option<&DeclarationCoordinateLoan<'_>>,
+    operation: Option<(&BuiltinForeignSourceAuthentication<'_, '_>, &crate::resolved::ScalarPreflightOwnerAuthentication<'_>)>,
 ) -> Result<OriginalDeclarationProvenance, ValidationError> {
     let mut original = OriginalDeclarationProvenance::default();
     for (module, source) in modules {
         charge(work, 1)?;
         let source = *sources.get(source).ok_or_else(registry_error)?;
         let shared = loan
-            .map(|loan| loan.get(*module, source, work))
+            .map(|loan| if operation.is_none() { loan.get(*module, source, work) } else { loan.get_with_factory(*module, source, work, |work| {
+                DeclarationCoordinates::from_module_source_with_byte_proof(*module, source, work, operation.map(|(proof, _)| (proof, registry)))
+            }) })
             .transpose()?;
         let fresh = if shared.is_none() {
-            Some(DeclarationCoordinates::from_module_source(
-                *module, source, work,
+            Some(DeclarationCoordinates::from_module_source_with_byte_proof(
+                *module, source, work, operation.map(|(proof, _)| (proof, registry)),
             )?)
         } else {
             None
@@ -985,7 +1011,11 @@ fn authenticate_with_coordinates(
             .expect("one coordinate owner");
         // Only syntax is shared. Each immutable registry/context still proves
         // all declarations, retained resource binders and unused candidates.
-        authenticate_module(registry, *module, source, coordinates, work, &mut original)?;
+        if operation.is_some() {
+            authenticate_module_with_operation(registry, *module, source, coordinates, work, &mut original, operation)?;
+        } else {
+            authenticate_module(registry, *module, source, coordinates, work, &mut original)?;
+        }
         coordinates.resource_binders.authenticate(
             registry,
             *module,
@@ -1019,6 +1049,18 @@ fn authenticate_module(
     coordinates: &DeclarationCoordinates,
     work: &mut TypeWorkBudget,
     original: &mut OriginalDeclarationProvenance,
+) -> Result<(), ValidationError> {
+    authenticate_module_with_operation(registry, module, source, coordinates, work, original, None)
+}
+
+fn authenticate_module_with_operation(
+    registry: &ResolvedRegistry,
+    module: ModuleId,
+    source: &SourceFile,
+    coordinates: &DeclarationCoordinates,
+    work: &mut TypeWorkBudget,
+    original: &mut OriginalDeclarationProvenance,
+    operation: Option<(&BuiltinForeignSourceAuthentication<'_, '_>, &crate::resolved::ScalarPreflightOwnerAuthentication<'_>)>,
 ) -> Result<(), ValidationError> {
     for nominal in registry.nominals() {
         charge(work, 1)?;
@@ -1142,18 +1184,16 @@ fn authenticate_module(
             // NativeHost is compiler metadata, not a parsed effect declaration.
             // Its exception requires the actual immutable defining source and
             // independently reconstructed complete builtin inventory.
-            charge(work, source.text().len())?;
-            if source.text() != crate::module::foreign_builtin_source_text()
-                || !crate::foreign::checked_builtins::is_canonical_native_host(
-                    effect, registry, work,
-                )
-                .map_err(|error| {
-                    if error.is_resource_exhaustion() {
-                        resource()
-                    } else {
-                        registry_error()
-                    }
-                })?
+            let covered = operation.map(|(proof, _)| proof.covers(registry, module, source, work)).transpose()?.unwrap_or(false);
+            if !covered {
+                charge(work, source.text().len())?;
+                if source.text() != crate::module::foreign_builtin_source_text() { return Err(registry_error()); }
+            }
+            let canonical = match operation {
+                Some((_, preflights)) => crate::foreign::checked_builtins::is_canonical_native_host_with_preflights(effect, registry, preflights, work),
+                None => crate::foreign::checked_builtins::is_canonical_native_host(effect, registry, work),
+            }.map_err(|error| if error.is_resource_exhaustion() { resource() } else { registry_error() })?;
+            if !canonical
             {
                 return Err(registry_error());
             }

@@ -815,3 +815,15 @@ before owner/symbol rebinding or hostile image cases. See the
 The next image repair must retain the full checked profile, assumptions and
 Host/member relations through fresh original-source reconstruction; the legacy
 wire/profile guards remain intact. This is not private-image completion.
+
+The operation-local builtin proof candidate has passing component controls and
+an actual selective-legacy source→linked independent Core positive; see
+[the qualified candidate record](../evidence/checked-byte-windows/candidates/operation-local-builtin-proof/README.md).
+Default startup remains 1/3: two-owner exhausts work, and dependent exhausts
+work in its post-restore static library comparison (masked as InvalidRecord by
+the fixture). The selective partial checker view additionally retains Host
+without its complete checking inventory; old and new source authentication
+agree on refusal, while the ordinary linked program passes. Restore this
+internal original-view positive through exact retained-Host metadata closure;
+do not accept a silent unsupported reclassification. The checked prepared-image
+carrier repair remains separate. No budget, public build or runtime gate moved.
