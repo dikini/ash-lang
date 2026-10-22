@@ -168,3 +168,31 @@ correction likewise needs fresh execution.
 The first sharing run's passes are not transferred to these later source bytes.
 The startup blocker, remaining hostile-window/original controls, full images and
 affected regressions remain open.
+
+## Second Host-proof sharing result
+
+The second repair passes four family/kind controls (including two genuinely
+completed builtin graphs), all seven connected source/consumer/Core controls,
+and both exact image-subset controls. The passive image now passes canonical
+Effect encoding, restoration and evaluation followed by its complete hostile
+record loop. The module-qualified DataOf quantifier locator is exercised.
+All commands retain 591 equal inputs, aggregate `837b5c5b`, reconstructed from
+`43cda78d` and the retained comment-only overlay. One mistyped subset selector
+matched zero tests; its receipt is retained without test credit, and the exact
+`checked_builtin_image_subset_` selector separately passes both actual tests.
+
+Both buffer startups and the dependent startup still fail Resource at unchanged
+327680. The complete pinned trace records 58 full checked inventories, 166 codec
+checks and six table admissions across compilation and restoration. These are
+different admission boundaries; nested costs overlap and cannot be added.
+Each whole-table pass now proves the checked inventory once, retaining all row
+projections. Four standalone row checks still repeat that inventory within each
+immutable Core table validation. Reconstruction and selection also retain rows
+with fresh standalone proofs; sharing across distinct registries or admission
+boundaries is not justified. The first actual capped refusal occurs later in
+independent Core capture-control discovery, at 327677 used plus a 15-cell request.
+The printed reconstruction total does not establish reconstruction completion.
+No allowance, fixture or permission has changed; the startup regression remains
+a delivery blocker. The next repair must preserve paid row/source/projection
+checks and separate fresh admissions. Window hostiles and remaining regressions
+are still pending; no checked execution or whole-F3 acceptance follows.

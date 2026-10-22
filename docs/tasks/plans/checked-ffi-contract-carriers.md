@@ -759,3 +759,9 @@ The first measured operation-local family codec proof sharing preserves connecte
 the unchanged allowance. A second exact duplicate full-inventory replay through
 per-row Host checks is measured and a projection-preserving repair is authored,
 not executed. Its future results must not inherit the first candidate's passes.
+
+The second Host-proof sharing candidate passes four family controls, connected
+7/7, image subset 2/2 and complete passive-image tamper validation, at 591 equal
+inputs `837b5c5b`. Startup still fails at unchanged 327680. Complete caller/cost
+evidence separates repeated proofs inside immutable table operations from
+independent admission boundaries; no cap or validation waiver is permitted.
