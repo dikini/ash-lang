@@ -84,6 +84,16 @@ this unresolved requirement into architecture acceptance. The subsequent
 records host `Returned(7)` and sandbox EACCES under explicit known-loading and
 host-authority premises; it leaves that requirement unmet.
 
+## Proposed owner/resource in-process comparison
+
+The [owner/resource experiment amendment](linux-owner-inprocess-experiment.md)
+proposes one existing-profile generated malloc/free direct-resource baseline,
+compared with retained static checked lifecycle facts. It preserves AD-0015's
+owner-free scope and separates contract review, exact build/inspection assignment
+and any later exact diagnostic approval. No candidate execution, provisioning,
+checked runtime bypass or ownerful architecture acceptance follows from the
+amendment alone. Isolated Stage B and SQLite remain separate.
+
 ## Proposed architecture requirements awaiting evidence
 
 These requirements refine design questions; they are not an accepted AD.
