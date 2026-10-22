@@ -77,3 +77,43 @@ assumes ForeignOwnerApply where the actual source uses Application. These are
 fixture or assertion boundaries, not evidence for a product relaxation. The
 source overlay is relative to the recorded base and reconstructs the exact
 compiled test/spec inputs. No all-green delivery is claimed.
+
+## Fixture correction snapshot
+
+The [two-command correction snapshot](fixture-corrections/snapshot.json) retains
+588 equal inputs (`3b630795707c074c9ce53bc7581ae6ad31eee30df624d28d52e5e156b62d73b0`).
+Rebinding passes 5/5 after using the genuine curried State application and
+donor-source origins. The binder intentionally requires operation/annotation
+origins inside the exact prepared member; substituting its own H occurrence
+is not an invalid original. The previous run reached only that accepted
+annotation-origin mutation, not the subsequent operation-origin assertion.
+
+Connected controls pass 12/13: the multiline ordinary native handler reaches
+the exact ForeignPrivilegeUnavailable refusal. The new independent `Observe<Int>`
+positive with a handler nested inside the source phase still refuses template
+admission with Source Argument, so its State-operand hostile case never runs.
+No product change or failure-arm escape credit follows. A caller-handled
+outward request is a separate fixture isolation; the actual original-request
+component remains the evidence for independent BoundaryFailed visitation and
+unchanged finish authority.
+
+## Nonempty row vectors and observer prerequisite
+
+The [outward-row snapshot](outward-row-diagnostic/snapshot.json) retains 588 equal
+inputs (`25d3652aa7db0f19dbe1f36fd6cb4531baac479b93cfa533ea2c7f777f910fc3`).
+The four-formal Borrow preserves distinct nonempty ordinary effect rows before
+and after H/R, exact original ordered IDs, H at index 1 and State arguments at
+indices 1/2, through source/header, body-free consumer, linked Core and transforms.
+That control passes; connected controls are 13/14 and rebinding 5/5.
+
+The independent caller-handled observer still fails before symbolic flow. Pinned
+debugger observations locate Registry/None at the OriginalTemplate registry
+source-order census: ordinary Observe<T> formal local 13 at 4088..4089 is visited
+before the run's lexical host H, local 17 at 3905..3906. The template view contains
+no run-host node, so its reconstructed host context is empty when the source
+span moves backwards. The exact reconstructed fixture and unchanged artifact
+hashes remain recorded. The symbolic invalid breakpoint was not reached.
+This is not evidence that ordinary outward requests or reason forwarding are
+unsupported; that earlier attribution is withdrawn. The State-hostile variant
+never executes. Moving the equivalent ordinary declaration before the resource
+is a separate fixture isolation, with the original ordering checks retained.

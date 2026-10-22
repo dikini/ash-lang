@@ -309,8 +309,6 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution() 
         |effect| effect.parameters[0].id = effect.parameters[1].id,
         |effect| effect.parameters[0].kind = Kind::EffectRow,
         |effect| effect.parameters[0].origin = effect.parameters[1].origin.clone(),
-        |effect| effect.operations[0].annotation.origin = effect.parameters[0].origin.clone(),
-        |effect| effect.operations[0].origin = effect.parameters[0].origin.clone(),
         |effect| effect.operations[0].id = OperationId::new(effect.id, 1),
         |effect| {
             let mut operations = effect.operations.to_vec();
@@ -338,6 +336,15 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution() 
     let mut effect: ResolvedEffectDeclaration = canonical.clone();
     effect.origin = Origin::Source(donor_span);
     assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
+    for annotation in [false, true] {
+        let mut effect: ResolvedEffectDeclaration = canonical.clone();
+        if annotation {
+            effect.operations[0].annotation.origin = Origin::Source(donor_span);
+        } else {
+            effect.operations[0].origin = Origin::Source(donor_span);
+        }
+        assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
+    }
 }
 
 #[test]
@@ -347,27 +354,35 @@ fn checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals() {
     fixture
         .bind(canonical, &mut TypeWorkBudget::default())
         .unwrap();
-    for replacement in [Type::Int, Type::Variable(canonical.parameters[1].id)] {
-        let mut effect: ResolvedEffectDeclaration = canonical.clone();
-        let Type::Function(domain, _) = &mut effect.operations[0].annotation.ty else {
-            panic!("actual original Read outer arrow");
-        };
-        let Type::ForeignOwnerApply(_, arguments) = domain.as_mut() else {
-            panic!("actual original Read exact State full vector");
-        };
-        assert_eq!(arguments.len(), 2);
-        arguments[0] = crate::types::KindedArgument::TypeArg(replacement);
-        assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
+    for owned in [false, true] {
+        for replacement in [
+            Type::Int,
+            Type::Variable(canonical.parameters[usize::from(!owned)].id),
+        ] {
+            let mut effect: ResolvedEffectDeclaration = canonical.clone();
+            let Type::Function(domain, _) = &mut effect.operations[0].annotation.ty else {
+                panic!("actual original Read outer arrow");
+            };
+            let Type::Application(function, r) = domain.as_mut() else {
+                panic!("actual original Read State second actual");
+            };
+            let Type::Application(head, h) = function.as_mut() else {
+                panic!("actual original Read State first actual");
+            };
+            assert_eq!(
+                head.as_ref(),
+                &Type::Nominal(fixture.original.owner().unwrap().nominal())
+            );
+            assert_eq!(h.as_ref(), &Type::Variable(canonical.parameters[0].id));
+            assert_eq!(r.as_ref(), &Type::Variable(canonical.parameters[1].id));
+            if owned {
+                **r = replacement;
+            } else {
+                **h = replacement;
+            }
+            assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
+        }
     }
-    let mut effect: ResolvedEffectDeclaration = canonical.clone();
-    let Type::Function(domain, _) = &mut effect.operations[0].annotation.ty else {
-        unreachable!()
-    };
-    let Type::ForeignOwnerApply(_, arguments) = domain.as_mut() else {
-        unreachable!()
-    };
-    arguments.swap(0, 1);
-    assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
 }
 
 #[test]

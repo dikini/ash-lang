@@ -220,39 +220,31 @@ fn checked_scalar_borrow_body_free_reexport_keeps_defining_native_fact() {
     validate_latest_payload_core(&graph);
 }
 
-fn callback_result_source(capture_state: bool) -> String {
-    let boundary_callback = if capture_state {
-        "let retained = state\n42"
+fn observed_boundary_source(transport_state: bool) -> String {
+    let (actual, operand) = if transport_state {
+        ("State<H, R>", "state")
     } else {
-        "42"
+        ("Int", "42")
     };
     let handler = format!(
-        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => {{\n let callback : Unit -> Int = fn(ignored) {{\n value\n }}\n resume (Foreign.CheckedReturned callback)\n }}\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let callback : Unit -> Int = fn(ignored) {{\n {boundary_callback}\n }}\n resume (Foreign.CheckedReturned callback)\n }}\n }}"
+        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => resume (Foreign.CheckedReturned value)\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let ignored = perform Observe<{actual}>.note {operand}\n resume (Foreign.BoundaryFailed reason)\n }}\n }}"
     );
-    BORROW_SOURCE
-        .replace(
-            "read : Access -> Foreign.CheckedCall<Int>",
-            "read : Access -> Foreign.CheckedCall<Unit -> Int>",
-        )
-        .replace(
-            "Foreign.CheckedScope<Foreign.CheckedCall<Int>,",
-            "Foreign.CheckedScope<Foreign.CheckedCall<Unit -> Int>,",
-        )
-        .replace(
-            "read access => resume (perform Read<H, R>.call state)",
-            &handler,
-        )
+    let source = BORROW_SOURCE
+        .replace("read access => resume (perform Read<H, R>.call state)", &handler)
+        .replace("run () = handle (foreign host H {", "run () = handle (handle (foreign host H {")
+        .replace("}) with Trace {\n    note ignored => resume ()\n}",
+            "}) with Trace {\n    note ignored => resume ()\n}) with Observe<Int> {\n    note ignored => resume ()\n}");
+    format!("{source}\neffect Observe<T> {{\n note : T -> Unit\n}}\n")
 }
 
 #[test]
-fn checked_scalar_borrow_boundary_branch_cannot_transport_current_in_a_callback() {
-    canonical(&callback_result_source(false));
-    let error = check_graph(&graph_with_entry(&callback_result_source(true), None)).expect_err(
-        "the actual independent failure branch cannot transport Current through resume",
-    );
+fn checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect() {
+    canonical(&observed_boundary_source(false));
+    let error = check_graph(&graph_with_entry(&observed_boundary_source(true), None))
+        .expect_err("the failure branch cannot expose Current as an ordinary effect operand");
     assert!(
         matches!(error, TypeError::Source(_)),
-        "semantic failure-branch escape refusal required: {error:?}"
+        "semantic State transport refusal required: {error:?}"
     );
 }
 
@@ -277,7 +269,7 @@ fn checked_scalar_borrow_ordinary_handler_cannot_simulate_native_result() {
     canonical(BORROW_SOURCE);
     let simulated = BORROW_SOURCE.replace(
         "resume (perform Read<H, R>.call state)",
-        "resume (handle (perform Read<H, R>.call state) with Read<H, R> { call ignored => resume (Foreign.CheckedReturned 1) })",
+        "resume (handle (perform Read<H, R>.call state) with Read<H, R> {\n call ignored => resume (Foreign.CheckedReturned 1)\n })",
     );
     let error = check_graph(&graph_with_entry(&simulated, None))
         .expect_err("an ordinary native handler cannot simulate a checked Borrow result");
@@ -339,4 +331,101 @@ fn checked_scalar_borrow_independent_core_checks_read_vectors_membership_and_hos
             "semantic Borrow Core refusal required for {mutation:?}: {error:?}"
         );
     }
+}
+
+#[test]
+fn checked_scalar_borrow_retains_complete_type_row_formal_vector() {
+    let source = BORROW_SOURCE
+        .replace(
+            "symbol Read<H, R>",
+            "symbol Read<Before : EffectRow, H, R, After : EffectRow>",
+        )
+        .replace("Read<H, R>", "Read<{BeforeMarker}, H, R, {AfterMarker}>");
+    let source = format!(
+        "{source}\neffect BeforeMarker {{\n before : Unit -> Unit\n}}\neffect AfterMarker {{\n after : Unit -> Unit\n}}\n"
+    );
+    let checked = canonical(&source);
+    let producer = checked
+        .iter()
+        .find(|module| module.source_resource_code().is_some())
+        .unwrap();
+    let read = producer
+        .registry()
+        .effects()
+        .iter()
+        .find(|effect| effect.spelling == "Read")
+        .unwrap();
+    assert_eq!(
+        read.parameters
+            .iter()
+            .map(|formal| &formal.kind)
+            .collect::<Vec<_>>(),
+        [
+            &crate::types::Kind::EffectRow,
+            &crate::types::Kind::Type,
+            &crate::types::Kind::Type,
+            &crate::types::Kind::EffectRow
+        ]
+    );
+    let original = producer
+        .registry()
+        .native_symbol(crate::types::OperationId::new(read.id, 0))
+        .unwrap();
+    assert_eq!(original.parameter_ids().len(), 4);
+    let selected =
+        &original.prepared().checked_contract().unwrap().symbols()[original.symbol_index()];
+    assert_eq!(selected.host_parameter(), 1);
+    assert_eq!(
+        original.owner_role().unwrap().application().arguments(),
+        [
+            crate::foreign::source_contract::PreparedOwnerArgument::Type(1),
+            crate::foreign::source_contract::PreparedOwnerArgument::Type(2)
+        ]
+    );
+    assert_eq!(
+        original.parameter_ids(),
+        read.parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>()
+    );
+    let header = producer
+        .source_resource_code()
+        .unwrap()
+        .headers()
+        .next()
+        .unwrap();
+    assert!(Arc::ptr_eq(original.owner().unwrap(), &header.owner));
+    let actual = header
+        .original
+        .interpreted
+        .iter()
+        .find(|effect| effect.instance.effect() == original.effect())
+        .unwrap();
+    assert_eq!(actual.instance.arguments().len(), 4);
+    let before = producer
+        .registry()
+        .effects()
+        .iter()
+        .find(|effect| effect.spelling == "BeforeMarker")
+        .unwrap()
+        .id;
+    let after = producer
+        .registry()
+        .effects()
+        .iter()
+        .find(|effect| effect.spelling == "AfterMarker")
+        .unwrap()
+        .id;
+    assert_ne!(before, after);
+    for (position, expected) in [(0, before), (3, after)] {
+        let crate::types::KindedArgument::RowArg(row) = &actual.instance.arguments()[position]
+        else {
+            panic!("actual row remains kinded");
+        };
+        assert_eq!(row.known().len(), 1);
+        assert_eq!(row.known()[0].effect(), expected);
+        assert!(row.tail().is_none());
+    }
+    validate_latest_payload_core(&graph_with_entry(&source, Some(CONSUMER)));
 }

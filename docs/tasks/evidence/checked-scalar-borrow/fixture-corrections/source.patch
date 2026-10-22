@@ -1,0 +1,153 @@
+diff --git a/src/elaborate/checked_scalar_borrow_tests.rs b/src/elaborate/checked_scalar_borrow_tests.rs
+index 0f0f160..2fe78ed 100644
+--- a/src/elaborate/checked_scalar_borrow_tests.rs
++++ b/src/elaborate/checked_scalar_borrow_tests.rs
+@@ -220,39 +220,30 @@ fn checked_scalar_borrow_body_free_reexport_keeps_defining_native_fact() {
+     validate_latest_payload_core(&graph);
+ }
+ 
+-fn callback_result_source(capture_state: bool) -> String {
+-    let boundary_callback = if capture_state {
+-        "let retained = state\n42"
++fn observed_boundary_source(transport_state: bool) -> String {
++    let (actual, operand) = if transport_state {
++        ("State<H, R>", "state")
+     } else {
+-        "42"
++        ("Int", "42")
+     };
+     let handler = format!(
+-        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => {{\n let callback : Unit -> Int = fn(ignored) {{\n value\n }}\n resume (Foreign.CheckedReturned callback)\n }}\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let callback : Unit -> Int = fn(ignored) {{\n {boundary_callback}\n }}\n resume (Foreign.CheckedReturned callback)\n }}\n }}"
++        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => resume (Foreign.CheckedReturned value)\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => resume (handle {{\n let ignored = perform Observe<{actual}>.note {operand}\n Foreign.BoundaryFailed reason\n }} with Observe<{actual}> {{\n note ignored => resume ()\n }})\n }}"
+     );
+-    BORROW_SOURCE
+-        .replace(
+-            "read : Access -> Foreign.CheckedCall<Int>",
+-            "read : Access -> Foreign.CheckedCall<Unit -> Int>",
+-        )
+-        .replace(
+-            "Foreign.CheckedScope<Foreign.CheckedCall<Int>,",
+-            "Foreign.CheckedScope<Foreign.CheckedCall<Unit -> Int>,",
+-        )
+-        .replace(
+-            "read access => resume (perform Read<H, R>.call state)",
+-            &handler,
+-        )
++    let source = BORROW_SOURCE.replace(
++        "read access => resume (perform Read<H, R>.call state)",
++        &handler,
++    );
++    format!("{source}\neffect Observe<T> {{\n note : T -> Unit\n}}\n")
+ }
+ 
+ #[test]
+-fn checked_scalar_borrow_boundary_branch_cannot_transport_current_in_a_callback() {
+-    canonical(&callback_result_source(false));
+-    let error = check_graph(&graph_with_entry(&callback_result_source(true), None)).expect_err(
+-        "the actual independent failure branch cannot transport Current through resume",
+-    );
++fn checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect() {
++    canonical(&observed_boundary_source(false));
++    let error = check_graph(&graph_with_entry(&observed_boundary_source(true), None))
++        .expect_err("the failure branch cannot expose Current as an ordinary effect operand");
+     assert!(
+         matches!(error, TypeError::Source(_)),
+-        "semantic failure-branch escape refusal required: {error:?}"
++        "semantic State transport refusal required: {error:?}"
+     );
+ }
+ 
+@@ -277,7 +268,7 @@ fn checked_scalar_borrow_ordinary_handler_cannot_simulate_native_result() {
+     canonical(BORROW_SOURCE);
+     let simulated = BORROW_SOURCE.replace(
+         "resume (perform Read<H, R>.call state)",
+-        "resume (handle (perform Read<H, R>.call state) with Read<H, R> { call ignored => resume (Foreign.CheckedReturned 1) })",
++        "resume (handle (perform Read<H, R>.call state) with Read<H, R> {\n call ignored => resume (Foreign.CheckedReturned 1)\n })",
+     );
+     let error = check_graph(&graph_with_entry(&simulated, None))
+         .expect_err("an ordinary native handler cannot simulate a checked Borrow result");
+diff --git a/src/foreign/checked_source/checked_borrow_tests.rs b/src/foreign/checked_source/checked_borrow_tests.rs
+index 7b5564b..7b247a6 100644
+--- a/src/foreign/checked_source/checked_borrow_tests.rs
++++ b/src/foreign/checked_source/checked_borrow_tests.rs
+@@ -309,8 +309,6 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution()
+         |effect| effect.parameters[0].id = effect.parameters[1].id,
+         |effect| effect.parameters[0].kind = Kind::EffectRow,
+         |effect| effect.parameters[0].origin = effect.parameters[1].origin.clone(),
+-        |effect| effect.operations[0].annotation.origin = effect.parameters[0].origin.clone(),
+-        |effect| effect.operations[0].origin = effect.parameters[0].origin.clone(),
+         |effect| effect.operations[0].id = OperationId::new(effect.id, 1),
+         |effect| {
+             let mut operations = effect.operations.to_vec();
+@@ -338,6 +336,15 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution()
+     let mut effect: ResolvedEffectDeclaration = canonical.clone();
+     effect.origin = Origin::Source(donor_span);
+     assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
++    for annotation in [false, true] {
++        let mut effect: ResolvedEffectDeclaration = canonical.clone();
++        if annotation {
++            effect.operations[0].annotation.origin = Origin::Source(donor_span);
++        } else {
++            effect.operations[0].origin = Origin::Source(donor_span);
++        }
++        assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
++    }
+ }
+ 
+ #[test]
+@@ -347,27 +354,35 @@ fn checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals() {
+     fixture
+         .bind(canonical, &mut TypeWorkBudget::default())
+         .unwrap();
+-    for replacement in [Type::Int, Type::Variable(canonical.parameters[1].id)] {
+-        let mut effect: ResolvedEffectDeclaration = canonical.clone();
+-        let Type::Function(domain, _) = &mut effect.operations[0].annotation.ty else {
+-            panic!("actual original Read outer arrow");
+-        };
+-        let Type::ForeignOwnerApply(_, arguments) = domain.as_mut() else {
+-            panic!("actual original Read exact State full vector");
+-        };
+-        assert_eq!(arguments.len(), 2);
+-        arguments[0] = crate::types::KindedArgument::TypeArg(replacement);
+-        assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
++    for owned in [false, true] {
++        for replacement in [
++            Type::Int,
++            Type::Variable(canonical.parameters[usize::from(!owned)].id),
++        ] {
++            let mut effect: ResolvedEffectDeclaration = canonical.clone();
++            let Type::Function(domain, _) = &mut effect.operations[0].annotation.ty else {
++                panic!("actual original Read outer arrow");
++            };
++            let Type::Application(function, r) = domain.as_mut() else {
++                panic!("actual original Read State second actual");
++            };
++            let Type::Application(head, h) = function.as_mut() else {
++                panic!("actual original Read State first actual");
++            };
++            assert_eq!(
++                head.as_ref(),
++                &Type::Nominal(fixture.original.owner().unwrap().nominal())
++            );
++            assert_eq!(h.as_ref(), &Type::Variable(canonical.parameters[0].id));
++            assert_eq!(r.as_ref(), &Type::Variable(canonical.parameters[1].id));
++            if owned {
++                **r = replacement;
++            } else {
++                **h = replacement;
++            }
++            assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
++        }
+     }
+-    let mut effect: ResolvedEffectDeclaration = canonical.clone();
+-    let Type::Function(domain, _) = &mut effect.operations[0].annotation.ty else {
+-        unreachable!()
+-    };
+-    let Type::ForeignOwnerApply(_, arguments) = domain.as_mut() else {
+-        unreachable!()
+-    };
+-    arguments.swap(0, 1);
+-    assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
+ }
+ 
+ #[test]

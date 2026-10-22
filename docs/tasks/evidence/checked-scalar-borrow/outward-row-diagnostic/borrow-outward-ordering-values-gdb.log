@@ -1,0 +1,28 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x55d6fa3: src/core/validate.rs:9491. (2 locations)
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect ... [New Thread 0x7ffff7bff6c0 (LWP 184622)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 184622)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1.1, ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_module_registry<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd7760, original=...) at src/core/validate.rs:9491
+9491	                        return Err(ValidationError::new(ValidationReason::Registry, None));
+$1 = ash::resolved::ResolvedTypeVariable {id: ash::types::TypeVariableId::Resolved{module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}, local: 17}, spelling: alloc::string::String {vec: alloc::vec::Vec<u8, alloc::alloc::Global> {buf: alloc::raw_vec::RawVec<u8, alloc::alloc::Global> {inner: alloc::raw_vec::RawVecInner<alloc::alloc::Global> {ptr: core::ptr::unique::Unique<u8> {pointer: core::ptr::non_null::NonNull<u8> {pointer: 0x7ffff00a66c0}, _marker: core::marker::PhantomData<u8>}, cap: core::num::niche_types::UsizeNoHighBit (1), alloc: alloc::alloc::Global}, _marker: core::marker::PhantomData<u8>}, len: 1}}, kind: ash::types::Kind::Type, origin: ash::source::Origin::Source(ash::source::Span {source: ash::source::SourceId (0), range: ash::source::ByteRange {start: 3905, end: 3906}})}
+$2 = ash::source::ByteRange {start: 3905, end: 3906}
+$3 = std::collections::hash::set::HashSet<ash::types::TypeVariableId, std::hash::random::RandomState, alloc::alloc::Global> {base: hashbrown::set::HashSet<ash::types::TypeVariableId, std::hash::random::RandomState, alloc::alloc::Global> {map: hashbrown::map::HashMap<ash::types::TypeVariableId, (), std::hash::random::RandomState, alloc::alloc::Global> {hash_builder: std::hash::random::RandomState {k0: 9165761117999208751, k1: 17004835933607103263}, table: hashbrown::raw::RawTable<(ash::types::TypeVariableId, ()), alloc::alloc::Global> {table: hashbrown::raw::RawTableInner {bucket_mask: 0, ctrl: core::ptr::non_null::NonNull<u8> {pointer: 0x555555ae18f0}, growth_left: 0, items: 0}, alloc: alloc::alloc::Global, marker: core::marker::PhantomData<(ash::types::TypeVariableId, ())>}}}}
+$4 = 17
+$5 = false
+$6 = std::collections::hash::map::HashMap<ash::module::ModuleId, u32, std::hash::random::RandomState, alloc::alloc::Global> {base: hashbrown::map::HashMap<ash::module::ModuleId, u32, std::hash::random::RandomState, alloc::alloc::Global> {hash_builder: std::hash::random::RandomState {k0: 9165761117999208750, k1: 17004835933607103263}, table: hashbrown::raw::RawTable<(ash::module::ModuleId, u32), alloc::alloc::Global> {table: hashbrown::raw::RawTableInner {bucket_mask: 3, ctrl: core::ptr::non_null::NonNull<u8> {pointer: 0x7ffff00b4b60}, growth_left: 2, items: 1}, alloc: alloc::alloc::Global, marker: core::marker::PhantomData<(ash::module::ModuleId, u32)>}}}
+$7 = core::option::Option<std::collections::hash::set::HashSet<ash::types::TypeVariableId, std::hash::random::RandomState, alloc::alloc::Global>>::None
+#0  ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_module_registry<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd7760, original=...) at src/core/validate.rs:9491
+#1  0x000055555ab6c9ef in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_registry_with_original_provenance<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd7760, original=...) at src/core/validate.rs:8743
+#2  0x000055555a2ad9d6 in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::authenticate_effect_registry_phase (self=0x7ffff7bd7760) at src/core/validate.rs:16223
+#3  0x000055555aac0026 in ash::core::validate::{impl#14}::check_with_handler_graph::{closure#1} () at src/core/validate.rs:3995
+#4  0x000055555a27b71f in ash::core::validate::SourceResourceStructureSession::check_with_handler_graph (self=0x7ffff7be1f80, program=0x7ffff7be1e10, original=0x7ffff00ab3c0, answer=false, sources=..., module_sources=..., globals=0x7ffff7bd8c58, handler_graph=..., work=0x7ffff7be4550) at src/core/validate.rs:3948
+#5  0x000055555cbdd195 in ash::core::source_resource::CheckedSourceResourceTemplate::admit_with_globals (header=..., acquire=..., finish=..., handler=..., handler_inputs=..., globals=..., sources=..., module_sources=..., work=0x7ffff7be4550, session=0x7ffff7be1f80) at src/core/source_resource.rs:1303
+#6  0x000055555ad3e30c in ash::elaborate::source_resource::compile::{closure#1} () at src/elaborate/source_resource.rs:1359
+#7  0x000055555cce7923 in ash::elaborate::source_resource::compile (module=0x7ffff7bf9310, registry=0x7ffff7be85e8, interfaces=..., schemes=..., work=0x7ffff7bf10d0, coverage=0x7ffff7bf10f0, constraints=0x7ffff7bfa4b0, original_provider=..., rewrite_work_limit=106096) at src/elaborate/source_resource.rs:1269

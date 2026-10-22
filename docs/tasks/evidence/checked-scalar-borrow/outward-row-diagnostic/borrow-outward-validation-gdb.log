@@ -1,0 +1,34 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x4d25a13: file src/core/validate.rs, line 2663.
+Breakpoint 2 at 0x4d1f768: file src/core/validate.rs, line 2715.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 180851)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 180851)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::core::validate::ValidationError::new (reason=ash::core::validate::ValidationReason::Registry, node=...) at src/core/validate.rs:2663
+2663	            cause: None,
+#0  ash::core::validate::ValidationError::new (reason=ash::core::validate::ValidationReason::Registry, node=...) at src/core/validate.rs:2663
+#1  0x000055555ab2afc8 in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_module_registry<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd7760, original=...) at src/core/validate.rs:9491
+#2  0x000055555ab6c9ef in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_registry_with_original_provenance<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd7760, original=...) at src/core/validate.rs:8743
+#3  0x000055555a2ad9d6 in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::authenticate_effect_registry_phase (self=0x7ffff7bd7760) at src/core/validate.rs:16223
+#4  0x000055555aac0026 in ash::core::validate::{impl#14}::check_with_handler_graph::{closure#1} () at src/core/validate.rs:3995
+#5  0x000055555a27b71f in ash::core::validate::SourceResourceStructureSession::check_with_handler_graph (self=0x7ffff7be1f80, program=0x7ffff7be1e10, original=0x7ffff00ab270, answer=false, sources=..., module_sources=..., globals=0x7ffff7bd8c58, handler_graph=..., work=0x7ffff7be4550) at src/core/validate.rs:3948
+#6  0x000055555cbdd195 in ash::core::source_resource::CheckedSourceResourceTemplate::admit_with_globals (header=..., acquire=..., finish=..., handler=..., handler_inputs=..., globals=..., sources=..., module_sources=..., work=0x7ffff7be4550, session=0x7ffff7be1f80) at src/core/source_resource.rs:1303
+#7  0x000055555ad3e30c in ash::elaborate::source_resource::compile::{closure#1} () at src/elaborate/source_resource.rs:1359
+#8  0x000055555cce7923 in ash::elaborate::source_resource::compile (module=0x7ffff7bf9310, registry=0x7ffff7be85e8, interfaces=..., schemes=..., work=0x7ffff7bf10d0, coverage=0x7ffff7bf10f0, constraints=0x7ffff7bfa4b0, original_provider=..., rewrite_work_limit=106096) at src/elaborate/source_resource.rs:1269
+#9  0x000055555c06dff6 in ash::elaborate::check_module_with_budget_family::{closure#0}<ash::core::effect::EffectOperationFamily> () at src/elaborate.rs:22749
+#10 0x000055555bfb1235 in ash::elaborate::check_module_with_budget_family<ash::core::effect::EffectOperationFamily> (resolved=..., provider_codes=0x7ffff7bfa450, type_work=0x7ffff7bfa460, coverage_work=0x7ffff7bfa4a8, constraint_work=0x7ffff7bfa4b0, rewrite_work=..., source_capture_observer=...) at src/elaborate.rs:22624
+#11 0x000055555bb12bd5 in ash::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work (resolved=..., provider_codes=0x7ffff7bfa450, type_work=0x7ffff7bfa460, coverage_work=0x7ffff7bfa4a8, constraint_work=0x7ffff7bfa4b0, rewrite_work=...) at src/elaborate.rs:22519
+#12 0x000055555c907a37 in ash::elaborate::checked_owner_lifecycle_tests::check_graph (graph=0x7ffff7bfdf18) at src/elaborate/checked_owner_lifecycle_tests.rs:87
+#13 0x000055555c9003b2 in ash::elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::canonical (source=...) at src/elaborate/checked_scalar_borrow_tests.rs:9
+#14 0x000055555c905e9b in ash::elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect () at src/elaborate/checked_scalar_borrow_tests.rs:242
+#15 0x0000555559d6a617 in ash::elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect::{closure#0} () at src/elaborate/checked_scalar_borrow_tests.rs:241
+#16 0x000055555a447d56 in core::ops::function::FnOnce::call_once<ash::elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect::{closure_env#0}, ()> () at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#17 0x000055555e103eeb in core::ops::function::FnOnce::call_once<fn() -> core::result::Result<(), alloc::string::String>, ()> () at library/core/src/ops/function.rs:250
+reason = ash::core::validate::ValidationReason::Registry
+node = core::option::Option<ash::core::dialect::NodeId>::None
