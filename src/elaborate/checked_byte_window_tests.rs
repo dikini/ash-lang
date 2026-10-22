@@ -273,3 +273,214 @@ fn checked_byte_window_all_four_primitives_check_actual_source_and_summary() {
         assert!(original.owner().is_some());
     }
 }
+
+const BYTE_CONSUMER: &str = "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<(Foreign.CheckedCall<Int>, Foreign.CheckedCall<Unit>, Producer.CopyProbe, Producer.CopyProbe), Unit, Unit>\nmain () = Producer.run ()\n";
+
+fn assert_connected_byte_core(graph: &ModuleGraph) {
+    use crate::core::{
+        effect::{EffectExprKind, EffectOperation},
+        packed::Intrinsic,
+    };
+    let checked = check_graph(graph).expect("actual byte/window body-free consumer checks");
+    let producer = checked
+        .iter()
+        .find(|m| m.source_resource_code().is_some())
+        .unwrap();
+    let code = Arc::clone(producer.source_resource_code().unwrap());
+    let header = Arc::clone(code.headers().next().unwrap());
+    assert_eq!(header.original.host.unwrap().position, 0);
+    assert_eq!(header.original.owned_position, 1);
+    assert_eq!(header.original.parameters.len(), 2);
+    assert!(
+        producer
+            .exports()
+            .source_resource_facts()
+            .any(|fact| Arc::ptr_eq(fact, &header.original))
+    );
+    let originals = ["Allocate", "Free", "QueryBytes", "ByteLength", "QueryNul"].map(|name| {
+        let effect = producer
+            .registry()
+            .effects()
+            .iter()
+            .find(|e| e.spelling == name)
+            .unwrap();
+        Arc::clone(
+            producer
+                .registry()
+                .native_symbol(crate::types::OperationId::new(effect.id, 0))
+                .unwrap(),
+        )
+    });
+    for original in &originals {
+        assert!(Arc::ptr_eq(
+            code.resource(0)
+                .unwrap()
+                .original_registry()
+                .native_symbol(original.operation())
+                .unwrap(),
+            original
+        ));
+        assert!(Arc::ptr_eq(original.owner().unwrap(), &header.owner));
+        let contract = original.prepared().checked_contract().unwrap();
+        let selected = &contract.symbols()[original.symbol_index()];
+        assert_eq!(
+            selected.host_parameter(),
+            if original.symbol().name() == "Allocate" || original.symbol().name() == "Free" {
+                0
+            } else {
+                1
+            }
+        );
+        let callee = contract
+            .assumptions()
+            .iter()
+            .find(|a| a.name() == "Callee")
+            .unwrap();
+        assert_eq!(
+            callee.description(),
+            "the admitted native owner, initialized interval and view contracts hold"
+        );
+        assert!(
+            selected
+                .assumption_members()
+                .contains(&callee.member_index())
+        );
+    }
+    let accesses = producer
+        .registry()
+        .source_accesses()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(accesses.len(), 2);
+    let linked = link_modules(checked, graph.entry()).expect("real byte/window closure links");
+    for original in &originals {
+        assert!(Arc::ptr_eq(
+            linked
+                .registry()
+                .native_symbol(original.operation())
+                .unwrap(),
+            original
+        ));
+    }
+    for access in &accesses {
+        assert!(Arc::ptr_eq(
+            linked
+                .registry()
+                .source_accesses()
+                .find(|actual| actual.nominal() == access.nominal())
+                .unwrap(),
+            access
+        ));
+    }
+    assert!(Arc::ptr_eq(
+        linked
+            .registry()
+            .source_resource_fact(header.original.id)
+            .unwrap(),
+        &header.original
+    ));
+    let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+    let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+    let typed = elaborator
+        .synthesize_effect_module_program(&linked)
+        .expect("real byte/window closure lowers with default funding");
+    let program = elaborator.finish(typed.node).unwrap();
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|m| m.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|m| (m.id(), m.source().id()))
+        .collect::<Vec<_>>();
+    let core = crate::core::validate_effect_modules(program, &sources, &modules)
+        .expect("independent default byte/window Core");
+    let mut calls = Vec::new();
+    let mut intrinsics = Vec::new();
+    for node in core.nodes() {
+        match &node.kind {
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) => {
+                scope
+                    .visit_byte_calls(
+                        |call, _| {
+                            calls.push(call.function.local());
+                            Ok(())
+                        },
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+            }
+            EffectExprKind::Pure(crate::core::dialect::PureExprKind::Value(
+                crate::core::dialect::PureValue::Intrinsic(node),
+            )) => match node.operation() {
+                Intrinsic::ForeignByteRead { function }
+                | Intrinsic::ForeignByteWrite { function }
+                | Intrinsic::ForeignCopyBytes { function }
+                | Intrinsic::ForeignCopyNul { function } => intrinsics.push(function.local()),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    for local in 11..=14 {
+        assert!(calls.contains(&local), "actual flow-proved call {local}");
+        assert!(
+            intrinsics.contains(&local),
+            "actual canonical intrinsic {local}"
+        );
+    }
+    for transformed in [
+        crate::core::transform::identity_effect_traversal(&core).unwrap(),
+        crate::core::transform::fold_effect_literal_primitives(&core).unwrap(),
+    ] {
+        crate::core::validate_effect_modules(transformed, &sources, &modules)
+            .expect("byte/window identity and fold independently validate");
+    }
+}
+
+#[test]
+fn checked_byte_window_body_free_consumer_core_and_transforms() {
+    assert_connected_byte_core(&graph_with_entry(SOURCE, Some(BYTE_CONSUMER)));
+}
+
+#[test]
+fn checked_byte_window_body_free_facade_core_and_transforms() {
+    static IDS: AtomicU64 = AtomicU64::new(0);
+    struct Owned(std::path::PathBuf);
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = loop {
+        let p = std::env::temp_dir().join(format!(
+            "ash-byte-window-facade-{}-{}",
+            std::process::id(),
+            IDS.fetch_add(1, Ordering::Relaxed)
+        ));
+        match std::fs::create_dir(&p) {
+            Ok(()) => break Owned(p),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => panic!("owned facade directory: {e}"),
+        }
+    };
+    std::fs::write(directory.0.join("producer.ash"), SOURCE).unwrap();
+    std::fs::write(
+        directory.0.join("facade.ash"),
+        "pub import producer (run as wrapped, CopyProbe)\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.0.join("entry.ash"),
+        BYTE_CONSUMER
+            .replace("import producer as Producer", "import facade as Producer")
+            .replace("Producer.run", "Producer.wrapped"),
+    )
+    .unwrap();
+    let graph =
+        crate::module::load_module_graph(&directory.0.join("entry.ash"), &ModuleRoots::empty())
+            .unwrap();
+    assert_connected_byte_core(&graph);
+}

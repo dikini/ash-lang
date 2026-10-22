@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work' (217) panicked at src/build/source_resource_image.rs:3646:14:
+dependent discard and original libraries fit the unchanged allowance: Validation(ValidationError { reason: Resource, node: None, cause: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work ... FAILED
+
+failures:
+
+failures:
+    build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2110 filtered out; finished in 0.43s
+
+error: test failed, to rerun pass `--lib`

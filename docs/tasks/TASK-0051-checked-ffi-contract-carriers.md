@@ -394,3 +394,11 @@ controls also pass on the same 591-input map (`c74e45c0`). Body-free import/
 re-export, linked independent Core/transforms, passive images, hostile controls,
 bounds and affected regressions remain assigned delivery work. No runtime or
 image activation claim follows.
+
+The next byte/window checkpoint passes actual direct/facade body-free consumers,
+linked independent default Core and identity/fold, retaining the exact original
+native/header/access facts and all four flow-proved calls. Its startup probes
+now expose real Resource regressions at unchanged 327680; these block delivery.
+Passive-image hostile completion, remaining window/Host/original controls and
+bounds/regressions remain pending. The candidate evidence records both positives
+and reds; no whole-F3, checked execution or image activation claim follows.
