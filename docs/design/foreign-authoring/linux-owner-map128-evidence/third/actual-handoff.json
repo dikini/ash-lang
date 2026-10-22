@@ -1,0 +1,18 @@
+{
+  "execution_manifest_sha256": "0e8c27baf81cee14df242ab547f88dfbbb92e1d977d472fa5ecbaf93494c3363",
+  "execution_readback_sha256": "67ee130a263ddff720a3e18d430c86bee13f86eb91e4f31c10f55701d9d2f783",
+  "monitor_receipt_sha256": "8700c90915aca2d1837d1b200f0040eb41cd0b5312a7bd251288e28dd04f2b1f",
+  "records": 27,
+  "retained_bytes": 67299843,
+  "prefix_only_not_full_map": {
+    "path": "whole-static.map",
+    "observed_size_bytes": 68108288,
+    "full_map_hashed": false,
+    "completeness_claimed": false,
+    "retained_prefix": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log",
+    "retained_prefix_bytes": 67108864,
+    "retained_prefix_sha256": "0e62a016e6bca947d2ce30ae523a0ff1e429eb45bffa7f85b477a1275dad94ab"
+  },
+  "slot_released": true,
+  "stop": "No retry/widen/repair/after-verifier/inspection/header query/startup"
+}

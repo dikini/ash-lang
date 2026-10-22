@@ -1,0 +1,20 @@
+{
+  "status": "BOUNDED_READ_ONLY_POSTMORTEM_NOT_ASSIGNMENT",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 3615,
+      "sha256": "bac98b096e3b44a6fc55d110cee309c62580f60e314a24af0a6fc47591fcb62e"
+    },
+    {
+      "path": "analyze_prefixes.py",
+      "size": 5257,
+      "sha256": "6a64964db5224996a3d0a0c02cbd208491d59007751d1de0a9df7dabbd996eeb"
+    },
+    {
+      "path": "prefix-analysis.json",
+      "size": 14715,
+      "sha256": "372f086b5a4dba77c694040d06cf81eb486900f437c53e0a050c63a64e6f3f16"
+    }
+  ]
+}

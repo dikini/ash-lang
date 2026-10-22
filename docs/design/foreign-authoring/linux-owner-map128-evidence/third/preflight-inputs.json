@@ -1,0 +1,415 @@
+{
+  "selected_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "selected_tree": "e4ab5e35b50d64326e548fc54cf264a4af170832",
+  "pins": [
+    {
+      "path": "/usr/bin/python3.14",
+      "resolved": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "resolved": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source.tar",
+      "resolved": "/tmp/ash-owner-build-snapshot-1a8ecef0/source.tar",
+      "size": 98672640,
+      "sha256": "bc9a64b1956df0d7b777809b1311184cd04996d4e2f5476a811fbe85d94dceb4"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+      "resolved": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+      "size": 814765,
+      "sha256": "a17ca66398d6cb9d4f46d2cf2fa82b0197682b8b5c76dd9624995c2733c1160b"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/runtime-content-inputs.json",
+      "resolved": "/tmp/ash-owner-packaging-1a8ecef0/runtime-content-inputs.json",
+      "size": 30707,
+      "sha256": "81cb83ee6bb03a8c4d9c28f0bc041cf722313058b8650c373aac499e898c883f"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/selected-source.json",
+      "resolved": "/tmp/ash-owner-packaging-1a8ecef0/selected-source.json",
+      "size": 5032,
+      "sha256": "1c1cdc7e5058fd746e5e62044ee5a1b1261bf01d7ea65adfc50d46ae5b269ceb"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+      "resolved": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+      "size": 6923,
+      "sha256": "7e95c8961f0786037353b303c5501a562f45c874dcf883f59debe536e591dd8e"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "size": 3442,
+      "sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/execution-readback.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/execution-readback.json",
+      "size": 4699,
+      "sha256": "d6c71a4485bf4be6e68c6c7d9c2f8fa27b6ce8936f3dc219bf611d56b7f0d0f3"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/execution-manifest.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/execution-manifest.json",
+      "size": 6253,
+      "sha256": "f3a36463e39f84d85a56be4ea6538ab9148de718462dfe069e15d6851637bae4"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/compiler-correspondence/cargo-selected-records.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/compiler-correspondence/cargo-selected-records.json",
+      "size": 2734,
+      "sha256": "740ab45f33a38c5df77cfd136f4ac8a08adf2b4ea4824aff1666651fbdcb6cbb"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "resolved": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "size": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/execution-manifest.json",
+      "resolved": "/tmp/ash-owner-generation-stage2/execution-manifest.json",
+      "size": 7118,
+      "sha256": "1684bf380ea50a3e651aa82479b6b5d29a1d929d37298bd8dcbe7145f2b4a437"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "resolved": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "resolved": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/native-build.log",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/native-build.log",
+      "size": 1156,
+      "sha256": "232dc2ed1ea1a11723b1e25df8eb6604184abe35e0a957ef125be539455c30c8"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.lock",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.lock",
+      "size": 10121,
+      "sha256": "c1eb4441f3a039e3757d67e9f05012c4b1f199d3c90ea1f7694e6f0086a9590e"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/rust-toolchain.toml",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/rust-toolchain.toml",
+      "size": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+      "size": 246,
+      "sha256": "686ad5d17be305bcc228093d089868de78e43a468a985129c92b5e04a14a2902"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+      "size": 17310,
+      "sha256": "4fff8df2dfb0ac63ec78179b74bba872f3e1b317a2c86dc46659e5bd6485df26"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd"
+    },
+    {
+      "path": "/usr/bin/cc",
+      "resolved": "/usr/bin/x86_64-linux-gnu-gcc-15",
+      "size": 1305304,
+      "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88"
+    },
+    {
+      "path": "/usr/bin/readelf",
+      "resolved": "/usr/bin/x86_64-linux-gnu-readelf",
+      "size": 818312,
+      "sha256": "c857339616bbbfa5eba32733e22365048903fbaf6ed2126b897dd138bcb741fc"
+    },
+    {
+      "path": "/usr/bin/ld.bfd",
+      "resolved": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+      "size": 1890472,
+      "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/default-linker-inputs.json",
+      "resolved": "/tmp/ash-owner-generation-stage2/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generation.monitor.json",
+      "resolved": "/tmp/ash-owner-generation-stage2/generation.monitor.json",
+      "size": 5041,
+      "sha256": "0cfbb235c796ce7f517e884da9e3732686f1ec5f757851edbc398a2ddf77eb8a"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/owner.ash",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/owner.ash",
+      "size": 2671,
+      "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/entry.ash",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/entry.ash",
+      "size": 148,
+      "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/verify_inputs.py",
+      "resolved": "/tmp/ash-owner-generation-stage2/verify_inputs.py",
+      "size": 4311,
+      "sha256": "a78992538278b49679161bc1a3eef35f6590db3eb98b74fe1d16e7d90c6971ec"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/collect_generated.py",
+      "resolved": "/tmp/ash-owner-generation-stage2/collect_generated.py",
+      "size": 7285,
+      "sha256": "bccd35f02fc6e06091449365479eb413d664438acf2e587fa5e4af9805f80ff3"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/selected-Cargo.lock.seed",
+      "resolved": "/tmp/ash-owner-generation-stage2/selected-Cargo.lock.seed",
+      "size": 10251,
+      "sha256": "26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/relink.monitor.json",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/relink.monitor.json",
+      "size": 6322,
+      "sha256": "7ba77af3e27516707c17e83e2c474bd878745ce94a8f75c13ed1e179319cefec"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/inspection.monitor.json",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/inspection.monitor.json",
+      "size": 1495,
+      "sha256": "6e032621873a169efe25bb231867b64fff9b0a9990f197d6a04298a81486c86f"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/verify_inputs.py",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/verify_inputs.py",
+      "size": 4399,
+      "sha256": "693c4f2707baa5c4d7a6f7a8ebf2f9b84fce27f2a5ec52e42c8f2f58a2846b36"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/ordinary-host",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/ordinary-host",
+      "size": 475650552,
+      "sha256": "d5799c76fbf3be8b06a473906b4e73ce82b1fdf90db4a1b1923d958816fe0a61"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/default-linker-inputs.json",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/prepare_candidate.py",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/prepare_candidate.py",
+      "size": 5781,
+      "sha256": "bb7fc46163204bfe6072b1cb37852a2621825de8bd187bd270a3984d5f01d394"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/finalize_static.py",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/finalize_static.py",
+      "size": 7918,
+      "sha256": "58eb632eabf1d2c3691547adb5b5c5cbdb16b424ad7662873f5a8714af2912e0"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/map-detail-evidence.json",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/map-detail-evidence.json",
+      "size": 2815,
+      "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838"
+    },
+    {
+      "path": "/usr/share/man/man1/ld.bfd.1.gz",
+      "resolved": "/usr/share/man/man1/ld.bfd.1.gz",
+      "size": 49180,
+      "sha256": "2f7c363d588b25cf60ac64322f3cd30eb01c7807e6bddaa82580d256dbdd1e9e"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+      "resolved": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+      "size": 6078,
+      "sha256": "dd6798e80d0d19c3fabeefdd29c4f348fba5ceed25b76b909ecf0373f3ab5857"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/execution-readback.json",
+      "resolved": "/tmp/ash-owner-static-stage3/execution-readback.json",
+      "size": 3159,
+      "sha256": "5bcc9c16131102b628bcf41ab8dff4acbafdac8ba565c672b62081d77a6b17ef"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+      "resolved": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+      "size": 9633,
+      "sha256": "3ee3aa6574144d1aabbfe21314a58bd680de8478b35a27b8727b2a184a2a3566"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+      "resolved": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+      "size": 16777216,
+      "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/experiment-contract.md",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/experiment-contract.md",
+      "size": 18813,
+      "sha256": "7e81587b5598f1d7184ce268725e2a1296341c8e84415a44de7cc180d65527ef"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/provenance.json",
+      "resolved": "/tmp/ash-owner-static-stage3-map64/provenance.json",
+      "size": 5591,
+      "sha256": "af0e2413fcc16419b33d86bc96cf7da8ae595b0b447e6256db50f9df33b2294c"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/test_monitor.py",
+      "resolved": "/tmp/ash-owner-map-class-monitor/test_monitor.py",
+      "size": 17592,
+      "sha256": "2516606e251c73640c96895ef063933566aa68dbde3ea8f1426e8fffb0e1e4b0"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/schema2.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/schema2.json",
+      "size": 1756,
+      "sha256": "9342c91888e525eb6e3f96754c34b381cfffdf4fba059d69b5552ada3faf13f6"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/review-manifest.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/review-manifest.json",
+      "size": 101211,
+      "sha256": "637d3f361af2cd383ef6faef29e624ab6824b1e1f9827cbb9f1750b02cd05ad7"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/suite-receipt.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/reviewed-suite/suite-receipt.json",
+      "size": 27800,
+      "sha256": "416168520e7932d48bb5f8b9069b7c27b8e774a35cba30219884ce02cd792266"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/before.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/reviewed-suite/before.json",
+      "size": 666,
+      "sha256": "c99b58ff6c3bcb9a75c74cfb85f6eb3b89e03f1d98671c26f8fe29c6d98361e8"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/after.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/reviewed-suite/after.json",
+      "size": 666,
+      "sha256": "c99b58ff6c3bcb9a75c74cfb85f6eb3b89e03f1d98671c26f8fe29c6d98361e8"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/command.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/reviewed-suite/command.json",
+      "size": 647,
+      "sha256": "d86e9baffc168d5a8761ba0d920571e8a939755c08ffcb06a9ac92725b65e27f"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map-detail/execution-manifest.json",
+      "resolved": "/tmp/ash-owner-static-stage3-map-detail/execution-manifest.json",
+      "size": 4185,
+      "sha256": "34ae188c6e255524b16458a181610cd1a9b9b64a0bddd592aa93188a330b8b68"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map-detail/execution-readback.json",
+      "resolved": "/tmp/ash-owner-static-stage3-map-detail/execution-readback.json",
+      "size": 3313,
+      "sha256": "3521592052c0e3636d21e7d1dfaeb952f8dccf8550ff6109e3b9b349e6bc6d6b"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/receipt.json",
+      "resolved": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/receipt.json",
+      "size": 11748,
+      "sha256": "0281568d84d0da673d94b42fea3694d300ee630ca1f797f25217b946826321d6"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/watched-0.log",
+      "resolved": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/watched-0.log",
+      "size": 16777216,
+      "sha256": "cb91bca15d2f3469175d7c1a2e9a6f67530a1ac7fb4028b68316823bc10453c9"
+    }
+  ],
+  "tool_native_manifest": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+  "snapshot_manifest": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+  "source_root": "/tmp/ash-owner-build-snapshot-1a8ecef0/source",
+  "private_directories": [
+    "/tmp/ash-owner-static-stage3-map64",
+    "/tmp/ash-owner-generation-stage2",
+    "/tmp/ash-owner-generation-stage2/experiment",
+    "/tmp/ash-owner-build-snapshot-1a8ecef0"
+  ],
+  "shared_cache": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+  "cargo_config_absence_paths": [
+    "/.cargo/config",
+    "/.cargo/config.toml",
+    "/tmp/.cargo/config",
+    "/tmp/.cargo/config.toml",
+    "/tmp/ash-owner-build-snapshot-1a8ecef0/.cargo/config",
+    "/tmp/ash-owner-build-snapshot-1a8ecef0/.cargo/config.toml",
+    "/tmp/ash-owner-build-snapshot-1a8ecef0/source/.cargo/config",
+    "/home/dikini/.cargo/config",
+    "/tmp/ash-owner-generation-stage2/.cargo/config",
+    "/tmp/ash-owner-generation-stage2/.cargo/config.toml",
+    "/tmp/ash-owner-generation-stage2/experiment/.cargo/config",
+    "/tmp/ash-owner-generation-stage2/experiment/.cargo/config.toml",
+    "/tmp/ash-owner-generation-stage2/experiment/.ash-build/.cargo/config",
+    "/tmp/ash-owner-generation-stage2/experiment/.ash-build/.cargo/config.toml",
+    "/tmp/ash-owner-static-stage3-map64/.cargo/config",
+    "/tmp/ash-owner-static-stage3-map64/.cargo/config.toml",
+    "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/.cargo/config",
+    "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/.cargo/config.toml"
+  ],
+  "outer_environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "stage1_root": "/tmp/ash-owner-compiler-stage1",
+  "expected_compiler_sha256": "5dca1b624bf206c44c6c4d3037675193800516eb936a0cf6420e67394e998d3e",
+  "expected_runtime_fingerprint": "6ed612090a3fadfbcc982c0cf41b210cb02e2d01af7db5a5958e63a6fc527a47",
+  "historical_compiler_no_current_cache_use": true,
+  "absent_bfd_lookup_paths": [
+    "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.bfd",
+    "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/ld.bfd"
+  ],
+  "known_output_footprint": {
+    "raw_map": 67108864,
+    "two_monitors_retained_map_copies": 134217728,
+    "candidate": 134217728,
+    "two_monitor_outputs": 33554432,
+    "two_monitor_receipts": 8388608,
+    "static_manifest": 4194304,
+    "static_receipt": 262144,
+    "candidate_record": 262144
+  },
+  "known_output_footprint_bytes": 382205952,
+  "space_qualification": "Observed available bytes before/after are not reserved; sampled monitoring is not quota. This enumerates known artifact maxima, not every possible intermediate or sidefile, and does not authorize deletion or widening."
+}

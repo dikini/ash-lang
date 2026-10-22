@@ -1,0 +1,22 @@
+{
+  "status": "ACTUAL_BOUNDED_DATA_EQUIVALENCE_SUCCESS",
+  "exit": 0,
+  "source_before": {
+    "path": "/tmp/ash-owner-map128-amendment/payload/docs/design/foreign-authoring/linux-owner-map128-evidence/verify_prefix_archives.py",
+    "resolved": "/tmp/ash-owner-map128-amendment/payload/docs/design/foreign-authoring/linux-owner-map128-evidence/verify_prefix_archives.py",
+    "size": 4145,
+    "sha256": "be621122a2254b98e130a3da81f25fc58da370ef90349355ea01b6024041af91"
+  },
+  "source_after": {
+    "path": "/tmp/ash-owner-map128-amendment/payload/docs/design/foreign-authoring/linux-owner-map128-evidence/verify_prefix_archives.py",
+    "resolved": "/tmp/ash-owner-map128-amendment/payload/docs/design/foreign-authoring/linux-owner-map128-evidence/verify_prefix_archives.py",
+    "size": 4145,
+    "sha256": "be621122a2254b98e130a3da81f25fc58da370ef90349355ea01b6024041af91"
+  },
+  "source_equal": true,
+  "command_sha256": "7420a0c406886e029ec0c79d2d25409d11db5d528f75f5a3efe4b1f67abe7832",
+  "receipt_sha256": "6e99c52359ebfa87016d9d82ff556d769f7930dacf04721e1a504808a5c6d7d9",
+  "stderr_empty": true,
+  "decoded_files_written": false,
+  "native_or_production_command_run": false
+}

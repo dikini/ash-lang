@@ -1,0 +1,402 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "7ba77af3e27516707c17e83e2c474bd878745ce94a8f75c13ed1e179319cefec",
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size_before": 20745,
+    "size_after": 20745,
+    "hashed_bytes": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 55540
+  },
+  "run_directory": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw",
+  "output_path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/output.log",
+  "argv": [
+    "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "rustc",
+    "--offline",
+    "--locked",
+    "--jobs",
+    "1",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--target-dir",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "--bin",
+    "ash-host-6-0",
+    "-vv",
+    "--message-format=json-render-diagnostics",
+    "--",
+    "-C",
+    "target-feature=+crt-static",
+    "-C",
+    "relocation-model=static",
+    "-C",
+    "linker=/usr/bin/cc",
+    "-C",
+    "link-arg=-fuse-ld=bfd",
+    "-C",
+    "link-arg=-static",
+    "-C",
+    "link-arg=-no-pie",
+    "-C",
+    "strip=debuginfo",
+    "-C",
+    "link-arg=-v",
+    "-C",
+    "link-arg=/usr/lib/x86_64-linux-gnu/libc.a",
+    "-C",
+    "link-arg=-Wl,-Map,/tmp/ash-owner-static-stage3-map64/whole-static.map",
+    "-C",
+    "link-arg=-Wl,--no-print-map-discarded"
+  ],
+  "child_pid": 6,
+  "child_exit": -9,
+  "reason": "watched_file_limit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 59047,
+  "retained_output_bytes": 59047,
+  "output_truncated": false,
+  "watched_files": [
+    {
+      "relative_path": "whole-static.map",
+      "observed_peak_bytes": 68108288,
+      "file_class": "link_map",
+      "limit_bytes": 67108864,
+      "path": "/tmp/ash-owner-static-stage3-map64/whole-static.map",
+      "size_before": 68108288,
+      "size_after": 68108288,
+      "hashed_bytes": 67108864,
+      "sha256": "0e62a016e6bca947d2ce30ae523a0ff1e429eb45bffa7f85b477a1275dad94ab",
+      "hash_is_prefix": true,
+      "device": 47,
+      "inode": 59473,
+      "retained_path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log"
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size_before": 2809,
+      "size_after": 2809,
+      "hashed_bytes": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40788
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size_before": 2248,
+      "size_after": 2248,
+      "hashed_bytes": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40795
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "size_before": 3442,
+      "size_after": 3442,
+      "hashed_bytes": 3442,
+      "sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 34124
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "size_before": 15239,
+      "size_after": 15239,
+      "hashed_bytes": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 21840
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size_before": 4096,
+      "size_after": 4096,
+      "hashed_bytes": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 26591
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/default-linker-inputs.json",
+      "size_before": 4096,
+      "size_after": 4096,
+      "hashed_bytes": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 58293
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/native-build.log",
+      "size_before": 1156,
+      "size_after": 1156,
+      "hashed_bytes": 1156,
+      "sha256": "232dc2ed1ea1a11723b1e25df8eb6604184abe35e0a957ef125be539455c30c8",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40598
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.lock",
+      "size_before": 10121,
+      "size_after": 10121,
+      "hashed_bytes": 10121,
+      "sha256": "c1eb4441f3a039e3757d67e9f05012c4b1f199d3c90ea1f7694e6f0086a9590e",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40597
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/rust-toolchain.toml",
+      "size_before": 103,
+      "size_after": 103,
+      "hashed_bytes": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40596
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+      "size_before": 246,
+      "size_after": 246,
+      "hashed_bytes": 246,
+      "sha256": "686ad5d17be305bcc228093d089868de78e43a468a985129c92b5e04a14a2902",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40595
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size_before": 12369,
+      "size_after": 12369,
+      "hashed_bytes": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40594
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+      "size_before": 17310,
+      "size_after": 17310,
+      "hashed_bytes": 17310,
+      "sha256": "4fff8df2dfb0ac63ec78179b74bba872f3e1b317a2c86dc46659e5bd6485df26",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40593
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size_before": 4399,
+      "size_after": 4399,
+      "hashed_bytes": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40592
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/verify_inputs.py",
+      "size_before": 4399,
+      "size_after": 4399,
+      "hashed_bytes": 4399,
+      "sha256": "693c4f2707baa5c4d7a6f7a8ebf2f9b84fce27f2a5ec52e42c8f2f58a2846b36",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 58295
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/prepare_candidate.py",
+      "size_before": 5781,
+      "size_after": 5781,
+      "hashed_bytes": 5781,
+      "sha256": "bb7fc46163204bfe6072b1cb37852a2621825de8bd187bd270a3984d5f01d394",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 58296
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/finalize_static.py",
+      "size_before": 7918,
+      "size_after": 7918,
+      "hashed_bytes": 7918,
+      "sha256": "58eb632eabf1d2c3691547adb5b5c5cbdb16b424ad7662873f5a8714af2912e0",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 58297
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/map-detail-evidence.json",
+      "size_before": 2815,
+      "size_after": 2815,
+      "hashed_bytes": 2815,
+      "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 58294
+    },
+    {
+      "path": "/usr/share/man/man1/ld.bfd.1.gz",
+      "size_before": 49180,
+      "size_after": 49180,
+      "hashed_bytes": 49180,
+      "sha256": "2f7c363d588b25cf60ac64322f3cd30eb01c7807e6bddaa82580d256dbdd1e9e",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26872051
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+      "size_before": 6078,
+      "size_after": 6078,
+      "hashed_bytes": 6078,
+      "sha256": "dd6798e80d0d19c3fabeefdd29c4f348fba5ceed25b76b909ecf0373f3ab5857",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 46708
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/execution-readback.json",
+      "size_before": 3159,
+      "size_after": 3159,
+      "hashed_bytes": 3159,
+      "sha256": "5bcc9c16131102b628bcf41ab8dff4acbafdac8ba565c672b62081d77a6b17ef",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 46567
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+      "size_before": 9633,
+      "size_after": 9633,
+      "hashed_bytes": 9633,
+      "sha256": "3ee3aa6574144d1aabbfe21314a58bd680de8478b35a27b8727b2a184a2a3566",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 46588
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+      "size_before": 16777216,
+      "size_after": 16777216,
+      "hashed_bytes": 16777216,
+      "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 46587
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/experiment-contract.md",
+      "size_before": 18813,
+      "size_after": 18813,
+      "hashed_bytes": 18813,
+      "sha256": "7e81587b5598f1d7184ce268725e2a1296341c8e84415a44de7cc180d65527ef",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 58292
+    }
+  ],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 6,
+        "wait_status": 9,
+        "exit_code": -9
+      },
+      {
+        "pid": 41,
+        "wait_status": 9,
+        "exit_code": -9
+      },
+      {
+        "pid": 26,
+        "wait_status": 9,
+        "exit_code": -9
+      },
+      {
+        "pid": 40,
+        "wait_status": 9,
+        "exit_code": -9
+      },
+      {
+        "pid": 42,
+        "wait_status": 9,
+        "exit_code": -9
+      }
+    ],
+    "reaped_count": 5,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": true
+  },
+  "map_relative_path": "whole-static.map",
+  "limits": {
+    "deadline_seconds": 1200,
+    "output_bytes": 16777216,
+    "sidefile_bytes": 16777216,
+    "map_bytes": 67108864
+  },
+  "environment_keys": [
+    "CARGO_BUILD_JOBS",
+    "CARGO_HOME",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "RUSTC",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTC_WRAPPER",
+    "RUSTDOC"
+  ],
+  "executable": {
+    "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "size_before": 42839824,
+    "size_after": 42839824,
+    "hashed_bytes": 42839824,
+    "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953",
+    "hash_is_prefix": false,
+    "device": 66309,
+    "inode": 48105489
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 6,
+  "child_session": 6,
+  "final_limit_failures": [
+    "watched_file_limit"
+  ],
+  "elapsed_seconds": 10.890622500000973,
+  "observed_output_sha256": "1b039d2ce3dfd8f6d82ac3e5a6c049f92470be30ba43af3255d61f83dfc54faf",
+  "output_file": {
+    "path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/output.log",
+    "size_before": 59047,
+    "size_after": 59047,
+    "hashed_bytes": 59047,
+    "sha256": "1b039d2ce3dfd8f6d82ac3e5a6c049f92470be30ba43af3255d61f83dfc54faf",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 59467
+  }
+}

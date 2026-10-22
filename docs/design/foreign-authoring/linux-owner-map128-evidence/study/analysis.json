@@ -1,0 +1,724 @@
+{
+  "status": "READ_ONLY_COMPLETE_PRODUCER_METADATA_AND_PARTIAL_MAP_ANALYSIS",
+  "producer": {
+    "path": "/tmp/ash-owner-generation-stage2/experiment/ordinary-host",
+    "size": 475650552,
+    "sha256_before": "d5799c76fbf3be8b06a473906b4e73ce82b1fdf90db4a1b1923d958816fe0a61",
+    "sha256_after": "d5799c76fbf3be8b06a473906b4e73ce82b1fdf90db4a1b1923d958816fe0a61",
+    "identity_before": [
+      47,
+      40782,
+      475650552,
+      1792655264152132405,
+      1792655264502138262
+    ],
+    "identity_after": [
+      47,
+      40782,
+      475650552,
+      1792655264152132405,
+      1792655264502138262
+    ],
+    "complete_producer_file_verified": true,
+    "ELF_type": 3,
+    "machine": 62,
+    "sections": [
+      {
+        "index": 0,
+        "name": "",
+        "type": 0,
+        "flags": 0,
+        "address": 0,
+        "offset": 0,
+        "size": 0,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 1,
+        "name": ".interp",
+        "type": 1,
+        "flags": 2,
+        "address": 736,
+        "offset": 736,
+        "size": 28,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 2,
+        "name": ".note.ABI-tag",
+        "type": 7,
+        "flags": 2,
+        "address": 764,
+        "offset": 764,
+        "size": 32,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 3,
+        "name": ".note.gnu.build-id",
+        "type": 7,
+        "flags": 2,
+        "address": 796,
+        "offset": 796,
+        "size": 36,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 4,
+        "name": ".dynsym",
+        "type": 11,
+        "flags": 2,
+        "address": 832,
+        "offset": 832,
+        "size": 1728,
+        "link": 8,
+        "entry_bytes": 24
+      },
+      {
+        "index": 5,
+        "name": ".gnu.version",
+        "type": 1879048191,
+        "flags": 2,
+        "address": 2560,
+        "offset": 2560,
+        "size": 144,
+        "link": 4,
+        "entry_bytes": 2
+      },
+      {
+        "index": 6,
+        "name": ".gnu.version_r",
+        "type": 1879048190,
+        "flags": 2,
+        "address": 2704,
+        "offset": 2704,
+        "size": 336,
+        "link": 8,
+        "entry_bytes": 0
+      },
+      {
+        "index": 7,
+        "name": ".gnu.hash",
+        "type": 1879048182,
+        "flags": 2,
+        "address": 3040,
+        "offset": 3040,
+        "size": 28,
+        "link": 4,
+        "entry_bytes": 0
+      },
+      {
+        "index": 8,
+        "name": ".dynstr",
+        "type": 3,
+        "flags": 2,
+        "address": 3068,
+        "offset": 3068,
+        "size": 1120,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 9,
+        "name": ".rela.dyn",
+        "type": 4,
+        "flags": 2,
+        "address": 4192,
+        "offset": 4192,
+        "size": 2465664,
+        "link": 4,
+        "entry_bytes": 24
+      },
+      {
+        "index": 10,
+        "name": ".rela.plt",
+        "type": 4,
+        "flags": 66,
+        "address": 2469856,
+        "offset": 2469856,
+        "size": 96,
+        "link": 4,
+        "entry_bytes": 24
+      },
+      {
+        "index": 11,
+        "name": ".gcc_except_table",
+        "type": 1,
+        "flags": 2,
+        "address": 2469952,
+        "offset": 2469952,
+        "size": 2048312,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 12,
+        "name": ".rodata",
+        "type": 1,
+        "flags": 50,
+        "address": 4518272,
+        "offset": 4518272,
+        "size": 223320,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 13,
+        "name": ".debug_gdb_scripts",
+        "type": 1,
+        "flags": 50,
+        "address": 4741592,
+        "offset": 4741592,
+        "size": 34,
+        "link": 0,
+        "entry_bytes": 1
+      },
+      {
+        "index": 14,
+        "name": ".eh_frame_hdr",
+        "type": 1,
+        "flags": 2,
+        "address": 4741628,
+        "offset": 4741628,
+        "size": 765796,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 15,
+        "name": ".eh_frame",
+        "type": 1,
+        "flags": 2,
+        "address": 5507424,
+        "offset": 5507424,
+        "size": 2507104,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 16,
+        "name": ".text",
+        "type": 1,
+        "flags": 6,
+        "address": 8018624,
+        "offset": 8014528,
+        "size": 35033143,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 17,
+        "name": ".init",
+        "type": 1,
+        "flags": 6,
+        "address": 43051768,
+        "offset": 43047672,
+        "size": 27,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 18,
+        "name": ".fini",
+        "type": 1,
+        "flags": 6,
+        "address": 43051796,
+        "offset": 43047700,
+        "size": 13,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 19,
+        "name": ".plt",
+        "type": 1,
+        "flags": 6,
+        "address": 43051824,
+        "offset": 43047728,
+        "size": 80,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 20,
+        "name": ".tdata",
+        "type": 1,
+        "flags": 1027,
+        "address": 43056000,
+        "offset": 43047808,
+        "size": 80,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 21,
+        "name": ".tbss",
+        "type": 8,
+        "flags": 1027,
+        "address": 43056080,
+        "offset": 43047888,
+        "size": 72,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 22,
+        "name": ".fini_array",
+        "type": 15,
+        "flags": 3,
+        "address": 43056080,
+        "offset": 43047888,
+        "size": 8,
+        "link": 0,
+        "entry_bytes": 8
+      },
+      {
+        "index": 23,
+        "name": ".init_array",
+        "type": 14,
+        "flags": 2097155,
+        "address": 43056088,
+        "offset": 43047896,
+        "size": 16,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 24,
+        "name": ".data.rel.ro",
+        "type": 1,
+        "flags": 3,
+        "address": 43056104,
+        "offset": 43047912,
+        "size": 387544,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 25,
+        "name": ".dynamic",
+        "type": 6,
+        "flags": 3,
+        "address": 43443648,
+        "offset": 43435456,
+        "size": 480,
+        "link": 8,
+        "entry_bytes": 16
+      },
+      {
+        "index": 26,
+        "name": ".got",
+        "type": 1,
+        "flags": 3,
+        "address": 43444128,
+        "offset": 43435936,
+        "size": 690288,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 27,
+        "name": ".got.plt",
+        "type": 1,
+        "flags": 3,
+        "address": 44134416,
+        "offset": 44126224,
+        "size": 56,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 28,
+        "name": ".relro_padding",
+        "type": 8,
+        "flags": 3,
+        "address": 44134472,
+        "offset": 44126280,
+        "size": 4024,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 29,
+        "name": ".tm_clone_table",
+        "type": 1,
+        "flags": 3,
+        "address": 44138568,
+        "offset": 44126280,
+        "size": 0,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 30,
+        "name": ".data",
+        "type": 1,
+        "flags": 3,
+        "address": 44138568,
+        "offset": 44126280,
+        "size": 2544,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 31,
+        "name": ".bss",
+        "type": 8,
+        "flags": 3,
+        "address": 44141112,
+        "offset": 44128824,
+        "size": 235,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 32,
+        "name": ".comment",
+        "type": 1,
+        "flags": 48,
+        "address": 0,
+        "offset": 44128824,
+        "size": 177,
+        "link": 0,
+        "entry_bytes": 1
+      },
+      {
+        "index": 33,
+        "name": ".debug_loc",
+        "type": 1,
+        "flags": 0,
+        "address": 0,
+        "offset": 44129001,
+        "size": 3802225,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 34,
+        "name": ".debug_abbrev",
+        "type": 1,
+        "flags": 0,
+        "address": 0,
+        "offset": 47931226,
+        "size": 232225,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 35,
+        "name": ".debug_info",
+        "type": 1,
+        "flags": 0,
+        "address": 0,
+        "offset": 48163451,
+        "size": 89083861,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 36,
+        "name": ".debug_aranges",
+        "type": 1,
+        "flags": 0,
+        "address": 0,
+        "offset": 137247312,
+        "size": 4154448,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 37,
+        "name": ".debug_ranges",
+        "type": 1,
+        "flags": 0,
+        "address": 0,
+        "offset": 141401760,
+        "size": 21600608,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 38,
+        "name": ".debug_str",
+        "type": 1,
+        "flags": 48,
+        "address": 0,
+        "offset": 163002368,
+        "size": 250830436,
+        "link": 0,
+        "entry_bytes": 1
+      },
+      {
+        "index": 39,
+        "name": ".debug_line",
+        "type": 1,
+        "flags": 0,
+        "address": 0,
+        "offset": 413832804,
+        "size": 30830993,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 40,
+        "name": ".symtab",
+        "type": 2,
+        "flags": 0,
+        "address": 0,
+        "offset": 444663800,
+        "size": 3147840,
+        "link": 42,
+        "entry_bytes": 24
+      },
+      {
+        "index": 41,
+        "name": ".shstrtab",
+        "type": 3,
+        "flags": 0,
+        "address": 0,
+        "offset": 447811640,
+        "size": 447,
+        "link": 0,
+        "entry_bytes": 0
+      },
+      {
+        "index": 42,
+        "name": ".strtab",
+        "type": 3,
+        "flags": 0,
+        "address": 0,
+        "offset": 447812087,
+        "size": 27835713,
+        "link": 0,
+        "entry_bytes": 0
+      }
+    ],
+    "symtab": {
+      "symbol_rows": 131160,
+      "all_symbol_name_bytes_with_rows": 27704553,
+      "symbol_type_counts": {
+        "0": 34935,
+        "1": 64,
+        "4": 336,
+        "2": 95818,
+        "6": 7
+      },
+      "symbol_binding_counts": {
+        "0": 45278,
+        "1": 85873,
+        "2": 9
+      },
+      "defined_text_function_rows": 95748,
+      "defined_text_function_name_bytes_with_rows": 27007277,
+      "unique_defined_text_function_names": 95745,
+      "unique_defined_text_function_name_bytes": 27007034,
+      "largest_five_names": [
+        {
+          "bytes": 753,
+          "prefix": "_RINvMNtCs4NRVxsYgnAr_4core6optionINtB3_6OptionRNtNtCscBIObJjeKay_3ash6source6OriginE7or_elseNCNvXs_NtNtNtB5_4iter8adapters5chainINtB1z_5ChainIB23_IB23_IB23_INtNtB1B_3map3MapINtNtNtB5_5slice4iter4Iter"
+        },
+        {
+          "bytes": 708,
+          "prefix": "_RNvXNtNtNtCs4NRVxsYgnAr_4core4iter6traits7collectINtNtNtB6_8adapters5chain5ChainIBM_IBM_IBM_INtNtBQ_3map3MapINtNtNtB8_5slice4iter4IterNtNtNtNtCscBIObJjeKay_3ash4core8provider8external21RetainedHandle"
+        },
+        {
+          "bytes": 707,
+          "prefix": "_RINvYINtNtNtCs4NRVxsYgnAr_4core5slice4iter4IterNtNtCscBIObJjeKay_3ash5types14EffectInstanceENtNtNtNtBa_4iter6traits12double_ended19DoubleEndedIterator5rfolduNCINvNtNtB1y_8adapters3map8map_foldRBJ_NtN"
+        },
+        {
+          "bytes": 707,
+          "prefix": "_RINvYINtNtNtCs4NRVxsYgnAr_4core5slice4iter4IterNtNtCscBIObJjeKay_3ash5types14EffectInstanceENtNtNtNtBa_4iter6traits12double_ended19DoubleEndedIterator5rfolduNCINvNtNtB1y_8adapters3map8map_foldRBJ_NtN"
+        },
+        {
+          "bytes": 707,
+          "prefix": "_RINvYINtNtNtCs4NRVxsYgnAr_4core5slice4iter4IterNtNtCscBIObJjeKay_3ash5types14KindedArgumentENtNtNtNtBa_4iter6traits12double_ended19DoubleEndedIterator5rfolduNCINvNtNtB1y_8adapters3map8map_foldRBJ_NtN"
+        }
+      ]
+    },
+    "qualification": "Complete ordinary producer input metadata, not a final static candidate; ordinary link is ET_DYN and includes DWARF. Different static linker/CRT/section ordering prevent treating it as a bijective inventory or bound for a future map."
+  },
+  "prefixes": [
+    {
+      "label": "third",
+      "path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log",
+      "bytes": 67108864,
+      "sha256": "0e62a016e6bca947d2ce30ae523a0ff1e429eb45bffa7f85b477a1275dad94ab",
+      "markers": {
+        "Memory Configuration": 519242,
+        "Linker script and memory map": 519386,
+        "OUTPUT(": -1,
+        "Cross Reference Table": -1,
+        ".debug_info": -1
+      },
+      "actual_rodata_output_header_count": 0,
+      "output_sections_observed": [
+        {
+          "name": ".rela.dyn",
+          "address": 4195080,
+          "planned_bytes": 0
+        },
+        {
+          "name": ".rela.plt",
+          "address": 4195080,
+          "planned_bytes": 744
+        },
+        {
+          "name": ".init",
+          "address": 4198400,
+          "planned_bytes": 27
+        },
+        {
+          "name": ".plt",
+          "address": 4198432,
+          "planned_bytes": 224
+        },
+        {
+          "name": ".text",
+          "address": 4198656,
+          "planned_bytes": 35803747
+        }
+      ],
+      "last_observed_extent": {
+        "address": 31360208,
+        "bytes": 164,
+        "input_prefix": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.dl8nrc5o18hjeldsuhr8t0hrs.0xgxaqu.rcgu.o)"
+      },
+      "text_planned_address_progress_fraction": 0.7586231686867858,
+      "progress_qualification": "Address position within the partial linker-script planned .text extent only; not percent of completed map/file/link or a correspondence to ordinary ELF ordering.",
+      "category_lines": {
+        "other": 3248,
+        "blank": 26,
+        "load": 78,
+        "address_symbol_name": 62784,
+        "address_extent_input": 63878,
+        "fill": 60817,
+        "mangled_text_section": 63757
+      },
+      "category_bytes": {
+        "other": 533787,
+        "blank": 26,
+        "load": 9927,
+        "address_symbol_name": 30582479,
+        "address_extent_input": 15071408,
+        "fill": 2858399,
+        "mangled_text_section": 18052838
+      },
+      "paired_names": {
+        "count": 62692,
+        "raw_section_name_bytes": 17352868,
+        "symbol_name_bytes": 27375303
+      },
+      "raw_Rust_addressed_symbol_names": 0,
+      "raw_Rust_names_matching_ordinary_text_functions": 0,
+      "matched_name_bytes": 0,
+      "near_end_1200bytes": "ome/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.dl8nrc5o18hjeldsuhr8t0hrs.0xgxaqu.rcgu.o)\n                0x0000000001de84d0                <core::result::Result<(), alloc::collections::TryReserveError>>::map_err::<ash::core::validate::ValidationError, ash::types::compare_structural_with_charge<ash::core::source_resource::check_provider_association::{closure#7}::{closure#0}, ash::types::substitute_structural_type_and_row_variables<ash::core::validate::ValidationError, ash::types::Type, ash::core::source_resource::check_provider_association::{closure#7}::{closure#0}, ash::core::source_resource::resource>::{closure#40}>::{closure#26}>\n *fill*         0x0000000001de8574        0xc \n .text._RINvMNtCs4NRVxsYgnAr_4core6resultINtB3_6ResultuNtNtCscdodAO9FK5_5alloc11collections15TryReserveErrorE7map_errNtNtNtCscBIObJjeKay_3ash4core8validate15ValidationErrorNCINvNtB1P_5types30compare_structural_with_chargeNCNCNvNtB1N_15source_resource26check_provider_associations5_00NCINvB2H_44substitute_structural_type_and_row_variablesB1J_NtB2H_4TypeB3p_NvB3v_8resourceEsw_0E0EB1P_\n                0x0000000001d",
+      "full_map_hash_or_completeness_claimed": false
+    },
+    {
+      "label": "fourth",
+      "path": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/watched-0.log",
+      "bytes": 67108864,
+      "sha256": "af27c6e1f59f1d26c56d996989500bab10274e839702d0a3e9af0f11aca6d1d5",
+      "markers": {
+        "Memory Configuration": 520400,
+        "Linker script and memory map": 520544,
+        "OUTPUT(": -1,
+        "Cross Reference Table": -1,
+        ".debug_info": -1
+      },
+      "actual_rodata_output_header_count": 0,
+      "output_sections_observed": [
+        {
+          "name": ".rela.dyn",
+          "address": 4195080,
+          "planned_bytes": 0
+        },
+        {
+          "name": ".rela.plt",
+          "address": 4195080,
+          "planned_bytes": 744
+        },
+        {
+          "name": ".init",
+          "address": 4198400,
+          "planned_bytes": 27
+        },
+        {
+          "name": ".plt",
+          "address": 4198432,
+          "planned_bytes": 224
+        },
+        {
+          "name": ".text",
+          "address": 4198656,
+          "planned_bytes": 35803747
+        }
+      ],
+      "last_observed_extent": {
+        "address": 32871504,
+        "bytes": 118,
+        "input_prefix": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.dl8nrc5o18hjeldsuhr8t0hrs.0xgxaqu.rcgu.o)"
+      },
+      "text_planned_address_progress_fraction": 0.8008337227944327,
+      "progress_qualification": "Address position within the partial linker-script planned .text extent only; not percent of completed map/file/link or a correspondence to ordinary ELF ordering.",
+      "category_lines": {
+        "other": 3247,
+        "blank": 26,
+        "load": 78,
+        "address_symbol_name": 71595,
+        "address_extent_input": 72689,
+        "fill": 69628,
+        "mangled_text_section": 72568
+      },
+      "category_bytes": {
+        "other": 534916,
+        "blank": 26,
+        "load": 9927,
+        "address_symbol_name": 24514761,
+        "address_extent_input": 17150804,
+        "fill": 3272516,
+        "mangled_text_section": 21625914
+      },
+      "paired_names": {
+        "count": 71503,
+        "raw_section_name_bytes": 20855593,
+        "symbol_name_bytes": 20855593
+      },
+      "raw_Rust_addressed_symbol_names": 71585,
+      "raw_Rust_names_matching_ordinary_text_functions": 71585,
+      "matched_name_bytes": 20863221,
+      "near_end_1200bytes": "map_erruNCINvNtCscBIObJjeKay_3ash5types30compare_structural_with_chargeNCNCNvMNtNtNtNtB1R_4core8provider3row7realizeNtB2U_21HandlerRowRecipeDraft13realize_nodes00NCINvB1P_44substitute_structural_type_and_row_variablesuNtB1P_4TypeB2L_NCB2N_s_0EsB_0Esb_0EB1R_\n                0x0000000001f59450       0x76 /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.dl8nrc5o18hjeldsuhr8t0hrs.0xgxaqu.rcgu.o)\n                0x0000000001f59450                _RINvMNtCs4NRVxsYgnAr_4core6resultINtB3_6ResultuNtNtCscdodAO9FK5_5alloc11collections15TryReserveErrorE7map_erruNCINvNtCscBIObJjeKay_3ash5types30compare_structural_with_chargeNCNCNvMNtNtNtNtB1R_4core8provider3row7realizeNtB2U_21HandlerRowRecipeDraft13realize_nodes00NCINvB1P_44substitute_structural_type_and_row_variablesuNtB1P_4TypeB2L_NCB2N_s_0EsB_0Esb_0EB1R_\n *fill*         0x0000000001f594c6        0xa \n .text._RINvMNtCs4NRVxsYgnAr_4core6resultINtB3_6ResultuNtNtCscdodAO9FK5_5alloc11collections15TryReserveErrorE7map_erruNCINvNtCscBIObJjeKay_3ash5types30compare_structural_with_chargeNCNCNvMNtNtNtNtB1R_4core8provider3row7realizeNtB2U_21HandlerRowReci",
+      "full_map_hash_or_completeness_claimed": false
+    }
+  ],
+  "space_observations": [
+    {
+      "path": "/tmp",
+      "canonical": "/tmp",
+      "device": 47,
+      "available_bytes": 907739136,
+      "observation_only_not_reservation": true
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "canonical": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "device": 66309,
+      "available_bytes": 206895771648,
+      "observation_only_not_reservation": true
+    }
+  ],
+  "proposed_project_output_parent": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging",
+  "output_parent_created": false,
+  "ignore_input": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/.gitignore",
+    "size": 21,
+    "sha256": "9646ef2259b3f3e8d58e7095a9b6f44ed4b0ab2046c7637a6ef99efc1865760b",
+    "matching_rule": "/target/"
+  },
+  "mutable_cache_files_read": false,
+  "source_binary_or_cache_copies": false
+}

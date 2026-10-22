@@ -1,0 +1,229 @@
+{
+  "status": "READ_ONLY_STAGED_PUBLICATION_CHECKS_NOT_EXECUTION_APPROVAL",
+  "base": "88db679943c981458b829e1c430e9af290976d9f",
+  "exact_original_copies": 306,
+  "derived_gzip_containers": 2,
+  "gzip_paths": [
+    "docs/design/foreign-authoring/linux-owner-map128-evidence/maps/fourth-prefix64MiB.gz",
+    "docs/design/foreign-authoring/linux-owner-map128-evidence/maps/third-prefix64MiB.gz"
+  ],
+  "json_parsed_before_this_record": 166,
+  "python_ASTs": 17,
+  "relative_links": [
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "linux-profile-experiment.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../DN-0057-checked-ffi-module-boundaries.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../../tasks/TASK-0050-checked-ffi-regions-control-program.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../../tasks/plans/checked-ffi-regions-control.md#f2-validate-the-linux-execution-profile"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../../proposals/CP-0024-checked-foreign-host-profile.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "linux-owner-inprocess-evidence/README.md#actual-assigned-results"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "linux-owner-map128-evidence/README.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "linux-owner-inprocess-probe/README.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "../linux-owner-inprocess-experiment.md#prospective-map-only-budget-amendment"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "../linux-owner-inprocess-probe/preparation/selected-archive-manifest.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage1/experiment-contract.txt"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/experiment/owner.ash"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/experiment/entry.ash"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generated/src/main.rs"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generated/Cargo.toml"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generated/Cargo.lock"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generated-manifest.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/selected-Cargo.lock.seed"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage1/observed-compiler.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generation-receipt.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage3-default/execution-readback.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage3-no-discarded/execution-readback.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "maps/stage3-default.prefix"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "maps/stage3-no-discarded.prefix"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage3-no-discarded/map-detail-evidence.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "../linux-owner-inprocess-probe/build_monitor.py"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "retention-index.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "manifest.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "../linux-owner-map128-evidence/README.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "../linux-owner-inprocess-experiment.md#prospective-map-only-budget-amendment"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "../../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "../../../proposals/CP-0024-checked-foreign-host-profile.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "../linux-owner-inprocess-evidence/README.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "third/execution-manifest.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "fourth/execution-manifest.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "monitor64/build_monitor.py"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "monitor64/test_monitor.py"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "monitor64/schema2.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "monitor64/reviewed-suite/suite-receipt.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "postmortem/prefix-analysis.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "study/analysis.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "study/recommendation.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "maps/third-prefix64MiB.gz"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "maps/fourth-prefix64MiB.gz"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "prefix-containers.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "verify_prefix_archives.py"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "equivalence-command.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "equivalence-receipt.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "study/analysis.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "retention-index.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-map128-evidence/README.md",
+      "target": "manifest.json"
+    }
+  ],
+  "actual_archival_equivalence_receipt_sha256": "6e99c52359ebfa87016d9d82ff556d769f7930dacf04721e1a504808a5c6d7d9",
+  "no_raw_prefix_duplicate_in_payload": true,
+  "nonarchival_binaries_in_payload": false,
+  "authored_prose_whitespace": true,
+  "captured_data_whitespace": "Exact recorded bytes preserved; not reformatted",
+  "authority": "Proposed map128/log16/image128/output-placement amendment only; current64 monitor unchanged; separate retention/apparatus/tuple/root assignment required",
+  "production_or_native_commands_run": false
+}

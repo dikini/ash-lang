@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/tmp/ash-owner-static-stage3-mangled/verify_inputs.py",
+    "preparation-readback"
+  ],
+  "cwd": "/tmp/ash-owner-static-stage3-mangled",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "scope": "Read-only preparation verification, no production tuple step"
+}

@@ -94,7 +94,7 @@ production; it is an experiment artifact, not a new supported build mode.
 | Closure manifest | 4096 records, 4 MiB encoded total |
 | ELF program headers | 64 |
 | Command output and each raw build log | 16 MiB each |
-| Produced and retained complete link map | 64 MiB; map only, prospective amendment below |
+| Produced and retained complete link map | 128 MiB; map only, prospective amendment below |
 | Build/relink diagnostic window | 20 minutes per assigned command, one build job |
 | Optional later execution | 30-second child deadline, 16 KiB combined output |
 | Baseline native allocation | One requested 8-byte malloc; not a native-memory quota |
@@ -129,7 +129,8 @@ time. The separately assigned selected-source Stage1 build later produced a
 589,364,584-byte compiler, SHA-256
 `5dca1b624bf206c44c6c4d3037675193800516eb936a0cf6420e67394e998d3e`;
 its [historical correspondence record](linux-owner-inprocess-evidence/README.md#actual-assigned-results)
-does not identify the current contents of a shared cache after later builds. The map-only amendment below replaces the earlier 16 MiB map category. All
+does not identify the current contents of a shared cache after later builds. The proposed map-only amendment below replaces the retained 64 MiB map category
+prospectively. Earlier 16 MiB and 64 MiB observations remain unchanged. All
 experiment text, manifest, receipt, output/log and final-image bounds otherwise
 remain unchanged.
 Sampled storage monitoring is not a quota or a zero-overshoot guarantee.
@@ -143,43 +144,62 @@ compact LOAD/header evidence, whole-map hash and omission qualifications.
 
 ## Prospective map-only budget amendment
 
-The [actual packaging record](linux-owner-inprocess-evidence/README.md) retains
-successful selected-source compiler production and ordinary owner-host generation,
-followed by two root-static relink refusals under the earlier 16 MiB map limit.
-The first observed map reached 17,346,560 bytes; after suppressing discarded-section
-map diagnostics, the second reached 17,674,240 bytes. Each retained prefix is
-exactly 16,777,216 bytes. Both maps may be incomplete: neither has a full-map hash,
-verified static candidate, passive ELF inspection or successful packaging receipt.
-The diagnostic option removed the discarded-section listing, but the remaining
-active map still exceeded the old cap. Neither attempt is reclassified as a pass.
+PR102 retained the 64 MiB map-only policy at
+88db679943c981458b829e1c430e9af290976d9f after two 16 MiB map refusals. A separately
+reviewed per-file-class monitor then enforced map 64 MiB and watched logs/output
+16 MiB. Both later static relinks also refused: third observed 68,108,288 map
+bytes; fourth, using only additional --no-demangle output rendering, observed
+70,373,376. Each retained prefix is exactly 67,108,864 bytes. These may be
+incomplete maps at different termination progress; none has a full-map hash,
+verified static candidate, passive ELF result or after-verification. All four
+attempts remain failures. See the [new evidence and study](linux-owner-map128-evidence/README.md).
 
-Prospectively allow at most 67,108,864 bytes (64 MiB) for the complete produced
-and retained linker map. This finite operational tool-artifact allowance gives
-the active GNU/BFD map room for one separately assigned comparison; it predicts
-neither fit nor link success. Command output and every build/native log retain
-their separate 16,777,216-byte (16 MiB) caps. All other limits, fixed source/native
-inputs, semantic flags, diagnostic suppression and success/refusal gates remain
-unchanged. Retain and hash the entire new map within its limit; require recognized
-GNU/BFD framing, nonempty LOAD records and explicit pinned libc.a association.
-Missing temporary objects remain declared producer/build-trust limits. A partial
-old prefix cannot substitute for a complete new map or establish native closure.
+The fourth prefix shows that raw mangled section and symbol names now match,
+but duplicated names, archive/object paths, extents and fill records still consume
+the cap while inside .text. Complete fixed ordinary-producer ELF metadata has
+131,160 symbol rows and 27,704,553 referenced-name bytes. Combining those complete
+input facts with the observed fourth-prefix line overhead estimates 101,996,794
+bytes (97.27 MiB) for a full-record map. It is a scaling model, not an upper bound:
+static CRT, section grouping/order and unseen nontext details can differ.
 
-The executed monitor has one shared watched-sidefile limit; it cannot express
-map 64 MiB and log 16 MiB separately. This amendment does not change that code.
-Before any next assignment, independently review a concrete monitor/collector
-configuration that distinguishes the actual map from every log, observes each
-file class and its recorded peak, refuses the corresponding limit, and bounds
-retained reads. Raising the generic watched-file cap to 64 MiB is insufficient.
-Sampling permits overshoot and may miss changes between samples; it is not hard
-storage containment or a quota. Do not claim an unobserved kernel peak.
+Prospectively allow at most 134,217,728 bytes (128 MiB) for the complete produced
+and retained map, about 31.6% headroom above that explicit model. This is a finite
+operational choice, not fit, link-success or native-correctness assurance. Command
+output and every watched build/native log keep their separate 16,777,216-byte
+(16 MiB) caps. Final image 128 MiB, PH 64 and all other bounds remain unchanged.
+Keep semantic/static flags and source/native inputs fixed, along with the existing
+discarded-section suppression and mangled symbol rendering; remove no additional
+active symbol/address/archive records. Require the full new map within its cap,
+complete hash, recognized GNU/BFD framing/OUTPUT, nonempty LOAD and exact pinned
+libc.a association. Missing linker temporaries remain producer/build-trust limits.
+No partial prefix or narrower artifact substitutes for complete-map evidence.
 
-Retain this amendment and bind its accepted retaining commit and exact contract
-hash into a fresh reviewed tuple before assigning another command. Preserve the
-earlier contract hash and both failed tuples, receipts, prefixes and observed
-sizes. New command/monitor bytes, source/tool/generated-input checks and sole
-Cargo ownership still require separate review and exact root assignment. No
-relink, tool inspection, native startup, provisioning, ownerful architecture or
-checked-runtime permission follows from this record-budget change.
+For a later separately reviewed tuple, place only new experiment outputs in one
+private, owned 0700 directory under the existing ignored shared Cargo target on
+the project disk. This is not a new cache, checkout, source relocation or persistent
+approval store. Leave selected source and stored Stage2 inputs unchanged. Observe
+canonical parent identity, ownership and actual available bytes before/after;
+capacity is not reserved. The known map/image/log/record footprint is 583,532,544
+bytes, not a global intermediate bound. Rust/linker temporaries may still use
+/tmp under the unchanged environment. Do not move/delete old artifacts or unrelated
+scratch/cache files to claim compliance, and avoid cache pruning during live evidence.
+
+The exact executed per-class monitor still caps the map at 64 MiB. This proposal
+changes no monitor, collector or tuple. Before another assignment, independently
+review new per-class code/tests and exact collector/config pins enforcing map
+128 MiB versus logs/output 16 MiB, with bounded retention and full-map gates.
+A self-test override or generic watched-file cap must not widen logs. Sampled
+peaks can overshoot or miss changes; they are neither hard quotas nor proof of
+unobserved maxima. Check current output space afresh, without claiming reservation.
+
+Retain this amendment and bind its actual retaining commit/contract hash into a
+fresh independently reviewed tuple before root assigns a free sole Cargo slot.
+Preserve the earlier contracts, all four tuples/receipts and exact bounded-prefix
+content. The two 64 MiB prefixes may be archived in deterministic gzip containers
+with explicit compressed and decoded size/hash pins and bounded streaming
+verification; container bytes are derived evidence, not byte-identical raw files
+or complete maps. Historical receipts remain unchanged. No relink, inspection,
+startup, provisioning, ownerful architecture or checked-runtime authority follows.
 
 ## Trust, owner groups and shutdown
 
@@ -273,9 +293,11 @@ experimental; retain no prototype loader/runtime on the product path.
 
 The initial issue #58 delivery retained the owner/resource contract and an
 informative Linux-experiment link, followed by PR100's build-monitor preparation
-and source-category clarification. The current delivery retains actual Stage1
-compiler and Stage2 ordinary-generation evidence, both Stage3 map-limit refusals,
-and the prospective map-only budget amendment. It changes no F2 whole checkbox,
+and source-category clarification. PR102 retained Stage1 compiler and Stage2 ordinary-generation evidence and the
+first two Stage3 map-limit refusals. The current delivery retains the third and
+fourth 64 MiB refusals, bounded postmortem/complete producer-metadata study,
+explicitly derived prefix containers and prospective 128 MiB map-only/output-
+placement amendment. It changes no F2 whole checkbox,
 architecture scope or execution permission. Reviewer checks original record
 preservation, authority links, exact input correspondence, finite class-specific
 bounds, separate command assignment, contrary outcomes and disposal. A later

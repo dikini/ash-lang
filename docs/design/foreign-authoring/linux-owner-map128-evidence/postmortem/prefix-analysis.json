@@ -1,0 +1,229 @@
+{
+  "status": "BOUNDED_PREFIX_ONLY_NOT_FULL_MAP_OR_RETRY_PERMISSION",
+  "inputs": [
+    {
+      "label": "first16",
+      "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+      "retained_bytes": 16777216,
+      "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5",
+      "markers": {
+        "Discarded input sections": 519242,
+        "Memory Configuration": -1,
+        "Linker script and memory map": -1,
+        "LOAD ": -1,
+        "OUTPUT(": -1,
+        "Cross Reference Table": -1,
+        ".debug_info": 521015,
+        ".rodata": 519493
+      },
+      "category_lines": {
+        "other": 17489,
+        "blank": 7,
+        "address_extent_input": 33490,
+        "mangled_text_section": 19680
+      },
+      "category_bytes": {
+        "other": 3096714,
+        "blank": 7,
+        "address_extent_input": 7902864,
+        "mangled_text_section": 5777631
+      },
+      "category_percent": {
+        "other": 18.458,
+        "blank": 0.0,
+        "address_extent_input": 47.105,
+        "mangled_text_section": 34.437
+      },
+      "LOAD_lines": 0,
+      "explicit_libc_LOAD_present": false,
+      "local_symbol_markers": 0,
+      "last_text_section_offset": 16776961,
+      "paired_names": {
+        "count": 0,
+        "mangled_total_bytes": 0,
+        "rendered_total_bytes": 0,
+        "difference_bytes": 0,
+        "qualification": "Adjacent-section/next-addressed-symbol pairing heuristic, not a simulated --no-demangle result or complete-map size estimate."
+      },
+      "largest_three_observed_renderings": [],
+      "near_end_last1600bytes": "tCscBIObJjeKay_3ash9interface8MethodId5firstBy_\n                0x0000000000000000       0x35 /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.8tib22bnqibnlttcblu7mzicr.0xgxaqu.rcgu.o)\n .text._RNvMNtCs4NRVxsYgnAr_4core5sliceSRNtNtCscBIObJjeKay_3ash9interface18CheckedRequirement4iterBz_\n                0x0000000000000000       0x1c /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.8tib22bnqibnlttcblu7mzicr.0xgxaqu.rcgu.o)\n .text._RNvMNtCs4NRVxsYgnAr_4core5sliceSTNtNtCscBIObJjeKay_3ash9interface17EvidenceSelectionNtBx_14EvidenceNodeIdE5firstBz_\n                0x0000000000000000       0x35 /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.8tib22bnqibnlttcblu7mzicr.0xgxaqu.rcgu.o)\n .text._RNvMNtCs4NRVxsYgnAr_4core5sliceSTNtNtCscBIObJjeKay_3ash9interface17EvidenceSelectionNtBx_14EvidenceNodeIdE8is_emptyBz_\n                0x0000000000000000       0x14 /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.8tib22bnqibnlttcblu7mzicr.0xgxaqu.rcgu.o)\n .text._RNvMNtCs4NRVxsYgnAr_4core5sliceSTNtNtCscBIObJjeKay_3ash9interface17LexicalEvidenceIdNtBx_8MethodIdNtNtBz_8resolved8BinderIdE4iterBz_\n                0x0000000000000000       0x1c /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64",
+      "full_map_hashed_or_complete": false
+    },
+    {
+      "label": "suppressed16",
+      "path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/watched-0.log",
+      "retained_bytes": 16777216,
+      "sha256": "cb91bca15d2f3469175d7c1a2e9a6f67530a1ac7fb4028b68316823bc10453c9",
+      "markers": {
+        "Discarded input sections": -1,
+        "Memory Configuration": 519242,
+        "Linker script and memory map": 519386,
+        "LOAD ": 519416,
+        "OUTPUT(": -1,
+        "Cross Reference Table": -1,
+        ".debug_info": -1,
+        ".rodata": 530276
+      },
+      "category_lines": {
+        "other": 3247,
+        "blank": 26,
+        "load": 78,
+        "address_symbol_rendering": 15620,
+        "address_extent_input": 16049,
+        "fill": 15027,
+        "mangled_text_section": 15926
+      },
+      "category_bytes": {
+        "other": 533758,
+        "blank": 26,
+        "load": 9927,
+        "address_symbol_rendering": 7258650,
+        "address_extent_input": 3783574,
+        "fill": 706269,
+        "mangled_text_section": 4485012
+      },
+      "category_percent": {
+        "other": 3.181,
+        "blank": 0.0,
+        "load": 0.059,
+        "address_symbol_rendering": 43.265,
+        "address_extent_input": 22.552,
+        "fill": 4.21,
+        "mangled_text_section": 26.733
+      },
+      "LOAD_lines": 78,
+      "explicit_libc_LOAD_present": true,
+      "local_symbol_markers": 0,
+      "last_text_section_offset": 16776390,
+      "paired_names": {
+        "count": 15529,
+        "mangled_total_bytes": 4317138,
+        "rendered_total_bytes": 6456834,
+        "difference_bytes": 2139696,
+        "qualification": "Adjacent-section/next-addressed-symbol pairing heuristic, not a simulated --no-demangle result or complete-map size estimate."
+      },
+      "largest_three_observed_renderings": [
+        {
+          "mangled_bytes": 638,
+          "rendered_bytes": 2107,
+          "mangled_prefix": "_RINvXs_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3revINtB5_3RevINtNtNtBb_5slice4iter4IterNtNtCscBIObJjeKay_3ash5types14Eff",
+          "rendered_prefix": "<core::iter::adapters::rev::Rev<core::slice::iter::Iter<ash::types::EffectInstance>> as core::iter::traits::iterator::Iterator>::fold::<(), core::iter::adapters::map::map_fold<&ash::types::EffectInsta"
+        },
+        {
+          "mangled_bytes": 638,
+          "rendered_bytes": 2107,
+          "mangled_prefix": "_RINvXs_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3revINtB5_3RevINtNtNtBb_5slice4iter4IterNtNtCscBIObJjeKay_3ash5types14Eff",
+          "rendered_prefix": "<core::iter::adapters::rev::Rev<core::slice::iter::Iter<ash::types::EffectInstance>> as core::iter::traits::iterator::Iterator>::fold::<(), core::iter::adapters::map::map_fold<&ash::types::EffectInsta"
+        },
+        {
+          "mangled_bytes": 638,
+          "rendered_bytes": 2107,
+          "mangled_prefix": "_RINvXs_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3revINtB5_3RevINtNtNtBb_5slice4iter4IterNtNtCscBIObJjeKay_3ash5types14Kin",
+          "rendered_prefix": "<core::iter::adapters::rev::Rev<core::slice::iter::Iter<ash::types::KindedArgument>> as core::iter::traits::iterator::Iterator>::fold::<(), core::iter::adapters::map::map_fold<&ash::types::KindedArgum"
+        }
+      ],
+      "near_end_last1600bytes": "nded_argument_types_with_budget<ash::core::validate::ValidationError, ash::core::source_resource::bind_pattern::{closure#1}, <ash::types::EffectRow>::substitute_tail_once_with_budget_and_failure<ash::core::source_resource::bind_pattern::{closure#1}, ash::types::substitute_structural_type_and_row_variables<ash::core::validate::ValidationError, &ash::types::Type, ash::core::source_resource::bind_pattern::{closure#1}, ash::core::source_resource::resource>::{closure#40}>::{closure#1}, &mut ash::types::substitute_structural_type_and_row_variables<ash::core::validate::ValidationError, &ash::types::Type, ash::core::source_resource::bind_pattern::{closure#1}, ash::core::source_resource::resource>::{closure#40}>::{closure#7}>\n *fill*         0x00000000007e491c        0x4 \n .text._RINvMNtCs4NRVxsYgnAr_4core6optionINtB3_6OptionjE10ok_or_elseNtNtNtCscBIObJjeKay_3ash4core8validate15ValidationErrorNCINvNtNtB12_5types15owner_arguments37map_kinded_argument_types_with_budgetBW_NCNvNtB10_15source_resource12bind_patterns_0NCINvMsk_B1W_NtB1W_9EffectRow44substitute_tail_once_with_budget_and_failureB35_NCINvB1W_44substitute_structural_type_and_row_variablesBW_RNtB1W_4TypeB35_NvB39_8resourceEsC_0Es_0QB54_Esa_0EB12_\n                0x00000000007e4920       0x8c /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.9eicm9padd8rqsl0kuwj98h7y.0xgxaqu.rcgu.o)\n                0x00000000007e4920                <core::option::Option<usize>>::ok_or_else::<ash::core::validate::ValidationError, ash::types::owner_ar",
+      "full_map_hashed_or_complete": false
+    },
+    {
+      "label": "suppressed64",
+      "path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log",
+      "retained_bytes": 67108864,
+      "sha256": "0e62a016e6bca947d2ce30ae523a0ff1e429eb45bffa7f85b477a1275dad94ab",
+      "markers": {
+        "Discarded input sections": -1,
+        "Memory Configuration": 519242,
+        "Linker script and memory map": 519386,
+        "LOAD ": 519416,
+        "OUTPUT(": -1,
+        "Cross Reference Table": -1,
+        ".debug_info": -1,
+        ".rodata": 530276
+      },
+      "category_lines": {
+        "other": 3248,
+        "blank": 26,
+        "load": 78,
+        "address_symbol_rendering": 62783,
+        "address_extent_input": 63879,
+        "fill": 60817,
+        "mangled_text_section": 63757
+      },
+      "category_bytes": {
+        "other": 533787,
+        "blank": 26,
+        "load": 9927,
+        "address_symbol_rendering": 30582433,
+        "address_extent_input": 15071454,
+        "fill": 2858399,
+        "mangled_text_section": 18052838
+      },
+      "category_percent": {
+        "other": 0.795,
+        "blank": 0.0,
+        "load": 0.015,
+        "address_symbol_rendering": 45.571,
+        "address_extent_input": 22.458,
+        "fill": 4.259,
+        "mangled_text_section": 26.901
+      },
+      "LOAD_lines": 78,
+      "explicit_libc_LOAD_present": true,
+      "local_symbol_markers": 0,
+      "last_text_section_offset": 67108450,
+      "paired_names": {
+        "count": 62692,
+        "mangled_total_bytes": 17352868,
+        "rendered_total_bytes": 27375303,
+        "difference_bytes": 10022435,
+        "qualification": "Adjacent-section/next-addressed-symbol pairing heuristic, not a simulated --no-demangle result or complete-map size estimate."
+      },
+      "largest_three_observed_renderings": [
+        {
+          "mangled_bytes": 654,
+          "rendered_bytes": 2524,
+          "mangled_prefix": "_RNvYNvYINtNtNtNtCs4NRVxsYgnAr_4core4iter8adapters5chain5ChainIB6_IB6_INtNtBa_3map3MapINtNtNtBe_5slice4iter4IterNtNtNtNt",
+          "rendered_prefix": "<<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::map::Map<core::slice::iter::Iter<ash::core::provider::external::Retaine"
+        },
+        {
+          "mangled_bytes": 530,
+          "rendered_bytes": 2490,
+          "mangled_prefix": "_RNCINvNtCscBIObJjeKay_3ash5types42rebuild_effect_row_with_budget_and_failureNtNtNtB6_4eval7machine14RuntimeFailureNCINv",
+          "rendered_prefix": "ash::types::rebuild_effect_row_with_budget_and_failure::<ash::eval::machine::RuntimeFailure, ash::eval::machine::source_resource_phases::visit_typed_source_values<ash::eval::machine::source_resource_p"
+        },
+        {
+          "mangled_bytes": 532,
+          "rendered_bytes": 2490,
+          "mangled_prefix": "_RNCINvNtCscBIObJjeKay_3ash5types42rebuild_effect_row_with_budget_and_failureNtNtNtB6_4eval7machine14RuntimeFailureNCINv",
+          "rendered_prefix": "ash::types::rebuild_effect_row_with_budget_and_failure::<ash::eval::machine::RuntimeFailure, ash::eval::machine::source_resource_phases::visit_typed_source_values<ash::eval::machine::source_resource_p"
+        }
+      ],
+      "near_end_last1600bytes": "esultINtB3_6ResultuNtNtCscdodAO9FK5_5alloc11collections15TryReserveErrorE7map_errNtNtNtCscBIObJjeKay_3ash4core8validate15ValidationErrorNCINvNtB1P_5types30compare_structural_with_chargeNCNCNvNtB1N_15source_resource26check_provider_associations5_00NCINvB2H_44substitute_structural_type_and_row_variablesB1J_NtB2H_4TypeB3p_NvB3v_8resourceEsC_0Eso_0EB1P_\n                0x0000000001de84d0       0xa4 /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib(ash-0aa39cb4094423a4.dl8nrc5o18hjeldsuhr8t0hrs.0xgxaqu.rcgu.o)\n                0x0000000001de84d0                <core::result::Result<(), alloc::collections::TryReserveError>>::map_err::<ash::core::validate::ValidationError, ash::types::compare_structural_with_charge<ash::core::source_resource::check_provider_association::{closure#7}::{closure#0}, ash::types::substitute_structural_type_and_row_variables<ash::core::validate::ValidationError, ash::types::Type, ash::core::source_resource::check_provider_association::{closure#7}::{closure#0}, ash::core::source_resource::resource>::{closure#40}>::{closure#26}>\n *fill*         0x0000000001de8574        0xc \n .text._RINvMNtCs4NRVxsYgnAr_4core6resultINtB3_6ResultuNtNtCscdodAO9FK5_5alloc11collections15TryReserveErrorE7map_errNtNtNtCscBIObJjeKay_3ash4core8validate15ValidationErrorNCINvNtB1P_5types30compare_structural_with_chargeNCNCNvNtB1N_15source_resource26check_provider_associations5_00NCINvB2H_44substitute_structural_type_and_row_variablesB1J_NtB2H_4TypeB3p_NvB3v_8resourceEsw_0E0EB1P_\n                0x0000000001d",
+      "full_map_hashed_or_complete": false,
+      "first16_range_sha256": "6dfc9e0e1e34c38a2079fd59357264caa183558a3de8390b521f27bff059ea92"
+    }
+  ],
+  "class_rule": "Disjoint line heuristics, precedence shown in script; categories describe retained text bytes, not executable/native size or complete map distribution.",
+  "manual": {
+    "path": "/usr/share/man/man1/ld.bfd.1.gz",
+    "compressed_bytes": 49180,
+    "compressed_sha256": "2f7c363d588b25cf60ac64322f3cd30eb01c7807e6bddaa82580d256dbdd1e9e",
+    "uncompressed_bytes": 174576,
+    "uncompressed_sha256": "d68694b33179394f19c779f3b3cf04272571c55f28cacf913fbf2bd85e2999ec",
+    "options": {
+      "no-demangle": {
+        "manual_uncompressed_byte_offset": 83557,
+        "interpretation": "Controls rendering of symbol names in errors and other output; default demangles unless COLLECT_NO_DEMANGLE is set. Proposed diagnostic-only option requires exact review/assignment; no fit/byte-identity claim."
+      },
+      "no-print-map-locals": {
+        "manual_uncompressed_byte_offset": 32357,
+        "interpretation": "Local map symbols disabled by default; none observed in retained prefixes. No evidenced benefit from restating this default."
+      },
+      "reduce-memory-overheads": {
+        "manual_uncompressed_byte_offset": 137987,
+        "interpretation": "Changes linker memory/speed tradeoffs including map generation algorithm and hash table size; not documented to omit the large symbol representations. Not recommended as this map-size remedy."
+      }
+    },
+    "short_exact_quote": "These options control whether to demangle symbol names in error messages and other output."
+  }
+}

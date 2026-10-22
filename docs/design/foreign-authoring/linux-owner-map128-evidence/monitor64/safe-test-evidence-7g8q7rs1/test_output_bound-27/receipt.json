@@ -1,0 +1,92 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "d5421fdb73971dc2d08543a957466f39c628cbaabade18fba23e73d8ddb596dd",
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size_before": 20745,
+    "size_after": 20745,
+    "hashed_bytes": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 55540
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-tgji226c/build-run-btut4apo",
+  "output_path": "/tmp/ash-build-monitor-test-tgji226c/build-run-btut4apo/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "import os,time; os.write(1,b\"x\"*65536); time.sleep(1)"
+  ],
+  "child_pid": 44,
+  "child_exit": -9,
+  "reason": "output_limit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 65536,
+  "retained_output_bytes": 1024,
+  "output_truncated": true,
+  "watched_files": [],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 44,
+        "wait_status": 9,
+        "exit_code": -9
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": true
+  },
+  "map_relative_path": null,
+  "limits": {
+    "deadline_seconds": 2,
+    "output_bytes": 1024,
+    "sidefile_bytes": 16384,
+    "map_bytes": 67108864
+  },
+  "environment_keys": [],
+  "executable": {
+    "path": "/usr/bin/python3.14",
+    "size_before": 7477160,
+    "size_after": 7477160,
+    "hashed_bytes": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347805
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 44,
+  "child_session": 44,
+  "final_limit_failures": [
+    "output_limit"
+  ],
+  "elapsed_seconds": 0.031720195000161766,
+  "observed_output_sha256": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-tgji226c/build-run-btut4apo/output.log",
+    "size_before": 1024,
+    "size_after": 1024,
+    "hashed_bytes": 1024,
+    "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 57244
+  }
+}
