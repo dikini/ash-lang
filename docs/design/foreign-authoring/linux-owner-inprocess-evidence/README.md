@@ -139,3 +139,10 @@ immutable receipt/approval/store/context enforcement, checked runtime/image
 activation, C-to-S/SQLite and F7 isolation/credentials/storage/filter/quota/fault/
 termination evidence remain separate obligations. All whole-scope F2 criteria
 remain open.
+
+## Later 64 MiB refusals and prospective follow-up
+
+The [later map-budget evidence](../linux-owner-map128-evidence/README.md) retains
+the next two actual refusals, bounded source/metadata analysis and exact compressed
+prefix content. Its proposed 128 MiB map-only/output-placement amendment grants
+no retry, monitor/tuple or startup authority and changes none of these earlier records.

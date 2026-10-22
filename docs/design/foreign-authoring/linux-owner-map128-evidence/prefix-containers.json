@@ -1,0 +1,40 @@
+{
+  "status": "DETERMINISTIC_DERIVED_ARCHIVAL_CONTAINERS_NOT_COMPLETE_MAPS",
+  "decoded_limit_each": 67108864,
+  "records": [
+    {
+      "original_path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log",
+      "original_size": 67108864,
+      "original_sha256": "0e62a016e6bca947d2ce30ae523a0ff1e429eb45bffa7f85b477a1275dad94ab",
+      "container_path": "docs/design/foreign-authoring/linux-owner-map128-evidence/maps/third-prefix64MiB.gz",
+      "compressed_size": 2253271,
+      "compressed_sha256": "c6a891b5550ed019597d2661a403037b2432e56b432693e71a21ed8f2cc108b7",
+      "format": "gzip",
+      "parameters": {
+        "filename": "",
+        "mtime": 0,
+        "compresslevel": 9,
+        "zlib_runtime": "1.3.1"
+      },
+      "deterministic_recompression_equal": true,
+      "qualification": "Derived gzip container, not byte-identical raw file. Decoded content is exactly the retained bounded prefix, never the complete oversize map."
+    },
+    {
+      "original_path": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/watched-0.log",
+      "original_size": 67108864,
+      "original_sha256": "af27c6e1f59f1d26c56d996989500bab10274e839702d0a3e9af0f11aca6d1d5",
+      "container_path": "docs/design/foreign-authoring/linux-owner-map128-evidence/maps/fourth-prefix64MiB.gz",
+      "compressed_size": 2058994,
+      "compressed_sha256": "4c73ab13eac44f6825cf464da148324cf6ad8d937eb85b12b4086ded646630fb",
+      "format": "gzip",
+      "parameters": {
+        "filename": "",
+        "mtime": 0,
+        "compresslevel": 9,
+        "zlib_runtime": "1.3.1"
+      },
+      "deterministic_recompression_equal": true,
+      "qualification": "Derived gzip container, not byte-identical raw file. Decoded content is exactly the retained bounded prefix, never the complete oversize map."
+    }
+  ]
+}

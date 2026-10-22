@@ -1,0 +1,189 @@
+{
+  "status": "FOURTH_STAGE3_MANGLED_MAP64_REFUSED_NO_RETRY_AFTER_INSPECTION_OR_STARTUP",
+  "reviewed_tuple_sha256": "8a7135d8a59d34edfbc5ff78cf0e24252c9b9613e3bdbda978a0c4a1e128f390",
+  "reviewed_pre_run_manifest_sha256": "887cf3244263bdde6c33c0ef19065768e346d778812e34ba167269c9d842f9a9",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 5379,
+      "sha256": "28059a6b673d86426e79d4acb89488a7c051c1f464ab281af5d50456c55d17d1"
+    },
+    {
+      "path": "build-run-ppvqh10e/output.log",
+      "size": 59079,
+      "sha256": "699cdfeab031013008d02cba73d4bc6197a292cde20f8aa5de56e9eb31fc7876"
+    },
+    {
+      "path": "build-run-ppvqh10e/receipt.json",
+      "size": 12227,
+      "sha256": "3019a9f70a834f259efc183b8d350886afd15def3dca4777437473a5caa1efd5"
+    },
+    {
+      "path": "build-run-ppvqh10e/watched-0.log",
+      "size": 67108864,
+      "sha256": "af27c6e1f59f1d26c56d996989500bab10274e839702d0a3e9af0f11aca6d1d5"
+    },
+    {
+      "path": "default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "execute_assigned.py",
+      "size": 4228,
+      "sha256": "90603a2255b8d8ee0f37046e6d234811a62d48f5e5acb9dc94470564ab99f6c2"
+    },
+    {
+      "path": "execution-readback.json",
+      "size": 3378,
+      "sha256": "379bfa877fcc4e3a758f3676bb18d5babd5b30644bb444953d404aeb6d6b3a96"
+    },
+    {
+      "path": "experiment-contract.md",
+      "size": 18813,
+      "sha256": "7e81587b5598f1d7184ce268725e2a1296341c8e84415a44de7cc180d65527ef"
+    },
+    {
+      "path": "finalize_static.py",
+      "size": 8009,
+      "sha256": "95743eceb7704b7d7367d716e3c3eb7574146ccf3a94d531336c145a6f44ff03"
+    },
+    {
+      "path": "handoff.json",
+      "size": 1176,
+      "sha256": "4f0800ab941c7c9063110100371ba0bc7aa7b284a4cae90aac45d590cedbce09"
+    },
+    {
+      "path": "historical-readonly-before-prose-fix/preparation-readback.json",
+      "size": 430,
+      "sha256": "4f022f4b12100564b07d2e34e207e2d603758da0c5f5298cf303af3b225f1f31"
+    },
+    {
+      "path": "historical-readonly-before-prose-fix/preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "historical-readonly-before-prose-fix/readonly-check-command.json",
+      "size": 445,
+      "sha256": "711b9b0159f34323bd20da882c21af35e6c02b8c6ac89d81280052222de6daf4"
+    },
+    {
+      "path": "inspection.monitor.json",
+      "size": 1513,
+      "sha256": "9cd21cd0b2173bb00e37893c97919ec0f533651492759b818e039129a8806eb5"
+    },
+    {
+      "path": "manifest.json",
+      "size": 3203,
+      "sha256": "887cf3244263bdde6c33c0ef19065768e346d778812e34ba167269c9d842f9a9"
+    },
+    {
+      "path": "map-detail-evidence.json",
+      "size": 2815,
+      "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838"
+    },
+    {
+      "path": "preflight-inputs.json",
+      "size": 20962,
+      "sha256": "d13aaf43f324abfee7ace916c163a8408c5024f1810d5ce70165a50f66e751fc"
+    },
+    {
+      "path": "preparation-readback.json",
+      "size": 430,
+      "sha256": "2671c6f5f7b16e931e4117869441a584aa0acb2576d6ed7660ec3b0450dc421c"
+    },
+    {
+      "path": "preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "prepare_candidate.py",
+      "size": 5781,
+      "sha256": "bb7fc46163204bfe6072b1cb37852a2621825de8bd187bd270a3984d5f01d394"
+    },
+    {
+      "path": "prepare_proposal.py",
+      "size": 5636,
+      "sha256": "353c73bc52bb0b0dcd6341c24dac93c4d69e3872cd2d9578afbd63aebf7c0361"
+    },
+    {
+      "path": "provenance.json",
+      "size": 8190,
+      "sha256": "57cb3074b4add3105094b10f79ca71a2d6aa855ec2070398d47febddb8513852"
+    },
+    {
+      "path": "readonly-check-command.json",
+      "size": 484,
+      "sha256": "e90083d9e1fd279c6f59fbdc757eaf2b5d729047b25468d1677358facf9922c3"
+    },
+    {
+      "path": "relink-response.json",
+      "size": 116,
+      "sha256": "2b7007683d587bcf6564c24f48f703bdd3f16894f4f5d67cc7f3d608bf00c6c2"
+    },
+    {
+      "path": "relink-response.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "relink.monitor.json",
+      "size": 6384,
+      "sha256": "77d7591aeebdb62af79525b0327cb303ad3dac23cb1790340286f0638767d7b0"
+    },
+    {
+      "path": "snapshot-before.json",
+      "size": 423,
+      "sha256": "49e6909375cb32dd86fc8838a4262b2b8045b1f806a1a7b905929a17a4d86f0a"
+    },
+    {
+      "path": "snapshot-before.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tuple.json",
+      "size": 15420,
+      "sha256": "8a7135d8a59d34edfbc5ff78cf0e24252c9b9613e3bdbda978a0c4a1e128f390"
+    },
+    {
+      "path": "verify_inputs.py",
+      "size": 4399,
+      "sha256": "693c4f2707baa5c4d7a6f7a8ebf2f9b84fce27f2a5ec52e42c8f2f58a2846b36"
+    }
+  ],
+  "omitted_oversize_actual_map": {
+    "path": "whole-static.map",
+    "observed_size_bytes": 70373376,
+    "full_map_hashed": false,
+    "completeness_claimed": false,
+    "retained_prefix": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/watched-0.log",
+    "retained_prefix_bytes": 67108864,
+    "retained_prefix_sha256": "af27c6e1f59f1d26c56d996989500bab10274e839702d0a3e9af0f11aca6d1d5"
+  },
+  "source_verification": {
+    "before_passed": true,
+    "files": 2784,
+    "bytes": 96452672,
+    "after_assigned_step_not_run_due_failure": true,
+    "before_after_equality_claimed": false
+  },
+  "monitor": {
+    "receipt": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/receipt.json",
+    "receipt_sha256": "3019a9f70a834f259efc183b8d350886afd15def3dca4777437473a5caa1efd5",
+    "reason": "watched_file_limit",
+    "child_exit": -9,
+    "elapsed_seconds": 8.520340954000858,
+    "observed_output_bytes": 59079,
+    "all_reaped": true,
+    "reaped_count": 5,
+    "pending_observed_during_cleanup": true,
+    "final_pending": false,
+    "escaped": false
+  },
+  "candidate_exists": false,
+  "image_executed": false,
+  "cache_slot_released": true
+}

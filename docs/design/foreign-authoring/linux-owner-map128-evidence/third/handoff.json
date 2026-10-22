@@ -1,0 +1,18 @@
+{
+  "root": "/tmp/ash-owner-static-stage3-map64",
+  "hashes": {
+    "tuple.json": "a58a8f3e648ccbf92ae2c46508b19d8d6726542fce18addbdf193adc8f4908f2",
+    "relink.monitor.json": "7ba77af3e27516707c17e83e2c474bd878745ce94a8f75c13ed1e179319cefec",
+    "inspection.monitor.json": "6e032621873a169efe25bb231867b64fff9b0a9990f197d6a04298a81486c86f",
+    "preflight-inputs.json": "e9a977e0d583e8b0555f83c445afaae29f8a0b5a009587ecb93af1826b58144e",
+    "verify_inputs.py": "693c4f2707baa5c4d7a6f7a8ebf2f9b84fce27f2a5ec52e42c8f2f58a2846b36",
+    "prepare_candidate.py": "bb7fc46163204bfe6072b1cb37852a2621825de8bd187bd270a3984d5f01d394",
+    "finalize_static.py": "58eb632eabf1d2c3691547adb5b5c5cbdb16b424ad7662873f5a8714af2912e0",
+    "manifest.json": "86b137b931b76280b599c249b05b41979b03a6a263a4bd22593bacf32bd6dbf6",
+    "provenance.json": "af0e2413fcc16419b33d86bc96cf7da8ae595b0b447e6256db50f9df33b2294c"
+  },
+  "record_count": 16,
+  "bytes": 107868,
+  "scope": "Review only; no relink/readelf/native/candidate startup assignment",
+  "pending": "Independent exact tuple/collector review and root sole-Cargo assignment"
+}

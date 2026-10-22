@@ -1,0 +1,40 @@
+{
+  "status": "READ_ONLY_BOUNDED_STUDY_NOT_AUTHORIZATION",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 7451,
+      "sha256": "1a0671c9fb1bec2bb1e5640218a83ed3eb57c4be90a4e7064c6633833148e035"
+    },
+    {
+      "path": "analysis-stdout.json",
+      "size": 4127,
+      "sha256": "ec34dd356b622fbb4237585a036c94f43ee95c0d83053f18d5dc39c568b2ad55"
+    },
+    {
+      "path": "analysis.json",
+      "size": 21049,
+      "sha256": "e0872a8b78c148309ea8a374b5092fec446e1071662707a104df2bfe02186f7a"
+    },
+    {
+      "path": "analyze.py",
+      "size": 7834,
+      "sha256": "ed5bed92f1a2172002e2928f99923bf6ae12305c68da261745e53b0c564e8f1f"
+    },
+    {
+      "path": "historical-first-analysis.json",
+      "size": 20998,
+      "sha256": "f30883c3fdca7d888dcf259c9a53d5b9377af9c5ed027fade726c40c30b8146f"
+    },
+    {
+      "path": "historical-first-analyze.py",
+      "size": 7730,
+      "sha256": "a8ce8a31d75eaa2935bee220285885bbc08b223896bb4630e49648e1bbd0a9df"
+    },
+    {
+      "path": "recommendation.json",
+      "size": 1791,
+      "sha256": "8badb527c7aef4b503617cf85f0007c3ad78734984b2a0a3e5d0f02455db3515"
+    }
+  ]
+}

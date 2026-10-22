@@ -1,0 +1,58 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "267eb5e0e1dc9f352115168424289f8babfd12cd650153e802ef4b0b4c0d7b7e",
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size_before": 20745,
+    "size_after": 20745,
+    "hashed_bytes": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 55540
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-k7ml8aff/build-run-epif0dk0",
+  "output_path": "/tmp/ash-build-monitor-test-k7ml8aff/build-run-epif0dk0/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "raise AssertionError(\"must not run\")"
+  ],
+  "child_pid": null,
+  "child_exit": null,
+  "reason": "setup_refusal",
+  "error": "Refusal: map_relative_path must be one exact canonical relative whole-static.map path",
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 0,
+  "retained_output_bytes": 0,
+  "output_truncated": false,
+  "watched_files": [],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [],
+    "reaped_count": 0,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": false,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "elapsed_seconds": 2.8594000468729064e-05,
+  "observed_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-k7ml8aff/build-run-epif0dk0/output.log",
+    "size_before": 0,
+    "size_after": 0,
+    "hashed_bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 56940
+  }
+}

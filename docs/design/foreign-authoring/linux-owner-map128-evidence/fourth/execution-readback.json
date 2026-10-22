@@ -1,0 +1,72 @@
+{
+  "status": "REFUSED_STOP_NO_RETRY",
+  "anchors": {
+    "/tmp/ash-owner-static-stage3-mangled/tuple.json": "8a7135d8a59d34edfbc5ff78cf0e24252c9b9613e3bdbda978a0c4a1e128f390",
+    "/tmp/ash-owner-static-stage3-mangled/relink.monitor.json": "77d7591aeebdb62af79525b0327cb303ad3dac23cb1790340286f0638767d7b0",
+    "/tmp/ash-owner-static-stage3-mangled/inspection.monitor.json": "9cd21cd0b2173bb00e37893c97919ec0f533651492759b818e039129a8806eb5",
+    "/tmp/ash-owner-static-stage3-mangled/manifest.json": "887cf3244263bdde6c33c0ef19065768e346d778812e34ba167269c9d842f9a9",
+    "/tmp/ash-owner-static-stage3-mangled/preflight-inputs.json": "d13aaf43f324abfee7ace916c163a8408c5024f1810d5ce70165a50f66e751fc",
+    "/tmp/ash-owner-static-stage3-mangled/verify_inputs.py": "693c4f2707baa5c4d7a6f7a8ebf2f9b84fce27f2a5ec52e42c8f2f58a2846b36",
+    "/tmp/ash-owner-static-stage3-mangled/prepare_candidate.py": "bb7fc46163204bfe6072b1cb37852a2621825de8bd187bd270a3984d5f01d394",
+    "/tmp/ash-owner-static-stage3-mangled/finalize_static.py": "95743eceb7704b7d7367d716e3c3eb7574146ccf3a94d531336c145a6f44ff03",
+    "/tmp/ash-owner-map-class-monitor/build_monitor.py": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "/usr/bin/python3.14": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "steps": [
+    {
+      "name": "before-relink",
+      "phase": "before",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-static-stage3-mangled/verify_inputs.py",
+        "before-relink"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "stdout": "/tmp/ash-owner-static-stage3-mangled/snapshot-before.json",
+      "stderr": "/tmp/ash-owner-static-stage3-mangled/snapshot-before.json.stderr",
+      "started_unix": 1792662601.6388383,
+      "pid": 4,
+      "exit": 0,
+      "finished_unix": 1792662603.3274832,
+      "stdout_sha256": "49e6909375cb32dd86fc8838a4262b2b8045b1f806a1a7b905929a17a4d86f0a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "static-relink",
+      "phase": "relink",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+        "/tmp/ash-owner-static-stage3-mangled/relink.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "stdout": "/tmp/ash-owner-static-stage3-mangled/relink-response.json",
+      "stderr": "/tmp/ash-owner-static-stage3-mangled/relink-response.json.stderr",
+      "started_unix": 1792662603.3278487,
+      "pid": 5,
+      "exit": 1,
+      "finished_unix": 1792662612.0137506,
+      "stdout_sha256": "2b7007683d587bcf6564c24f48f703bdd3f16894f4f5d67cc7f3d608bf00c6c2",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "scope": "Root-assigned Stage3 packaging/passive inspection only; no startup",
+  "image_executed": false,
+  "external_anchors_equal": true,
+  "reviewed_manifest_all_equal": true,
+  "failed_step": "static-relink"
+}

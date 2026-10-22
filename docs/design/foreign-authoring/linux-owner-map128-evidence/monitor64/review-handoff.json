@@ -1,0 +1,10 @@
+{
+  "monitor_sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+  "tests_sha256": "2516606e251c73640c96895ef063933566aa68dbde3ea8f1426e8fffb0e1e4b0",
+  "manifest_sha256": "637d3f361af2cd383ef6faef29e624ab6824b1e1f9827cbb9f1750b02cd05ad7",
+  "schema_sha256": "9342c91888e525eb6e3f96754c34b381cfffdf4fba059d69b5552ada3faf13f6",
+  "fresh_receipt_sha256": "416168520e7932d48bb5f8b9069b7c27b8e774a35cba30219884ce02cd792266",
+  "records": 468,
+  "total_bytes": 406700,
+  "authority": "Preparation and benign tests only; independent review and retained amendment/fresh exact tuple/root assignment remain required."
+}

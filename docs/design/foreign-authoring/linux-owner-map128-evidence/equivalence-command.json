@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/tmp/ash-owner-map128-amendment/payload/docs/design/foreign-authoring/linux-owner-map128-evidence/verify_prefix_archives.py",
+    "--compare-originals"
+  ],
+  "cwd": "/tmp/ash-owner-map128-amendment/payload/docs/design/foreign-authoring/linux-owner-map128-evidence",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "scope": "Bounded compressed-window + decoded-stream equivalence only; no native commands",
+  "script_before": {
+    "path": "/tmp/ash-owner-map128-amendment/payload/docs/design/foreign-authoring/linux-owner-map128-evidence/verify_prefix_archives.py",
+    "resolved": "/tmp/ash-owner-map128-amendment/payload/docs/design/foreign-authoring/linux-owner-map128-evidence/verify_prefix_archives.py",
+    "size": 4145,
+    "sha256": "be621122a2254b98e130a3da81f25fc58da370ef90349355ea01b6024041af91"
+  },
+  "python": {
+    "path": "/usr/bin/python3.14",
+    "resolved": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "historical_first_record": "historical-equivalence-first/ preserves earlier source/command/receipt before explicit compressed-window cap",
+  "no_raw_output_written": true
+}

@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/tmp/ash-owner-map-class-monitor/test_monitor.py"
+  ],
+  "cwd": "/tmp/ash-owner-map-class-monitor",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "stdin": "DEVNULL",
+  "deadline_seconds": 180,
+  "scope": "Benign self-authored Python tests only; no build/compiler/linker/native candidate",
+  "monitor_test_child_environments": "Existing test harness preserves its exact configs: empty environment for each benign child; outer suite environment shown above."
+}

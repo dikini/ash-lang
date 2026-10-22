@@ -1,0 +1,671 @@
+{
+  "status": "PASS",
+  "exit": 0,
+  "elapsed_seconds": 4.034738846999971,
+  "pid": 4,
+  "waited": true,
+  "source_before_equals_after": true,
+  "historical_checkpoint_all234_equal": true,
+  "evidence_directory": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1",
+  "command_sha256": "d86e9baffc168d5a8761ba0d920571e8a939755c08ffcb06a9ac92725b65e27f",
+  "stdout": {
+    "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/stdout.log",
+    "size": 90,
+    "sha256": "c4f10f76512fdc567b6e1201efe04cac1b5cd91e7165f8ade9c6b4cc16e2087a"
+  },
+  "stderr": {
+    "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/stderr.log",
+    "size": 2468,
+    "sha256": "282b1fd2c270f6ce718700a9c2af1038f4d47fe481619316ce119a85bd0457c5"
+  },
+  "cases": [
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-0",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-0/config.json",
+        "size": 557,
+        "sha256": "ccf18d2bda879a212787f8ec0b466cbc1938c373716ccedcdac3052e29f6bdde"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-0/receipt.json",
+        "size": 1879,
+        "sha256": "a4de30485c524e861641adf7e02ebc8f5c60c68bd1988ae813a4426769b24d37"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-1",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-1/config.json",
+        "size": 555,
+        "sha256": "d9f1c1086b88bea0b9ceb3b49f800b1104cea9720e505daca179fbc12ec0b5c8"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-1/receipt.json",
+        "size": 1878,
+        "sha256": "e4ea7e15b6ab186283e8484a8bf9afcd821a91e928f07b37d6c72b1e9c5775b0"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-10",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-10/config.json",
+        "size": 577,
+        "sha256": "8d00f1410921348fa052220f773e22d0e9e8468ed8abdb1373831b6dbf3f25c8"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-10/receipt.json",
+        "size": 1878,
+        "sha256": "37acb051fb1789f24ef86f7fbdde1bec398b99155adba0911840727ed069f00e"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-11",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-11/config.json",
+        "size": 578,
+        "sha256": "e91c267b3b55b0fa004cf27a699ace51f82740dfbc4f62ae18322459be1d079c"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-11/receipt.json",
+        "size": 1879,
+        "sha256": "7bcc1c8e70a2f541f4a7a6f6e9958aa732ec296d70c02d60e7b879863b97ffe6"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-12",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-12/config.json",
+        "size": 577,
+        "sha256": "dfd97329064194dd3ba5a11c1a117ab494c9609808a63c1cfd28e4c45cee047c"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-12/receipt.json",
+        "size": 1879,
+        "sha256": "3d44abaae35c3a38bdfbb2925f7794df61fad82b43d9e22871a1aa9ce82ab44f"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-13",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-13/config.json",
+        "size": 571,
+        "sha256": "83d8f24de5208b7e0eebffb3c111ae1a3a27c46cc6c08a0f61fae1cb1da576c4"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-13/receipt.json",
+        "size": 1878,
+        "sha256": "72b4b37a2340c6938110cf704ac608661102fc451c7dd2d15f232fc7acca778b"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-14",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-14/config.json",
+        "size": 582,
+        "sha256": "b598b557e834ee4cc58711ac6ff83217c5f519d9d8e693c940fa026993f4c0fe"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-14/receipt.json",
+        "size": 1878,
+        "sha256": "47f4cb003bfae09329f3ff435e9fc9659fddae41c13d93100257b541fc71018c"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-15",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-15/config.json",
+        "size": 580,
+        "sha256": "0f75f164de5753be2bd427f8deb59e3d9e611f0f39df4125505827bd6eaa9ece"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-15/receipt.json",
+        "size": 1899,
+        "sha256": "28a9fa9b0d53f2849345a8e64840d3097529ee64c8cdb4ba2d6e779b3da50c97"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-16",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-16/config.json",
+        "size": 596,
+        "sha256": "64674a573560fd4dea34928380e73d88710dcff3935781daea1d95ad6bec2fad"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-16/receipt.json",
+        "size": 1880,
+        "sha256": "9f02a7a626e249b0346c3349b90c6a382807ac12e926d821bbf7d9ba547e9360"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-2",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-2/config.json",
+        "size": 557,
+        "sha256": "5ed02efa979a30b99e467fe63b414348bf634a1b60462125af799d7ce0a959ea"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-2/receipt.json",
+        "size": 1878,
+        "sha256": "8c07a744de552cceb8bda9ff622160dfcf3784a386f68d394f7a8dcb13f5a08e"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-3",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-3/config.json",
+        "size": 555,
+        "sha256": "7a5f1b6f14639a1d35d984c4b444d3969b06a60bfe3f0098a7455f4e513c7b2b"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-3/receipt.json",
+        "size": 1879,
+        "sha256": "824795cab391f5c6471b910ecc1fc1aa0d726136e540822c8134dcd212c1cdd3"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-4",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-4/config.json",
+        "size": 555,
+        "sha256": "b6c031b62710343d26a904241a406034a594e81f9b822a9ee3607d5979b80d20"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-4/receipt.json",
+        "size": 1879,
+        "sha256": "98d19965747e2cdc26d318f801d075a997b9f436fa195a8c0af13530d5c7e029"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-5",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-5/config.json",
+        "size": 555,
+        "sha256": "20125ddb119c52574ce9c97fe661de255d957e438bc99200b81915d777640c3b"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-5/receipt.json",
+        "size": 1879,
+        "sha256": "18877c2ac2ce660eaed8c8a1c2f82f79e784c7b2df694b9b41aef7fc6d834320"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-6",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-6/config.json",
+        "size": 576,
+        "sha256": "267eb5e0e1dc9f352115168424289f8babfd12cd650153e802ef4b0b4c0d7b7e"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-6/receipt.json",
+        "size": 1879,
+        "sha256": "bfce764eae066b9259fe717bad054169a59b3a75539bac593a8311e422279fc9"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-7",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-7/config.json",
+        "size": 574,
+        "sha256": "b281c2d07c07abc5729ef29ae8b5277905e68b310849fb1793610cdac3122a1a"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-7/receipt.json",
+        "size": 1877,
+        "sha256": "740f6f41c8dcd29ec502da3e4a48a64e5beda5a8393ccfe29441bb8934799dc4"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-8",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-8/config.json",
+        "size": 579,
+        "sha256": "a06aaf20d442baab62f2c0f92bd86bbdddb149c3e5c8a2c2c5b945932d52d053"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-8/receipt.json",
+        "size": 1878,
+        "sha256": "92fbb239b5020d2695c519ca1bc775c4e709ccc49c0e2f829ee3a8ab994cb193"
+      }
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-9",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-9/config.json",
+        "size": 573,
+        "sha256": "f8ac67d12cd299d5b52b09385d1ba24f3dfc778055213c50d2153e711374d5c4"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_bad_map_path_or_schema_never_spawns-9/receipt.json",
+        "size": 1878,
+        "sha256": "cf223d836a94522a27a39e0da02b5e3572685f280f3561cf9f02c9f0eb7cf32c"
+      }
+    },
+    {
+      "case": "test_direct_sidefile_bound_observes_overshoot-17",
+      "reason": "watched_file_limit",
+      "child_pid": 24,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_direct_sidefile_bound_observes_overshoot-17/config.json",
+        "size": 580,
+        "sha256": "fe53f99e1357d9933f4673e4e0a74c1a1fe087e3d673412c614c506e3449144c"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_direct_sidefile_bound_observes_overshoot-17/receipt.json",
+        "size": 3187,
+        "sha256": "f1113508e6acc78f130ce588a088f86b286503f64c91f314c2eada3d519c2cae"
+      }
+    },
+    {
+      "case": "test_exact_map_above_log_cap_is_allowed-18",
+      "reason": "exit",
+      "child_pid": 26,
+      "returncode": 0,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_exact_map_above_log_cap_is_allowed-18/config.json",
+        "size": 643,
+        "sha256": "1689cb5d3081f0689a1ed0207dc4af2333ff8b94acbf75dcf870d76ffe1777d3"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_exact_map_above_log_cap_is_allowed-18/receipt.json",
+        "size": 3162,
+        "sha256": "858862914d3477f0fd398b064cab326d67505f492d973d9af46f2ccd773b0b2a"
+      }
+    },
+    {
+      "case": "test_exact_map_above_map_cap_refuses-19",
+      "reason": "watched_file_limit",
+      "child_pid": 28,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_exact_map_above_map_cap_refuses-19/config.json",
+        "size": 672,
+        "sha256": "e16e6a613354a33bfc1e0d0f4110ba735c986ccac2ffd26441a3ba378bac5441"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_exact_map_above_map_cap_refuses-19/receipt.json",
+        "size": 3234,
+        "sha256": "a512e3ab68e1358f7fdd99c1ebb930e231422c22a9dfdf62d3adc1c43d8c75e1"
+      }
+    },
+    {
+      "case": "test_late_log_keeps_cap_in_final_post_reap_sample-20",
+      "reason": "watched_file_limit",
+      "child_pid": 30,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_late_log_keeps_cap_in_final_post_reap_sample-20/config.json",
+        "size": 687,
+        "sha256": "c4f4c9e6596cde53f858dd61c33c575dac7239fad6bae4f78872060f1816a89a"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_late_log_keeps_cap_in_final_post_reap_sample-20/receipt.json",
+        "size": 3241,
+        "sha256": "619bec006a1cae1e27fd3e8719a16dc7ba71ae758ca2814edf4414f2d438b0c8"
+      }
+    },
+    {
+      "case": "test_late_output_after_last_sample_is_refused-21",
+      "reason": "output_limit",
+      "child_pid": 32,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_late_output_after_last_sample_is_refused-21/config.json",
+        "size": 598,
+        "sha256": "7445e1da5fbd14fdd1d87c01e60bcc21c70ebfe3e069175a19b247439ad72efd"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_late_output_after_last_sample_is_refused-21/receipt.json",
+        "size": 2646,
+        "sha256": "28abb88e9cd1596e28c1ec4300619b1b0ae11541757081a6129f245c129a064e"
+      }
+    },
+    {
+      "case": "test_late_sidefile_after_last_sample_is_refused-22",
+      "reason": "watched_file_limit",
+      "child_pid": 34,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_late_sidefile_after_last_sample_is_refused-22/config.json",
+        "size": 624,
+        "sha256": "85e6135f024fd18640c2231ce4df0587b5dcce0cb193a4f4a3e0874fecd8873a"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_late_sidefile_after_last_sample_is_refused-22/receipt.json",
+        "size": 3231,
+        "sha256": "d093f0ee00ba8849cdf9df2d1a770431df81e039667c80c9841c2e929a4c99f4"
+      }
+    },
+    {
+      "case": "test_nonmap_log_keeps_lower_cap-23",
+      "reason": "watched_file_limit",
+      "child_pid": 36,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_nonmap_log_keeps_lower_cap-23/config.json",
+        "size": 644,
+        "sha256": "33a891666984bc68481bfc18c9bf08719c822be4955a586dcaefa15fea3cacf2"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_nonmap_log_keeps_lower_cap-23/receipt.json",
+        "size": 3198,
+        "sha256": "d0752f75274e266149d691c4c38d98bdb3d9ee1fc9c8544193f515422baadad6"
+      }
+    },
+    {
+      "case": "test_normal_and_nonzero_exit-24",
+      "reason": "exit",
+      "child_pid": 38,
+      "returncode": 0,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_normal_and_nonzero_exit-24/config.json",
+        "size": 524,
+        "sha256": "96813177bf9938919e96e4219ca5688d2f14021961686f42df87054b211c0fb6"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_normal_and_nonzero_exit-24/receipt.json",
+        "size": 2532,
+        "sha256": "12ac7f372433e2f9026fba270139bfc2dfede864ce18fd8110912c24829e373c"
+      }
+    },
+    {
+      "case": "test_normal_and_nonzero_exit-25",
+      "reason": "exit",
+      "child_pid": 40,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_normal_and_nonzero_exit-25/config.json",
+        "size": 524,
+        "sha256": "42a32f2fa8a69ba92bcbfe5303654a97bb564da8fc6c93d75d5111153a8b91bd"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_normal_and_nonzero_exit-25/receipt.json",
+        "size": 2536,
+        "sha256": "eb5d747f489b96f2f055277840edd4a095288bdff8f709422bed37171b4ba957"
+      }
+    },
+    {
+      "case": "test_other_map_does_not_inherit_exact_path_cap-26",
+      "reason": "watched_file_limit",
+      "child_pid": 42,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_other_map_does_not_inherit_exact_path_cap-26/config.json",
+        "size": 644,
+        "sha256": "d76a926ac3c6d7a84d09f09e7e25f32fd8fdfe02db6d5cad1bee93af61be8a2c"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_other_map_does_not_inherit_exact_path_cap-26/receipt.json",
+        "size": 3199,
+        "sha256": "ee5fd6e6729f531100721edf24c29c7c364b8f43fd44b2db290b4aa3b892458d"
+      }
+    },
+    {
+      "case": "test_output_bound-27",
+      "reason": "output_limit",
+      "child_pid": 44,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_output_bound-27/config.json",
+        "size": 529,
+        "sha256": "d5421fdb73971dc2d08543a957466f39c628cbaabade18fba23e73d8ddb596dd"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_output_bound-27/receipt.json",
+        "size": 2579,
+        "sha256": "d08a45987491a785161fdae166f5fe9095b91503baf1408cf21df6634ae7ccc2"
+      }
+    },
+    {
+      "case": "test_owned_escaped_descendant_is_refused_and_reaped-28",
+      "reason": "unsupported_group_escape",
+      "child_pid": 46,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_owned_escaped_descendant_is_refused_and_reaped-28/config.json",
+        "size": 551,
+        "sha256": "47ef4c7ba5903a4abd579949beafc573e0ef8c07b6f0c133e2a2f068572548f7"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_owned_escaped_descendant_is_refused_and_reaped-28/receipt.json",
+        "size": 2705,
+        "sha256": "1656c1fe235fe6f2ad91405c2a2f3f974be7d4bb7ff9a3c8260346803cfd51ad"
+      }
+    },
+    {
+      "case": "test_postspawn_setup_failure_reaps-29",
+      "reason": "monitor_error",
+      "child_pid": 49,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_postspawn_setup_failure_reaps-29/config.json",
+        "size": 502,
+        "sha256": "8e3443046a6f2ce0d41a50843aeb2d6ab7ce46c58021f4975ed2d495863ebfdc"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_postspawn_setup_failure_reaps-29/receipt.json",
+        "size": 2546,
+        "sha256": "4db8611719c01b9473473c23b774b6f0af9cbfda11b87c6e05f2a6a528968254"
+      }
+    },
+    {
+      "case": "test_setup_refusal_starts_no_child-30",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_setup_refusal_starts_no_child-30/config.json",
+        "size": 523,
+        "sha256": "0b1ed4536122f35b6b424ea314126f626d4813fe9e62b976258f85edd9028d3d"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_setup_refusal_starts_no_child-30/receipt.json",
+        "size": 1996,
+        "sha256": "789c1caa083f86fbfb4b32d33eab916a62ef53655b4d58c366b68fab02675100"
+      }
+    },
+    {
+      "case": "test_successful_leader_cannot_leave_descendants-31",
+      "reason": "leader_exit_with_descendants",
+      "child_pid": 52,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_successful_leader_cannot_leave_descendants-31/config.json",
+        "size": 551,
+        "sha256": "8d06e3d25c5f0607571b8f1d3a47c4cdae3eda322f167b5efa3558c62c281cc5"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_successful_leader_cannot_leave_descendants-31/receipt.json",
+        "size": 2663,
+        "sha256": "a9bfa4cf2088769fd1389c9fd3a3c34ada59afe074cf0d70735d8295e3173378"
+      }
+    },
+    {
+      "case": "test_timeout_reaps_descendant-32",
+      "reason": "deadline",
+      "child_pid": 55,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_timeout_reaps_descendant-32/config.json",
+        "size": 524,
+        "sha256": "0f2fa35b0e98b156971837d2f8328740a1b1cd2434edd177eb3862fe65bc4d77"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_timeout_reaps_descendant-32/receipt.json",
+        "size": 2618,
+        "sha256": "383eee47770eeb8168dcd6659d79202347b478ff9a7706cde25734b648427b00"
+      }
+    },
+    {
+      "case": "test_unrelated_owned_control_group_is_not_signalled-33",
+      "reason": "deadline",
+      "child_pid": 59,
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_unrelated_owned_control_group_is_not_signalled-33/config.json",
+        "size": 504,
+        "sha256": "0cd96da7776ba08d35b81d7d3784470e6de573000a846e0cb81cba0da05fac95"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_unrelated_owned_control_group_is_not_signalled-33/receipt.json",
+        "size": 2512,
+        "sha256": "35b88adaac49faec689d91a27e746e922f9f6db0f1d21aaf8941d7033d2962f1"
+      }
+    },
+    {
+      "case": "test_unsupported_subreaper_refuses_before_spawn-34",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_unsupported_subreaper_refuses_before_spawn-34/config.json",
+        "size": 517,
+        "sha256": "29d20fce6d32ef724f09a44ac05736d7c567a8f481f0b500bcd18c651d38bfe6"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_unsupported_subreaper_refuses_before_spawn-34/receipt.json",
+        "size": 2310,
+        "sha256": "28fa14102fb5b9d297048f739f0839198c9f009104ba53953184f55f2f23347f"
+      }
+    },
+    {
+      "case": "test_wrong_tool_pin_refuses_before_spawn-35",
+      "reason": "setup_refusal",
+      "child_pid": null,
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true,
+      "config": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_wrong_tool_pin_refuses_before_spawn-35/config.json",
+        "size": 517,
+        "sha256": "29599fd495aac07fd51904b85f49c9a3420199ee4ed85880624775faf5828f2b"
+      },
+      "receipt": {
+        "path": "/tmp/ash-owner-map-class-monitor/safe-test-evidence-7g8q7rs1/test_wrong_tool_pin_refuses_before_spawn-35/receipt.json",
+        "size": 2307,
+        "sha256": "7fee6f41af6052bc7ba54922b694c02bc605008b9b2f6499c9289ff4d394cba3"
+      }
+    }
+  ]
+}
