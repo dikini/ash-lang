@@ -1,0 +1,140 @@
+{
+  "argv": [
+    "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "rustc",
+    "--offline",
+    "--locked",
+    "--jobs",
+    "1",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--target-dir",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "--bin",
+    "ash-host-6-0",
+    "-vv",
+    "--message-format=json-render-diagnostics",
+    "--",
+    "-C",
+    "target-feature=+crt-static",
+    "-C",
+    "relocation-model=static",
+    "-C",
+    "linker=/usr/bin/cc",
+    "-C",
+    "link-arg=-fuse-ld=bfd",
+    "-C",
+    "link-arg=-static",
+    "-C",
+    "link-arg=-no-pie",
+    "-C",
+    "strip=debuginfo",
+    "-C",
+    "link-arg=-v",
+    "-C",
+    "link-arg=/usr/lib/x86_64-linux-gnu/libc.a",
+    "-C",
+    "link-arg=-Wl,-Map,/tmp/ash-owner-static-stage3/whole-static.map"
+  ],
+  "executable_pin": {
+    "size": 42839824,
+    "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953"
+  },
+  "cwd": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0",
+  "output_parent": "/tmp/ash-owner-static-stage3",
+  "watch_root": "/tmp/ash-owner-static-stage3",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "CARGO_HOME": "/home/dikini/.cargo",
+    "RUSTC": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "input_files": [
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "size": 3442,
+      "sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "size": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/native-build.log",
+      "size": 1156,
+      "sha256": "232dc2ed1ea1a11723b1e25df8eb6604184abe35e0a957ef125be539455c30c8"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.lock",
+      "size": 10121,
+      "sha256": "c1eb4441f3a039e3757d67e9f05012c4b1f199d3c90ea1f7694e6f0086a9590e"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/rust-toolchain.toml",
+      "size": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+      "size": 246,
+      "sha256": "686ad5d17be305bcc228093d089868de78e43a468a985129c92b5e04a14a2902"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+      "size": 17310,
+      "sha256": "4fff8df2dfb0ac63ec78179b74bba872f3e1b317a2c86dc46659e5bd6485df26"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/verify_inputs.py",
+      "size": 3991,
+      "sha256": "cf3611d7238b81e2c77cc3dbe9faffdd319f15fac66ddd5ae5b2f6e13dd3058f"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/prepare_candidate.py",
+      "size": 5531,
+      "sha256": "1ccf56f3c771dda6cdf59d41350bc59f417e60f2d6318d1458c556f2e20c58d7"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/finalize_static.py",
+      "size": 6628,
+      "sha256": "9b18c5e65126cebb3a47cca6ecc7177f3ef3fb835c204caea00a33d749d1389c"
+    }
+  ],
+  "artifact_files": []
+}

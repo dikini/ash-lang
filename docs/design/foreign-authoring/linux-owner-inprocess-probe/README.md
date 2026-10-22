@@ -79,3 +79,11 @@ external d448eee1 proposed-contract pin as prepublication history. That original
 informative preparation link. These historical proposal pins do not identify an
 accepted contract. A fresh association with the exact retained contract and
 accepted amendment is mandatory before any command assignment.
+
+## Later assigned packaging observations
+
+This preparation record predates separately assigned builds. The
+[owner packaging evidence](../linux-owner-inprocess-evidence/README.md) retains
+the actual selected-source compiler and ordinary generated owner-host results,
+then two static-relink map-limit refusals. Its proposed map-only contract change
+does not alter these historical monitor bytes or authorize a retry or startup.

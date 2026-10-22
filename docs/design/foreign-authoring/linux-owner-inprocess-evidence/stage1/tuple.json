@@ -1,0 +1,141 @@
+{
+  "status": "UNEXECUTED_STAGE1_EXACT_REVIEW_ONLY",
+  "contract": {
+    "pr": 100,
+    "published_head": "8d26d04e9a47991b74c796d408a39aede59b8ec7",
+    "exact_contract_sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+    "retained_commit": "2ac8c393846715249de5a475a65e47bf1309bb54",
+    "retained_commit_requirement": "Actual retention supplied by root; exact contract bytes27430b69 and independent tuple/root build assignment still required."
+  },
+  "selected_source_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "selected_source_tree": "e4ab5e35b50d64326e548fc54cf264a4af170832",
+  "interpreter": {
+    "path": "/usr/bin/python3.14",
+    "resolved": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "monitor": {
+    "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "resolved": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "size": 18877,
+    "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60"
+  },
+  "config": {
+    "path": "/tmp/ash-owner-compiler-stage1/compiler-build.monitor.json",
+    "resolved": "/tmp/ash-owner-compiler-stage1/compiler-build.monitor.json",
+    "size": 3230,
+    "sha256": "d011fc6be127e51d05937a6bd7e560f22c4a818878fdb4ec587d930a2103883e"
+  },
+  "preflight": {
+    "path": "/tmp/ash-owner-compiler-stage1/preflight-inputs.json",
+    "resolved": "/tmp/ash-owner-compiler-stage1/preflight-inputs.json",
+    "size": 4270,
+    "sha256": "b24d78fb1ceea0013217fd4b6f99ed5896343330b5b8555c7bcfb7453d1436a6"
+  },
+  "working_directory": "/tmp/ash-owner-compiler-stage1",
+  "sequence": [
+    {
+      "name": "before",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-compiler-stage1/verify_inputs.py",
+        "before-compiler"
+      ],
+      "retain_stdout": "/tmp/ash-owner-compiler-stage1/snapshot-before.json",
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      }
+    },
+    {
+      "name": "compiler-build",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-build-monitor/build_monitor.py",
+        "/tmp/ash-owner-compiler-stage1/compiler-build.monitor.json"
+      ],
+      "retain_stdout": "/tmp/ash-owner-compiler-stage1/monitor-response.json",
+      "retain_stderr": "/tmp/ash-owner-compiler-stage1/monitor-stderr.log",
+      "require": "exit0, reason exit, child_exit0, all_children_reaped true, no final_limit_failures; no pending/escaped/descendant/setup/limit success",
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      }
+    },
+    {
+      "name": "after",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-compiler-stage1/verify_inputs.py",
+        "after-compiler"
+      ],
+      "retain_stdout": "/tmp/ash-owner-compiler-stage1/snapshot-after.json",
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      }
+    },
+    {
+      "name": "observe-compiler-only-after-success",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-compiler-stage1/observe_compiler.py",
+        "/tmp/ash-owner-compiler-stage1/monitor-response.json"
+      ],
+      "retain_stdout": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      }
+    }
+  ],
+  "limits": {
+    "deadline_seconds": 1200,
+    "retained_combined_output_bytes": 16777216,
+    "sampled_each_native_build_log_or_map_bytes": 16777216,
+    "interval_seconds": 0.01,
+    "cumulative_watch_records": 4096,
+    "receipt_bytes": 4194304,
+    "final_image_bound_not_applied_to_compiler": 134217728
+  },
+  "next_stages": "STOP after compiler observation. Ordinary-host build requires frozen observed compiler pin/config and separate assignment; generated inputs must then be observed before separately assigned root-only static relink. No owner/image execution or startup permission.",
+  "outer_environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "outer_environment_mode": "subprocess env=exact map, never shell/inherited; excludes LD_PRELOAD/LD_LIBRARY_PATH/PYTHON*; Python -I -S ignores env/user site and disables site initialization",
+  "external_trust_anchor": "Before running any command, operator compares this reviewed tuple and manifest SHA, verifier/preflight/config/monitor/interpreter SHA against independent review and root assignment. Files cannot authenticate their own outer trust anchor. Do not source JSON hashes from an unreviewed mutable file.",
+  "selected_compiler_correspondence": {
+    "policy": "Require fresh=false selected exact manifest/lib+bin source paths, consistent Cargo package ID, build-finished success, actual debug/0 build-script fingerprint env/output, selected ash.d paths without Borrow root, and per-target Cargo fingerprint JSON found via exact emitted rustc extra-filename. Refuse missing/unknown format or stale correspondence; do not relabel cache by commit/mtime. Normal compatible dependency reuse remains allowed.",
+    "observer": {
+      "path": "/tmp/ash-owner-compiler-stage1/observe_compiler.py",
+      "resolved": "/tmp/ash-owner-compiler-stage1/observe_compiler.py",
+      "size": 6039,
+      "sha256": "6474128d18e3fcac780bf73d777859ba102028fe5fbadf87563bd85ade3a34db"
+    },
+    "default_linker_inputs": {
+      "path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    }
+  }
+}

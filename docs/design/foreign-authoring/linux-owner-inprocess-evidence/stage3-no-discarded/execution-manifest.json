@@ -1,0 +1,127 @@
+{
+  "status": "FRESH_STAGE3_MAP_DETAIL_ATTEMPT_REFUSED_LIMIT_NO_RETRY_OR_INSPECTION",
+  "reviewed_tuple_sha256": "eff444df3e93604a5c66afa10c8bdbd90a619fe79415dee5bd92fb53e0886d85",
+  "reviewed_config_sha256": "796008d9bdc926568b94376cfefadaebd4bf55f576ea3c96a00244d2c466cf28",
+  "approved_pre_run_manifest_sha256": "02da20a7046cf33d074de5cafaa1fed662635f799baf640fe751fabfb5cae2b8",
+  "bounded_prefix_marker_observations": {
+    "Discarded input sections": -1,
+    "Memory Configuration": 519242,
+    "Linker script and memory map": 519386,
+    "LOAD ": 519416,
+    "OUTPUT(": -1
+  },
+  "omitted_oversized_actuals": [
+    {
+      "path": "whole-static.map",
+      "observed_size_bytes": 17674240,
+      "why": "Sampled16MiB map limit refusal; raw possibly incomplete oversize external file unchanged. No full-map digest/completeness claim; bounded exact prefix is separately retained."
+    }
+  ],
+  "files": [
+    {
+      "path": "README.md",
+      "size": 3999,
+      "sha256": "a7db4108003863889099f1298c32403a9ab0018df757eca1c781340a91abb253"
+    },
+    {
+      "path": "build-run-gbjzjclf/output.log",
+      "size": 59052,
+      "sha256": "1b561a2707889ff31924d7d077944c1c43d6bbb2d0f3db2bab05773e97f9ff0d"
+    },
+    {
+      "path": "build-run-gbjzjclf/receipt.json",
+      "size": 11748,
+      "sha256": "0281568d84d0da673d94b42fea3694d300ee630ca1f797f25217b946826321d6"
+    },
+    {
+      "path": "build-run-gbjzjclf/watched-0.log",
+      "size": 16777216,
+      "sha256": "cb91bca15d2f3469175d7c1a2e9a6f67530a1ac7fb4028b68316823bc10453c9"
+    },
+    {
+      "path": "default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "execution-readback.json",
+      "size": 3313,
+      "sha256": "3521592052c0e3636d21e7d1dfaeb952f8dccf8550ff6109e3b9b349e6bc6d6b"
+    },
+    {
+      "path": "finalize_static.py",
+      "size": 6628,
+      "sha256": "9b18c5e65126cebb3a47cca6ecc7177f3ef3fb835c204caea00a33d749d1389c"
+    },
+    {
+      "path": "inspection.monitor.json",
+      "size": 1300,
+      "sha256": "944d20b600ff34f16004e4ea19ac7590bc27257167849eb7a9b5f630a0ae88e0"
+    },
+    {
+      "path": "manifest.json",
+      "size": 1932,
+      "sha256": "02da20a7046cf33d074de5cafaa1fed662635f799baf640fe751fabfb5cae2b8"
+    },
+    {
+      "path": "map-detail-evidence.json",
+      "size": 2815,
+      "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838"
+    },
+    {
+      "path": "preflight-inputs.json",
+      "size": 14964,
+      "sha256": "989b2b859e3ab0425089ddeff8324a8c713eb12d8c7f9c9b7aeb1ce9786ab029"
+    },
+    {
+      "path": "preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e"
+    },
+    {
+      "path": "preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "prepare_candidate.py",
+      "size": 5531,
+      "sha256": "1ccf56f3c771dda6cdf59d41350bc59f417e60f2d6318d1458c556f2e20c58d7"
+    },
+    {
+      "path": "relink-response.json",
+      "size": 119,
+      "sha256": "aab93b992b0f893dec857375cccda1c1aa7ebd8b35a45d3f619424199251240a"
+    },
+    {
+      "path": "relink-response.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "relink.monitor.json",
+      "size": 6127,
+      "sha256": "796008d9bdc926568b94376cfefadaebd4bf55f576ea3c96a00244d2c466cf28"
+    },
+    {
+      "path": "snapshot-before.json",
+      "size": 293,
+      "sha256": "db6bf928a8e543ae537319ae1a949011699df836c41d108ea7fe613da8a14e52"
+    },
+    {
+      "path": "snapshot-before.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tuple.json",
+      "size": 10250,
+      "sha256": "eff444df3e93604a5c66afa10c8bdbd90a619fe79415dee5bd92fb53e0886d85"
+    },
+    {
+      "path": "verify_inputs.py",
+      "size": 3991,
+      "sha256": "cf3611d7238b81e2c77cc3dbe9faffdd319f15fac66ddd5ae5b2f6e13dd3058f"
+    }
+  ]
+}
