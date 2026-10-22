@@ -532,7 +532,9 @@ pub(crate) fn is_canonical_native_host_declaration(
         && original(&parameter.origin, source, formal))
 }
 
-fn host_matches(
+// Exact Host declaration and canonical formal projection after the caller has
+// authenticated this module/source's complete checked builtin inventory.
+pub(super) fn host_matches(
     effect: &ResolvedEffectDeclaration,
     registry: &ResolvedRegistry,
     module: ModuleId,

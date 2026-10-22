@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 2 tests
+test resolved::image_subset_tests::checked_builtin_image_subset_preserves_exact_metadata_and_work_limit ... ok
+test resolved::image_subset_tests::checked_builtin_image_subset_refuses_altered_roles_and_mirrors ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2110 filtered out; finished in 0.04s
+

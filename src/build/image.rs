@@ -6424,10 +6424,27 @@ main () = {
                 .iter()
                 .find(|fact| fact.role == Role::DataOf)
                 .unwrap();
-            match image.types[usize::try_from(fact.annotation.ty).unwrap()].tag {
-                TypeTag::Forall { parameters } if parameters.len == 2 => parameters.start as usize,
-                _ => panic!("canonical Data declaration has both ordered formals"),
-            }
+            let BinderIdentity::Resolved { module, local } = fact.function else {
+                panic!("canonical DataOf binder")
+            };
+            assert_eq!(local, Role::DataOf.local());
+            let mut starts = image.types.iter().filter_map(|record| {
+                let TypeTag::Forall { parameters } = record.tag else { return None };
+                let formals = parameters.get(&image.quantifiers).unwrap();
+                if formals.len() == 2 && formals.iter().zip([7, 8]).all(|(formal, expected)|
+                    matches!(formal.id, TypeVariableIdentity::Resolved { module: m, local: l } if m == module && l == expected)
+                    && matches!(image.kinds[usize::try_from(formal.kind).unwrap()], KindRecord::Type)) {
+                    Some(parameters.start as usize)
+                } else { None }
+            }).collect::<Vec<_>>();
+            starts.sort_unstable();
+            starts.dedup();
+            assert_eq!(
+                starts.len(),
+                1,
+                "one interned exact DataOf formal vector, not an arbitrary two-formal signature"
+            );
+            starts[0]
         }
         let mutations: &[fn(&mut PureImage)] = &[
             |image| {

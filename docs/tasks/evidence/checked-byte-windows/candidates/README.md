@@ -133,3 +133,38 @@ Window/Host/owner/original hostile controls, complete passive-image tamper
 coverage, remaining bounds and affected regressions remain pending. The
 327680 startup blocker must be repaired without a waiver. No checked runtime,
 native execution or image activation follows from these static results.
+
+## First proof-sharing candidate and next authored repair
+
+The first operation-local codec-family proof sharing passes three family/kind/
+remint/budget controls, the seven connected source/consumer/Core controls, and
+both image-subset controls after their formal-count expectations were corrected.
+All six commands have 591 equal maps, aggregate `944573f9`; their exact five-file
+overlay is against `56f79ad8`, artifact SHA256
+`4c432f06953276da3627d938c4759f2b9c0b649f338fa15c4f22f0fa726a1088`.
+The unchanged startup probes still refuse Resource. Passive image canonical
+encode/restore/evaluation succeeds, but its intrinsic-type Forall test locator
+still stops the tamper loop. No complete default or hostile-image pass follows.
+
+The second pinned cost trace now records one codec inventory authentication
+plus four further identical inventory authentications through Host checks in
+each table operation. Registry address, complete module identity and source
+span are identical, each repeated inventory costing 436/450 units. Every Host
+check then independently repeats its declaration/formal projection as well.
+
+A second repair is authored but UNEXECUTED at this checkpoint. Standalone and
+bulk checked-family paths first reconstruct the complete CheckedCall12 codec
+inventory (fresh once per exact family within the bulk operation). Their private
+per-row Host projection now calls the existing exact `host_matches` directly:
+declaration, source/module, H22 kind and original origin checks remain paid on
+every row. Only the identical full inventory replay is removed. Other Host
+callers and standalone full codec authentication remain unchanged. No proof
+escapes the operation, no allowance or startup fixture changes, and no checked
+activation is granted. A new genuine two-graph control targets local-only family
+memo keys; its setup and result are also unexecuted. The image locator now seeks
+the unique exact module-qualified DataOf `[7,8]` Type-formal range; that test-only
+correction likewise needs fresh execution.
+
+The first sharing run's passes are not transferred to these later source bytes.
+The startup blocker, remaining hostile-window/original controls, full images and
+affected regressions remain open.

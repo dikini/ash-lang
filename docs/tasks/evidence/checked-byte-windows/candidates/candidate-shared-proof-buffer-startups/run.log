@@ -1,0 +1,30 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 2 tests
+buffer diagnostic compilation: CompilationWork { source_checking: Some(PhaseCost { completed: true, phase: SourceChecking, used: 201983, allowance: Some(5892000) }), final_elaboration: Some(PhaseCost { completed: true, phase: FinalElaboration, used: 58359, allowance: Some(5892000) }), independent_core: Some(PhaseCost { completed: true, phase: IndependentCore, used: 162847, allowance: Some(2540925) }) }
+buffer startup after decode: 41194
+buffer startup after complete fact authentication: 56651
+buffer nested cleanup startup decoded: 43195
+buffer nested cleanup startup authenticated facts: 59507
+buffer nested cleanup startup total: 327680
+
+thread 'build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget' (81) panicked at src/build/source_resource_image.rs:3023:16:
+called `Result::unwrap()` on an `Err` value: Validation(ValidationError { reason: Resource, node: None, cause: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget ... FAILED
+buffer startup after reconstruction: 327677
+
+thread 'build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget' (82) panicked at src/build/source_resource_image.rs:3411:13:
+buffer startup: Validation(ValidationError { reason: Resource, node: None, cause: None })
+test build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget ... FAILED
+
+failures:
+
+failures:
+    build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget
+    build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2110 filtered out; finished in 0.99s
+
+error: test failed, to rerun pass `--lib`

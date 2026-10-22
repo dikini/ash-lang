@@ -21570,31 +21570,8 @@ impl ResolvedRegistry {
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
-        work.charge(self.scalar_preflights.len())
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        for (function, fact) in &self.scalar_preflights {
-            if *function != fact.function() {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            fact.authenticate(self, work)
-                .map_err(scalar_preflight_failure)?;
-            // Preserve the same original codec within each exact builtin
-            // family. Legacy Call and checked memory CheckedCall are distinct;
-            // neither may replace the other's original or remint a route copy.
-            let anchor = if fact.role().host_parameter(fact.module()).is_some() {
-                11
-            } else {
-                0
-            };
-            let common = self
-                .scalar_preflights
-                .get(&BinderId::resolved(fact.module(), anchor))
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
-            if !Arc::ptr_eq(common.call_codec(), fact.call_codec()) {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-        }
-        Ok(())
+        crate::foreign::scalar_preflight::authenticate_registry_families(self, work)
+            .map_err(scalar_preflight_failure)
     }
 
     // Insert in impl ResolvedRegistry. Call after new_with_budget,
