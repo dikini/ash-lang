@@ -1,0 +1,7 @@
+{
+  "base": "6940a4a6555396afb621280cd4d6abe8189c7aa2",
+  "tracked_patch": "source.patch",
+  "added": {},
+  "patch_sha256": "55a14a0c20e820d4e0c09d843b83463c310b0591111d173a0d62c09276cfaf06",
+  "artifact_sha256": "3abf0f294b10d6133586f8885ebbf6de9076786646867b166fb4c5427f25d939"
+}

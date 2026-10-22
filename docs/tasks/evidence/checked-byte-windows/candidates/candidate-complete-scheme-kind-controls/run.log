@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 2 tests
+test resolved::checked_codec_category_tests::checked_memory_scheme_kinds_require_exact_complete_original_formals ... ok
+test resolved::checked_codec_category_tests::checked_memory_preflight_codecs_keep_exact_family_originals ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2106 filtered out; finished in 0.10s
+
