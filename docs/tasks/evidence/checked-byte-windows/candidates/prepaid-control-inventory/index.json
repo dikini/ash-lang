@@ -1,0 +1,38 @@
+[
+  {
+    "stem": "prepaid-controls",
+    "map": "2c30e282c69b947419da6efb087f8a9f35b716c9e0ccdc33c53c0236d2d21b15.inputs.json.gz",
+    "raw_sha256": "e45d85822003a76eee5ce715cf35fe94bbf391735ecc75f08a854e76e9d9becd",
+    "exit_code": 0
+  },
+  {
+    "stem": "complete-inventory",
+    "map": "2c30e282c69b947419da6efb087f8a9f35b716c9e0ccdc33c53c0236d2d21b15.inputs.json.gz",
+    "raw_sha256": "744dce1b11c92d9915a7f5cb28e3989340904423131284abce755bbc103f5805",
+    "exit_code": 0
+  },
+  {
+    "stem": "buffer-startups",
+    "map": "2c30e282c69b947419da6efb087f8a9f35b716c9e0ccdc33c53c0236d2d21b15.inputs.json.gz",
+    "raw_sha256": "f6d4feb6c13b797c6f048c5636fe25faf3840f55934300cf6caf2903ec27216a",
+    "exit_code": 101
+  },
+  {
+    "stem": "dependent-startup",
+    "map": "2c30e282c69b947419da6efb087f8a9f35b716c9e0ccdc33c53c0236d2d21b15.inputs.json.gz",
+    "raw_sha256": "1babad1488bcbbce2f84ffc08c97c593f1be75ed1a030f6c9988ffb79e8c610c",
+    "exit_code": 0
+  },
+  {
+    "stem": "full-static",
+    "map": "2c30e282c69b947419da6efb087f8a9f35b716c9e0ccdc33c53c0236d2d21b15.inputs.json.gz",
+    "raw_sha256": "686dab489434497af527203065c2f45d052d4d990e806fddee55de6a48d26724",
+    "exit_code": 0
+  },
+  {
+    "stem": "prior-code-inventory-probe",
+    "map": "d31a459ec21e4102c5baedbebd6b75263dbee7c0653253dc7bc8d48e758b84a9.inputs.json.gz",
+    "raw_sha256": "0c1bcbaf8e4992e9f1b4c1afedbeed91a3ede91d6cc392b561cb8701f7369bd9",
+    "exit_code": 0
+  }
+]

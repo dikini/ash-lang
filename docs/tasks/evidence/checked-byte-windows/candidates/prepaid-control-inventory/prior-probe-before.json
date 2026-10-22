@@ -1,0 +1,52 @@
+{
+  "head": "eb108fced3439a25225df5b834f40a13ad7440e4",
+  "status": "",
+  "artifact": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "size": 850666488,
+  "sha256": "3896e9922b5c01173ad9bed6fce4e2169c673449237b64303a96e012906677a9",
+  "script_sha256": "accfee5701a7506d740746bbbd5bdfd644793381c2931fb1724291d4882cf81a",
+  "argv": [
+    "timeout",
+    "--signal=TERM",
+    "--kill-after=10s",
+    "180s",
+    "gdb",
+    "-q",
+    "-batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "set confirm off",
+    "-ex",
+    "set debuginfod enabled off",
+    "-ex",
+    "set breakpoint pending on",
+    "-ex",
+    "source /tmp/ash-checked-capture-code-inventory-probe/probe.py",
+    "-ex",
+    "run",
+    "--args",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "refused_lines": {
+    "src/types.rs": 80,
+    "src/core/validate.rs": 10664
+  },
+  "environment": {
+    "PATH": "/home/dikini/.elan/bin:/home/dikini/.local/bin:/home/dikini/bin:/home/dikini/.codex/tmp/arg0/codex-arg0BbwWYa:/home/dikini/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/home/dikini/.elan/bin:/home/dikini/.local/bin:/home/dikini/bin:/home/dikini/.kimi-code/bin:/home/dikini/.bun/bin:/home/dikini/.local/bin:/home/dikini/.opencode/bin:/home/dikini/.nvm/versions/node/v24.0.1/bin:/home/dikini/miniforge3/bin:/home/dikini/miniforge3/condabin:/home/dikini/.elan/bin:/home/dikini/.cargo/bin:/home/dikini/.local/bin:/home/dikini/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/dikini/.lmstudio/bin:/home/dikini/.cache/coursier/arc/https/github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%252B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz/jdk-21.0.11+10/bin:/home/dikini/.local/share/coursier/bin:/home/dikini/.lmstudio/bin:/home/dikini/.lmstudio/bin:/home/dikini/.cache/coursier/arc/https/github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%252B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz/jdk-21.0.11+10/bin:/home/dikini/.local/share/coursier/bin:/home/dikini/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/usr/lib/chatgpt/resources:/home/dikini/.lmstudio/bin:/home/dikini/.cache/coursier/arc/https/github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%252B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz/jdk-21.0.11+10/bin:/home/dikini/.local/share/coursier/bin",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "LD_LIBRARY_PATH": null,
+    "PYTHONPATH": null
+  },
+  "runner_overrides": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target"
+  },
+  "raw_size_limit_bytes": 1048576
+}

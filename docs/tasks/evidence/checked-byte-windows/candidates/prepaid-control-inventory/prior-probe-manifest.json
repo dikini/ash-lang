@@ -1,0 +1,43 @@
+{
+  "source_only_preparation": true,
+  "current_source_readback": [
+    {
+      "path": "src/core/capture.rs",
+      "size": 366831,
+      "sha256": "029745887303cb7f6b953ebfa95039f0fc360c7dda0be5da55205521255383aa"
+    },
+    {
+      "path": "src/core/capture/control.rs",
+      "size": 332470,
+      "sha256": "bb7bd2a143d708f454bf463942ef45a72b0dc7b39552502baac130a1cba058b4"
+    },
+    {
+      "path": "src/core/capture/value.rs",
+      "size": 554857,
+      "sha256": "3c9d6debbe57a73e7f1352120b2c1228a5f10b2e8712f5bbfb031cdc8c181f25"
+    },
+    {
+      "path": "src/types.rs",
+      "size": 277708,
+      "sha256": "35d669dc8603bf36dcd71b47ed2b749d6d4e43f8287af74d6e64d91434e04eea"
+    },
+    {
+      "path": "src/core/validate.rs",
+      "size": 1694607,
+      "sha256": "d6932638aee2ef0f4aa4ea363cf8665e7efca65fb7de87e7405b4087d2a90a0f"
+    }
+  ],
+  "files": [
+    {
+      "path": "probe.py",
+      "size": 7341,
+      "sha256": "accfee5701a7506d740746bbbd5bdfd644793381c2931fb1724291d4882cf81a"
+    },
+    {
+      "path": "proposal.json",
+      "size": 2347,
+      "sha256": "6c21426afb8aa8ffd7d8dd2f5ce8fc111e01a5cc6f35b610c0581266e7cd1119"
+    }
+  ],
+  "artifact": "Must be selected and pinned by root/developer after byte-patch terminal/checkpoint; no execution assigned."
+}
