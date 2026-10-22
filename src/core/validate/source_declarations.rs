@@ -970,16 +970,27 @@ pub(super) fn authenticate_with_coordinate_loan(
     authenticate_with_coordinates(registry, sources, modules, work, Some(loan), None)
 }
 
+// Keep borrowed authority/context inputs and the mutable meter explicit here.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn authenticate_with_builtin_operation(
-    registry: &ResolvedRegistry, sources: &HashMap<SourceId, &SourceFile>,
-    modules: &HashMap<ModuleId, SourceId>, work: &mut TypeWorkBudget,
+    registry: &ResolvedRegistry,
+    sources: &HashMap<SourceId, &SourceFile>,
+    modules: &HashMap<ModuleId, SourceId>,
+    work: &mut TypeWorkBudget,
     loan: Option<&DeclarationCoordinateLoan<'_>>,
     operation: &BuiltinForeignSourceAuthentication<'_, '_>,
     preflights: &crate::resolved::ScalarPreflightOwnerAuthentication<'_>,
     context: &super::SourceResourceValidationContext,
 ) -> Result<OriginalDeclarationProvenance, ValidationError> {
     operation.context_matches(registry, sources, modules, context, work)?;
-    authenticate_with_coordinates(registry, sources, modules, work, loan, Some((operation, preflights)))
+    authenticate_with_coordinates(
+        registry,
+        sources,
+        modules,
+        work,
+        loan,
+        Some((operation, preflights)),
+    )
 }
 
 fn authenticate_with_coordinates(

@@ -182,20 +182,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .try_reserve_exact(row.known().len())
             .map_err(|_| type_resource())?;
         for effect in row.known() {
-            if let Some(host) = &host {
-                if crate::types::compare_effect_instances_with_budget(
+            if let Some(host) = &host
+                && crate::types::compare_effect_instances_with_budget(
                     effect,
                     host,
                     &mut self.type_work,
                 )
                 .map_err(|_| type_resource())?
                     == std::cmp::Ordering::Equal
-                {
-                    retained_host = true;
-                    // The exact sealed Host obligation is retained, never
-                    // interpreted as a native operation by this window.
-                    continue;
-                }
+            {
+                retained_host = true;
+                // The exact sealed Host obligation is retained, never
+                // interpreted as a native operation by this window.
+                continue;
             }
             let symbol = self
                 .registry

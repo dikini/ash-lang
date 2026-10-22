@@ -411,6 +411,25 @@ public checked execution acceptance follows.
 
 The [combined native-interpreter discriminator](evidence/checked-byte-windows/candidates/combined-native-fixture/README.md)
 records two fresh passing two-owner startup repeats, followed by a genuine
-native-interpreter fixture inventory failure in the affected batch. A reviewed
-fixture-only complete-declaration repair and omission control are uncompiled;
-new retaining-tip integration and remaining regression/lint gates stay pending.
+native-interpreter fixture inventory failure in the affected batch. At that checkpoint the
+reviewed fixture-only complete-declaration repair and omission control were
+uncompiled. The final combined verification below supersedes those pending gates.
+
+
+The [final combined byte/window verification](evidence/checked-byte-windows/candidates/final-combined-verification/README.md)
+passes 473 distinct selected unit tests, two additional exact two-owner startup
+repeats, the compile/link-only producer-receipt integration, and Clippy with
+warnings denied on one frozen source/configuration map. The unchanged startup
+allowance is 327680: two-owner uses 327365, nested cleanup 320457, and dependent
+cumulative reconstruction/correspondence 325006. The dependent control retains
+exact, one-short, prefix and fresh-retry checks.
+
+The complete native fixture now includes authentic checked declarations; a
+canonical-first omission control rejects the same registry with only those
+declarations removed. Full checked private static-image reconstruction, hostile
+records and paid bounds pass. Earlier positive-fixture and lint failures remain
+qualified in evidence; no generated program was started by the receipt
+integration. Independent published-head review and milestone retention remain
+pending. Whole F3, public checked execution/protected activation, and the connected
+F-core gate remain open. The developer owns the next full workspace verification
+when F3/F4/F6 connect to the generated-host path.

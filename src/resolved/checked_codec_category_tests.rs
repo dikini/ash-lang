@@ -458,7 +458,6 @@ fn checked_memory_family_proofs_are_distinct_across_genuine_builtin_graphs() {
             .unwrap()
     );
     assert!(fallback.used() >= full.used());
-    drop(proof);
     let mut malformed = uncovered.clone();
     let boundary =
         crate::types::ConstructorId::new(crate::types::NominalTypeId::new(second, 12), 2);

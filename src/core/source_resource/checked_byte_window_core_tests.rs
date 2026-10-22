@@ -31,10 +31,10 @@ pub(crate) fn mutate(program: &mut UnvalidatedEffectProgram, mutation: Mutation)
     scope
         .visit_byte_calls(
             |call, _| {
-                if call.function.local() == 13 && call.apply.is_some() {
-                    assert!(copy_apply
-                        .replace(call.apply.expect("actual applied checked_copy_bytes"))
-                        .is_none());
+                if call.function.local() == 13
+                    && let Some(apply) = call.apply
+                {
+                    assert!(copy_apply.replace(apply).is_none());
                 }
                 Ok(())
             },

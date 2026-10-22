@@ -2438,6 +2438,84 @@ impl Decoder<'_> {
 }
 
 #[cfg(test)]
+pub(super) fn checked_window_static_image_controls(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(super::ModuleId, Arc<super::SourceFile>)],
+) {
+    use super::*;
+    assert!(matches!(encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut TypeWorkBudget::default()),
+        Err(NativeImageFailure::Image(ImageFailure::Unsupported(Unsupported::EffectOperation)))),
+        "static reconstruction must not enable public checked build admission");
+    let mut work = TypeWorkBudget::default();
+    let encoder = encode_program(program, provenance, &mut work, true, |encoder| {
+        for node in program.nodes() {
+            charge(encoder.work, 1)?;
+            if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) = &node.kind {
+                encoder.encode_source_registry_view(scope.original(), program.registry())?;
+            }
+        }
+        Ok(())
+    }, |encoder, kind| encoder.encode_effect_node(kind)).expect("genuine checked window static image encodes");
+    let image = encoder.image;
+    let slot = image.resource_headers.iter().position(|h| h.codec == 2).expect("actual CheckedScope header");
+    assert!(image.resource_headers[slot].host.is_some());
+    assert!(image.resource_headers[slot].windows.len > 0);
+    let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+    let expected = image.encode_native_expectations(&mut TypeWorkBudget::default()).unwrap();
+    let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+    let canonical = decode();
+    canonical.compare_native_expectations(&expected, &mut TypeWorkBudget::default()).unwrap();
+    let mut measured = TypeWorkBudget::default();
+    let restored = canonical.restore_effect(&mut measured).expect("whole checked image independent source/template/Core reconstruction");
+    crate::core::source_resource::coordinate_reuse_tests::assert_handler_coordinate_reuse(
+        &restored.program, &restored.sources, &restored.modules,
+    );
+    super::checked_prepared_image::checked_projection_hostile_controls(&canonical);
+    let cost = measured.used();
+    assert!(cost > 0);
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+        exact.charge(prefix).unwrap();
+        canonical.restore_effect(&mut exact).unwrap();
+        assert_eq!(exact.used(), prefix + cost);
+        assert!(canonical.restore_effect(&mut exact).is_err(), "spent operation refuses");
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        match canonical.restore_effect(&mut short) {
+            Err(ImageFailure::Resource) => {},
+            Err(ImageFailure::Validation(error)) if error.reason() == crate::core::ValidationReason::Resource => {},
+            _ => panic!("one-short must be actual Resource refusal"),
+        }
+    }
+    for _ in 0..2 { canonical.restore_effect(&mut TypeWorkBudget::with_limit(cost)).unwrap(); }
+    for mutation in 0..5 {
+        let mut hostile = decode();
+        match mutation {
+            0 => hostile.resource_headers[slot].host = None,
+            1 => { let owned = hostile.resource_headers[slot].owned_position; hostile.resource_headers[slot].host.as_mut().unwrap().position = owned; },
+            2 => hostile.resource_headers[slot].codec = 1,
+            3 => hostile.resource_headers[slot].codec = 255,
+            4 => hostile.resource_headers[slot].windows.len = 0,
+            _ => unreachable!(),
+        }
+        let error = match hostile.restore_effect(&mut TypeWorkBudget::default()) {
+            Ok(_) => panic!("actual header mutation must refuse independent restore"),
+            Err(error) => error,
+        };
+        match error {
+            ImageFailure::Resource => panic!("no budget failure credit"),
+            ImageFailure::Validation(error) => assert_ne!(error.reason(), crate::core::ValidationReason::Resource),
+            ImageFailure::CoreAdmission(error) => panic!("builder setup failure is not independent semantic refusal: {error:?}"),
+            ImageFailure::Unsupported(feature) => panic!("unsupported coverage is not hostile rejection evidence: {feature:?}"),
+            _ => {},
+        }
+    }
+    let mut old = bytes;
+    old[PRIVATE_MAGIC.len() - 1] = 0x12;
+    assert!(PureImage::decode_bytes(&old, &mut TypeWorkBudget::default()).is_err(), "old wire version must not reinterpret the new header layout");
+}
+
+#[cfg(test)]
 mod tests {
     use super::super::{ImageFailure, PureImage, Slice, get};
     use crate::types::TypeWorkBudget;
@@ -4590,82 +4668,4 @@ Buffer.Success (Buffer.Success 7)
             "payload helper image restoration exact work={cost}; prefix/one-short/two retries and four loan/copy refusals"
         );
     }
-}
-
-#[cfg(test)]
-pub(super) fn checked_window_static_image_controls(
-    program: &crate::core::ValidatedEffectProgram,
-    provenance: &[(super::ModuleId, Arc<super::SourceFile>)],
-) {
-    use super::*;
-    assert!(matches!(encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut TypeWorkBudget::default()),
-        Err(NativeImageFailure::Image(ImageFailure::Unsupported(Unsupported::EffectOperation)))),
-        "static reconstruction must not enable public checked build admission");
-    let mut work = TypeWorkBudget::default();
-    let encoder = encode_program(program, provenance, &mut work, true, |encoder| {
-        for node in program.nodes() {
-            charge(encoder.work, 1)?;
-            if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) = &node.kind {
-                encoder.encode_source_registry_view(scope.original(), program.registry())?;
-            }
-        }
-        Ok(())
-    }, |encoder, kind| encoder.encode_effect_node(kind)).expect("genuine checked window static image encodes");
-    let image = encoder.image;
-    let slot = image.resource_headers.iter().position(|h| h.codec == 2).expect("actual CheckedScope header");
-    assert!(image.resource_headers[slot].host.is_some());
-    assert!(image.resource_headers[slot].windows.len > 0);
-    let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
-    let expected = image.encode_native_expectations(&mut TypeWorkBudget::default()).unwrap();
-    let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-    let canonical = decode();
-    canonical.compare_native_expectations(&expected, &mut TypeWorkBudget::default()).unwrap();
-    let mut measured = TypeWorkBudget::default();
-    let restored = canonical.restore_effect(&mut measured).expect("whole checked image independent source/template/Core reconstruction");
-    crate::core::source_resource::coordinate_reuse_tests::assert_handler_coordinate_reuse(
-        &restored.program, &restored.sources, &restored.modules,
-    );
-    super::checked_prepared_image::checked_projection_hostile_controls(&canonical);
-    let cost = measured.used();
-    assert!(cost > 0);
-    for prefix in [0, 7] {
-        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
-        exact.charge(prefix).unwrap();
-        canonical.restore_effect(&mut exact).unwrap();
-        assert_eq!(exact.used(), prefix + cost);
-        assert!(canonical.restore_effect(&mut exact).is_err(), "spent operation refuses");
-        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
-        short.charge(prefix).unwrap();
-        match canonical.restore_effect(&mut short) {
-            Err(ImageFailure::Resource) => {},
-            Err(ImageFailure::Validation(error)) if error.reason() == crate::core::ValidationReason::Resource => {},
-            _ => panic!("one-short must be actual Resource refusal"),
-        }
-    }
-    for _ in 0..2 { canonical.restore_effect(&mut TypeWorkBudget::with_limit(cost)).unwrap(); }
-    for mutation in 0..5 {
-        let mut hostile = decode();
-        match mutation {
-            0 => hostile.resource_headers[slot].host = None,
-            1 => { let owned = hostile.resource_headers[slot].owned_position; hostile.resource_headers[slot].host.as_mut().unwrap().position = owned; },
-            2 => hostile.resource_headers[slot].codec = 1,
-            3 => hostile.resource_headers[slot].codec = 255,
-            4 => hostile.resource_headers[slot].windows.len = 0,
-            _ => unreachable!(),
-        }
-        let error = match hostile.restore_effect(&mut TypeWorkBudget::default()) {
-            Ok(_) => panic!("actual header mutation must refuse independent restore"),
-            Err(error) => error,
-        };
-        match error {
-            ImageFailure::Resource => panic!("no budget failure credit"),
-            ImageFailure::Validation(error) => assert_ne!(error.reason(), crate::core::ValidationReason::Resource),
-            ImageFailure::CoreAdmission(error) => panic!("builder setup failure is not independent semantic refusal: {error:?}"),
-            ImageFailure::Unsupported(feature) => panic!("unsupported coverage is not hostile rejection evidence: {feature:?}"),
-            _ => {},
-        }
-    }
-    let mut old = bytes;
-    old[PRIVATE_MAGIC.len() - 1] = 0x12;
-    assert!(PureImage::decode_bytes(&old, &mut TypeWorkBudget::default()).is_err(), "old wire version must not reinterpret the new header layout");
 }

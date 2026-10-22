@@ -164,10 +164,8 @@ impl Decoder<'_> {
         let mut selected = None;
         for library in &surface.foreign_libraries {
             charge(self.work, 1)?;
-            if library.span == parts.span {
-                if selected.replace(library).is_some() {
-                    return Err(ImageFailure::InvalidRecord);
-                }
+            if library.span == parts.span && selected.replace(library).is_some() {
+                return Err(ImageFailure::InvalidRecord);
             }
         }
         let written = selected.ok_or(ImageFailure::SourceAdmission)?;
@@ -288,7 +286,7 @@ pub(super) fn checked_projection_hostile_controls(image: &PureImage) {
                 );
                 hostile.prepared_libraries[slot].module = index(donor).unwrap();
             }
-            4 | 5 | 6 => {
+            4..=6 => {
                 let data = projection.get(&hostile.bytes).unwrap();
                 let (owner_host, symbol_host, member) = projection_offsets(data);
                 let offset = match mutation {

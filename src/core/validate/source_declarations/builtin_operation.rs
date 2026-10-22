@@ -731,7 +731,7 @@ mod tests {
         let scalar = registry.authenticate_scalar_preflights_for_owners(&mut work).unwrap();
         authenticate_with_builtin_operation(registry, &sources, &modules, &mut work,
             None, &operation, &scalar, &current).expect("genuine complete source and registry first");
-        let mut effects = registry.effects().iter().cloned().collect::<Vec<_>>();
+        let mut effects = registry.effects().to_vec();
         effects.iter_mut().find(|effect| effect.id == EffectId::new(
             loaded.id(), crate::module::FOREIGN_NATIVE_HOST_LOCAL)).unwrap().public = false;
         let changed = registry.as_ref().clone().replace_effects_for_core_test(effects);
