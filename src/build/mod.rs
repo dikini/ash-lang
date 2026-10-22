@@ -8,10 +8,15 @@
 mod artifacts;
 mod bridge;
 mod checked_admission;
+mod checked_receipt;
 mod emit;
 mod gas;
 mod host;
 mod image;
+
+pub use checked_receipt::{
+    ArtifactPin, ProducerReceipt, ProducerReceiptLimits, ReceiptFailure, ReceiptField,
+};
 
 pub use host::{
     BuildConfiguration, BuildFailure, BuiltProgram, NATIVE_TARGET, NativeLinkInput,

@@ -254,11 +254,11 @@ impl<'a> PassivePlan<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    const SOURCE: &str = r#"import @builtin.foreign as Foreign
+    pub(in crate::build) const SOURCE: &str = r#"import @builtin.foreign as Foreign
 foreign library C {
     profile "x86_64-unknown-linux-gnu"
     repr Size = size_t
@@ -277,7 +277,7 @@ main () = match perform Measure.call 42 {
 }
 "#;
 
-    fn with_driver_result(
+    pub(in crate::build) fn with_driver_result(
         source: &str,
         test: impl FnOnce(Result<crate::driver::CompiledProgram, crate::driver::FileFailure>),
     ) {
@@ -309,7 +309,7 @@ main () = match perform Measure.call 42 {
         ));
     }
 
-    fn with_program(
+    pub(in crate::build) fn with_program(
         source: &str,
         test: impl FnOnce(
             &ValidatedEffectProgram,

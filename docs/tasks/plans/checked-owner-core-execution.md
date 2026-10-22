@@ -55,12 +55,12 @@ remains open.
 Line numbers are current inspection hints; the assigned author rechecks exact
 file/range ownership at launch. No changes are assigned by this table.
 
-## Active passive increment
+## Retained passive increment and active receipts
 
-Source-only passive F4 record types/transitions, passive F6 applicability and
-refusal tests are active under the root assignment. The root dependency audit
-permits this slice's individual product PR on retained `bd725c97`, after fresh
-base verification and review. AD-0016 retention is recorded above. PR101, the
+PR108 retained passive F4 record types/transitions, passive F6 applicability and
+refusal tests at `f4a3a048`, after fresh retained-base verification and review.
+The active next increment adds bounded producer receipts and independent
+applicability decoding under the root assignment. AD-0016 retention is recorded above. PR101, the
 minimal initialized native helper and checked image roundtrip remain connected
 prerequisites for actual activation. These
 are usable incremental product changes without a native activation permission.
@@ -140,8 +140,16 @@ separate preparation delivery.
    authored E is available only after actual finish/result admission. Expose the
    bounded ordered records through read-only execution inspection, without
    changing the source host result into an aggregate.
-5. Connect F6 before enabling the real public native positive. Freeze bounded
-   deterministic receipt/plan and policy versions binding the full checked
+5. Connect F6 before enabling the real public native positive. The active next
+   increment implements opt-in producer observations and independent bounded
+   receipt decoding from existing native image/emission/build seams. Source
+   tests passed seven controls on the first frozen source. The final frozen
+   [verification](../evidence/checked-owner-core-execution/producer-receipts/README.md)
+   passed seven refreshed receipt controls, 17 affected regressions, Clippy and
+   one real public compile/link-only receipt test on base `f4a3a048` plus candidate
+   source. No generated output was executed. Missing closure remains explicit; the product
+   protected store/context and immutable launcher are later components, and
+   current activation refusals stay closed. Freeze bounded deterministic receipt/plan and policy versions binding the full checked
    required closure, original operation/bridge/payload/facts mappings, native/
    headers/runtime/tool/config hashes, mode/role/target, finite capacities and
    exact premise/context. The separate trusted launcher contains no selected

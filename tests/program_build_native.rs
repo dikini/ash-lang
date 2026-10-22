@@ -434,3 +434,279 @@ pub foreign library Sentinels {
         assert_eq!(calls, b"ss");
     }
 }
+
+/// One real public producer observation, without starting the generated image.
+/// The limits are finite legacy debug-artifact observation bounds, not a strict
+/// checked policy, native/header proof or protected deployment configuration.
+#[test]
+fn producer_receipt_observes_native_build_without_startup() {
+    use ash::build::{
+        ArtifactPin, ProducerReceipt, ProducerReceiptLimits, ReceiptFailure, ReceiptField,
+    };
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+    const ARTIFACT_CAP: usize = 1_073_741_824;
+    let limits = ProducerReceiptLimits {
+        artifact_bytes: ARTIFACT_CAP,
+        receipt_bytes: 4096,
+        records: 64,
+        work: 2_147_483_648,
+    };
+    let cache = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+    let cache = fs::canonicalize(cache).unwrap();
+    let retain = std::env::var_os("ASH_RECEIPT_EVIDENCE_DIR").map(PathBuf::from);
+    let base = retain
+        .clone()
+        .unwrap_or_else(|| cache.join("receipt-observation-tests"));
+    fs::create_dir_all(&base).unwrap();
+    let base = fs::canonicalize(base).unwrap();
+    assert!(
+        base.starts_with(&cache),
+        "receipt fixture must use the selected existing cache disk"
+    );
+    struct Directory {
+        path: PathBuf,
+        retain: bool,
+    }
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            if !self.retain {
+                let _ = fs::remove_dir_all(&self.path);
+            }
+        }
+    }
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let directory = loop {
+        let path = base.join(format!(
+            "case-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => {
+                break Directory {
+                    path,
+                    retain: retain.is_some(),
+                };
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("receipt observation directory: {error}"),
+        }
+    };
+    let root = &directory.path;
+    for (name, bytes) in [
+        (
+            "entry.ash",
+            include_str!("fixtures/source-native/cases/combined.ash"),
+        ),
+        ("native.ash", NATIVE),
+        ("facade.ash", FACADE),
+        ("helper.ash", HELPER),
+        ("native_counter.c", C),
+    ] {
+        fs::write(root.join(name), bytes).unwrap();
+    }
+    let source = root.join("native_counter.c");
+    let object = root.join("native_counter.o");
+    let archive = root.join("libash_receipt_counter.a");
+    let mut tool_records = Vec::new();
+    // These are the unchanged scalar fixture's compile/archive commands. No
+    // shared object, candidate query or generated executable is invoked.
+    for (name, mut command) in [
+        ("cc", {
+            let mut c = Command::new("cc");
+            c.args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fPIC", "-c"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&object);
+            c
+        }),
+        ("ar", {
+            let mut c = Command::new("ar");
+            c.arg("crs").arg(&archive).arg(&object);
+            c
+        }),
+    ] {
+        let argv: Vec<_> = std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|value| {
+                value
+                    .to_str()
+                    .expect("the owned fixture path is UTF-8")
+                    .to_owned()
+            })
+            .collect();
+        let result = command.output().unwrap();
+        fs::write(root.join(format!("{name}.stdout")), &result.stdout).unwrap();
+        fs::write(root.join(format!("{name}.stderr")), &result.stderr).unwrap();
+        tool_records.push(serde_json::json!({"argv": argv, "exit_code": result.status.code()}));
+        assert!(
+            result.status.success(),
+            "receipt fixture {name}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let compiled = compile_path(RunConfiguration {
+        entry: root.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap();
+    let configuration = |output| {
+        let mut configuration = BuildConfiguration::new(output);
+        configuration.native_inputs = vec![NativeLinkInput::StaticArchive(archive.clone())];
+        configuration.cargo_target_directory = Some(cache.clone());
+        configuration
+    };
+    let ordinary =
+        prepare_program(&compiled, configuration(root.join("ordinary-not-built"))).unwrap();
+    assert!(ordinary.producer_receipt().is_none());
+    let mut requested = configuration(root.join("program"));
+    requested.producer_receipt = Some(limits);
+    let prepared = prepare_program(&compiled, requested).unwrap();
+    assert_eq!(ordinary.preparation_work(), prepared.preparation_work());
+    assert_eq!(ordinary.generated_rust(), prepared.generated_rust());
+    let initial = prepared.producer_receipt().unwrap().clone();
+    assert_eq!(initial.pin(ReceiptField::FinalElf), None);
+    let built = build_prepared(prepared).unwrap_or_else(|error| {
+        let log = error.build_log().map(|path| path.display().to_string());
+        panic!("receipt native build failed: {error}; retained log: {log:?}")
+    });
+    let receipt_path = built
+        .producer_receipt()
+        .expect("opt-in build retains a receipt");
+    let receipt =
+        ProducerReceipt::read(&mut fs::File::open(receipt_path).unwrap(), limits).unwrap();
+    for field in [
+        ReceiptField::ProgramImage,
+        ReceiptField::ExpectedFacts,
+        ReceiptField::GeneratedRust,
+        ReceiptField::OriginalMappings,
+        ReceiptField::RuntimeFingerprint,
+        ReceiptField::DeclaredNativeInputs,
+    ] {
+        assert_eq!(receipt.pin(field), initial.pin(field), "{field:?}");
+    }
+    assert_eq!(
+        receipt.check_checked_applicability(),
+        Err(ReceiptFailure::IncompleteClosure)
+    );
+    assert_eq!(
+        receipt.activate(),
+        Err(ReceiptFailure::ProtectedAuthorityUnavailable)
+    );
+    fn observe(path: &Path, cap: usize) -> ArtifactPin {
+        let mut file = fs::File::open(path).unwrap();
+        let before = file.metadata().unwrap();
+        assert!(before.is_file() && before.len() <= cap as u64);
+        let mut count = 0_usize;
+        let mut hash = Sha256::new();
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let read = file.read(&mut buffer).unwrap();
+            if read == 0 {
+                break;
+            }
+            count = count.checked_add(read).unwrap();
+            assert!(count <= cap);
+            hash.update(&buffer[..read]);
+        }
+        let after = file.metadata().unwrap();
+        assert_eq!(
+            (
+                before.dev(),
+                before.ino(),
+                before.len(),
+                before.mtime(),
+                before.mtime_nsec(),
+                before.ctime(),
+                before.ctime_nsec()
+            ),
+            (
+                after.dev(),
+                after.ino(),
+                after.len(),
+                after.mtime(),
+                after.mtime_nsec(),
+                after.ctime(),
+                after.ctime_nsec()
+            )
+        );
+        assert_eq!(count as u64, before.len());
+        ArtifactPin {
+            bytes: count as u64,
+            sha256: hash.finalize().into(),
+        }
+    }
+    let generated = built.generated_source();
+    let project = generated.parent().unwrap().parent().unwrap();
+    let mut observations = Vec::new();
+    for (field, path) in [
+        (ReceiptField::FinalElf, built.executable().to_path_buf()),
+        (ReceiptField::GeneratedRust, generated.to_path_buf()),
+        (
+            ReceiptField::ProgramImage,
+            generated.parent().unwrap().join("program-image.bin"),
+        ),
+        (
+            ReceiptField::ExpectedFacts,
+            generated.parent().unwrap().join("expected-facts.bin"),
+        ),
+    ] {
+        let observed = observe(&path, ARTIFACT_CAP);
+        assert_eq!(receipt.pin(field), Some(observed));
+        observations.push(serde_json::json!({"field": format!("{field:?}"), "path": path, "bytes": observed.bytes, "sha256": observed.sha256}));
+    }
+    let mut inputs = Vec::new();
+    for path in [
+        source,
+        object,
+        archive,
+        root.join("entry.ash"),
+        root.join("native.ash"),
+        root.join("facade.ash"),
+        root.join("helper.ash"),
+        project.join("Cargo.toml"),
+        project.join("Cargo.lock"),
+        project.join("rust-toolchain.toml"),
+        built.build_log().to_path_buf(),
+        receipt_path.to_path_buf(),
+    ] {
+        let observed = observe(&path, ARTIFACT_CAP);
+        inputs.push(
+            serde_json::json!({"path": path, "bytes": observed.bytes, "sha256": observed.sha256}),
+        );
+    }
+    let package = project.file_name().unwrap();
+    let retired_root = cache
+        .join(ash::build::NATIVE_TARGET)
+        .join(if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        })
+        .join(package);
+    assert!(!retired_root.exists());
+    assert!(!retired_root.with_extension("d").exists());
+    let seed_lock: [u8; 32] = Sha256::digest(include_bytes!("../Cargo.lock")).into();
+    fs::write(root.join("observation.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "status": "legacy native compile/link observation only; generated executable not started",
+        "target": ash::build::NATIVE_TARGET, "tools": tool_records, "inputs": inputs, "observations": observations,
+        "seed_cargo_lock": {"bytes": include_bytes!("../Cargo.lock").len(), "sha256": seed_lock},
+        "resolved_cargo_lock": project.join("Cargo.lock"),
+        "ordinary_preparation_work": ordinary.preparation_work(), "built_preparation_work": built.preparation_work(),
+        "artifact_cap": ARTIFACT_CAP, "receipt_cap": limits.receipt_bytes, "records_cap": limits.records, "work_cap": limits.work,
+        "protected_authority": "unavailable", "checked_closure": "incomplete", "immutable_execution": "not established",
+        "loading_abi_native_behavior": "not established", "published_staging_retired": !project.join("linked-program").exists(),
+        "retired_cargo_root": retired_root, "retired_cargo_root_and_depinfo_absent": true
+    })).unwrap()).unwrap();
+    assert!(!root.join("ordinary-not-built").exists());
+    assert!(!project.join("linked-program").exists());
+    eprintln!(
+        "receipt build observation: {}",
+        root.join("observation.json").display()
+    );
+}

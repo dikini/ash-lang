@@ -1,7 +1,7 @@
 # TASK-0053: Connected checked owner execution and immutable admission
 
 - ID: `TASK-0053`
-- Status: active for source-only passive control/admission implementation; integration and execution await their gates
+- Status: active for bounded producer-receipt implementation; protected activation and connected execution await their gates
 - Related: [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](TASK-0051-checked-ffi-contract-carriers.md),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
@@ -56,9 +56,9 @@ Trace after Free. Assert copied bytes after finish has completed. The PR101
 candidate fixture's malloc plus initialized_bytes declaration is not actual
 initialization evidence and must not be used as the native positive.
 
-## Active passive increment
+## Retained passive increment and active receipts
 
-Two private modules are staged for product integration: an owner control ledger
+PR108 retained the passive increment at `f4a3a048`. Its two private modules provide an owner control ledger
 and a passive image applicability plan. The ledger retains actual admitted
 header/native originals, reserved observation/closing history and distinct K,
 source delivery and continuation state. The plan reuses actual program, image,
@@ -85,9 +85,21 @@ without importing PR101's candidate changes.
 
 This is passive unit/model and admission-data evidence, not native consumption,
 protected activation or execution acceptance. The complete byte-copy/runtime
-F-core path still awaits PR101 and protected deployment. Producer receipt
-emission and independent applicability decoding are the next bounded phase;
-this slice does not provide them. Include these task/plan documents with the
+F-core path still awaits PR101 and protected deployment. The next active product
+increment adds opt-in producer receipt emission and
+independent bounded applicability decoding from the retained image/emission/build
+seams. [Receipt verification](evidence/checked-owner-core-execution/producer-receipts/README.md)
+passed the initial exact test and seven-test module, then a final frozen refresh
+of seven receipt controls, 17 affected regressions, Clippy with warnings denied,
+and one real public compile/link-only receipt observation. All 25 final tests
+passed on retained base `f4a3a048` plus the candidate source; no generated output
+was started. Receipt records keep
+unavailable checked/native/header/tool/premise/context closure explicit and do
+not grant protected approval or activation. The passive receipt/control result
+above remains the retained baseline; the new receipt-unit results are candidate
+evidence, not native execution or protected activation. F3 verification now uses
+a separately assigned `parallel-f3` target while F6 retains the existing shared
+target; this changes neither semantic/work limits nor execution permission. Include these task/plan documents with the
 product PR, not a standalone preparation PR.
 
 ## Acceptance for this bounded delivery
