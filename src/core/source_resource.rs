@@ -8752,3 +8752,7 @@ mod checked_owner_tests;
 #[cfg(test)]
 #[path = "source_resource/checked_lifecycle_core_tests.rs"]
 pub(crate) mod checked_lifecycle_core_tests;
+
+#[cfg(test)]
+#[path = "source_resource/checked_borrow_core_tests.rs"]
+pub(crate) mod checked_borrow_core_tests;

@@ -222,12 +222,12 @@ fn checked_scalar_borrow_body_free_reexport_keeps_defining_native_fact() {
 
 fn callback_result_source(capture_state: bool) -> String {
     let boundary_callback = if capture_state {
-        "{ let retained = state\n42 }"
+        "let retained = state\n42"
     } else {
         "42"
     };
     let handler = format!(
-        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => {{\n let callback : Unit -> Int = fn ignored => value\n resume (Foreign.CheckedReturned callback)\n }}\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let callback : Unit -> Int = fn ignored => {boundary_callback}\n resume (Foreign.CheckedReturned callback)\n }}\n }}"
+        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => {{\n let callback : Unit -> Int = fn(ignored) {{ value }}\n resume (Foreign.CheckedReturned callback)\n }}\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let callback : Unit -> Int = fn(ignored) {{ {boundary_callback} }}\n resume (Foreign.CheckedReturned callback)\n }}\n }}"
     );
     BORROW_SOURCE
         .replace(
@@ -262,9 +262,74 @@ fn checked_scalar_borrow_no_resource_context_and_ordinary_simulation_refuse() {
     let source = format!(
         "{BORROW_SOURCE}\nuncontrolled : State<Int, Bool> -> Foreign.CheckedCall<Int> ! {{Read<Int, Bool>, Foreign.NativeHost<Int>}}\nuncontrolled state = perform Read<Int, Bool>.call state\n"
     );
-    source_refusal(&source);
-    source_refusal(&BORROW_SOURCE.replace(
+    let no_context = check_graph(&graph_with_entry(&source, None))
+        .expect_err("a native Current request outside its owning phase must refuse");
+    assert!(
+        matches!(
+            no_context,
+            TypeError::Internal(ElaborationFailure::ForeignPrivilegeUnavailable)
+        ),
+        "exact no-context privilege refusal required: {no_context:?}"
+    );
+    let simulated = BORROW_SOURCE.replace(
         "resume (perform Read<H, R>.call state)",
         "resume (handle (perform Read<H, R>.call state) with Read<H, R> { call ignored => resume (Foreign.CheckedReturned 1) })",
-    ));
+    );
+    let error = check_graph(&graph_with_entry(&simulated, None))
+        .expect_err("an ordinary native handler cannot simulate a checked Borrow result");
+    assert!(
+        matches!(
+            error,
+            TypeError::Internal(ElaborationFailure::ForeignPrivilegeUnavailable)
+        ),
+        "exact ordinary-handler privilege refusal required: {error:?}"
+    );
+}
+
+#[test]
+fn checked_scalar_borrow_independent_core_checks_read_vectors_membership_and_host_row() {
+    let graph = graph_with_entry(BORROW_SOURCE, Some(CONSUMER));
+    let checked =
+        check_graph(&graph).expect("real scalar Borrow source and body-free consumer first");
+    let linked = link_modules(checked, graph.entry()).unwrap();
+    let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+    let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+    let typed = elaborator
+        .synthesize_effect_module_program(&linked)
+        .unwrap();
+    let program = elaborator.finish(typed.node).unwrap();
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let core = crate::core::validate_effect_modules(program, &sources, &modules)
+        .expect("independent actual scalar Borrow Core under default allowance");
+    let canonical = crate::core::transform::identity_effect_traversal(&core).unwrap();
+    crate::core::source_resource::checked_lifecycle_core_tests::assert_budget_controls(&canonical);
+    use crate::core::source_resource::checked_borrow_core_tests::{
+        Mutation, mutate_and_authenticate,
+    };
+    for mutation in [
+        Mutation::InterpretationHost,
+        Mutation::InterpretationOwned,
+        Mutation::MissingInterpretation,
+        Mutation::CopiedReadHost,
+        Mutation::CopiedReadHostRow,
+    ] {
+        let mut candidate = crate::core::transform::identity_effect_traversal(&core).unwrap();
+        mutate_and_authenticate(&mut candidate, mutation);
+        let error = crate::core::validate_effect_modules(candidate, &sources, &modules)
+            .expect_err("independent whole Core rejects the hostile exact Read correspondence");
+        assert_ne!(
+            error.reason(),
+            crate::core::ValidationReason::Resource,
+            "semantic Borrow Core refusal required for {mutation:?}: {error:?}"
+        );
+    }
 }

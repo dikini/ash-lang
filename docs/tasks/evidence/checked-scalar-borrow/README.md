@@ -35,3 +35,24 @@ Rust pretty-printers misdecode nested enum payloads in this artifact, so their
 output is not full Type/Row-vector evidence. Debugger command success means only
 inspection, not a passing source test. The next repair must reconstruct the exact
 original native Host demand with paid work, without dropping or trusting a row.
+
+## Demand correspondence checkpoint
+
+The exact native-derived Host reconstruction in handler demand extraction and
+substituted row realization admits the canonical connected source and summary,
+body-free consumer and re-export, linked independent Core, identity/fold and
+all five targeted Read Core mutations. The connected command passes 10/12; the
+integration binding command passes 3/3, on 588 equal before/after inputs
+`c64afdd2a5874a44067fc3ff083c4933f08e95b9b89bc1ec260b36edc7ec56aa`.
+[Raw receipts](demand-correspondence/borrow-demand-connected.receipt.json) keep
+the exact scope; no all-green delivery is claimed.
+
+Two connected controls remain test-boundary failures: callback body syntax needs
+a logical newline, while a no-context function is already refused with Source
+Argument for controlled State in an ordinary callable, before the expected
+privilege diagnostic. The subsequent simulation check did not execute. Private
+rebinding still fails five setup controls because the shared owner validator
+freshly reconstructs its codec against the local projection; reusing existing
+codec Arcs alone does not supply missing registry declarations. Those tests need
+a genuine complete checked registry, without weakening that reconstruction.
+The failure-arm Current-transport negative has no semantic credit yet.

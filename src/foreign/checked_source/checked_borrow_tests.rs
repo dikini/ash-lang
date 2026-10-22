@@ -10,20 +10,41 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const SOURCE: &str = include_str!("../../../tests/fixtures/checked-scalar-borrow/owner.ash");
 
+struct FixtureDirectory(std::path::PathBuf);
+
+impl FixtureDirectory {
+    fn new() -> Self {
+        static IDS: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..1024 {
+            let path = std::env::temp_dir().join(format!(
+                "ash-checked-borrow-binding-{}-{}",
+                std::process::id(),
+                IDS.fetch_add(1, Ordering::Relaxed),
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot create private fixture directory: {error}"),
+            }
+        }
+        panic!("fixture directory namespace exhausted without acquiring a directory");
+    }
+}
+
+impl Drop for FixtureDirectory {
+    fn drop(&mut self) {
+        // Delete only the directory this guard created. Cleanup also runs on
+        // source-write or graph-load panic, never on an AlreadyExists candidate.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn graph(source: &str) -> ModuleGraph {
-    static IDS: AtomicU64 = AtomicU64::new(0);
-    let directory = std::env::temp_dir().join(format!(
-        "ash-checked-borrow-binding-{}-{}",
-        std::process::id(),
-        IDS.fetch_add(1, Ordering::Relaxed),
-    ));
-    std::fs::create_dir(&directory).unwrap();
-    let entry = directory.join("owner.ash");
+    let directory = FixtureDirectory::new();
+    let entry = directory.0.join("owner.ash");
     std::fs::write(&entry, source).unwrap();
-    let result = crate::module::load_module_graph(&entry, &ModuleRoots::empty())
-        .expect("real checked Borrow source parses before binding controls");
-    std::fs::remove_dir_all(directory).unwrap();
-    result
+    crate::module::load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("real checked Borrow source parses before binding controls")
 }
 
 fn resolve(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
@@ -93,11 +114,8 @@ impl Fixture {
         }
     }
 
-    fn effect(&self) -> ResolvedEffectDeclaration {
-        self.registry
-            .effect(self.original.effect())
-            .unwrap()
-            .clone()
+    fn effect(&self) -> &ResolvedEffectDeclaration {
+        self.registry.effect(self.original.effect()).unwrap()
     }
 
     fn bind(
@@ -105,15 +123,48 @@ impl Fixture {
         effect: &ResolvedEffectDeclaration,
         work: &mut TypeWorkBudget,
     ) -> Result<CheckedForeignSymbol, ForeignAdmissionError> {
+        // Canonical rebinding receives the actual registered reference. A
+        // hostile clone is registered in a separate consuming view, retaining
+        // original codec/owner/native brands and all identity-position tables.
+        // This is fixture preparation, not an uncharged production registry clone.
+        let view = if self
+            .registry
+            .effect(effect.id)
+            .is_some_and(|registered| std::ptr::eq(registered, effect))
+        {
+            None
+        } else {
+            let mut effects = self.registry.effects().to_vec();
+            let position = effects
+                .iter()
+                .position(|stored| stored.id == effect.id)
+                .unwrap();
+            effects[position] = effect.clone();
+            Some(
+                self.registry
+                    .as_ref()
+                    .clone()
+                    .replace_effects_for_core_test(effects),
+            )
+        };
+        let registry = view.as_ref().unwrap_or(self.registry.as_ref());
+        let effect = registry.effect(effect.id).unwrap();
         let codec = self.original.call_codec();
-        let context = ForeignBindingContext::new(
-            &self.registry,
-            codec.module(),
-            codec.source(),
-            codec.ids(),
-            work,
-        )?
-        .with_owners(&self.owners, work)?;
+        // The merged root registry is a projection, not the defining builtin
+        // inventory. Reuse only the immutable codec originals retained by this
+        // genuine resolved Read, rather than minting an incomplete new proof.
+        charge(work, 2, codec.source())?;
+        let context = ForeignBindingContext {
+            registry,
+            codec: Arc::clone(codec),
+            owners: &self.owners,
+            owner_codec: Some(Arc::clone(
+                self.original
+                    .owner_codec
+                    .as_ref()
+                    .expect("genuine resolved owner Borrow retains its original owner codec"),
+            )),
+        };
         bind_checked_foreign_symbol(
             self.original.library(),
             Arc::clone(self.original.prepared()),
@@ -133,6 +184,7 @@ fn assert_semantic_refusal(result: Result<CheckedForeignSymbol, ForeignAdmission
         matches!(
             error.reason(),
             ForeignAdmissionReason::InvalidLibrary
+                | ForeignAdmissionReason::InvalidOperation
                 | ForeignAdmissionReason::InvalidParameters
                 | ForeignAdmissionReason::InvalidSignature
         ),
@@ -210,7 +262,7 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution() 
         },
     ];
     for (index, mutation) in mutations.iter().enumerate() {
-        let mut effect = canonical.clone();
+        let mut effect: ResolvedEffectDeclaration = canonical.clone();
         mutation(&mut effect);
         let result = fixture.bind(&effect, &mut TypeWorkBudget::default());
         assert!(result.is_err(), "mutation {index} must refuse");
@@ -224,7 +276,7 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution() 
     let donor_span = donor
         .span(crate::source::ByteRange::new(0, 2).unwrap())
         .unwrap();
-    let mut effect = canonical.clone();
+    let mut effect: ResolvedEffectDeclaration = canonical.clone();
     effect.origin = Origin::Source(donor_span);
     assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
 }
@@ -237,7 +289,7 @@ fn checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals() {
         .bind(&canonical, &mut TypeWorkBudget::default())
         .unwrap();
     for replacement in [Type::Int, Type::Variable(canonical.parameters[1].id)] {
-        let mut effect = canonical.clone();
+        let mut effect: ResolvedEffectDeclaration = canonical.clone();
         let Type::Function(domain, _) = &mut effect.operations[0].annotation.ty else {
             panic!("actual original Read outer arrow");
         };
@@ -248,7 +300,7 @@ fn checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals() {
         arguments[0] = crate::types::KindedArgument::TypeArg(replacement);
         assert_semantic_refusal(fixture.bind(&effect, &mut TypeWorkBudget::default()));
     }
-    let mut effect = canonical.clone();
+    let mut effect: ResolvedEffectDeclaration = canonical.clone();
     let Type::Function(domain, _) = &mut effect.operations[0].annotation.ty else {
         unreachable!()
     };
