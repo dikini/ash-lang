@@ -12015,11 +12015,12 @@ impl Decoder<'_> {
             push(&mut scalar_preflights, Arc::new(fact), self.work)?;
         }
         drop(contexts);
-        for fact in scalar_preflights {
-            registry
-                .retain_scalar_preflight(fact, self.work)
-                .map_err(|_| ImageFailure::RegistryAdmission)?;
-        }
+        registry = registry
+            .with_scalar_preflights(
+                scalar_preflights.iter().map(|fact| (fact.function(), fact)),
+                self.work,
+            )
+            .map_err(|_| ImageFailure::RegistryAdmission)?;
         charge(
             self.work,
             self.image

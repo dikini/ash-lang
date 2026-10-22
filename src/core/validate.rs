@@ -9029,23 +9029,21 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            let mut work = TypeWorkBudget::with_limit(
-                self.type_work_limit.saturating_sub(self.type_work.get()),
-            );
-            let result = fact.authenticate(registry, &mut work);
-            self.charge_type_work(work.used())?;
-            result.map_err(|failure| {
-                ValidationError::new(
-                    if failure.is_resource_exhaustion() {
-                        ValidationReason::Resource
-                    } else {
-                        ValidationReason::Registry
-                    },
-                    None,
-                )
-            })?;
         }
-        Ok(())
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = registry.authenticate_scalar_preflights(&mut work);
+        self.charge_type_work(work.used())?;
+        result.map_err(|failure| {
+            ValidationError::new(
+                if failure == crate::resolved::ResolvedBuildFailure::TypeResource {
+                    ValidationReason::Resource
+                } else {
+                    ValidationReason::Registry
+                },
+                None,
+            )
+        })
     }
 
     fn validate_global_parameter_rows(

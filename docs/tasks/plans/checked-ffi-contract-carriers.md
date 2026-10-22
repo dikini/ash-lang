@@ -765,3 +765,10 @@ The second Host-proof sharing candidate passes four family controls, connected
 inputs `837b5c5b`. Startup still fails at unchanged 327680. Complete caller/cost
 evidence separates repeated proofs inside immutable table operations from
 independent admission boundaries; no cap or validation waiver is permitted.
+
+The grouped immutable-table/owned-pointwise repair passes five focused controls
+(`704cc8e8`) but still fails all three unchanged startup probes. Selective size
+and legacy byte imports/re-exports reach the next case; direct checked-copy NUL
+then fails codec admission both before and after this repair, confirmed against
+exact `a99a9c4c` plus the same test overlay (`cd784d8a`). Preserve that distinction
+and diagnose its actual closure fact; no codec or budget waiver follows.

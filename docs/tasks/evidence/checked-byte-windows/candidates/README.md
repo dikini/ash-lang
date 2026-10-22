@@ -196,3 +196,35 @@ No allowance, fixture or permission has changed; the startup regression remains
 a delivery blocker. The next repair must preserve paid row/source/projection
 checks and separate fresh admissions. Window hostiles and remaining regressions
 are still pending; no checked execution or whole-F3 acceptance follows.
+
+## Owned pointwise projections and immutable Core tables
+
+The next grouped repair preserves the Core validator's full row/context loop
+and calls the existing strict full-table authenticator once per immutable table.
+Three owned reconstruction/projection sites stage paid key/Arc collision-checked
+facts, then perform pointwise admission before returning the owned registry.
+Selective projections need not contain global anchors 0/11; they do not claim
+complete-table family continuity. Within one pointwise operation, each literal
+codec Arc plus exact module/source receives a fresh full proof; a different Arc
+pays a separate proof. Every row retains its original and registry projections.
+Standalone retention and strict complete-table anchor checks remain unchanged.
+No mutable unauthenticated API or completed proof token escapes.
+
+Five family/kind/owned-projection controls pass at 591 equal inputs `704cc8e8`,
+including old standalone partial admission versus batch equivalence, no invented
+anchors, distinct-codec work, malformed target refusal, collision checks and
+exact/prefix/short/spent/fresh retries. Both buffer startups and the dependent
+startup still exhaust unchanged 327680. The selective source test fails overall:
+its first two cases (`checked_size_t` and `byte_read`) complete direct and
+body-free re-export checks, but direct `checked_copy_nul` fails InvalidCodec in
+checker-view admission before later checks. The pinned loop-local trace identifies
+the third case; a generic panic message alone did not identify it.
+
+A reversible comparison restores exact `a99a9c4c` implementation bytes plus only
+the identical new selective test. Its 591 equal inputs `cd784d8a` fail the same
+third direct case with InvalidCodec through old standalone retention. Thus this
+checked-copy selective-closure failure predates the grouped repair; its cause
+remains to be localized without weakening canonical codec proof. Candidate source
+was restored byte-exact after the baseline artifact and logs were pinned.
+The aggregate selective test has no passing-test credit. Startup, this closure
+case, window hostiles and affected regressions remain open.
