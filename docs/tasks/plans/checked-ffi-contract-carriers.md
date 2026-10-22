@@ -783,3 +783,13 @@ candidate passes 9 connected/source/privacy tests and 7 family/summary controls
 probes still exhaust the unchanged allowance. Next measure exclusive capture
 charges with a reversible bounded diagnostic overlay; do not infer a cost repair
 from successful closure or relax any guard or budget.
+
+The reversible exclusive-charge observer and pinned pre-byte comparison are now
+retained as diagnostics. Both complete reports reconcile without overflow; small
+final-total variability also occurs with the observer off. Pre-byte startup
+passes near 311414 while the current candidate remains Resource. Most lost
+allowance (about 26872 cells) occurs before capture; graph work adds only 570.
+A baseline earlier-phase ledger is retained, with the current-side counterpart
+still required before a paid-work simplification is selected. Temporary source
+hooks were restored and removed; no product profiler, cap or guard change is
+part of this checkpoint.
