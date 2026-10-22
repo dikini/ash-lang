@@ -499,3 +499,20 @@ fn checked_byte_window_selective_nonanchor_preflights_preserve_import_and_reexpo
             .expect("a body-free selected non-anchor reexport keeps exact checking facts without adding other global names");
     }
 }
+
+#[test]
+fn checked_byte_window_selective_facade_does_not_publish_dependency_names() {
+    let facade = "pub import @builtin.foreign (checked_copy_nul as selected)\n";
+    let entry = "import producer (selected as forwarded)\nmain : Unit -> Int\nmain () = 42\n";
+    check_graph(&graph_with_entry(facade, Some(entry))).unwrap();
+    for name in ["Call", "Returned", "NativeHost", "checked_byte_read"] {
+        let entry =
+            format!("import producer ({name} as hidden)\nmain : Unit -> Int\nmain () = 42\n");
+        let error = resolve_entry(&graph_with_entry(facade, Some(&entry)), true)
+            .expect_err("checking-only dependencies must not create facade names");
+        assert!(
+            matches!(error, ResolveModuleError::Resolution(ref diagnostic) if diagnostic.reason == ResolveReason::UnavailableExport),
+            "{error:?}"
+        );
+    }
+}

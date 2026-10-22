@@ -631,3 +631,136 @@ fn checked_memory_owned_projection_authenticates_before_publication_and_refuses_
     view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
         .unwrap();
 }
+
+fn selective_checked_summary() -> ExportSummary {
+    let graph = graph("pub import @builtin.foreign (checked_copy_nul as selected)\n");
+    let resolved = resolve_entry(&graph).unwrap();
+    crate::elaborate::check_module(resolved)
+        .unwrap()
+        .into_exports()
+}
+
+fn authenticate_selective(
+    summary: &ExportSummary,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    summary.authenticate(
+        work,
+        &mut crate::interface::InterfaceConstraintBudget::default(),
+    )
+}
+
+#[test]
+fn checked_memory_selective_summary_keeps_private_codec_dependencies_and_limits() {
+    let summary = selective_checked_summary();
+    let mut measured = TypeWorkBudget::default();
+    authenticate_selective(&summary, &mut measured).unwrap();
+    assert_eq!(summary.term_order, ["selected"]);
+    assert!(summary.nominal_order.is_empty());
+    assert!(summary.constructor_order.is_empty());
+    assert!(summary.effect_names.is_empty());
+    let original = summary.terms["selected"].scalar_preflight.as_ref().unwrap();
+    assert_eq!(original.function().local(), 14);
+    for (id, coordinates, family) in original.codec_nominal_dependencies() {
+        let fact = summary.nominal_fact(id).unwrap();
+        assert_eq!(!fact.constructors.is_empty(), family);
+        assert_eq!(fact.parameter_count, coordinates.formals().len());
+        assert_eq!(fact.constructor_count, coordinates.constructors().len());
+    }
+    let cost = measured.used();
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+        exact.charge(prefix).unwrap();
+        authenticate_selective(&summary, &mut exact).unwrap();
+        assert_eq!(exact.used(), prefix + cost);
+        assert_eq!(
+            authenticate_selective(&summary, &mut exact),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        assert_eq!(
+            authenticate_selective(&summary, &mut short),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        let mut fresh = TypeWorkBudget::with_limit(cost);
+        authenticate_selective(&summary, &mut fresh).unwrap();
+        assert_eq!(fresh.used(), cost);
+    }
+}
+
+#[test]
+fn checked_memory_selective_summary_rejects_erased_codec_dependencies() {
+    let mut summary = selective_checked_summary();
+    authenticate_selective(&summary, &mut TypeWorkBudget::default()).unwrap();
+    let original = Arc::clone(summary.terms["selected"].scalar_preflight.as_ref().unwrap());
+    let call = NominalTypeId::new(original.module(), 1);
+    let nominal = summary.hidden_nominals.remove(&call).unwrap();
+    let position = summary
+        .hidden_nominal_order
+        .iter()
+        .position(|id| *id == call)
+        .unwrap();
+    summary.hidden_nominal_order.remove(position);
+    assert_eq!(
+        authenticate_selective(&summary, &mut TypeWorkBudget::default()),
+        Err(ResolvedBuildFailure::InvalidState)
+    );
+    summary.hidden_nominals.insert(call, nominal);
+    summary.hidden_nominal_order.insert(position, call);
+    authenticate_selective(&summary, &mut TypeWorkBudget::default()).unwrap();
+
+    // Remove the dense tail and lower both claimed counts. Present constructor
+    // originals alone cannot certify that the entire canonical family remains.
+    let tail = ConstructorId::new(call, 1);
+    let constructor = summary.hidden_constructors.remove(&tail).unwrap();
+    let position = summary
+        .hidden_constructor_order
+        .iter()
+        .position(|id| *id == tail)
+        .unwrap();
+    summary.hidden_constructor_order.remove(position);
+    let nominal = summary.hidden_nominals.get_mut(&call).unwrap();
+    assert_eq!(nominal.constructor_count, 2);
+    assert_eq!(
+        nominal.constructors.as_ref(),
+        &[ConstructorId::new(call, 0), tail]
+    );
+    nominal.constructors = vec![ConstructorId::new(call, 0)].into_boxed_slice();
+    nominal.constructor_count = 1;
+    assert_eq!(
+        authenticate_selective(&summary, &mut TypeWorkBudget::default()),
+        Err(ResolvedBuildFailure::InvalidState)
+    );
+    let nominal = summary.hidden_nominals.get_mut(&call).unwrap();
+    nominal.constructor_count = 2;
+    nominal.constructors = vec![ConstructorId::new(call, 0), tail].into_boxed_slice();
+    summary.hidden_constructors.insert(tail, constructor);
+    summary.hidden_constructor_order.insert(position, tail);
+    authenticate_selective(&summary, &mut TypeWorkBudget::default()).unwrap();
+
+    let host = original.codec_host_dependency().unwrap();
+    let position = summary.effect_positions.remove(&host).unwrap();
+    let effect = summary.effects.remove(position);
+    for index in summary.effect_positions.values_mut() {
+        if *index > position {
+            *index -= 1;
+        }
+    }
+    assert_eq!(
+        authenticate_selective(&summary, &mut TypeWorkBudget::default()),
+        Err(ResolvedBuildFailure::InvalidState)
+    );
+    summary.effects.insert(position, effect);
+    for index in summary.effect_positions.values_mut() {
+        if *index >= position {
+            *index += 1;
+        }
+    }
+    summary.effect_positions.insert(host, position);
+    authenticate_selective(&summary, &mut TypeWorkBudget::default()).unwrap();
+    assert!(Arc::ptr_eq(
+        &original,
+        summary.terms["selected"].scalar_preflight.as_ref().unwrap()
+    ));
+}

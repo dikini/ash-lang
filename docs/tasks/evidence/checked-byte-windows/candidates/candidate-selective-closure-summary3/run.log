@@ -1,0 +1,11 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 08s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 2 tests
+test resolved::checked_codec_category_tests::checked_memory_selective_summary_rejects_erased_codec_dependencies ... ok
+test resolved::checked_codec_category_tests::checked_memory_selective_summary_keeps_private_codec_dependencies_and_limits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2116 filtered out; finished in 0.03s
+

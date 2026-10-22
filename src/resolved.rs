@@ -11921,6 +11921,47 @@ impl ExportSummary {
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                     fact.authenticate_original(type_work)
                         .map_err(scalar_preflight_failure)?;
+                    // Exact codec checking dependencies must survive facades,
+                    // even when their source names were never selected.
+                    for (id, coordinates, constructor_family) in fact.codec_nominal_dependencies() {
+                        type_work
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        let dependency = self
+                            .nominal_fact(id)
+                            .ok_or(ResolvedBuildFailure::InvalidState)?;
+                        if dependency.parameter_count != coordinates.formals().len()
+                            || dependency.constructor_count != coordinates.constructors().len()
+                        {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                        if constructor_family {
+                            type_work
+                                .charge(dependency.constructors.len())
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                            if dependency.constructors.len() != dependency.constructor_count
+                                || dependency.constructors.iter().enumerate().any(
+                                    |(ordinal, member)| {
+                                        usize::try_from(member.constructor()) != Ok(ordinal)
+                                            || member.owner() != id
+                                            || self.constructor_by_id(*member).is_none()
+                                    },
+                                )
+                            {
+                                return Err(ResolvedBuildFailure::InvalidState);
+                            }
+                        } else if !dependency.constructors.is_empty() {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    }
+                    if let Some(host) = fact.codec_host_dependency() {
+                        type_work
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        if self.effect_by_id(host).is_none() {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    }
                     if fact.function() != global.binder
                         || !fact.matches_parameters(&global.scheme.type_parameters)
                         || !global.scheme.requirements.is_empty()
@@ -13138,6 +13179,7 @@ impl ExportSummary {
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         // Stage only actual codec dependencies during the existing global pass.
         let mut preflight_constructor_owners = Vec::new();
+        let mut preflight_nominal_roots = Vec::new();
         type_work
             .charge(resolved.export_candidate.term_order.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -13239,9 +13281,23 @@ impl ExportSummary {
                         .and_then(|global| global.scalar_preflight.as_ref())
                 })
                 .map(Arc::clone);
-            let preflight_owner = scalar_preflight
-                .as_ref()
-                .map(|fact| fact.call_codec().ids().call);
+            if let Some(fact) = &scalar_preflight {
+                for (id, _, constructor_family) in fact.codec_nominal_dependencies() {
+                    type_work
+                        .charge(if constructor_family { 2 } else { 1 })
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    preflight_nominal_roots
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    preflight_nominal_roots.push(id);
+                    if constructor_family {
+                        preflight_constructor_owners
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        preflight_constructor_owners.push(id);
+                    }
+                }
+            }
             if summary
                 .terms
                 .insert(
@@ -13264,15 +13320,6 @@ impl ExportSummary {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-            }
-            if let Some(owner) = preflight_owner {
-                type_work
-                    .charge(1)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                preflight_constructor_owners
-                    .try_reserve(1)
-                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                preflight_constructor_owners.push(owner);
             }
             summary.term_order.push(spelling.clone());
         }
@@ -14676,6 +14723,11 @@ impl ExportSummary {
         }
 
         let mut referenced_nominals = HashSet::new();
+        for id in preflight_nominal_roots {
+            retain_nominal_identity(id, &mut referenced_nominals, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        }
+
         for fact in summary.source_resource_facts.values() {
             for ty in [
                 &fact.input.ty,

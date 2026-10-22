@@ -772,3 +772,14 @@ and legacy byte imports/re-exports reach the next case; direct checked-copy NUL
 then fails codec admission both before and after this repair, confirmed against
 exact `a99a9c4c` plus the same test overlay (`cd784d8a`). Preserve that distinction
 and diagnose its actual closure fact; no codec or budget waiver follows.
+
+The selective dependency repair now retains the exact canonical nominal,
+constructor-family and Host checking closure through direct imports and facades,
+without adding public names or other globals. A real coherent Call-constructor
+truncation initially authenticated; expected membership now comes from the
+existing immutable canonical inventory after original authentication. The fresh
+candidate passes 9 connected/source/privacy tests and 7 family/summary controls
+(including 2 summary tests), all at 591 equal inputs `57500e29`. All three startup
+probes still exhaust the unchanged allowance. Next measure exclusive capture
+charges with a reversible bounded diagnostic overlay; do not infer a cost repair
+from successful closure or relax any guard or budget.
