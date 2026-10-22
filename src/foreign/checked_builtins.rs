@@ -532,8 +532,8 @@ pub(crate) fn is_canonical_native_host_declaration(
         && original(&parameter.origin, source, formal))
 }
 
-// Exact Host declaration and canonical formal projection after the caller has
-// authenticated this module/source's complete checked builtin inventory.
+// Host-only declaration and formal projection, combined by callers with the
+// checked inventory proof. Scalar preflights invoke this after their codec proof.
 pub(super) fn host_matches(
     effect: &ResolvedEffectDeclaration,
     registry: &ResolvedRegistry,
