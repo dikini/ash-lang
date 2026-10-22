@@ -166,6 +166,27 @@ impl SourceResourceReportCodec {
     }
 }
 
+// Complete original contract admission owns the pointer ABI/source typing.
+// This narrower checked-finish refinement excludes fallible conversions and
+// duplicate Current operands; eval_flow separately proves each live Enclosing
+// value belongs to this header's exact declared dependency vector.
+fn checked_finish_pointer_operands(
+    symbol: &CheckedForeignSymbol,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ValidationError> {
+    use crate::foreign::source_contract::PreparedOperandSource;
+    let mut current = false;
+    for operand in symbol.symbol().operands() {
+        charge(work, 1)?;
+        match operand.source() {
+            PreparedOperandSource::Current(_) if !current => current = true,
+            PreparedOperandSource::Enclosing(_) => {}
+            _ => return Ok(false),
+        }
+    }
+    Ok(current)
+}
+
 /// A completed header phase, retaining original immutable source authority.
 /// Only lifecycle and final-scope validation can supply execution permission.
 #[derive(Debug)]
@@ -830,7 +851,8 @@ impl CheckedSourceResourceHeader {
             return Err(invalid());
         }
         if checked
-            && (!owner.owner().retained_parameters().is_empty()
+            && ((!owner.owner().retained_parameters().is_empty()
+                && owner.owner().representation() != PreparedAddressRepresentation::Opaque)
                 || !matches!(
                     (owner.owner().representation(), acquire.owner_role()),
                     (
@@ -855,7 +877,7 @@ impl CheckedSourceResourceHeader {
                     teardown.symbol().result(),
                     crate::foreign::source_contract::PreparedAbiResult::Void
                 )
-                || teardown.symbol().operands().len() != 1)
+                || !checked_finish_pointer_operands(&teardown, work)?)
         {
             return Err(invalid());
         }
@@ -3060,11 +3082,13 @@ fn eval_flow<'a>(
                         header.codec.report,
                         SourceResourceReportCodec::CheckedScope { .. }
                     ) {
-                        // This signature has only authenticated Current and a void
-                        // result. It has no fallible scalar/result conversion.
+                        // The signature has one authenticated Current, optional
+                        // declared Enclosing pointers, and a void result. Every
+                        // Enclosing operand was checked above against the exact
+                        // dependency lineage; no scalar/result conversion occurs.
                         // Source arms remain typed/exhaustive; impossible generic
                         // codec alternatives supply no path or finish witness.
-                        if expected.symbol().operands().len() != 1
+                        if !checked_finish_pointer_operands(expected, work)?
                             || !matches!(
                                 expected.symbol().result(),
                                 crate::foreign::source_contract::PreparedAbiResult::Void

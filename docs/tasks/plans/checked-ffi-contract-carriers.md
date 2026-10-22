@@ -870,3 +870,38 @@ global limits. [Original and final evidence](../evidence/effect-row-comparator/R
 retains the genuine baseline red and both failed fixed attempts. Proceed to the
 separate unsigned delivery checkpoint and independent review; preserve PR110
 until this comparator correction is retained. Whole F3/F-core remains pending.
+
+### Declared enclosing checked-owner dependency checkpoint
+
+PR #101 is retained at `c51089c8b6de76384361283f671d1f2dbf3ad58e`, with
+independent actual-head/retained-result review and partial #59 acceptance readback
+confirmed by PM. Its final selected 473 units, compile/link-only receipt control
+and Clippy pass; the three unchanged startup probes fit 327680. This transfers
+only that static byte/window subset, not whole F3 or checked execution permission.
+
+The next checkpoint extends the existing declared enclosing-owner relation to
+checked opaque owners under accepted CP-0024. Reuse the original retained owner
+parameter, complete ordered Type/Row applications, original source/symbol/Host
+facts, header dependency vector and symbolic Enclosing lineage. Private data may
+retain the ordinary parent access handle but not its native State. Group/runtime
+activation, general helper transport and new dependency representations are out
+of scope. Existing ordinary dependency behavior remains a regression gate.
+
+1. Freeze a genuine two-owner checked source and body-free consumer expected
+   positive, with exact C distinct from S and H. Observe its first actual refusal
+   before widening production admission; setup or Resource failure is not evidence
+   of the dependency boundary. Keep the dependency-free canonical source first.
+2. Extend only the evidenced static binding/header/flow restrictions, preserving
+   full original owner/application/liveness facts and fresh independent checking.
+   Checked void finish may use only authenticated Current and declared Enclosing
+   pointer operands; scalar conversions, arbitrary States and helper permission
+   are not implied. Any gap in CP-0024 disposition semantics returns to design.
+3. Require source/summary, opaque body-free import/re-export, linked independent
+   Core and identity/fold, then actual private static-image reconstruction. Add
+   canonical-first wrong C/S/H, swapped full arguments/Rows, missing or donated
+   dependencies, State-in-private-data, stale copied forests and finish-witness
+   negatives, with exact/prefix/short/spent/fresh work controls.
+4. Run root-scoped focused/affected checks on frozen inputs, preserve genuine red
+   evidence, request independent current-head review, and deliver one product PR.
+   No preparation-only PR or runtime/native activation is authorized here. PM
+   schedules the connected F-core full gate; developer runs it when due.

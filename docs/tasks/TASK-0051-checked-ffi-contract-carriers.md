@@ -459,3 +459,21 @@ integration. Independent published-head review and milestone retention remain
 pending. Whole F3, public checked execution/protected activation, and the connected
 F-core gate remain open. The developer owns the next full workspace verification
 when F3/F4/F6 connect to the generated-host path.
+
+PR #101's bounded static byte/window delivery is GitHub-retained at
+`c51089c8b6de76384361283f671d1f2dbf3ad58e` with exact reviewed tree equality;
+[partial #59 acceptance](https://github.com/dikini/ash-lang/issues/59#issuecomment-6351849293)
+is independently read back and PM-confirmed. All whole-F3 boxes remain unchanged.
+The next assigned static slice is the declared enclosing C-to-S owner dependency
+checkpoint in the existing task-owned plan. It begins with a genuine checked
+parent/child source expected-positive discriminator; no new test/build success,
+production dependency admission or runtime permission is claimed yet.
+
+
+The [initial declared dependency checkpoint](evidence/checked-owner-dependencies/initial-connected/README.md)
+records a genuine checked dependent-library InvalidLibrary red after the existing
+canonical control, then a repaired opaque parent/child source/body-free/link/Core
+and identity/fold positive. This is an early candidate, not whole F3 acceptance.
+Hostile H/C/donor/full-vector/private-data controls, private image reconstruction,
+work bounds, affected regressions and independent current-head review remain
+pending. No runtime/native activation or general helper transport is added.

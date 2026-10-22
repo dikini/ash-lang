@@ -630,7 +630,8 @@ pub(crate) fn bind_checked_foreign_symbol(
             charge(work, 1, effect.span)?;
             let symbol = &prepared.symbols()[symbol_index];
             prepared.owners().get(role.application().owner()).is_some_and(|owner| {
-                owner.retained_parameters().is_empty() && match role {
+                (owner.retained_parameters().is_empty()
+                    || owner.representation() == Representation::Opaque) && match role {
                     PreparedOwnerCall::Acquire { initialized_bytes, .. } => matches!(
                         (owner.representation(), initialized_bytes),
                         (Representation::Opaque, None) | (Representation::Bytes, Some(_))

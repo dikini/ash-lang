@@ -1043,3 +1043,6 @@ pub(crate) fn checked_owner_passive_program_for_source(
 }
 #[path = "checked_byte_window_tests.rs"]
 mod checked_byte_window_tests;
+
+#[path = "checked_owner_dependency_tests.rs"]
+mod checked_owner_dependency_tests;

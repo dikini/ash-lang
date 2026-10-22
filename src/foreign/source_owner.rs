@@ -106,9 +106,10 @@ pub(crate) fn bind_foreign_owner(
     )
 }
 
-/// Binds the dependency-free checked owner declaration, retaining its exact
-/// opaque or byte representation. Initialized access remains an operation/phase
-/// obligation; this declaration grants no executable activation.
+/// Binds a checked owner declaration, retaining its exact opaque or byte
+/// representation and original opaque-owner dependency parameters. Initialized
+/// access remains an operation/phase obligation; this declaration grants no
+/// executable activation.
 pub(crate) fn bind_checked_foreign_owner(
     library: NativeLibraryId,
     prepared: Arc<PreparedForeignLibrary>,
@@ -131,7 +132,9 @@ pub(crate) fn bind_checked_foreign_owner(
             .get(selected.host_parameter())
             .map(|p| p.kind())
             != Some(&Kind::Type)
-        || !owner.retained_parameters().is_empty()
+        || (!owner.retained_parameters().is_empty()
+            && owner.representation()
+                != super::source_contract::PreparedAddressRepresentation::Opaque)
         || !matches!(
             owner.representation(),
             super::source_contract::PreparedAddressRepresentation::Opaque
