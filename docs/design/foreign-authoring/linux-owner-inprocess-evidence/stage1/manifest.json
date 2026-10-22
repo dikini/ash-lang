@@ -1,0 +1,95 @@
+{
+  "status": "UNEXECUTED_REPAIRED_STAGE1_REVIEW_ONLY",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 5826,
+      "sha256": "4fd9cedb92eeb59b7a77fa1d62348af4e0a0459ec9c31c469361705594312d5f"
+    },
+    {
+      "path": "compiler-build.monitor.json",
+      "size": 3230,
+      "sha256": "d011fc6be127e51d05937a6bd7e560f22c4a818878fdb4ec587d930a2103883e"
+    },
+    {
+      "path": "default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "experiment-contract.md",
+      "size": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e"
+    },
+    {
+      "path": "historical-first-tuple/README.md",
+      "size": 3340,
+      "sha256": "594b99d1aff4595e189b13b5b04afaa85c9649e102fcdda6432c6514848a89dd"
+    },
+    {
+      "path": "historical-first-tuple/compiler-build.monitor.json",
+      "size": 2980,
+      "sha256": "ed312f0d1c63e35f6d2583093284dac59627b654457895957017dd9753a71622"
+    },
+    {
+      "path": "historical-first-tuple/experiment-contract.md",
+      "size": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e"
+    },
+    {
+      "path": "historical-first-tuple/observe_compiler.py",
+      "size": 1211,
+      "sha256": "67c8f5731fd4d32ec700a4ef784ba2a02777724a504b802216f9943d4f40a685"
+    },
+    {
+      "path": "historical-first-tuple/preflight-inputs.json",
+      "size": 3838,
+      "sha256": "6886c0a22012dfe4aec8cc742b510ec02aa1dc3eaabfc1412e50a60a5ad4ef87"
+    },
+    {
+      "path": "historical-first-tuple/preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e"
+    },
+    {
+      "path": "historical-first-tuple/tuple.json",
+      "size": 3601,
+      "sha256": "85aba3834abf3a8d883dd00041e848f71e4d24869ba681f4c2fc10094f3bcb55"
+    },
+    {
+      "path": "historical-first-tuple/verify_inputs.py",
+      "size": 2976,
+      "sha256": "cd5e835e1fa80554e15a6dfa99f0ffa93d43c4796e7b1a45fe7338a0ecfaa23d"
+    },
+    {
+      "path": "observe_compiler.py",
+      "size": 6039,
+      "sha256": "6474128d18e3fcac780bf73d777859ba102028fe5fbadf87563bd85ade3a34db"
+    },
+    {
+      "path": "preflight-inputs.json",
+      "size": 4270,
+      "sha256": "b24d78fb1ceea0013217fd4b6f99ed5896343330b5b8555c7bcfb7453d1436a6"
+    },
+    {
+      "path": "preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e"
+    },
+    {
+      "path": "preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tuple.json",
+      "size": 6261,
+      "sha256": "fdf23c99b4ba27290ce35b2afd8e49cd0f7b99feb8181f671a6f3191af61e287"
+    },
+    {
+      "path": "verify_inputs.py",
+      "size": 3667,
+      "sha256": "125630d0b56bf1faf455619056ea2c93648109aaf20b236212bff5731aab8dff"
+    }
+  ]
+}

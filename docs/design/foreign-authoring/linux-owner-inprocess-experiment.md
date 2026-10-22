@@ -1,6 +1,7 @@
 # Proposed bounded owner/resource in-process packaging experiment
 
-Status: proposed contract amendment for review. Preparation is authorized; this
+Status: proposed map-budget amendment for review. Prior build assignments remain
+historical; this amendment does not assign another command. Preparation is authorized; this
 text authorizes no build, candidate execution, provisioning, product change or
 architecture acceptance. The lead must separately assign each gate below.
 
@@ -92,7 +93,8 @@ production; it is an experiment artifact, not a new supported build mode.
 | Independent experiment approval | 64 KiB |
 | Closure manifest | 4096 records, 4 MiB encoded total |
 | ELF program headers | 64 |
-| Retained raw build log and link map | 16 MiB each; compact extracts in repository |
+| Command output and each raw build log | 16 MiB each |
+| Produced and retained complete link map | 64 MiB; map only, prospective amendment below |
 | Build/relink diagnostic window | 20 minutes per assigned command, one build job |
 | Optional later execution | 30-second child deadline, 16 KiB combined output |
 | Baseline native allocation | One requested 8-byte malloc; not a native-memory quota |
@@ -115,14 +117,21 @@ lifecycle-postattempt-syntax-corrected-red.log (1,479,865), and
 lifecycle-public-codec-semantic-controls.log (1,515,703 bytes). Full paths and
 size/hash records for all eight, and all other blobs, remain in the complete
 2784-entry producer manifest (96,452,672 file-content bytes). No old snapshot
-blob is silently excluded from the prospective category. Their exact full
-hashes/sizes remain assigned producer inputs. This prospective clarification must be reviewed and retained before assigning that build.
+blob was excluded from that clarified category. Their exact full hashes/sizes
+remained assigned producer inputs. PR100 retained this source-category
+clarification at 2ac8c393846715249de5a475a65e47bf1309bb54 before Stage1 was assigned.
 
 Tool executables and ordinary build intermediates are separate from the final
 candidate. Stream tool/input hashing against frozen expected sizes and hashes;
-do not apply the 128 MiB final-image limit to tools/intermediates. The observed
-cached compiler is 589,362,808 bytes and is not approved for reuse. Keep all
-experiment text, manifest, receipt, log/map and final-image bounds unchanged.
+do not apply the 128 MiB final-image limit to tools/intermediates. The pre-Stage1
+cache observation was 589,362,808 bytes and was not approved for reuse at that
+time. The separately assigned selected-source Stage1 build later produced a
+589,364,584-byte compiler, SHA-256
+`5dca1b624bf206c44c6c4d3037675193800516eb936a0cf6420e67394e998d3e`;
+its [historical correspondence record](linux-owner-inprocess-evidence/README.md#actual-assigned-results)
+does not identify the current contents of a shared cache after later builds. The map-only amendment below replaces the earlier 16 MiB map category. All
+experiment text, manifest, receipt, output/log and final-image bounds otherwise
+remain unchanged.
 Sampled storage monitoring is not a quota or a zero-overshoot guarantee.
 
 These are experiment record/tool bounds, not promises of host memory/CPU
@@ -131,6 +140,46 @@ segments without candidate execution: ELF64 little-endian x86-64 ET_EXEC, no
 PT_INTERP/PT_DYNAMIC or unsupported dependency metadata. Structural static
 format does not prove absence of runtime loading. Retain exact size/hash and
 compact LOAD/header evidence, whole-map hash and omission qualifications.
+
+## Prospective map-only budget amendment
+
+The [actual packaging record](linux-owner-inprocess-evidence/README.md) retains
+successful selected-source compiler production and ordinary owner-host generation,
+followed by two root-static relink refusals under the earlier 16 MiB map limit.
+The first observed map reached 17,346,560 bytes; after suppressing discarded-section
+map diagnostics, the second reached 17,674,240 bytes. Each retained prefix is
+exactly 16,777,216 bytes. Both maps may be incomplete: neither has a full-map hash,
+verified static candidate, passive ELF inspection or successful packaging receipt.
+The diagnostic option removed the discarded-section listing, but the remaining
+active map still exceeded the old cap. Neither attempt is reclassified as a pass.
+
+Prospectively allow at most 67,108,864 bytes (64 MiB) for the complete produced
+and retained linker map. This finite operational tool-artifact allowance gives
+the active GNU/BFD map room for one separately assigned comparison; it predicts
+neither fit nor link success. Command output and every build/native log retain
+their separate 16,777,216-byte (16 MiB) caps. All other limits, fixed source/native
+inputs, semantic flags, diagnostic suppression and success/refusal gates remain
+unchanged. Retain and hash the entire new map within its limit; require recognized
+GNU/BFD framing, nonempty LOAD records and explicit pinned libc.a association.
+Missing temporary objects remain declared producer/build-trust limits. A partial
+old prefix cannot substitute for a complete new map or establish native closure.
+
+The executed monitor has one shared watched-sidefile limit; it cannot express
+map 64 MiB and log 16 MiB separately. This amendment does not change that code.
+Before any next assignment, independently review a concrete monitor/collector
+configuration that distinguishes the actual map from every log, observes each
+file class and its recorded peak, refuses the corresponding limit, and bounds
+retained reads. Raising the generic watched-file cap to 64 MiB is insufficient.
+Sampling permits overshoot and may miss changes between samples; it is not hard
+storage containment or a quota. Do not claim an unobserved kernel peak.
+
+Retain this amendment and bind its accepted retaining commit and exact contract
+hash into a fresh reviewed tuple before assigning another command. Preserve the
+earlier contract hash and both failed tuples, receipts, prefixes and observed
+sizes. New command/monitor bytes, source/tool/generated-input checks and sole
+Cargo ownership still require separate review and exact root assignment. No
+relink, tool inspection, native startup, provisioning, ownerful architecture or
+checked-runtime permission follows from this record-budget change.
 
 ## Trust, owner groups and shutdown
 
@@ -222,13 +271,16 @@ experimental; retain no prototype loader/runtime on the product path.
 
 ## Delivery and later decision
 
-The smallest issue #58 PR adds this proposed contract and one informative link
-from the existing Linux experiment. Before: accepted AD-0015 owner-free scalar
-scope plus isolated prerequisite failure. After: the same accepted authority,
-with an independently reviewable owner/resource experiment question and explicit
-future gates. No F2 whole checkbox, architecture scope or execution permission
-changes. Reviewer checks authority links, exact input correspondence, supported
-source/contracts, finite bounds, gate separation, contrary outcomes and disposal.
+The initial issue #58 delivery retained the owner/resource contract and an
+informative Linux-experiment link, followed by PR100's build-monitor preparation
+and source-category clarification. The current delivery retains actual Stage1
+compiler and Stage2 ordinary-generation evidence, both Stage3 map-limit refusals,
+and the prospective map-only budget amendment. It changes no F2 whole checkbox,
+architecture scope or execution permission. Reviewer checks original record
+preservation, authority links, exact input correspondence, finite class-specific
+bounds, separate command assignment, contrary outcomes and disposal. A later
+retry requires retained amendment bytes and a separately reviewed exact tuple;
+this document does not assign it.
 
 After separately assigned evidence, a later reviewed decision may select an
 owner/resource in-process architecture and its residual trust/deployment

@@ -1,0 +1,63 @@
+{
+  "project": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0",
+  "package_name": "ash-host-6-0",
+  "files": [
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.lock",
+      "size": 10121,
+      "sha256": "c1eb4441f3a039e3757d67e9f05012c4b1f199d3c90ea1f7694e6f0086a9590e",
+      "device": 47,
+      "inode": 40597
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+      "size": 246,
+      "sha256": "686ad5d17be305bcc228093d089868de78e43a468a985129c92b5e04a14a2902",
+      "device": 47,
+      "inode": 40595
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/native-build.log",
+      "size": 1156,
+      "sha256": "232dc2ed1ea1a11723b1e25df8eb6604184abe35e0a957ef125be539455c30c8",
+      "device": 47,
+      "inode": 40598
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/rust-toolchain.toml",
+      "size": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "device": 47,
+      "inode": 40596
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301",
+      "device": 47,
+      "inode": 40594
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd",
+      "device": 47,
+      "inode": 40592
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+      "size": 17310,
+      "sha256": "4fff8df2dfb0ac63ec78179b74bba872f3e1b317a2c86dc46659e5bd6485df26",
+      "device": 47,
+      "inode": 40593
+    }
+  ],
+  "ordinary_host": {
+    "path": "/tmp/ash-owner-generation-stage2/experiment/ordinary-host",
+    "size": 475650552,
+    "sha256": "d5799c76fbf3be8b06a473906b4e73ce82b1fdf90db4a1b1923d958816fe0a61",
+    "device": 47,
+    "inode": 40782
+  },
+  "ordinary_host_is_not_final_static_image": true
+}

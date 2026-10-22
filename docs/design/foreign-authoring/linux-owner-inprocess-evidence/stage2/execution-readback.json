@@ -1,0 +1,116 @@
+{
+  "status": "Stage2_complete_stop",
+  "external_anchors_equal": true,
+  "anchors": {
+    "/tmp/ash-owner-generation-stage2/tuple.json": "ce4a317bc78cdc6d4397f2e771b446d237e9e4d427ad4b60a0230dc7459568fb",
+    "/tmp/ash-owner-generation-stage2/generation.monitor.json": "0cfbb235c796ce7f517e884da9e3732686f1ec5f757851edbc398a2ddf77eb8a",
+    "/tmp/ash-owner-generation-stage2/manifest.json": "b217c2773092cc6cf87b6a608e1909eff62683e0ed833088c4bbd676e7daab53",
+    "/tmp/ash-owner-generation-stage2/verify_inputs.py": "a78992538278b49679161bc1a3eef35f6590db3eb98b74fe1d16e7d90c6971ec",
+    "/tmp/ash-owner-generation-stage2/collect_generated.py": "bccd35f02fc6e06091449365479eb413d664438acf2e587fa5e4af9805f80ff3",
+    "/tmp/ash-owner-generation-stage2/preflight-inputs.json": "d40b7c59a705733807e5254629262fbf928e21391316dd826040ddbe4e5e8bab",
+    "/tmp/ash-owner-build-monitor/build_monitor.py": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+    "/usr/bin/python3.14": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/ash": "5dca1b624bf206c44c6c4d3037675193800516eb936a0cf6420e67394e998d3e"
+  },
+  "steps": [
+    {
+      "name": "before-generation",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-generation-stage2/verify_inputs.py",
+        "before-generation"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "pid": 4,
+      "started_unix": 1792655090.4896133,
+      "stdout": "/tmp/ash-owner-generation-stage2/snapshot-before.json",
+      "stderr": "/tmp/ash-owner-generation-stage2/snapshot-before.json.stderr",
+      "exit": 0,
+      "finished_unix": 1792655092.5142763,
+      "stdout_sha256": "fb87fc5276acc0d99e9a436a1c443f8de3d6382435fa4ad8c3a3a8445ffdc41a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "generation",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-build-monitor/build_monitor.py",
+        "/tmp/ash-owner-generation-stage2/generation.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "pid": 5,
+      "started_unix": 1792655092.516202,
+      "stdout": "/tmp/ash-owner-generation-stage2/monitor-response.json",
+      "stderr": "/tmp/ash-owner-generation-stage2/monitor-response.json.stderr",
+      "exit": 0,
+      "finished_unix": 1792655264.5291603,
+      "stdout_sha256": "95a30e133f30cae2644086fc56300e1f284ac5a60b738532cb183e5fea699ee2",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7/receipt.json",
+      "receipt_sha256": "0ae04f338662d973fd0461cd16e8c591b2cd55347746d757f28ad4328a00de1d"
+    },
+    {
+      "name": "after-generation",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-generation-stage2/verify_inputs.py",
+        "after-generation"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "pid": 464,
+      "started_unix": 1792655264.5318625,
+      "stdout": "/tmp/ash-owner-generation-stage2/snapshot-after.json",
+      "stderr": "/tmp/ash-owner-generation-stage2/snapshot-after.json.stderr",
+      "exit": 0,
+      "finished_unix": 1792655266.1717415,
+      "stdout_sha256": "d3099a53df6e808527e8d5d0b117ac9d41307d185868b23a46c5e07924f33199",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "collect-only-after-success",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-generation-stage2/collect_generated.py",
+        "/tmp/ash-owner-generation-stage2/monitor-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "pid": 465,
+      "started_unix": 1792655266.1733348,
+      "stdout": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "stderr": "/tmp/ash-owner-generation-stage2/generation-receipt.json.stderr",
+      "exit": 0,
+      "finished_unix": 1792655267.269943,
+      "stdout_sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "scope": "Stage2 public generation/ordinary link only; no static relink/ELF inspection/native image startup"
+}

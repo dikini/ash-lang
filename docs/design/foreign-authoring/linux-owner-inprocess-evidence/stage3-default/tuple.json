@@ -1,0 +1,221 @@
+{
+  "status": "EXACT_REVIEW_ONLY_NO_RELINK_INSPECTION_OR_STARTUP_ASSIGNED",
+  "contract_commit": "2ac8c393846715249de5a475a65e47bf1309bb54",
+  "contract_sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+  "selected_source_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "stage2_generation_receipt": {
+    "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+    "resolved": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+    "size": 2809,
+    "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+  },
+  "stage2_generated_manifest": {
+    "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+    "resolved": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+    "size": 2248,
+    "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+  },
+  "historical_cli": {
+    "record": {
+      "path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "size": 3442,
+      "sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48"
+    },
+    "used_by_stage3": false,
+    "note": "CLI5dca produced stored Stage2 inputs; current mutable cache/debug/ash is neither required nor frozen."
+  },
+  "interpreter": {
+    "path": "/usr/bin/python3.14",
+    "resolved": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "monitor": {
+    "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "resolved": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "size": 18877,
+    "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60"
+  },
+  "relink_config": {
+    "path": "/tmp/ash-owner-static-stage3/relink.monitor.json",
+    "resolved": "/tmp/ash-owner-static-stage3/relink.monitor.json",
+    "size": 4866,
+    "sha256": "bc9320329a83fde0da2d3f97541abfe90f21d743de297ded6768ee9bc0f5fa52"
+  },
+  "inspection_config": {
+    "path": "/tmp/ash-owner-static-stage3/inspection.monitor.json",
+    "resolved": "/tmp/ash-owner-static-stage3/inspection.monitor.json",
+    "size": 1212,
+    "sha256": "71ed1d742b6532c8b927b3bf9241e462a5ba0df47890509f160e24ae42e3003e"
+  },
+  "preflight": {
+    "path": "/tmp/ash-owner-static-stage3/preflight-inputs.json",
+    "resolved": "/tmp/ash-owner-static-stage3/preflight-inputs.json",
+    "size": 13218,
+    "sha256": "64999ca545da6932896108bec0efdb07c5c77e58decdb23ce993a3a82a8cede3"
+  },
+  "verifier": {
+    "path": "/tmp/ash-owner-static-stage3/verify_inputs.py",
+    "resolved": "/tmp/ash-owner-static-stage3/verify_inputs.py",
+    "size": 3991,
+    "sha256": "cf3611d7238b81e2c77cc3dbe9faffdd319f15fac66ddd5ae5b2f6e13dd3058f"
+  },
+  "outer_environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "working_directory": "/tmp/ash-owner-static-stage3",
+  "sequence": [
+    {
+      "phase": "before",
+      "name": "before-relink",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-static-stage3/verify_inputs.py",
+        "before-relink"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/tmp/ash-owner-static-stage3/snapshot-before.json",
+      "retain_stderr": "/tmp/ash-owner-static-stage3/snapshot-before.json.stderr"
+    },
+    {
+      "phase": "relink",
+      "name": "static-relink",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-build-monitor/build_monitor.py",
+        "/tmp/ash-owner-static-stage3/relink.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/tmp/ash-owner-static-stage3/relink-response.json",
+      "retain_stderr": "/tmp/ash-owner-static-stage3/relink-response.json.stderr"
+    },
+    {
+      "phase": "after",
+      "name": "after-relink",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-static-stage3/verify_inputs.py",
+        "after-relink"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/tmp/ash-owner-static-stage3/snapshot-after.json",
+      "retain_stderr": "/tmp/ash-owner-static-stage3/snapshot-after.json.stderr"
+    },
+    {
+      "phase": "passive-inspection",
+      "name": "prepare-candidate",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-static-stage3/prepare_candidate.py",
+        "/tmp/ash-owner-static-stage3/relink-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/tmp/ash-owner-static-stage3/candidate-record.json",
+      "retain_stderr": "/tmp/ash-owner-static-stage3/candidate-record.json.stderr"
+    },
+    {
+      "phase": "passive-inspection",
+      "name": "readelf-metadata",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-build-monitor/build_monitor.py",
+        "/tmp/ash-owner-static-stage3/inspection.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/tmp/ash-owner-static-stage3/inspection-response.json",
+      "retain_stderr": "/tmp/ash-owner-static-stage3/inspection-response.json.stderr"
+    },
+    {
+      "phase": "passive-inspection",
+      "name": "finalize-static-receipt",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-static-stage3/finalize_static.py",
+        "/tmp/ash-owner-static-stage3/candidate-record.json",
+        "/tmp/ash-owner-static-stage3/inspection-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "retain_stdout": "/tmp/ash-owner-static-stage3/static-receipt.json",
+      "retain_stderr": "/tmp/ash-owner-static-stage3/static-receipt.json.stderr"
+    }
+  ],
+  "operator_anchor": "Verify external reviewed tuple/manifest/verifier/collector/config/monitor/interpreter hashes before launching trusted subprocesses with exact env. No file self-approval. Sole shared-cache slot must be assigned; no concurrent Cargo.",
+  "success": "Every step0, bothmonitors exit/child0/allreaped/no pending/escape/truncation/limits, full source/generated/tool before-after equal, fresh actual root Cargo artifact, static candidate<=128MiB/ELF64LE/x86-64ET_EXEC/PH<=64/noINTERP/DYNAMIC/unsupporteddependency metadata. Unknown format or any failure stops without fallback/retry/widening.",
+  "limits": {
+    "command_seconds": 1200,
+    "each_output_retention_bytes": 16777216,
+    "each_map_or_build_log_bytes": 16777216,
+    "final_candidate_bytes": 134217728,
+    "ELF_program_headers": 64,
+    "text_record_bytes": 1048576,
+    "manifest_records": 4096,
+    "manifest_bytes": 4194304,
+    "receipt_bytes": 262144
+  },
+  "stop": "Packaging/inspection only. No owner/native/image execution, memfd startup, approval/store/context provisioning, architecture acceptance or host-policy change.",
+  "candidate_collector": {
+    "path": "/tmp/ash-owner-static-stage3/prepare_candidate.py",
+    "resolved": "/tmp/ash-owner-static-stage3/prepare_candidate.py",
+    "size": 5531,
+    "sha256": "1ccf56f3c771dda6cdf59d41350bc59f417e60f2d6318d1458c556f2e20c58d7"
+  },
+  "receipt_collector": {
+    "path": "/tmp/ash-owner-static-stage3/finalize_static.py",
+    "resolved": "/tmp/ash-owner-static-stage3/finalize_static.py",
+    "size": 6628,
+    "sha256": "9b18c5e65126cebb3a47cca6ecc7177f3ef3fb835c204caea00a33d749d1389c"
+  },
+  "explicit_passive_readelf_child_argv": [
+    "/usr/bin/x86_64-linux-gnu-readelf",
+    "-W",
+    "-h",
+    "-l",
+    "-d",
+    "/tmp/ash-owner-static-stage3/static-host"
+  ]
+}

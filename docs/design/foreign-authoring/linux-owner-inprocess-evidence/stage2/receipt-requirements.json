@@ -1,0 +1,51 @@
+{
+  "status": "REQUIRED_POST_GENERATION_OBSERVATIONS_NOT_YET_EXISTENT",
+  "preparation": {
+    "source_archive_and_all_2784_files": "Recheck full exact path/size/SHA/Git/modes before and after, using reviewed Stage1 verifier under its exact outer environment.177 content census remains separate.",
+    "compiler": "Stage1 admitted actual byte pin/source/fingerprint artifacts, checked before and after generation, including exact compiler/runtime debug profile and selected CARGO_MANIFEST_DIR.",
+    "native_and_tools": "Verify all previously frozen native archives/headers/tool/config/linker pins plus PATH cargo lookup; no new flags/downloads.",
+    "no_old_outputs": "Exact private experiment owner/entry only initially; no ordinary-host or .ash-build project existed at staging."
+  },
+  "monitor": {
+    "deadline_seconds": 1200,
+    "combined_output_retention_bytes": 16777216,
+    "sampled_native_build_log_bytes": 16777216,
+    "all_children_reaped_required": true,
+    "no_pending_or_escaped_group_success": true,
+    "overshoot_not_quota": true,
+    "artifact_files_empty_reason": "Ordinary host/compiler/intermediate output is not the128MiB selected final static image; stream post-build sizes/hashes separately."
+  },
+  "generated_project": {
+    "discovery": "After successful public ash build, require exactly one new project under this private experiment/.ash-build, record exact observed directory/package/bin identity. Never prefill PID-derived project name.",
+    "retain_full_size_and_hash": [
+      "src/main.rs",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain.toml",
+      "src/program-image.bin",
+      "src/expected-facts.bin",
+      "native-build.log"
+    ],
+    "text_bound_bytes": 1048576,
+    "binary_payloads": "program-image.bin/expected-facts.bin are private binary records, not ordinary source text. Record exact sizes/hashes, image/fact/runtime versions and closure associations; do not silently apply text-record bound or treat them as operator approval. Enforce manifest4096/4MiB and prospective receipt256KiB; any otherwise unbounded needed payload retention must be reviewed before collecting/repository publication.",
+    "cargo_manifest": "Dependency ash.path must equal exact selected source root; features/profile/panic/assertions/toolchain/lock correspond to selected compiler; preserve Cargo.lock before+after generated root resolution."
+  },
+  "ordinary_host": {
+    "path": "/tmp/ash-owner-generation-stage2/experiment/ordinary-host",
+    "observe": "Record actual full size/SHA from regular output; published only after generated Cargo root cleanup succeeds. Never execute or classify as final static candidate.",
+    "generated_root_cleanup": "Selected host.rs/artifacts.rs clean only generated root package from shared target after copying; project source/private payloads/logs remain. Cleanup failure means refusal/no published success."
+  },
+  "producer_receipt": {
+    "maximum_bytes": 262144,
+    "must_bind": [
+      "retained experiment contract/authority and purpose",
+      "selected compiler/source/tool/native/ABI/runtime versions and source assumptions",
+      "source-owner exact adapted malloc/free names and generated bridge operation mapping",
+      "actual generated Cargo project/name/source/private image/expected-facts and native linker inputs",
+      "actual monitor exit/reaping/log-limit outcomes and source/config before/after hashes",
+      "ordinary host full hash/size and explicit nonfinal/nonapproved status",
+      "remaining ownerful architecture/admission/host-loss/group/shutdown premises and no startup permission"
+    ]
+  },
+  "stop": "Retain generation evidence; freeze exact observed generated root/package/inputs before separately assigned static relink. No trace, foreign/native metadata query or candidate startup."
+}

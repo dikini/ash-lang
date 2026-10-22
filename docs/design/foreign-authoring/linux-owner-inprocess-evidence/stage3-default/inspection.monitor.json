@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "/usr/bin/x86_64-linux-gnu-readelf",
+    "-W",
+    "-h",
+    "-l",
+    "-d",
+    "/tmp/ash-owner-static-stage3/static-host"
+  ],
+  "executable_pin": {
+    "size": 818312,
+    "sha256": "c857339616bbbfa5eba32733e22365048903fbaf6ed2126b897dd138bcb741fc"
+  },
+  "cwd": "/tmp/ash-owner-static-stage3",
+  "output_parent": "/tmp/ash-owner-static-stage3",
+  "watch_root": "/tmp/ash-owner-static-stage3",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "input_files": [
+    {
+      "path": "/tmp/ash-owner-static-stage3/verify_inputs.py",
+      "size": 3991,
+      "sha256": "cf3611d7238b81e2c77cc3dbe9faffdd319f15fac66ddd5ae5b2f6e13dd3058f"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/prepare_candidate.py",
+      "size": 5531,
+      "sha256": "1ccf56f3c771dda6cdf59d41350bc59f417e60f2d6318d1458c556f2e20c58d7"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3/finalize_static.py",
+      "size": 6628,
+      "sha256": "9b18c5e65126cebb3a47cca6ecc7177f3ef3fb835c204caea00a33d749d1389c"
+    }
+  ],
+  "artifact_files": [
+    "/tmp/ash-owner-static-stage3/static-host"
+  ]
+}
