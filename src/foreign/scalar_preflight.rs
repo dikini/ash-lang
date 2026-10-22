@@ -840,4 +840,53 @@ pub(crate) fn authenticate_registry_families(
     Ok(())
 }
 
+/// Pointwise admission for an owned, possibly selective projection. Unlike the
+/// complete-table entry, this does not certify anchor/family continuity. Each
+/// literal codec allocation receives its own fresh proof in this target.
+pub(crate) fn admit_projected_preflights(
+    registry: ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<ResolvedRegistry, ForeignAdmissionError> {
+    let mut proved = Vec::<&Arc<CheckedForeignCallCodec>>::new();
+    for (function, fact) in registry.scalar_preflights() {
+        charge(work, 1, fact.source)?;
+        if function != fact.function() {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidSignature,
+                fact.source,
+            ));
+        }
+        fact.authenticate_original(work)?;
+        let scan = proved
+            .len()
+            .checked_mul(3)
+            .ok_or_else(|| failure(ForeignAdmissionReason::WorkExhausted, fact.source))?;
+        charge(work, scan, fact.source)?;
+        let fresh = !proved.iter().any(|codec| {
+            codec.module() == fact.module()
+                && codec.source() == fact.source
+                && Arc::ptr_eq(codec, fact.call_codec())
+        });
+        if fresh {
+            CheckedForeignCallCodec::authenticate(
+                fact.module(),
+                fact.source,
+                fact.call_codec.ids(),
+                &registry,
+                work,
+            )?;
+        }
+        fact.authenticate_registry_projection(&registry, work)?;
+        if fresh {
+            charge(work, 1, fact.source)?;
+            proved
+                .try_reserve(1)
+                .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
+            proved.push(fact.call_codec());
+        }
+    }
+    drop(proved);
+    Ok(registry)
+}
+
 mod checked_memory;

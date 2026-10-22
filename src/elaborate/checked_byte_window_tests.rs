@@ -484,3 +484,18 @@ fn checked_byte_window_body_free_facade_core_and_transforms() {
             .unwrap();
     assert_connected_byte_core(&graph);
 }
+
+#[test]
+fn checked_byte_window_selective_nonanchor_preflights_preserve_import_and_reexport() {
+    for name in ["checked_size_t", "byte_read", "checked_copy_nul"] {
+        let direct = format!(
+            "import @builtin.foreign ({name} as selected)\nmain : Unit -> Int\nmain () = 42\n"
+        );
+        check_graph(&graph_with_entry(&direct, None))
+            .expect("a genuine selected non-anchor preflight remains independently checkable");
+        let facade = format!("pub import @builtin.foreign ({name} as selected)\n");
+        let entry = "import producer (selected as forwarded)\nmain : Unit -> Int\nmain () = 42\n";
+        check_graph(&graph_with_entry(&facade, Some(entry)))
+            .expect("a body-free selected non-anchor reexport keeps exact checking facts without adding other global names");
+    }
+}

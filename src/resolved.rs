@@ -21566,6 +21566,41 @@ impl ResolvedRegistry {
         Ok(())
     }
 
+    /// Finish pointwise admission of one owned selective projection. Complete
+    /// anchor/family continuity remains a separate independent table check.
+    /// Failure drops the stage; no unauthenticated mutable interface escapes.
+    pub(crate) fn with_scalar_preflights<'a>(
+        mut self,
+        facts: impl IntoIterator<
+            Item = (
+                BinderId,
+                &'a Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>,
+            ),
+        >,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        for (function, fact) in facts {
+            work.charge(2)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if function != fact.function() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            self.scalar_preflights
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            match self.scalar_preflights.entry(function) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Arc::clone(fact));
+                }
+                std::collections::hash_map::Entry::Occupied(entry)
+                    if Arc::ptr_eq(entry.get(), fact) => {}
+                _ => return Err(ResolvedBuildFailure::InvalidState),
+            }
+        }
+        crate::foreign::scalar_preflight::admit_projected_preflights(self, work)
+            .map_err(scalar_preflight_failure)
+    }
+
     pub(crate) fn authenticate_scalar_preflights(
         &self,
         work: &mut TypeWorkBudget,
@@ -23304,14 +23339,18 @@ impl ResolvedRegistry {
             &self.scalar_preflights,
             budget,
         )?;
-        for global in imported.globals() {
-            budget
-                .charge(1)
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            if let Some(fact) = &global.scalar_preflight {
-                registry.retain_scalar_preflight(Arc::clone(fact), budget)?;
-            }
-        }
+        budget
+            .charge(imported.global_order.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        registry = registry.with_scalar_preflights(
+            imported.globals().filter_map(|global| {
+                global
+                    .scalar_preflight
+                    .as_ref()
+                    .map(|fact| (fact.function(), fact))
+            }),
+            budget,
+        )?;
         retain_native_symbols(&mut registry.native_symbols, &self.native_symbols, budget)?;
         retain_native_symbols(
             &mut registry.native_symbols,

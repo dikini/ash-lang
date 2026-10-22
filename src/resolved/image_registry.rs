@@ -362,6 +362,7 @@ impl ResolvedRegistry {
         // never infer one category from a module's presence in the main view.
         selected.abstract_nominal_names.clear();
         selected.abstract_nominal_kinds.clear();
+        let mut preflights = Vec::new();
         for item in items {
             paid(work.charge(1))?;
             match *item {
@@ -432,13 +433,15 @@ impl ResolvedRegistry {
                     Arc::clone(self.native_symbols.get(&id).ok_or_else(invalid)?),
                     work,
                 )?,
-                Preflight(id) => selected.retain_scalar_preflight(
-                    Arc::clone(self.scalar_preflights.get(&id).ok_or_else(invalid)?),
+                Preflight(id) => push(
+                    &mut preflights,
+                    (id, self.scalar_preflights.get(&id).ok_or_else(invalid)?),
                     work,
                 )?,
                 _ => {}
             }
         }
+        selected = selected.with_scalar_preflights(preflights, work)?;
         if !names.is_empty() {
             return Err(invalid());
         }

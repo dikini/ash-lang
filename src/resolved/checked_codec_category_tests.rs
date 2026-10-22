@@ -453,3 +453,181 @@ fn checked_memory_family_proofs_are_distinct_across_genuine_builtin_graphs() {
     view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
         .unwrap();
 }
+
+#[test]
+fn checked_memory_owned_projection_authenticates_before_publication_and_refuses_collisions() {
+    let view = original_view();
+    view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+        .unwrap();
+    let empty = || {
+        let mut candidate = view.clone();
+        candidate.scalar_preflights.clear();
+        candidate
+    };
+    let mut measured = TypeWorkBudget::default();
+    let admitted = empty()
+        .with_scalar_preflights(view.scalar_preflights(), &mut measured)
+        .expect("the complete genuine projected table authenticates before publication");
+    for (id, fact) in view.scalar_preflights() {
+        assert!(Arc::ptr_eq(admitted.scalar_preflight(id).unwrap(), fact));
+    }
+    let cost = measured.used();
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+        exact.charge(prefix).unwrap();
+        empty()
+            .with_scalar_preflights(view.scalar_preflights(), &mut exact)
+            .unwrap();
+        assert_eq!(exact.used(), prefix + cost);
+        assert!(matches!(
+            empty().with_scalar_preflights(view.scalar_preflights(), &mut exact),
+            Err(ResolvedBuildFailure::TypeResource)
+        ));
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        assert!(matches!(
+            empty().with_scalar_preflights(view.scalar_preflights(), &mut short),
+            Err(ResolvedBuildFailure::TypeResource)
+        ));
+        let mut fresh = TypeWorkBudget::with_limit(cost);
+        empty()
+            .with_scalar_preflights(view.scalar_preflights(), &mut fresh)
+            .unwrap();
+        assert_eq!(fresh.used(), cost);
+    }
+    let (function, fact) = view
+        .scalar_preflights()
+        .find(|(id, _)| id.local() == 14)
+        .unwrap();
+    let repeated = [(function, fact), (function, fact)];
+    let retained = admitted
+        .with_scalar_preflights(repeated, &mut TypeWorkBudget::default())
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        retained.scalar_preflight(function).unwrap(),
+        fact
+    ));
+    let duplicate = crate::foreign::scalar_preflight::CheckedForeignScalarPreflight::from_original(
+        fact.role(),
+        fact.source(),
+        fact.origin(),
+        fact.annotation(),
+        Arc::clone(fact.call_codec()),
+        &mut TypeWorkBudget::default(),
+    )
+    .unwrap();
+    duplicate
+        .authenticate(&view, &mut TypeWorkBudget::default())
+        .unwrap();
+    let duplicate = Arc::new(duplicate);
+    assert!(matches!(
+        view.clone()
+            .with_scalar_preflights([(function, &duplicate)], &mut TypeWorkBudget::default()),
+        Err(ResolvedBuildFailure::InvalidState)
+    ));
+    assert!(matches!(
+        empty().with_scalar_preflights(
+            [(BinderId::resolved(fact.module(), 999), fact)],
+            &mut TypeWorkBudget::default()
+        ),
+        Err(ResolvedBuildFailure::InvalidState)
+    ));
+    for missing in [0, 11] {
+        let partial = || {
+            view.scalar_preflights()
+                .filter(|(id, _)| id.local() != missing)
+        };
+        let mut standalone = empty();
+        for (_, fact) in partial() {
+            standalone
+                .retain_scalar_preflight(Arc::clone(fact), &mut TypeWorkBudget::default())
+                .expect("the existing standalone path permits selective non-anchor facts");
+        }
+        let projected = empty()
+            .with_scalar_preflights(partial(), &mut TypeWorkBudget::default())
+            .expect("pointwise projection does not invent an unselected family anchor");
+        assert!(
+            projected
+                .scalar_preflight(BinderId::resolved(fact.module(), missing))
+                .is_none()
+        );
+        assert_eq!(
+            projected.scalar_preflights().count(),
+            standalone.scalar_preflights().count()
+        );
+        assert_eq!(
+            projected.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+    }
+    let codec = crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
+        fact.module(),
+        fact.source(),
+        fact.call_codec().ids(),
+        &view,
+        &mut TypeWorkBudget::default(),
+    )
+    .unwrap();
+    let reminted = Arc::new(
+        crate::foreign::scalar_preflight::CheckedForeignScalarPreflight::from_original(
+            fact.role(),
+            fact.source(),
+            fact.origin(),
+            fact.annotation(),
+            Arc::new(codec),
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap(),
+    );
+    reminted
+        .authenticate(&view, &mut TypeWorkBudget::default())
+        .unwrap();
+    let mut codec_work = TypeWorkBudget::default();
+    crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
+        fact.module(),
+        fact.source(),
+        fact.call_codec().ids(),
+        &view,
+        &mut codec_work,
+    )
+    .unwrap();
+    let mut distinct_work = TypeWorkBudget::default();
+    let projected = empty()
+        .with_scalar_preflights(
+            view.scalar_preflights()
+                .map(|(id, original)| (id, if id == function { &reminted } else { original })),
+            &mut distinct_work,
+        )
+        .expect("a distinct independently valid codec gets its own pointwise proof");
+    assert!(
+        distinct_work.used() >= cost + codec_work.used(),
+        "a second literal codec allocation must pay its own full proof"
+    );
+    assert_eq!(
+        projected.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
+        Err(ResolvedBuildFailure::InvalidState)
+    );
+    let mut malformed_target = empty();
+    malformed_target
+        .constructors
+        .iter_mut()
+        .find(|constructor| {
+            constructor.id
+                == crate::types::ConstructorId::new(
+                    crate::types::NominalTypeId::new(fact.module(), 12),
+                    2,
+                )
+        })
+        .unwrap()
+        .payload = Some(Type::Int);
+    assert!(matches!(
+        malformed_target
+            .with_scalar_preflights(view.scalar_preflights(), &mut TypeWorkBudget::default()),
+        Err(ResolvedBuildFailure::InvalidState)
+    ));
+    empty()
+        .with_scalar_preflights(view.scalar_preflights(), &mut TypeWorkBudget::default())
+        .unwrap();
+    view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+        .unwrap();
+}

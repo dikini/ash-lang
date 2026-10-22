@@ -1,0 +1,24 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x893f3be: file src/resolved.rs, line 4659.
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 599890)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 599890)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::resolved::scalar_preflight_failure (failure=...) at src/resolved.rs:4659
+4659	    if failure.is_resource_exhaustion() {
+#9  0x000055555adad6be in ash::elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_selective_nonanchor_preflights_preserve_import_and_reexport () at src/elaborate/checked_byte_window_tests.rs:494
+494	        check_graph(&graph_with_entry(&direct, None))
+direct = alloc::string::String {vec: alloc::vec::Vec<u8, alloc::alloc::Global> {buf: alloc::raw_vec::RawVec<u8, alloc::alloc::Global> {inner: alloc::raw_vec::RawVecInner<alloc::alloc::Global> {ptr: core::ptr::unique::Unique<u8> {pointer: core::ptr::non_null::NonNull<u8> {pointer: 0x7ffff0022090}, _marker: core::marker::PhantomData<u8>}, cap: core::num::niche_types::UsizeNoHighBit (142), alloc: alloc::alloc::Global}, _marker: core::marker::PhantomData<u8>}, len: 87}}
+name = "checked_copy_nul"
+iter = core::array::iter::IntoIter<&str, 3> {inner: core::mem::manually_drop::ManuallyDrop<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>; 3]>> {value: core::mem::maybe_dangling::MaybeDangling<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>; 3]>> (core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>; 3]> {alive: core::ops::index_range::IndexRange {start: 3, end: 3}, data: [core::mem::maybe_uninit::MaybeUninit<&str> {uninit: (), value: core::mem::manually_drop::ManuallyDrop<&str> {value: core::mem::maybe_dangling::MaybeDangling<&str> ("checked_size_t")}}, core::mem::maybe_uninit::MaybeUninit<&str> {uninit: (), value: core::mem::manually_drop::ManuallyDrop<&str> {value: core::mem::maybe_dangling::MaybeDangling<&str> ("byte_read")}}, core::mem::maybe_uninit::MaybeUninit<&str> {uninit: (), value: core::mem::manually_drop::ManuallyDrop<&str> {value: core::mem::maybe_dangling::MaybeDangling<&str> ("checked_copy_nul")}}]})}}
