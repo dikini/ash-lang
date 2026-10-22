@@ -35,3 +35,26 @@ unexecuted at this checkpoint; it preserves exact Type IDs/module/formal checks
 and grants no checked runtime or image activation. Source/consumer/Core/
 transform/static-image positives, hostile controls, bounds and regressions stay
 pending. Existing checked execution refusal remains.
+
+The subsequent `candidate-window-demand` run compiled and passed 4/5 at 591
+identical inputs (`da642d50`), raw SHA256
+`aa2c12efa4d9c5fc4fec58d8233d16a305f67cc2a1ae5894fa6a838db1ffc224`.
+Its overlay is against `79c2eeaab8db4304da6791b8582d05298204deee`, with no
+added source files. The exact test artifact is SHA256
+`99bb52ac1b203ddde1d4c0cc5ee4a0bf72d255cd7c3c7d954ef9b1386bfa3e92`.
+The exact Host correspondence in CopyWindow demand and realization did not
+establish a connected source positive.
+
+Pinned front-end GDB probes then identified the first failure before symbolic
+flow: acquire OriginalTemplate effect-registry authentication compared
+CheckedCopyNul binder 14's codec reference against legacy I64 binder 0.
+`preflight-codec-failure.gdb.log` records the rejecting pointer-continuity guard;
+`preflight-codec-values.gdb.log` records the actual facts. Other exploratory
+probes do not establish ordering, kind or flow failures. No native call ran.
+
+The current repair mints one checked codec reference independently of the
+legacy codec, forwards each within its exact family, and retains pointer
+continuity against family anchors 11 and 0. A new control independently
+authenticates a same-shaped reminted fact before requiring family rejection.
+These repair bytes and the new control are unexecuted at this checkpoint;
+the all-four connected positive and all later delivery gates remain pending.

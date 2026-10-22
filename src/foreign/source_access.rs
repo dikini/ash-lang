@@ -797,9 +797,9 @@ pub(crate) fn checked_window_host_instance(
     if !super::checked_builtins::is_canonical_native_host(declaration, registry, work)? {
         return Err(invalid());
     }
+    charge(work, 2, span)?;
     let host = crate::types::clone_type_with_budget(host, work)
         .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, span))?;
-    charge(work, 2, span)?;
     Ok(Some(EffectInstance::new(
         EffectId::new(
             declaration.id.module(),

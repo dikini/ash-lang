@@ -21578,11 +21578,17 @@ impl ResolvedRegistry {
             }
             fact.authenticate(self, work)
                 .map_err(scalar_preflight_failure)?;
-            // Every sealed common callable uses the same authenticated codec.
-            // Role count is independent of the original two scalar preflights.
+            // Preserve the same original codec within each exact builtin
+            // family. Legacy Call and checked memory CheckedCall are distinct;
+            // neither may replace the other's original or remint a route copy.
+            let anchor = if fact.role().host_parameter(fact.module()).is_some() {
+                11
+            } else {
+                0
+            };
             let common = self
                 .scalar_preflights
-                .get(&BinderId::resolved(fact.module(), 0))
+                .get(&BinderId::resolved(fact.module(), anchor))
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             if !Arc::ptr_eq(common.call_codec(), fact.call_codec()) {
                 return Err(ResolvedBuildFailure::InvalidState);

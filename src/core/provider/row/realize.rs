@@ -223,7 +223,28 @@ impl HandlerRowRecipeDraft {
                             body = remove(&body, &actual, true, work)?;
                         }
                         if !body.is_empty() {
-                            return Err(invalid(equation.node));
+                            let host = crate::foreign::source_access::checked_window_host_instance(
+                                scope.family(),
+                                scope.arguments(),
+                                &program.registry,
+                                work,
+                            )
+                            .map_err(|error| {
+                                if error.is_resource_exhaustion() {
+                                    resource()
+                                } else {
+                                    invalid(equation.node)
+                                }
+                            })?
+                            .ok_or_else(|| invalid(equation.node))?;
+                            let host = instance(&host, work)?;
+                            charge(work, 1)?;
+                            let expected = EffectRow::singleton(host);
+                            if !crate::types::same_effect_rows_with_budget(&body, &expected, work)
+                                .map_err(|()| resource())?
+                            {
+                                return Err(invalid(equation.node));
+                            }
                         }
                         let state = self
                             .node_equations
@@ -231,7 +252,7 @@ impl HandlerRowRecipeDraft {
                             .copied()
                             .flatten()
                             .ok_or_else(|| invalid(equation.node))?;
-                        row = copy(&values[state.0], work)?;
+                        row = union(&values[state.0], &body, work)?;
                     }
                     RowEquationOperation::NativeInterpret => {
                         let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) =

@@ -1,0 +1,25 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x8877d7d: file src/resolved.rs, line 21588.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 408313)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 408313)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::resolved::ResolvedRegistry::authenticate_scalar_preflights (self=0x7ffff00e54f0, work=0x7ffff7bd3000) at src/resolved.rs:21588
+21588	                return Err(ResolvedBuildFailure::InvalidState);
+#0  ash::resolved::ResolvedRegistry::authenticate_scalar_preflights (self=0x7ffff00e54f0, work=0x7ffff7bd3000) at src/resolved.rs:21588
+#1  0x000055555ddca724 in ash::resolved::ResolvedRegistry::authenticate_owner_definitions (self=0x7ffff00e54f0, budget=0x7ffff7bd3000) at src/resolved.rs:21001
+#2  0x000055555aba45c0 in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_effect_registry<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd7620, module_sources=..., parameter_owners=0x7ffff7bd5bf0) at src/core/validate.rs:9911
+#3  0x000055555a2d6c10 in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::authenticate_effect_registry_phase (self=0x7ffff7bd7620) at src/core/validate.rs:16224
+#4  0x000055555ab43086 in ash::core::validate::{impl#14}::check_with_handler_graph::{closure#1} () at src/core/validate.rs:3995
+#5  0x000055555a2a3dcf in ash::core::validate::SourceResourceStructureSession::check_with_handler_graph (self=0x7ffff7be1e40, program=0x7ffff7be1cd0, original=0x7ffff00ec920, answer=false, sources=..., module_sources=..., globals=0x7ffff7bd8b18, handler_graph=..., work=0x7ffff7be4410) at src/core/validate.rs:3948
+#6  0x000055555cc46ec5 in ash::core::source_resource::CheckedSourceResourceTemplate::admit_with_globals (header=..., acquire=..., finish=..., handler=..., handler_inputs=..., globals=..., sources=..., module_sources=..., work=0x7ffff7be4410, session=0x7ffff7be1e40) at src/core/source_resource.rs:1308
+#7  0x000055555ade792c in ash::elaborate::source_resource::compile::{closure#1} () at src/elaborate/source_resource.rs:1359
+#8  0x0000555559ea8703 in ash::elaborate::source_resource::compile (module=0x7ffff7bf91d0, registry=0x7ffff7be84a8, interfaces=..., schemes=..., work=0x7ffff7bf0f90, coverage=0x7ffff7bf0fb0, constraints=0x7ffff7bfa370, original_provider=..., rewrite_work_limit=177952) at src/elaborate/source_resource.rs:1269
+$1 = (*mut ash::resolved::BinderId) 0x7ffff00e4fe0
+$2 = (*mut alloc::sync::Arc<ash::foreign::scalar_preflight::CheckedForeignScalarPreflight, alloc::alloc::Global>) 0x7ffff00e4ff0
+$3 = (*mut alloc::sync::Arc<ash::foreign::scalar_preflight::CheckedForeignScalarPreflight, alloc::alloc::Global>) 0x7ffff00e4fa8

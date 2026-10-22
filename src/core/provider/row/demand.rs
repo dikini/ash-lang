@@ -1003,7 +1003,32 @@ impl DirectDemandProof {
                         body = proof.remove(&body, interpretation.effect(), true, work)?;
                     }
                     if !body.atoms.is_empty() {
-                        return Err(invalid(equation.node));
+                        let host = crate::foreign::source_access::checked_window_host_instance(
+                            scope.family(),
+                            scope.arguments(),
+                            &program.registry,
+                            work,
+                        )
+                        .map_err(|error| {
+                            if error.is_resource_exhaustion() {
+                                resource()
+                            } else {
+                                invalid(equation.node)
+                            }
+                        })?
+                        .ok_or_else(|| invalid(equation.node))?;
+                        charge(work, 1)?;
+                        let expected = proof.ordinary(&EffectRow::singleton(host), work)?;
+                        charge(
+                            work,
+                            body.atoms
+                                .len()
+                                .checked_add(expected.atoms.len())
+                                .ok_or_else(resource)?,
+                        )?;
+                        if body.atoms != expected.atoms {
+                            return Err(invalid(equation.node));
+                        }
                     }
                     // The state expression executes before the native window.
                     // Its requests are never interpreted by the window body.
@@ -1014,6 +1039,9 @@ impl DirectDemandProof {
                         .flatten()
                         .ok_or_else(|| invalid(equation.node))?;
                     expression = Self::copy(&proof.nodes[state.0], work)?;
+                    // Only the exact sealed Host residual crosses this window;
+                    // the window interprets native members, never Host itself.
+                    expression = proof.union(expression, &body, work)?;
                 }
                 EffectExprKind::Operation(EffectOperation::Discard(_)) => {
                     let RowEquationOperation::Discard { capture } = equation.operation else {
