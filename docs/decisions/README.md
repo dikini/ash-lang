@@ -24,3 +24,4 @@ Use [the template](template.md) and allocate the next `AD-NNNN` ID.
 - [AD-0013: Generated native bridges and program builds](AD-0013-generated-native-bridges-and-program-builds.md)
 - [AD-0014: Rust verification stage reuse](AD-0014-rust-verification-stage-reuse.md)
 - [AD-0015: Linux scalar in-process whole images](AD-0015-linux-scalar-inprocess-whole-images.md)
+- [AD-0016: Linux owner in-process whole images](AD-0016-linux-owner-inprocess-whole-images.md)

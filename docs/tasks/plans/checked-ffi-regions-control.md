@@ -211,6 +211,12 @@ refusal obligations after reviewed packaging/source/diagnostic evidence. Strict
 per-image approval, protected store/context/F6 enforcement, isolated Stage B,
 SQLite and owner/resource evidence remain pending. No whole F2 criterion is
 completed by this partial architecture decision.
+[AD-0016](../../decisions/AD-0016-linux-owner-inprocess-whole-images.md) later
+selects owner/resource GNU in-process whole-image mechanisms under finite
+trusted native/runtime/allocator/closure premises. It supplies an architecture
+basis for appropriately assigned F4/F6 work, not per-image strict approval,
+protected context/store enforcement, checked activation, isolation, SQLite or
+whole F2 completion.
 
 - Outcome: a tested, accepted Linux x86-64 executor architecture and explicit
   deployment prerequisites for in-process and isolated checked images.

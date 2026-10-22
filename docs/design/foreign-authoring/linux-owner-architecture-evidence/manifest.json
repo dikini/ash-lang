@@ -1,0 +1,40 @@
+{
+  "scope": "Owner adoption/source originals only, not executable authority",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 2102,
+      "sha256": "82d6607ef89bf1ac12511b5c12a716bf1eb8013877f2ce7227652b959a8285fa"
+    },
+    {
+      "path": "adoption-readback.json",
+      "size": 7158,
+      "sha256": "6923fb3516712aa72d2f017f3fb0aebf74202e21fe3429422f31e29048a2d542"
+    },
+    {
+      "path": "original-allocation.json",
+      "size": 2502,
+      "sha256": "8c7264ece161310162266f740d4f7e841dd9734223a025b832df222767a8b88a"
+    },
+    {
+      "path": "owner-adoption.json",
+      "size": 2001,
+      "sha256": "25d5540e9fc80daf1941f8aaa8d14aa96b8d28ecf7d1516181d1a8aebeda080b"
+    },
+    {
+      "path": "reviewed-proposal-manifest.json",
+      "size": 678,
+      "sha256": "161475748d34aa9fc0190a8298c88176f7f29b8e65fe651e97933e958ff09baf"
+    },
+    {
+      "path": "reviewed-proposal.txt",
+      "size": 17173,
+      "sha256": "4b379d6a8963c36f803bc849af0b74c40c832e432fedac4993798a0defe7ac15"
+    },
+    {
+      "path": "reviewed-proposed-index.txt",
+      "size": 1851,
+      "sha256": "bfde26a96f872945ed7be5caabbb5fc1ef69b992d2c5acf45b81c43f5cf6734e"
+    }
+  ]
+}

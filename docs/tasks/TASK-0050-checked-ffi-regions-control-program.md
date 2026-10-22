@@ -97,6 +97,15 @@ strict per-image approval, protected store/context enforcement and connected
 F4/F6 product evidence remain pending. Isolated, owner/resource and SQLite scope
 are excluded, and whole F2 criteria remain unchecked.
 
+The later [AD-0016](../decisions/AD-0016-linux-owner-inprocess-whole-images.md)
+selects the owner/resource GNU in-process whole-image mechanism after reviewed
+packaging, header and trusted legacy diagnostic evidence. Its finite native/
+runtime/allocator/loading/shutdown/host-loss premises remain explicit trust
+conditions. This is partial architecture selection only: applicable strict
+per-image approval, protected store/context and connected F3/F4/F6 product
+enforcement remain gates. The legacy result is no checked O/K/group proof;
+isolation, SQLite and all whole F2 criteria remain open.
+
 Remaining: concrete delegated Linux controls and Stage B enforcement evidence,
 isolated/SQLite/owner scope, product implementation and all product gates.
 Stage A is environmental evidence,

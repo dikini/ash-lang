@@ -1,0 +1,49 @@
+{
+  "status": "PROPOSED_ALLOCATION_RECHECK_BEFORE_PUBLICATION",
+  "base": "0b2b9dc90122d5513bb63f4608bede76f5339fea",
+  "candidate": "AD-0016",
+  "current_tree_paths": [
+    "docs/decisions/AD-0001-implementation-environment.md",
+    "docs/decisions/AD-0002-documentation-system.md",
+    "docs/decisions/AD-0003-formal-notation-fences.md",
+    "docs/decisions/AD-0004-small-step-semantic-method.md",
+    "docs/decisions/AD-0005-parser-architecture.md",
+    "docs/decisions/AD-0006-front-end-semantic-boundaries.md",
+    "docs/decisions/AD-0007-typed-core-dialects.md",
+    "docs/decisions/AD-0008-explicit-evaluator-machine.md",
+    "docs/decisions/AD-0009-ordered-resolved-global-binder-authority.md",
+    "docs/decisions/AD-0010-human-diagnostic-presentation-and-localization.md",
+    "docs/decisions/AD-0011-milestone-worktree-lifecycle.md",
+    "docs/decisions/AD-0012-proof-development-feedback-and-build-reuse.md",
+    "docs/decisions/AD-0013-generated-native-bridges-and-program-builds.md",
+    "docs/decisions/AD-0014-rust-verification-stage-reuse.md",
+    "docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md",
+    "docs/decisions/README.md",
+    "docs/decisions/template.md"
+  ],
+  "all_available_history_paths": [
+    "docs/decisions/AD-0001-implementation-environment.md",
+    "docs/decisions/AD-0002-documentation-system.md",
+    "docs/decisions/AD-0003-formal-notation-fences.md",
+    "docs/decisions/AD-0004-small-step-semantic-method.md",
+    "docs/decisions/AD-0005-parser-architecture.md",
+    "docs/decisions/AD-0006-front-end-semantic-boundaries.md",
+    "docs/decisions/AD-0007-typed-core-dialects.md",
+    "docs/decisions/AD-0008-explicit-evaluator-machine.md",
+    "docs/decisions/AD-0009-ordered-resolved-global-binder-authority.md",
+    "docs/decisions/AD-0010-human-diagnostic-presentation-and-localization.md",
+    "docs/decisions/AD-0011-milestone-worktree-lifecycle.md",
+    "docs/decisions/AD-0012-proof-development-feedback-and-build-reuse.md",
+    "docs/decisions/AD-0013-generated-native-bridges-and-program-builds.md",
+    "docs/decisions/AD-0014-rust-verification-stage-reuse.md",
+    "docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md",
+    "docs/decisions/README.md",
+    "docs/decisions/template.md"
+  ],
+  "current_and_history_unused": true,
+  "commands": [
+    "git ls-tree -r --name-only 0b2b9dc90122d5513bb63f4608bede76f5339fea docs/decisions",
+    "git log --all --format= --name-only -- docs/decisions"
+  ],
+  "no_Git_mutation": true
+}
