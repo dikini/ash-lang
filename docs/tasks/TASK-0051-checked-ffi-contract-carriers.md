@@ -408,3 +408,9 @@ passes its focused controls and all three unchanged startup probes on the isolat
 parallel F3 configuration. Integration onto the retained passive milestone,
 affected regressions, Clippy and final review remain pending; no whole F3 or
 public checked execution acceptance follows.
+
+The [combined native-interpreter discriminator](evidence/checked-byte-windows/candidates/combined-native-fixture/README.md)
+records two fresh passing two-owner startup repeats, followed by a genuine
+native-interpreter fixture inventory failure in the affected batch. A reviewed
+fixture-only complete-declaration repair and omission control are uncompiled;
+new retaining-tip integration and remaining regression/lint gates stay pending.
