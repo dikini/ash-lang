@@ -1,0 +1,50 @@
+{
+  "kind": "HEADER_DEPENDENCY_DISCOVERY_ONLY",
+  "known_inputs_before_after_required": true,
+  "post_query_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+    "size": 9529,
+    "sha256": "9b73bbf5f051cbf2c78d00ed8aaacc07072bfdef57c45ae1eae2a644baad5dcb"
+  },
+  "query_monitor_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/build-run-rdul_efb/receipt.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/build-run-rdul_efb/receipt.json",
+    "size": 11601,
+    "sha256": "c25d886b63af3c6b2582da828239c7280c60210ee2858704e593799ff0097ddb"
+  },
+  "raw_query_output": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/build-run-rdul_efb/output.log",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/build-run-rdul_efb/output.log",
+    "size": 4247,
+    "sha256": "6330912be55e4eb080c76c5ec0fec179a9c7be5f93f04e2d4746099d64af4ef5"
+  },
+  "raw_dependency": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "size": 1373,
+    "sha256": "747a091828204943704f753b7b9ad0f37911e0fd665453c2f8ad9fbeafdb74a3",
+    "device": 66309,
+    "inode": 49555298,
+    "mtime_ns": 1792666859789234003
+  },
+  "settled_monitor_dependency_observation": {
+    "relative_path": "native-build.log",
+    "observed_peak_bytes": 1373,
+    "file_class": "sidefile_log",
+    "limit_bytes": 16777216,
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "size_before": 1373,
+    "size_after": 1373,
+    "hashed_bytes": 1373,
+    "sha256": "747a091828204943704f753b7b9ad0f37911e0fd665453c2f8ad9fbeafdb74a3",
+    "hash_is_prefix": false,
+    "device": 66309,
+    "inode": 49555298,
+    "retained_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/build-run-rdul_efb/watched-0.log"
+  },
+  "header_closure_was_unknown_before_query": true,
+  "prototype_or_target_static_asserts_checked": false,
+  "object_link_or_native_image_executed": false,
+  "next_gate": "Independent discovered-closure review, then a separately assigned exact -fsyntax-only check; never run it automatically"
+}

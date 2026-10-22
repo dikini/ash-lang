@@ -1,0 +1,43 @@
+{
+  "tuple": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/tuple.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/tuple.json",
+    "size": 8867,
+    "sha256": "d772443ea8955100fc44f14ac0e2426b1170a4f961be5b71310ae8b6a67373d8"
+  },
+  "config": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json",
+    "size": 10313,
+    "sha256": "badcd7aec2613202ae9be80fe6b07dc31399a3034ce73be6a3cf2af2be94ac1f"
+  },
+  "manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/manifest.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/manifest.json",
+    "size": 2519,
+    "sha256": "af9125cde7b212ab8ce31631f31027a78602bbb28a43043fb8c72d5e162fb197"
+  },
+  "verifier": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+    "size": 2388,
+    "sha256": "35e4d224be4d5f208e631ee48f2d37bacaa681fea0618437bdffbef6661b13c9"
+  },
+  "collector": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+    "size": 7721,
+    "sha256": "2446f36f2b7a63d245436ba6b5058ea255f337b5a554785252e609e4f45a9edd"
+  },
+  "test_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/safe-test-receipt.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/safe-test-receipt.json",
+    "size": 2201,
+    "sha256": "e5755686dc248e62a18bda97a35548965f87cffb33f0e7a54ef000b26dd0455f"
+  },
+  "root": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+  "status": "PREPARATION_ONLY_NO_GCC",
+  "frozen_inputs": 28,
+  "safe_test_methods": 14,
+  "readonly_verifier_exit": 0
+}

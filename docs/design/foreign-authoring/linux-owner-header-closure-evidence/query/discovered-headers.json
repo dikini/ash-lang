@@ -1,0 +1,204 @@
+{
+  "kind": "POST_QUERY_HEADER_DISCOVERY_SNAPSHOT_NOT_PRIOR_BYTE_PROOF",
+  "dependencies": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/owner-header-abi.c",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/owner-header-abi.c",
+      "size": 686,
+      "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694"
+    },
+    {
+      "path": "/usr/include/stdlib.h",
+      "resolved": "/usr/include/stdlib.h",
+      "size": 42963,
+      "sha256": "936ffcdf6161aa702d9fe433879e59b039731effebea7a9c02506da183a99d02"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "size": 4286,
+      "sha256": "9ec1af1a58b5d6431708a7ca71ef65944622921ca6fce878ae2ab486f3145296"
+    },
+    {
+      "path": "/usr/include/features.h",
+      "resolved": "/usr/include/features.h",
+      "size": 19773,
+      "sha256": "f6d015d0248056a3091de489abcbadbbd93d7aaf95753d7426f779765f067118"
+    },
+    {
+      "path": "/usr/include/features-time64.h",
+      "resolved": "/usr/include/features-time64.h",
+      "size": 1532,
+      "sha256": "c7c33cddd4ffbbca1eb0de042131a51201a42f29139820d0a36c1e1dd0d16ba5"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+      "size": 398,
+      "sha256": "948177c0fc84c4746588f62252029880ec4c6f88b743ba55d952f980303ebfbb"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+      "size": 1109,
+      "sha256": "9d075412fa9c84e68a59e22944daad36905cb2eb19c3a7613d652b85ece4f207"
+    },
+    {
+      "path": "/usr/include/stdc-predef.h",
+      "resolved": "/usr/include/stdc-predef.h",
+      "size": 2462,
+      "sha256": "383ff8bd7dcc87deefedd062637f4afe28f85f8be443beda8b41d15e45ef1679"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+      "size": 35168,
+      "sha256": "a5a71b01109709190529d0c3532751869d05db6a5e8ce01c8c73229b797cfb83"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+      "size": 970,
+      "sha256": "9b3fe370666b72e74d2c19c9fa44bd18a72f671e5ca24fbf4cca6a29b114459d"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+      "size": 384,
+      "sha256": "ef444295a0a9e8f5c40918399a00cc91ba0bd79774110cdf6e652baa6cfadb2e"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+      "size": 481,
+      "sha256": "0b6ab3e2ed3ba79b30fe6ba81a68fc41f57965b8d56662763633431b703c9289"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+      "size": 14134,
+      "sha256": "472a84e536689fc48e861b2415b229742e133d09bbf1c8fd8e0fe89ab5712f04"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+      "size": 4929,
+      "sha256": "00524c02db9c4aa6dce6cdee90183bfca40fb254a93f0ea22a397f3355711d1f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+      "size": 10325,
+      "sha256": "8d5c5517e58c6d7ac4c915037f3af518fadc41ceb47999ee3387e4fb91cb4eaa"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+      "size": 1115,
+      "sha256": "8900ab8d754778a6df25a040202726097d29f65954c4525de4542abef79c0c01"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+      "size": 443,
+      "sha256": "64ab730bb09eba38f01a62174fb8371ef281778ac33f141a6fa4217a9b39466a"
+    },
+    {
+      "path": "/usr/include/stdint.h",
+      "resolved": "/usr/include/stdint.h",
+      "size": 8268,
+      "sha256": "fbd21c7a64b876eddd4e179172fb58a4921fd616d103b8107a28a54cf687289b"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/types.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/types.h",
+      "size": 8806,
+      "sha256": "3fcf066dbf9fac9c5a15ff6327ca6a437e955e9aa571de1c3347cd0f4da4f93d"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+      "size": 3737,
+      "sha256": "a52fb9d6cca3d305618b036183fe11fbb1789afea64f5436197bbb058e5edf0f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+      "size": 1340,
+      "sha256": "c502af2b2d265699b53ccb52e7a20521ab3ec4d346deb1366f494d1e22354ff9"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+      "size": 1906,
+      "sha256": "9a3e6e246753da1e142227f6a81a9d0064cbb3189073c367263a491b4044373f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+      "size": 1037,
+      "sha256": "ed15fd5be7a39b8145b2beb08fd4a316bb72f0bd5ebca707399b4f5b0c0bf304"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+      "size": 1049,
+      "sha256": "f0d1ad8c0effab436bebd7a4c177a28a567f0faaae69877e9ccbe3d631a7cd68"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+      "size": 1305,
+      "sha256": "24c527a005947517a1d3032fdf161577e5a62184f4419066a2112a79ab2da788"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+      "size": 6507,
+      "sha256": "c1db59d8d8a54dbc7e7dbc5ce2f25fd0451f8e01794e7964a15a3e6cc17566d3"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+      "size": 445,
+      "sha256": "9409a59233daef9339a757c58b3dd1cee980a65f1ef2590040fe5e106222a4bc"
+    },
+    {
+      "path": "/usr/include/limits.h",
+      "resolved": "/usr/include/limits.h",
+      "size": 5839,
+      "sha256": "7505220f742ab30ef635baa0849f26e1dfdb4fb22f2b506f4f2b0f4879f82dfb"
+    }
+  ],
+  "exact_cc1_preprocess_command": "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1 -E -quiet -nostdinc -v -imultiarch x86_64-linux-gnu -M -MF /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log -MT owner_header_abi -isystem /usr/lib/gcc/x86_64-linux-gnu/15/include -isystem /usr/include/x86_64-linux-gnu -isystem /usr/include /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/owner-header-abi.c -m64 -mtune=generic -march=x86-64 -std=c11 -Wall -Wextra -Werror -pedantic-errors -fno-builtin -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -fzero-init-padding-bits=all -Wbidi-chars=any -dumpdir a- -dumpbase owner-header-abi.c -dumpbase-ext .c",
+  "actual_include_roots": [
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include",
+    "/usr/include/x86_64-linux-gnu",
+    "/usr/include"
+  ],
+  "raw_dependency": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "size": 1373,
+    "sha256": "747a091828204943704f753b7b9ad0f37911e0fd665453c2f8ad9fbeafdb74a3",
+    "device": 66309,
+    "inode": 49555298,
+    "mtime_ns": 1792666859789234003
+  },
+  "settled_monitor_dependency_observation": {
+    "relative_path": "native-build.log",
+    "observed_peak_bytes": 1373,
+    "file_class": "sidefile_log",
+    "limit_bytes": 16777216,
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "size_before": 1373,
+    "size_after": 1373,
+    "hashed_bytes": 1373,
+    "sha256": "747a091828204943704f753b7b9ad0f37911e0fd665453c2f8ad9fbeafdb74a3",
+    "hash_is_prefix": false,
+    "device": 66309,
+    "inode": 49555298,
+    "retained_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/build-run-rdul_efb/watched-0.log"
+  },
+  "qualification": "These are post-query header snapshots. Full unknown headers were not pinned before discovery, so this is not proof of bytes used during this query. Freeze/review them and before/after-check exact closure plus dependency-set equality at a separately assigned syntax-only gate. No prototype/ABI/native correctness result."
+}

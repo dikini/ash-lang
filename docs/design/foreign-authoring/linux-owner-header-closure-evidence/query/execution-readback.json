@@ -1,0 +1,142 @@
+{
+  "status": "SUCCESS_DEPENDENCY_DISCOVERY_ONLY",
+  "steps": [
+    {
+      "name": "before-query",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+        "before-query"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+      "started_unix": 1792666859.5478914,
+      "pid": 4,
+      "exit": 0,
+      "stdout": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/known-before.json",
+        "size": 183,
+        "sha256": "1bfd9ef33f3abd1314e487af38b6ff60f6c7b273081f5235e57f4009df741aa3"
+      },
+      "stderr": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/known-before.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "finished_unix": 1792666859.647456
+    },
+    {
+      "name": "dependency-query",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+      "started_unix": 1792666859.6477494,
+      "pid": 5,
+      "exit": 0,
+      "stdout": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query-response.json",
+        "size": 179,
+        "sha256": "3e543dcd58b32286ff9babcf66edf78c3d5fb416e222723dde639c6038ae521c"
+      },
+      "stderr": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query-response.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "finished_unix": 1792666859.803329,
+      "monitor_receipt": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/build-run-rdul_efb/receipt.json",
+        "size": 11601,
+        "sha256": "c25d886b63af3c6b2582da828239c7280c60210ee2858704e593799ff0097ddb"
+      }
+    },
+    {
+      "name": "after-query",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/verify_inputs.py",
+        "after-query"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+      "started_unix": 1792666859.8041701,
+      "pid": 8,
+      "exit": 0,
+      "stdout": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/known-after.json",
+        "size": 182,
+        "sha256": "bc5b38679886c0350d41c5b1628db6e9e0ee44f4b2431af44d4f82885f895f6e"
+      },
+      "stderr": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/known-after.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "finished_unix": 1792666859.9027216
+    },
+    {
+      "name": "collect-discovered-headers",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/query-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+      "started_unix": 1792666859.903028,
+      "pid": 9,
+      "exit": 0,
+      "stdout": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json",
+        "size": 2976,
+        "sha256": "b89b81b854765f86df14d82cbd3d73a87fbb97b6b81d0413df4689fb1e0d5b03"
+      },
+      "stderr": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "finished_unix": 1792666859.955083
+    }
+  ],
+  "anchors": {
+    "tuple.json": "a0508c640cb40fd28638dae16ff6b0d404dc7cba4e84cd41053f62046dc90e30",
+    "query.monitor.json": "f6685ed58846c4aac8c38e58bdc10329cfe80216198bcacf0f67c12c21b66dd5",
+    "manifest.json": "3fcf0266384913819c67ad18e4bc3c569da81b9c4059654db3eaf26b10c3d715",
+    "collect_dependencies.py": "b9fad73d35df9767f73d4b0a450f33eecd9ba9ed07768ecdad29e0a3c10d6e57",
+    "verify_inputs.py": "4f83fbef2b08d27a818d161175feef56f6399cd68436405f1b075244584bf473"
+  },
+  "scope": "Assigned dependency-only query; no syntax/object/link/image/native startup"
+}

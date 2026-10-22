@@ -1,0 +1,44 @@
+{
+  "exit": 0,
+  "before_equals_after": true,
+  "source_pins": {
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+      "size": 7288,
+      "sha256": "b9fad73d35df9767f73d4b0a450f33eecd9ba9ed07768ecdad29e0a3c10d6e57"
+    },
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py",
+      "size": 3106,
+      "sha256": "eb5567dce665cf6ca0ab2a6a6cf4537e973c158af5a3eba54133b95f37c80871"
+    },
+    "/tmp/ash-owner-map-class-monitor/build_monitor.py": {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "resolved": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+    },
+    "/usr/bin/python3.14": {
+      "path": "/usr/bin/python3.14",
+      "resolved": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    }
+  },
+  "stdout": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/association-test.stdout",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/association-test.stdout",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/association-test.stderr",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/association-test.stderr",
+    "size": 1003,
+    "sha256": "7ce7b39229522fef193890dea709922ebced67144507145d44bedee413327d74"
+  },
+  "methods": 11,
+  "gcc_or_header_query_run": false
+}

@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "before": {
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/collect_dependencies.py",
+      "size": 7288,
+      "sha256": "b9fad73d35df9767f73d4b0a450f33eecd9ba9ed07768ecdad29e0a3c10d6e57"
+    },
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/test_dependency_association.py",
+      "size": 3106,
+      "sha256": "eb5567dce665cf6ca0ab2a6a6cf4537e973c158af5a3eba54133b95f37c80871"
+    },
+    "/tmp/ash-owner-map-class-monitor/build_monitor.py": {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "resolved": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+    },
+    "/usr/bin/python3.14": {
+      "path": "/usr/bin/python3.14",
+      "resolved": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    }
+  },
+  "scope": "Benign files with actual admission function extracted via AST; no GCC/header query/native execution"
+}

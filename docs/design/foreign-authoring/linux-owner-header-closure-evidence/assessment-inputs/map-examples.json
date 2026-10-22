@@ -1,0 +1,32 @@
+{
+  "source": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/whole-static.map",
+    "size": 100345205,
+    "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b"
+  },
+  "read_before_after_equal": true,
+  "examples": {
+    "__libc_malloc": [
+      "                0x0000000002572e30                __libc_malloc\n"
+    ],
+    "__libc_free": [
+      "                0x0000000002573370                __libc_free\n"
+    ],
+    "__malloc_assert": [],
+    "malloc_printerr": [],
+    "__libc_dlopen_mode": [
+      "                              /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a(idna.o) (__libc_dlopen_mode)\n",
+      "                0x00000000025d1a50                __libc_dlopen_mode\n"
+    ],
+    "__gconv_find_transform": [
+      "                0x00000000025d3ac0                __gconv_find_transform\n"
+    ],
+    "_dl_open": [
+      "                0x00000000025cc260                _dl_open\n"
+    ],
+    "__run_exit_handlers": [
+      "                0x0000000002568df0                __run_exit_handlers\n"
+    ]
+  },
+  "qualification": "At most3 bounded textual examples per selected name. Presence is retained code/name evidence, not observed loading or proven reachability; absence from this small selection would not prove exclusion."
+}
