@@ -1,7 +1,11 @@
 //! Original compiler-owned scalar checks and sealed byte declarations.
 //! A declaration fact grants no live native access or owner authority.
 
-use std::sync::Arc;
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use super::checked_source::{
     CheckedForeignCallCodec, ForeignAdmissionError, ForeignAdmissionReason, charge, failure,
@@ -888,28 +892,29 @@ impl CheckedForeignScalarPreflight {
     }
 }
 
-/// Paid canonical identities only; this ordering grants no fact authority.
-fn ordered_registry_preflights(
-    registry: &ResolvedRegistry,
-    work: &mut TypeWorkBudget,
-) -> Result<Vec<crate::resolved::ImageRegistryItem>, ForeignAdmissionError> {
-    use crate::resolved::ImageRegistryItem;
-    let mut rows = Vec::new();
-    let Some((_, first)) = registry.scalar_preflights().next() else {
-        return Ok(rows);
-    };
-    let source = first.source;
-    for (function, fact) in registry.scalar_preflights() {
-        charge(work, 1, fact.source)?;
-        rows.try_reserve(1)
-            .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
-        rows.push(ImageRegistryItem::Preflight(function));
+/// Exact codec identity borrowed only for this immutable registry operation.
+/// The reference keeps allocation identity live; no proof or pointer escapes.
+#[derive(Clone, Copy)]
+struct CodecProofKey<'registry> {
+    module: ModuleId,
+    source: Span,
+    codec: &'registry Arc<CheckedForeignCallCodec>,
+}
+
+impl PartialEq for CodecProofKey<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module
+            && self.source == other.source
+            && Arc::ptr_eq(self.codec, other.codec)
     }
-    // The existing fixed merge passes charge a cardinality-derived bound for
-    // scratch, comparisons, writes and copy-back, independent of hash order.
-    crate::resolved::sort_image_registry_items(&mut rows, work)
-        .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, source))?;
-    Ok(rows)
+}
+impl Eq for CodecProofKey<'_> {}
+impl Hash for CodecProofKey<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.module.hash(state);
+        self.source.hash(state);
+        std::ptr::hash(Arc::as_ptr(self.codec), state);
+    }
 }
 
 /// Authenticate this immutable registry table, sharing only identical codec
@@ -918,16 +923,8 @@ pub(crate) fn authenticate_registry_families(
     registry: &ResolvedRegistry,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ForeignAdmissionError> {
-    let mut proved = Vec::<BinderId>::new();
-    for row in ordered_registry_preflights(registry, work)? {
-        let crate::resolved::ImageRegistryItem::Preflight(function) = row else {
-            unreachable!("only preflight identities were collected")
-        };
-        // Lookup stays paid; ordering retains identities, never fact proofs.
-        let fact = registry
-            .scalar_preflight(function)
-            .expect("immutable registry key");
-        charge(work, 1, fact.source)?;
+    let mut proved = HashSet::<BinderId>::new();
+    for (function, fact) in registry.scalar_preflights() {
         charge(work, 1, fact.source)?;
         if function != fact.function() {
             return Err(failure(
@@ -954,7 +951,9 @@ pub(crate) fn authenticate_registry_families(
                 fact.source,
             ));
         }
-        charge(work, proved.len(), fact.source)?;
+        // Paid fixed-identity hash/lookup; the mandatory anchor allocation
+        // comparison above still precedes reuse of this exact family proof.
+        charge(work, 1, fact.source)?;
         let fresh = !proved.contains(&anchor);
         if fresh {
             CheckedForeignCallCodec::authenticate(
@@ -969,11 +968,12 @@ pub(crate) fn authenticate_registry_families(
         // projections; the common codec proof alone is shared.
         fact.authenticate_registry_projection(registry, work)?;
         if fresh {
-            charge(work, 1, fact.source)?;
+            // Pay successful-key storage and its insertion lookup before either.
+            charge(work, 2, fact.source)?;
             proved
                 .try_reserve(1)
                 .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
-            proved.push(anchor);
+            proved.insert(anchor);
         }
     }
     Ok(())
@@ -986,15 +986,8 @@ pub(crate) fn admit_projected_preflights(
     registry: ResolvedRegistry,
     work: &mut TypeWorkBudget,
 ) -> Result<ResolvedRegistry, ForeignAdmissionError> {
-    let mut proved = Vec::<&Arc<CheckedForeignCallCodec>>::new();
-    for row in ordered_registry_preflights(&registry, work)? {
-        let crate::resolved::ImageRegistryItem::Preflight(function) = row else {
-            unreachable!("only preflight identities were collected")
-        };
-        let fact = registry
-            .scalar_preflight(function)
-            .expect("immutable registry key");
-        charge(work, 1, fact.source)?;
+    let mut proved = HashSet::<CodecProofKey<'_>>::new();
+    for (function, fact) in registry.scalar_preflights() {
         charge(work, 1, fact.source)?;
         if function != fact.function() {
             return Err(failure(
@@ -1003,16 +996,15 @@ pub(crate) fn admit_projected_preflights(
             ));
         }
         fact.authenticate_original(work)?;
-        let scan = proved
-            .len()
-            .checked_mul(3)
-            .ok_or_else(|| failure(ForeignAdmissionReason::WorkExhausted, fact.source))?;
-        charge(work, scan, fact.source)?;
-        let fresh = !proved.iter().any(|codec| {
-            codec.module() == fact.module()
-                && codec.source() == fact.source
-                && Arc::ptr_eq(codec, fact.call_codec())
-        });
+        // All three exact fixed-size key components participate in hashing
+        // and equality; pointer identity alone never substitutes for context.
+        let key = CodecProofKey {
+            module: fact.module(),
+            source: fact.source,
+            codec: fact.call_codec(),
+        };
+        charge(work, 3, fact.source)?;
+        let fresh = !proved.contains(&key);
         if fresh {
             CheckedForeignCallCodec::authenticate(
                 fact.module(),
@@ -1024,11 +1016,12 @@ pub(crate) fn admit_projected_preflights(
         }
         fact.authenticate_registry_projection(&registry, work)?;
         if fresh {
-            charge(work, 1, fact.source)?;
+            // One retained key plus the three-component insertion lookup.
+            charge(work, 4, fact.source)?;
             proved
                 .try_reserve(1)
                 .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
-            proved.push(fact.call_codec());
+            proved.insert(key);
         }
     }
     drop(proved);
