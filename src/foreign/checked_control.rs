@@ -1,4 +1,5 @@
-//! Passive CP-0024 O/X/K bookkeeping. No evaluator or native entry point uses it.
+//! CP-0024 O/X/K bookkeeping connected to existing physical owner slots.
+//! Checked activation remains closed; the checked-copy event is not wired yet.
 //!
 //! A native observation is an input from a future trusted bridge, not evidence
 //! manufactured by this ledger. Source E and native addresses never enter it.
@@ -44,13 +45,13 @@ pub(super) enum CallKind {
     Finish,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Native {
+pub(crate) enum Native {
     NoOwner,
     Owned,
     Consumed,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum K {
+pub(crate) enum K {
     Absent,
     Pending,
     Closing,
@@ -97,7 +98,7 @@ enum History {
     },
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Continuation {
+pub(crate) enum Continuation {
     Absent,
     Required,
     Completed,
@@ -131,9 +132,23 @@ struct GroupState {
     quarantined: bool,
     owner_bound: bool,
 }
+enum Header<'p> {
+    Borrowed(&'p CheckedSourceResourceHeader),
+    Owned(std::sync::Arc<CheckedSourceResourceHeader>),
+}
+impl std::ops::Deref for Header<'_> {
+    type Target = CheckedSourceResourceHeader;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(header) => header,
+            Self::Owned(header) => header,
+        }
+    }
+}
+
 struct Record<'p> {
     // These exact originals outlive every record and pending observation.
-    header: &'p CheckedSourceResourceHeader,
+    header: Header<'p>,
     group: Group,
     generation: u64,
     serial: u64,
@@ -240,6 +255,15 @@ impl<'p> Ledger<'p> {
         &mut self,
         group: Group,
         header: &'p CheckedSourceResourceHeader,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Owner, Failure> {
+        self.owner_header(group, Header::Borrowed(header), work)
+    }
+
+    fn owner_header(
+        &mut self,
+        group: Group,
+        header: Header<'p>,
         work: &mut TypeWorkBudget,
     ) -> Result<Owner, Failure> {
         pay(work, 10)?;
@@ -352,8 +376,19 @@ impl<'p> Ledger<'p> {
             CallKind::Finish if record.k == K::Closing && record.native == Native::Owned => {
                 &record.header.teardown
             }
-            // Borrow needs a separately authenticated operation binding; this
-            // increment never accepts an arbitrary original on operation ID alone.
+            CallKind::Borrow
+                if record.native == Native::Owned
+                    && matches!(record.k, K::Pending | K::Closing)
+                    && original.owner().is_some_and(|owner| {
+                        std::sync::Arc::ptr_eq(owner, &record.header.owner)
+                    })
+                    && matches!(
+                        original.owner_role(),
+                        Some(super::source_contract::PreparedOwnerCall::Borrow { .. })
+                    ) =>
+            {
+                original
+            }
             _ => return Err(Failure::Unsupported),
         };
         if !std::sync::Arc::ptr_eq(expected, original) {
@@ -387,6 +422,9 @@ impl<'p> Ledger<'p> {
         let native = match (call.kind, observation) {
             (CallKind::Acquire, Observed::Acquired) => Native::Owned,
             (CallKind::Acquire, Observed::Null) => Native::NoOwner,
+            (CallKind::Borrow, Observed::Borrowed) if record.native == Native::Owned => {
+                Native::Owned
+            }
             (CallKind::Finish, Observed::FinishedConsumed)
                 if matches!(
                     record.header.teardown.owner_role(),
@@ -618,6 +656,319 @@ impl<'p> Ledger<'p> {
         record.continuation = Continuation::Completed;
         record.delivery = Delivery::Published;
         Ok(())
+    }
+}
+
+/// Finite resource data only. It is neither protected policy nor approval.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BoundaryLimits {
+    pub(crate) groups: usize,
+    pub(crate) owners: usize,
+    pub(crate) pending: usize,
+    pub(crate) observations: usize,
+    pub(crate) history: usize,
+    pub(crate) continuations: usize,
+}
+
+/// Runtime bookkeeping stored in the existing physical owner slot. It carries
+/// no native callback, address, executable approval or invocation constructor.
+pub(super) struct RuntimeBoundary {
+    ledger: Ledger<'static>,
+    owner: Owner,
+    group: Group,
+    scope: std::sync::Arc<crate::core::source_resource::CheckedSourceResourceTemplate>,
+    scope_node: crate::core::NodeId,
+    activation: usize,
+    acquire_request: crate::core::NodeId,
+    pending: Option<Call>,
+    finish_prepared: bool,
+    // These fixed future ledger operations were paid before native entry.
+    prepaid: TypeWorkBudget,
+}
+impl std::fmt::Debug for RuntimeBoundary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeBoundary")
+            .field("activation", &self.activation)
+            .finish_non_exhaustive()
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BoundarySnapshot {
+    pub(crate) identity: u64,
+    pub(crate) native: Native,
+    pub(crate) k: K,
+    pub(crate) unresolved: bool,
+    pub(crate) continuation: Continuation,
+    pub(crate) terminal: bool,
+    pub(crate) observations: usize,
+    pub(crate) history: usize,
+}
+impl RuntimeBoundary {
+    pub(super) fn reserve(
+        receipt: &super::source_bindings::SourceOwnerScopeRequest,
+        activation: usize,
+        limits: BoundaryLimits,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        pay(work, 6)?;
+        if limits.groups != 1
+            || limits.owners != 1
+            || limits.pending < 1
+            || limits.observations < receipt._scope.header().original.interpreted.len().max(2)
+            || limits.continuations < 1
+            || limits.history
+                < limits
+                    .observations
+                    .checked_add(1)
+                    .ok_or(Failure::Resource)?
+        {
+            return Err(Failure::Resource);
+        }
+        if receipt._phase != super::source_bindings::SourceOwnerPhase::Acquire
+            || receipt._window.is_some()
+        {
+            return Err(Failure::Original);
+        }
+        // Pay scope/header retention and a bounded set of nonowning slot handles.
+        // Future enter/commit/witness operations use only the prepaid meter.
+        let future = limits
+            .observations
+            .checked_mul(12)
+            .and_then(|n| n.checked_add(8 + 8 + 4 + 3))
+            .ok_or(Failure::Resource)?;
+        pay(work, future.checked_add(2 + 3).ok_or(Failure::Resource)?)?;
+        let mut ledger = Ledger::reserve(limits.groups, limits.owners, limits.observations, work)?;
+        let group = ledger.group(work)?;
+        let owner = ledger.owner_header(
+            group,
+            Header::Owned(std::sync::Arc::clone(receipt._scope.header())),
+            work,
+        )?;
+        Ok(Self {
+            ledger,
+            owner,
+            group,
+            scope: std::sync::Arc::clone(&receipt._scope),
+            scope_node: receipt._scope_node,
+            activation,
+            acquire_request: receipt._request,
+            pending: None,
+            finish_prepared: false,
+            prepaid: TypeWorkBudget::with_limit(future),
+        })
+    }
+    pub(super) fn begin_acquire(&mut self) -> Result<(), Failure> {
+        let call = self.ledger.enter(
+            self.owner,
+            CallKind::Acquire,
+            &self.scope.header().acquire,
+            &mut self.prepaid,
+        )?;
+        self.pending = Some(call);
+        Ok(())
+    }
+    pub(super) fn acquired(&mut self, present: bool) {
+        if let Some(call) = self.pending.take() {
+            // The single-use native ticket and exclusive slot borrow establish
+            // this exact transition before conversion or source reporting.
+            self.ledger
+                .observed(
+                    call,
+                    if present {
+                        Observed::Acquired
+                    } else {
+                        Observed::Null
+                    },
+                )
+                .expect("reserved acquisition observation");
+        }
+    }
+    pub(super) fn publish(
+        &mut self,
+        activation: usize,
+        scope: crate::core::NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        pay(work, 2)?;
+        if activation != self.activation || scope != self.scope_node {
+            return Err(Failure::Original);
+        }
+        self.ledger.publish_acquired(self.owner, work)
+    }
+    pub(super) fn borrow_request(
+        &self,
+        receipt: &super::source_bindings::SourceOwnerScopeRequest,
+        activation: usize,
+        original: &std::sync::Arc<super::checked_source::CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        pay(work, 6)?;
+        if activation != self.activation
+            || receipt._scope_node != self.scope_node
+            || !std::sync::Arc::ptr_eq(&receipt._scope, &self.scope)
+            || !matches!(
+                receipt._phase,
+                super::source_bindings::SourceOwnerPhase::Borrow(
+                    crate::core::source_resource::SourceResourcePhase::Handler
+                        | crate::core::source_resource::SourceResourcePhase::Finish
+                )
+            )
+            || !original
+                .owner()
+                .is_some_and(|owner| std::sync::Arc::ptr_eq(owner, &self.scope.header().owner))
+            || !matches!(
+                original.owner_role(),
+                Some(super::source_contract::PreparedOwnerCall::Borrow { .. })
+            )
+        {
+            return Err(Failure::Original);
+        }
+        let record = &self.ledger.records[self.owner.index];
+        if self.ledger.terminal
+            || record.unresolved
+            || record.pending.is_some()
+            || record.native != Native::Owned
+            || !matches!(record.k, K::Pending | K::Closing)
+        {
+            return Err(Failure::State);
+        }
+        if self
+            .ledger
+            .observed_calls
+            .checked_add(self.ledger.in_flight)
+            .is_none_or(|n| n >= self.ledger.call_limit)
+        {
+            return Err(Failure::Resource);
+        }
+        Ok(())
+    }
+    pub(super) fn begin_borrow(
+        &mut self,
+        original: &std::sync::Arc<super::checked_source::CheckedForeignSymbol>,
+    ) -> Result<(), Failure> {
+        self.pending =
+            Some(
+                self.ledger
+                    .enter(self.owner, CallKind::Borrow, original, &mut self.prepaid)?,
+            );
+        Ok(())
+    }
+    pub(super) fn borrowed(&mut self) {
+        let call = self.pending.take().expect("single entered borrow request");
+        self.ledger
+            .observed(call, Observed::Borrowed)
+            .expect("reserved borrow observation");
+    }
+    pub(super) fn closing(
+        &mut self,
+        activation: usize,
+        scope: crate::core::NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        pay(work, 2)?;
+        if activation != self.activation || scope != self.scope_node {
+            return Err(Failure::Original);
+        }
+        match self
+            .ledger
+            .close(self.owner, true, false, &mut self.prepaid)?
+        {
+            Close::NativeFinish | Close::Local => Ok(()),
+            _ => Err(Failure::State),
+        }
+    }
+    pub(super) fn prepare_finish(
+        &mut self,
+        receipt: &super::source_bindings::SourceOwnerScopeRequest,
+        activation: usize,
+        blocked: bool,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        pay(work, 5)?;
+        if activation != self.activation
+            || receipt._scope_node != self.scope_node
+            || receipt._phase != super::source_bindings::SourceOwnerPhase::Finish
+            || receipt._window.is_some()
+            || receipt._request == self.acquire_request
+            || !std::sync::Arc::ptr_eq(&receipt._scope, &self.scope)
+        {
+            return Err(Failure::Original);
+        }
+        if self.finish_prepared || self.pending.is_some() {
+            return Err(Failure::State);
+        }
+        match self
+            .ledger
+            .close(self.owner, true, blocked, &mut self.prepaid)?
+        {
+            Close::NativeFinish => self.finish_prepared = true,
+            Close::Local => {}
+            _ => return Err(Failure::State),
+        }
+        Ok(())
+    }
+    pub(super) fn begin_finish(&mut self) -> Result<(), Failure> {
+        if self.ledger.records[self.owner.index].k == K::Discharged {
+            return Ok(());
+        }
+        if !self.finish_prepared {
+            return Err(Failure::State);
+        }
+        self.finish_prepared = false;
+        self.pending = Some(self.ledger.enter(
+            self.owner,
+            CallKind::Finish,
+            &self.scope.header().teardown,
+            &mut self.prepaid,
+        )?);
+        Ok(())
+    }
+    pub(super) fn finished(&mut self, consumed: bool) {
+        if let Some(call) = self.pending.take() {
+            self.ledger
+                .observed(
+                    call,
+                    if consumed {
+                        Observed::FinishedConsumed
+                    } else {
+                        Observed::FinishedRetained
+                    },
+                )
+                .expect("reserved finish observation");
+        }
+    }
+    pub(super) fn quarantine(&mut self) {
+        self.ledger
+            .lose_group(self.group, true)
+            .expect("reserved owner group");
+    }
+    pub(super) fn output_failed(&mut self) {
+        self.ledger.output_failed();
+    }
+    pub(super) fn source_continued(
+        &mut self,
+        activation: usize,
+        scope: crate::core::NodeId,
+    ) -> Result<(), Failure> {
+        if activation != self.activation || scope != self.scope_node {
+            return Err(Failure::Original);
+        }
+        let witness = self.ledger.finish_witness(self.owner, &mut self.prepaid)?;
+        self.ledger
+            .source_continued(self.owner, witness, &mut self.prepaid)
+    }
+    pub(super) fn snapshot(&self) -> BoundarySnapshot {
+        let record = &self.ledger.records[self.owner.index];
+        BoundarySnapshot {
+            identity: self.ledger.identity,
+            native: record.native,
+            k: record.k,
+            unresolved: record.unresolved,
+            continuation: record.continuation,
+            terminal: self.ledger.terminal,
+            observations: self.ledger.observed_calls,
+            history: self.ledger.history.len(),
+        }
     }
 }
 

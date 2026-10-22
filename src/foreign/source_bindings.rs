@@ -519,92 +519,12 @@ impl SourceNativeBindings {
         symbol: &Arc<CheckedForeignSymbol>,
         work: &mut TypeWorkBudget,
     ) -> Result<AdmittedSourceOwnerInvocation<'bindings>, RuntimeFailure> {
-        paid(work, 6)?;
-        // Access-result members require the distinct exact-window invocation
-        // receipt, never an ordinary owner phase or compatible scalar callback.
-        if symbol.symbol().access_result().is_some() {
-            return Err(RuntimeFailure::ForeignBinding);
-        }
-        let crate::eval::ExecutableProgram::Effect(program) = program else {
-            return Err(RuntimeFailure::ForeignBinding);
-        };
-        let Some(scope_node_value) = program.node(scope_node) else {
-            return Err(RuntimeFailure::ForeignBinding);
-        };
-        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
-            &scope_node_value.kind
-        else {
-            return Err(RuntimeFailure::ForeignBinding);
-        };
-        if !scope
-            .contains_phase_request(
-                program,
-                request,
-                match phase {
-                    SourceOwnerPhase::Acquire => {
-                        crate::core::source_resource::SourceResourcePhase::Acquire
-                    }
-                    SourceOwnerPhase::Finish => {
-                        crate::core::source_resource::SourceResourcePhase::Finish
-                    }
-                    SourceOwnerPhase::Borrow(phase) => phase,
-                },
-                work,
-            )
-            .map_err(|error| {
-                if error.reason() == crate::core::ValidationReason::Resource {
-                    effect_work_refusal(work)
-                } else {
-                    RuntimeFailure::ForeignBinding
-                }
-            })?
-        {
-            return Err(RuntimeFailure::ForeignBinding);
-        }
-        let header = scope.header();
-        let expected = match phase {
-            SourceOwnerPhase::Acquire => &header.acquire,
-            SourceOwnerPhase::Finish => &header.teardown,
-            SourceOwnerPhase::Borrow(_) => {
-                if !matches!(
-                    symbol.owner_role(),
-                    Some(super::source_contract::PreparedOwnerCall::Borrow { .. })
-                ) || !symbol
-                    .owner()
-                    .is_some_and(|owner| Arc::ptr_eq(owner, &header.owner))
-                {
-                    return Err(RuntimeFailure::ForeignBinding);
-                }
-                symbol
-            }
-        };
-        if !Arc::ptr_eq(symbol, expected)
-            || !program
-                .registry()
-                .native_symbol(symbol.operation())
-                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
-            || !program
-                .registry()
-                .effect(symbol.effect())
-                .and_then(|effect| effect.native_contract.as_ref())
-                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
-        {
-            return Err(RuntimeFailure::ForeignBinding);
-        }
+        let receipt = SourceOwnerScopeRequest::admit(
+            program, scope_node, request, phase, instance, symbol, work,
+        )?;
+        let header = receipt._scope.header();
         self.authenticate_owner_binding(symbol, work)?;
         self.authenticate_owner_binding(&header.teardown, work)?;
-        admit_complete_native_instance(symbol, instance, work)?;
-        let instance = crate::types::clone_effect_instance_with_budget(instance, work)
-            .map_err(|()| effect_work_refusal(work))?;
-        paid(work, 1)?;
-        let receipt = SourceOwnerScopeRequest {
-            _scope: Arc::clone(scope.original()),
-            _scope_node: scope_node,
-            _window: None,
-            _request: request,
-            _phase: phase,
-            _instance: instance,
-        };
         let binding = self
             .owners
             .get(&symbol.operation())
@@ -629,6 +549,7 @@ impl SourceNativeBindings {
                 let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
                 Ok(AdmittedSourceOwnerInvocation::Borrow(
                     AdmittedSourceOwnerBorrowInvocation {
+                        checked: None,
                         binding,
                         receipt,
                         hidden_error,
@@ -706,53 +627,21 @@ impl SourceNativeBindings {
         symbol: &Arc<CheckedForeignSymbol>,
         work: &mut TypeWorkBudget,
     ) -> Result<AdmittedSourceWindowInvocation<'bindings>, RuntimeFailure> {
-        paid(work, 6)?;
+        let receipt = SourceOwnerScopeRequest::admit_window(
+            program,
+            scope_node,
+            window_node,
+            request,
+            phase,
+            arguments,
+            instance,
+            symbol,
+            work,
+        )?;
         let crate::eval::ExecutableProgram::Effect(program) = program else {
             return Err(RuntimeFailure::ForeignBinding);
         };
-        let scope = match program.node(scope_node).map(|node| &node.kind) {
-            Some(EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope))) => scope,
-            _ => return Err(RuntimeFailure::ForeignBinding),
-        };
-        let window = match program.node(window_node).map(|node| &node.kind) {
-            Some(EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window))) => window,
-            _ => return Err(RuntimeFailure::ForeignBinding),
-        };
-        if !scope
-            .contains_phase_window(phase, window_node, work)
-            .map_err(|error| core_admission_failure(error, work))?
-            || !scope
-                .contains_window_request(phase, window_node, request, symbol, work)
-                .map_err(|error| core_admission_failure(error, work))?
-            || !program
-                .registry()
-                .native_symbol(symbol.operation())
-                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
-            || !program
-                .registry()
-                .effect(symbol.effect())
-                .and_then(|effect| effect.native_contract.as_ref())
-                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
-            || !super::source_access::window_operation_matches(
-                window.family(),
-                arguments,
-                symbol,
-                instance,
-                program.registry(),
-                work,
-            )
-            .map_err(|error| {
-                if error.is_resource_exhaustion() {
-                    effect_work_refusal(work)
-                } else {
-                    RuntimeFailure::ForeignBinding
-                }
-            })?
-        {
-            return Err(RuntimeFailure::ForeignBinding);
-        }
         self.authenticate_owner_binding(symbol, work)?;
-        admit_complete_native_instance(symbol, instance, work)?;
         let binding = self
             .owners
             .get(&symbol.operation())
@@ -767,20 +656,11 @@ impl SourceNativeBindings {
             return Err(RuntimeFailure::ForeignBinding);
         }
         let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
-        let instance = crate::types::clone_effect_instance_with_budget(instance, work)
-            .map_err(|()| effect_work_refusal(work))?;
-        paid(work, 1)?;
         Ok(AdmittedSourceWindowInvocation {
+            checked: None,
             binding,
             hidden_error,
-            receipt: SourceOwnerScopeRequest {
-                _scope: Arc::clone(scope.original()),
-                _scope_node: scope_node,
-                _window: Some(window_node),
-                _request: request,
-                _phase: SourceOwnerPhase::Borrow(phase),
-                _instance: instance,
-            },
+            receipt,
         })
     }
 
@@ -914,13 +794,183 @@ pub(crate) enum SourceOwnerPhase {
 /// Per-request scope authority retains the final checked template and full
 /// runtime instance. Only exact final-program scope/request admission creates it.
 #[derive(Debug)]
-struct SourceOwnerScopeRequest {
-    _scope: Arc<crate::core::source_resource::CheckedSourceResourceTemplate>,
-    _scope_node: crate::core::NodeId,
-    _window: Option<crate::core::NodeId>,
-    _request: crate::core::NodeId,
-    _phase: SourceOwnerPhase,
+pub(super) struct SourceOwnerScopeRequest {
+    pub(super) _scope: Arc<crate::core::source_resource::CheckedSourceResourceTemplate>,
+    pub(super) _scope_node: crate::core::NodeId,
+    pub(super) _window: Option<crate::core::NodeId>,
+    pub(super) _request: crate::core::NodeId,
+    pub(super) _phase: SourceOwnerPhase,
     _instance: EffectInstance,
+}
+
+impl SourceOwnerScopeRequest {
+    #[allow(clippy::too_many_arguments)]
+    fn admit_window(
+        program: &crate::eval::ExecutableProgram,
+        scope_node: crate::core::NodeId,
+        window_node: crate::core::NodeId,
+        request: crate::core::NodeId,
+        phase: crate::core::source_resource::SourceResourcePhase,
+        arguments: &[KindedArgument],
+        instance: &EffectInstance,
+        symbol: &Arc<CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        paid(work, 6)?;
+        let crate::eval::ExecutableProgram::Effect(program) = program else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let scope = match program.node(scope_node).map(|node| &node.kind) {
+            Some(EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope))) => scope,
+            _ => return Err(RuntimeFailure::ForeignBinding),
+        };
+        let window = match program.node(window_node).map(|node| &node.kind) {
+            Some(EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window))) => window,
+            _ => return Err(RuntimeFailure::ForeignBinding),
+        };
+        if !scope
+            .contains_phase_window(phase, window_node, work)
+            .map_err(|error| core_admission_failure(error, work))?
+            || !scope
+                .contains_window_request(phase, window_node, request, symbol, work)
+                .map_err(|error| core_admission_failure(error, work))?
+            || !program
+                .registry()
+                .native_symbol(symbol.operation())
+                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
+            || !program
+                .registry()
+                .effect(symbol.effect())
+                .and_then(|effect| effect.native_contract.as_ref())
+                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
+            || !super::source_access::window_operation_matches(
+                window.family(),
+                arguments,
+                symbol,
+                instance,
+                program.registry(),
+                work,
+            )
+            .map_err(|error| {
+                if error.is_resource_exhaustion() {
+                    effect_work_refusal(work)
+                } else {
+                    RuntimeFailure::ForeignBinding
+                }
+            })?
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+
+        admit_complete_native_instance(symbol, instance, work)?;
+        let instance = crate::types::clone_effect_instance_with_budget(instance, work)
+            .map_err(|()| effect_work_refusal(work))?;
+        paid(work, 1)?;
+        Ok(Self {
+            _scope: Arc::clone(scope.original()),
+            _scope_node: scope_node,
+            _window: Some(window_node),
+            _request: request,
+            _phase: SourceOwnerPhase::Borrow(phase),
+            _instance: instance,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn admit(
+        program: &crate::eval::ExecutableProgram,
+        scope_node: crate::core::NodeId,
+        request: crate::core::NodeId,
+        phase: SourceOwnerPhase,
+        instance: &EffectInstance,
+        symbol: &Arc<CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        paid(work, 6)?;
+        // Access-result members require the distinct exact-window invocation
+        // receipt, never an ordinary owner phase or compatible scalar callback.
+        if symbol.symbol().access_result().is_some() {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        let crate::eval::ExecutableProgram::Effect(program) = program else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let Some(scope_node_value) = program.node(scope_node) else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &scope_node_value.kind
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        if !scope
+            .contains_phase_request(
+                program,
+                request,
+                match phase {
+                    SourceOwnerPhase::Acquire => {
+                        crate::core::source_resource::SourceResourcePhase::Acquire
+                    }
+                    SourceOwnerPhase::Finish => {
+                        crate::core::source_resource::SourceResourcePhase::Finish
+                    }
+                    SourceOwnerPhase::Borrow(phase) => phase,
+                },
+                work,
+            )
+            .map_err(|error| {
+                if error.reason() == crate::core::ValidationReason::Resource {
+                    effect_work_refusal(work)
+                } else {
+                    RuntimeFailure::ForeignBinding
+                }
+            })?
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        let header = scope.header();
+        let expected = match phase {
+            SourceOwnerPhase::Acquire => &header.acquire,
+            SourceOwnerPhase::Finish => &header.teardown,
+            SourceOwnerPhase::Borrow(_) => {
+                if !matches!(
+                    symbol.owner_role(),
+                    Some(super::source_contract::PreparedOwnerCall::Borrow { .. })
+                ) || !symbol
+                    .owner()
+                    .is_some_and(|owner| Arc::ptr_eq(owner, &header.owner))
+                {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                symbol
+            }
+        };
+        if !Arc::ptr_eq(symbol, expected)
+            || !program
+                .registry()
+                .native_symbol(symbol.operation())
+                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
+            || !program
+                .registry()
+                .effect(symbol.effect())
+                .and_then(|effect| effect.native_contract.as_ref())
+                .is_some_and(|canonical| Arc::ptr_eq(canonical, symbol))
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        admit_complete_native_instance(symbol, instance, work)?;
+        let instance = crate::types::clone_effect_instance_with_budget(instance, work)
+            .map_err(|()| effect_work_refusal(work))?;
+        paid(work, 1)?;
+        Ok(SourceOwnerScopeRequest {
+            _scope: Arc::clone(scope.original()),
+            _scope_node: scope_node,
+            _window: None,
+            _request: request,
+            _phase: phase,
+            _instance: instance,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -932,11 +982,24 @@ pub(crate) enum AdmittedSourceOwnerInvocation<'bindings> {
 
 #[derive(Debug)]
 pub(crate) struct AdmittedSourceOwnerBorrowInvocation<'bindings> {
+    checked: Option<super::source_runtime::NativeOwnerBorrowRecord>,
     binding: &'bindings SourceOwnerBinding,
     receipt: SourceOwnerScopeRequest,
     hidden_error: ConstructorId,
 }
 impl<'bindings> AdmittedSourceOwnerBorrowInvocation<'bindings> {
+    pub(crate) fn prepare_checked_boundary(
+        mut self,
+        guard: &NativeOwnerGuard,
+        activation: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        self.checked = guard
+            .prepare_checked_borrow(&self.receipt, &self.binding.symbol, activation, work)
+            .map_err(|error| owner_admission_failure(error, work))?;
+        Ok(self)
+    }
+
     pub(crate) fn result(&self) -> super::source_contract::PreparedAbiResult {
         self.binding.symbol.symbol().result()
     }
@@ -957,9 +1020,24 @@ impl<'bindings> AdmittedSourceOwnerBorrowInvocation<'bindings> {
         let SourceOwnerCallback::Borrow(callback) = &self.binding.callback else {
             return Err(NativeScalarCallError::ArgumentContract);
         };
-        let raw = callback(operands)?;
+        if let Some(checked) = &self.checked {
+            checked
+                .begin()
+                .map_err(|_| NativeScalarCallError::ArgumentContract)?;
+        }
+        let raw = match callback(operands) {
+            Ok(raw) => raw,
+            Err(error) => {
+                if let Some(checked) = &self.checked {
+                    checked.output_failed();
+                }
+                return Err(error);
+            }
+        };
+        let checked = self.checked.map(|record| record.returned());
         Ok((
             SourceOwnerReturnedAuthority {
+                checked,
                 _symbol: &self.binding.symbol,
                 _receipt: self.receipt,
             },
@@ -972,6 +1050,7 @@ impl<'bindings> AdmittedSourceOwnerBorrowInvocation<'bindings> {
 /// preadmit the guard, source operands and complete result storage before invoke.
 #[derive(Debug)]
 pub(crate) struct AdmittedSourceWindowInvocation<'bindings> {
+    checked: Option<super::source_runtime::NativeOwnerBorrowRecord>,
     binding: &'bindings SourceOwnerBinding,
     hidden_error: ConstructorId,
     receipt: SourceOwnerScopeRequest,
@@ -982,6 +1061,18 @@ pub(crate) enum SourceWindowRaw {
     Scalar(NativeScalarReply),
 }
 impl<'bindings> AdmittedSourceWindowInvocation<'bindings> {
+    pub(crate) fn prepare_checked_boundary(
+        mut self,
+        guard: &NativeOwnerGuard,
+        activation: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        self.checked = guard
+            .prepare_checked_borrow(&self.receipt, &self.binding.symbol, activation, work)
+            .map_err(|error| owner_admission_failure(error, work))?;
+        Ok(self)
+    }
+
     pub(crate) fn returned_constructor(&self) -> ConstructorId {
         self.binding.symbol.call_codec().ids().returned
     }
@@ -996,13 +1087,31 @@ impl<'bindings> AdmittedSourceWindowInvocation<'bindings> {
         operands: &[NativeOwnerOperand],
     ) -> Result<(SourceOwnerReturnedAuthority<'bindings>, SourceWindowRaw), NativeScalarCallError>
     {
-        let raw = match &self.binding.callback {
-            SourceOwnerCallback::View(callback) => SourceWindowRaw::View(callback(operands)?),
-            SourceOwnerCallback::Borrow(callback) => SourceWindowRaw::Scalar(callback(operands)?),
-            _ => return Err(NativeScalarCallError::ArgumentContract),
+        if let Some(checked) = &self.checked {
+            checked
+                .begin()
+                .map_err(|_| NativeScalarCallError::ArgumentContract)?;
+        }
+        let result = match &self.binding.callback {
+            SourceOwnerCallback::View(callback) => callback(operands).map(SourceWindowRaw::View),
+            SourceOwnerCallback::Borrow(callback) => {
+                callback(operands).map(SourceWindowRaw::Scalar)
+            }
+            _ => Err(NativeScalarCallError::ArgumentContract),
         };
+        let raw = match result {
+            Ok(raw) => raw,
+            Err(error) => {
+                if let Some(checked) = &self.checked {
+                    checked.output_failed();
+                }
+                return Err(error);
+            }
+        };
+        let checked = self.checked.map(|record| record.returned());
         Ok((
             SourceOwnerReturnedAuthority {
+                checked,
                 _symbol: &self.binding.symbol,
                 _receipt: self.receipt,
             },
@@ -1032,11 +1141,29 @@ pub(crate) struct AdmittedSourceOwnerTeardownInvocation<'bindings> {
 /// capability. The complete request and original symbol remain retained.
 #[derive(Debug)]
 pub(crate) struct SourceOwnerReturnedAuthority<'bindings> {
+    checked: Option<super::source_runtime::NativeOwnerBoundary>,
     _symbol: &'bindings Arc<CheckedForeignSymbol>,
     _receipt: SourceOwnerScopeRequest,
 }
 
+impl SourceOwnerReturnedAuthority<'_> {
+    pub(crate) fn output_failed(&self) {
+        if let Some(checked) = &self.checked {
+            checked.output_failed();
+        }
+    }
+}
+
 impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
+    pub(crate) fn checked_boundary(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<super::source_runtime::NativeOwnerBoundary>, RuntimeFailure> {
+        self.readiness
+            .checked_boundary(work)
+            .map_err(|error| owner_admission_failure(error, work))
+    }
+
     pub(crate) fn destructor(&self) -> &Arc<CheckedForeignSymbol> {
         self.destructor
     }
@@ -1045,6 +1172,7 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
     pub(crate) fn prepare_owner_authority(
         mut self,
         activation: usize,
+        limits: Option<super::source_runtime::CheckedOwnerLimits>,
         state: crate::types::IterativeTypeOwner,
         access: crate::types::IterativeTypeOwner,
         dependencies: Vec<super::source_runtime::NativeOwnerDependency>,
@@ -1053,6 +1181,9 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
     ) -> Result<Self, RuntimeFailure> {
         self.readiness
             .prepare_authority(activation, state, access, dependencies, operands, work)
+            .map_err(|error| owner_admission_failure(error, work))?;
+        self.readiness
+            .prepare_checked_boundary(&self.receipt, activation, limits, work)
             .map_err(|error| owner_admission_failure(error, work))?;
         Ok(self)
     }
@@ -1142,9 +1273,14 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
                 return Err(NativeScalarCallError::ArgumentContract);
             }
         };
-        let raw = callback(values, self.readiness)?;
+        let mut readiness = self.readiness;
+        readiness
+            .begin_checked_acquire()
+            .map_err(|_| NativeScalarCallError::ArgumentContract)?;
+        let raw = callback(values, readiness)?;
         Ok((
             SourceOwnerReturnedAuthority {
+                checked: None,
                 _symbol: &self.binding.symbol,
                 _receipt: self.receipt,
             },
@@ -1154,6 +1290,18 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
 }
 
 impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
+    pub(crate) fn prepare_checked_finish(
+        &self,
+        guard: &NativeOwnerGuard,
+        activation: usize,
+        blocked: bool,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), RuntimeFailure> {
+        guard
+            .prepare_checked_finish(&self.receipt, activation, blocked, work)
+            .map_err(|error| owner_admission_failure(error, work))
+    }
+
     pub(crate) fn result(&self) -> super::source_contract::PreparedAbiResult {
         self.symbol.symbol().result()
     }
@@ -1186,9 +1334,13 @@ impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
         NativeOwnerDisposition,
         Option<super::source_runtime::NativeOwnerStatus>,
     ) {
+        guard
+            .begin_checked_finish()
+            .expect("admitted checked finish ticket");
         let (consumed, status) = guard.finish_with_plan(&self.plan, operands, blocked);
         (
             SourceOwnerReturnedAuthority {
+                checked: None,
                 _symbol: self.symbol,
                 _receipt: self.receipt,
             },
@@ -1510,3 +1662,10 @@ fn storage(units: usize) -> RuntimeFailure {
         None,
     ))
 }
+
+#[cfg(test)]
+#[path = "source_owner_boundary_tests.rs"]
+mod boundary_tests;
+
+#[cfg(test)]
+pub(crate) use boundary_tests::with_recorded_boundary_for_test;

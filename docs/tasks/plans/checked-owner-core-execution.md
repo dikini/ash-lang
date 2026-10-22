@@ -115,6 +115,13 @@ separate preparation delivery.
    carriers: implement any needed by this supported closure, otherwise reject
    them explicitly and leave their F3 acceptance open. Runtime conservative
    quarantine/loss transitions remain mandatory for supported violations.
+The active boundary source candidate implements steps 3–4 incrementally on
+retained `e9177c50`. Its current tests are authored, not run. Exact private
+resource-policy limits are data only, and public execution remains closed.
+The initialized-eight-byte preparation and PR101 checked-copy boundary event
+must be verified on retained PR101 before this component is delivered; injected
+returns do not establish native initialization, copying, freeing or authored Trace.
+
 3. Add F4 control using the existing flat owner storage and evaluator boundary
    frames. Before irreversible native entry reserve the configured mandatory
    activation/group, one owner, pending request, outcome, K and ordered resource-

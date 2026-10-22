@@ -309,6 +309,7 @@ impl Machine<'_> {
         )?;
         let acquisition_environment = environment.clone().extend(acquire_parameter, initializer)?;
         let boundary = Box::new(SourceResourceBoundary {
+            checked: None,
             node,
             key,
             environment,
@@ -349,6 +350,23 @@ impl Machine<'_> {
     }
 
     pub(super) fn return_source_resource(
+        &mut self,
+        boundary: Box<SourceResourceBoundary>,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let checked = boundary
+            .checked
+            .as_ref()
+            .map(|control| control.prepaid_scope_observer());
+        let result = self.return_source_resource_inner(boundary, value);
+        if result.is_err() {
+            if let Some(control) = checked {
+                control.output_failed();
+            }
+        }
+        result
+    }
+    fn return_source_resource_inner(
         &mut self,
         mut boundary: Box<SourceResourceBoundary>,
         value: Value,
@@ -440,6 +458,20 @@ impl Machine<'_> {
                 let body = scope.handler.body();
                 let handler = scope.handler.id();
                 boundary.payload = Some(data);
+                if let Some(checked) = &boundary.checked {
+                    checked
+                        .publish(key.0 as usize, boundary.node, &mut self.instantiation_work)
+                        .map_err(|error| match error {
+                            crate::foreign::source_runtime::NativeOwnerAdmissionError::Work => {
+                                super::effect_work_failure(
+                                    &self.instantiation_work,
+                                    None,
+                                    RuntimePhase::Acquisition,
+                                )
+                            }
+                            _ => RuntimeFailure::ForeignBinding,
+                        })?;
+                }
                 boundary.phase = ProviderPhase::Body;
                 self.frames.push(Frame::SourceResourceBoundary(boundary));
                 self.frames.push(Frame::HandlerBoundary {
@@ -469,6 +501,20 @@ impl Machine<'_> {
                 self.frames
                     .try_reserve(1)
                     .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                if let Some(checked) = &boundary.checked {
+                    checked
+                        .closing(key.0 as usize, boundary.node, &mut self.instantiation_work)
+                        .map_err(|error| match error {
+                            crate::foreign::source_runtime::NativeOwnerAdmissionError::Work => {
+                                super::effect_work_failure(
+                                    &self.instantiation_work,
+                                    None,
+                                    RuntimePhase::Cleanup,
+                                )
+                            }
+                            _ => RuntimeFailure::ForeignBinding,
+                        })?;
+                }
                 boundary.phase = ProviderPhase::Finish;
                 boundary.saved = (!boundary.discarded).then_some(value);
                 self.frames.push(Frame::SourceResourceBoundary(boundary));
@@ -520,6 +566,11 @@ impl Machine<'_> {
                         return Err(RuntimeFailure::ResourceCompletion);
                     }
                     // No abandoned body value or Scope report exists on discard.
+                    if let Some(checked) = &boundary.checked {
+                        checked
+                            .source_continued(key.0 as usize, boundary.node)
+                            .map_err(|_| RuntimeFailure::ForeignBinding)?;
+                    }
                     self.control = Some(Control::Return(Value::Unit));
                     return Ok(());
                 }
@@ -572,6 +623,14 @@ impl Machine<'_> {
                     .ok_or(RuntimeFailure::InvalidControlState)?;
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
                 let report = report.ok_or(RuntimeFailure::ResourceCompletion)?;
+                // The current CheckedScope report guard above remains closed.
+                // This connection cannot mark the authored continuation complete
+                // until the source Finish has actually returned and its report exists.
+                if let Some(checked) = &boundary.checked {
+                    checked
+                        .source_continued(key.0 as usize, boundary.node)
+                        .map_err(|_| RuntimeFailure::ForeignBinding)?;
+                }
                 self.control = Some(Control::Return(report));
             }
         }
@@ -1939,6 +1998,7 @@ mod source_handler_entry_tests {
                         frames: vec![
                             Frame::SourceResourceBoundary(Box::new(
                                 super::super::SourceResourceBoundary {
+                                    checked: None,
                                     node,
                                     key: ActivationKey(depth),
                                     phase: super::super::ProviderPhase::Body,
@@ -2095,6 +2155,7 @@ mod source_handler_entry_tests {
                         unreachable!()
                     };
                     let copy = SourceResourceBoundary {
+                        checked: None,
                         node: original.node,
                         key: original.key,
                         environment: original.environment.clone(),
@@ -2357,5 +2418,72 @@ mod source_handler_entry_tests {
         drop(machine);
         drop(held_guard);
         assert_eq!(DESTROYED.get(), 1);
+    }
+}
+
+/// An injected legacy-shaped return exercises the existing phase branch. It is
+/// NOT a well-typed CheckedFinish result, authored Trace or checked activation.
+#[cfg(test)]
+#[test]
+fn checked_owner_boundary_discarded_finish_continuation_model() {
+    use crate::foreign::source_runtime::CheckedOwnerContinuation;
+    for failure in [false, true] {
+        crate::foreign::source_bindings::with_recorded_boundary_for_test(
+            |program, node, checked| {
+                let mut machine = Machine::new_effect(program);
+                machine.instantiation_work = crate::types::TypeWorkBudget::default();
+                machine.live_resources = 1;
+                machine.control = None;
+                let codec = machine.source_resource_scope(node).unwrap().header().codec;
+                let observed = checked.prepaid_scope_observer();
+                assert_eq!(
+                    observed.snapshot().continuation,
+                    CheckedOwnerContinuation::Required
+                );
+                // Deliberately injected legacy-shaped data, not checked report admission.
+                let value = machine
+                    .foreign_constructor(
+                        codec.finish[usize::from(failure)],
+                        failure.then_some(Value::Unit),
+                        RuntimePhase::Cleanup,
+                    )
+                    .unwrap();
+                let boundary = Box::new(SourceResourceBoundary {
+                    checked: Some(checked),
+                    node,
+                    key: ActivationKey(111),
+                    environment: Environment::new(),
+                    owner: None,
+                    dependencies: Vec::new(),
+                    phase: ProviderPhase::Finish,
+                    payload: None,
+                    saved: None,
+                    consumed: true,
+                    blocked: false,
+                    discarded: true,
+                });
+                let result = machine.return_source_resource(boundary, value);
+                if failure {
+                    assert!(result.is_err());
+                    assert_eq!(
+                        observed.snapshot().continuation,
+                        CheckedOwnerContinuation::Required
+                    );
+                    assert!(observed.snapshot().terminal);
+                } else {
+                    result.unwrap();
+                    assert!(matches!(
+                        machine.control,
+                        Some(Control::Return(Value::Unit))
+                    ));
+                    assert_eq!(
+                        observed.snapshot().continuation,
+                        CheckedOwnerContinuation::Completed
+                    );
+                    assert!(observed.source_continued(111, node).is_err());
+                }
+                assert!(machine.source_bindings.is_none()); // no evaluator native callback
+            },
+        );
     }
 }

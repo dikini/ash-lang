@@ -102,6 +102,17 @@ a separately assigned `parallel-f3` target while F6 retains the existing shared
 target; this changes neither semantic/work limits nor execution permission. Include these task/plan documents with the
 product PR, not a standalone preparation PR.
 
+The next active slice connects these records to existing physical owner slots
+and evaluator boundaries. Its source candidate reserves explicit finite policy
+data before entry, journals acquisition, authenticated borrow/view/extent and
+finish observations, and retains continuation bookkeeping after guard consumption.
+The policy data is not approval; absent policy and existing public checked guards
+still refuse activation. Eight source tests are authored and unexecuted, including
+one genuine initialized-eight-byte source/Core preparation with explicitly injected
+returns. The fixture C helper has not been compiled or executed. Retained PR101's
+checked-copy callable/event attachment and genuine checked private-image refresh
+remain required before this component's final verification or publication.
+
 ## Acceptance for this bounded delivery
 
 - [ ] The real producer, body-free direct/facade consumer, link and independent

@@ -623,56 +623,78 @@ impl Machine<'_> {
         let codec = symbol.owner_codec().ok_or(RuntimeFailure::ForeignBinding)?;
         let nullable = *codec.nullable_constructors();
         let readable = codec.output_constructors()[1];
+        let Frame::SourceResourceBoundary(boundary) = &self.frames[provider] else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let invocation = invocation.prepare_checked_boundary(
+            boundary
+                .owner
+                .as_ref()
+                .ok_or(RuntimeFailure::ForeignBinding)?,
+            owner_key.0 as usize,
+            &mut self.instantiation_work,
+        )?;
         super::disposal::check()?;
-        let (_authority, raw) = invocation
+        let (authority, raw) = invocation
             .invoke(&operands)
             .map_err(|_| RuntimeFailure::ForeignBinding)?;
-        let result = match raw {
-            SourceWindowRaw::View(raw) if is_view => {
-                let payload = if raw.is_null() {
-                    super::HeapCell::Constructor(nullable[0], None)
-                } else {
-                    let Frame::SourceWindowBoundary(window) = &mut self.frames[selected] else {
-                        unreachable!("window cannot move during synchronous callback")
+        let reported = (|| {
+            let result = match raw {
+                SourceWindowRaw::View(raw) if is_view => {
+                    let payload = if raw.is_null() {
+                        super::HeapCell::Constructor(nullable[0], None)
+                    } else {
+                        let Frame::SourceWindowBoundary(window) = &mut self.frames[selected] else {
+                            unreachable!("window cannot move during synchronous callback")
+                        };
+                        let key = WindowViewKey {
+                            window: window_key,
+                            slot: window.views.len(),
+                        };
+                        let (symbol, operands) =
+                            prepared_view.expect("view readiness owns passive record");
+                        window.views.push(WindowView {
+                            raw,
+                            symbol,
+                            operands,
+                        });
+                        super::HeapCell::Constructor(
+                            nullable[1],
+                            Some(Value::NativeWindowView(key)),
+                        )
                     };
-                    let key = WindowViewKey {
-                        window: window_key,
-                        slot: window.views.len(),
-                    };
-                    let (symbol, operands) =
-                        prepared_view.expect("view readiness owns passive record");
-                    window.views.push(WindowView {
+                    self.heap[start] = payload;
+                    self.heap[start + 1] =
+                        super::HeapCell::Constructor(readable, Some(Value::Location(start)));
+                    self.heap[start + 2] =
+                        super::HeapCell::Constructor(returned, Some(Value::Location(start + 1)));
+                    Value::Location(start + 2)
+                }
+                SourceWindowRaw::Scalar(raw) if !is_view => {
+                    let integer = widen_gnu_reply(
                         raw,
-                        symbol,
-                        operands,
-                    });
-                    super::HeapCell::Constructor(nullable[1], Some(Value::NativeWindowView(key)))
-                };
-                self.heap[start] = payload;
-                self.heap[start + 1] =
-                    super::HeapCell::Constructor(readable, Some(Value::Location(start)));
-                self.heap[start + 2] =
-                    super::HeapCell::Constructor(returned, Some(Value::Location(start + 1)));
-                Value::Location(start + 2)
-            }
-            SourceWindowRaw::Scalar(raw) if !is_view => {
-                let integer =
-                    widen_gnu_reply(raw, report.expect("scalar readiness owns report allowance"))
-                        .map_err(|_| RuntimeFailure::ForeignBinding)?
-                        .ok_or(RuntimeFailure::ForeignBinding)?;
-                let payload = if let Some(view) = extent_view {
-                    let length = integer.to_usize().ok_or(RuntimeFailure::ForeignBinding)?;
-                    Value::NativeWindowExtent(WindowExtentKey { view, length })
-                } else {
-                    Value::Integer(integer)
-                };
-                self.heap[start] = super::HeapCell::Constructor(returned, Some(payload));
-                Value::Location(start)
-            }
-            _ => return Err(RuntimeFailure::ForeignBinding),
-        };
-        self.control = Some(Control::Return(result));
-        Ok(())
+                        report.expect("scalar readiness owns report allowance"),
+                    )
+                    .map_err(|_| RuntimeFailure::ForeignBinding)?
+                    .ok_or(RuntimeFailure::ForeignBinding)?;
+                    let payload = if let Some(view) = extent_view {
+                        let length = integer.to_usize().ok_or(RuntimeFailure::ForeignBinding)?;
+                        Value::NativeWindowExtent(WindowExtentKey { view, length })
+                    } else {
+                        Value::Integer(integer)
+                    };
+                    self.heap[start] = super::HeapCell::Constructor(returned, Some(payload));
+                    Value::Location(start)
+                }
+                _ => return Err(RuntimeFailure::ForeignBinding),
+            };
+            self.control = Some(Control::Return(result));
+            Ok(())
+        })();
+        if reported.is_err() {
+            authority.output_failed();
+        }
+        reported
     }
 
     fn window_enclosing_operand(

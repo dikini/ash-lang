@@ -330,6 +330,7 @@ struct NativeOwnerSlot {
     dependencies: Box<[usize]>,
     closure: Box<[usize]>,
     live_dependents: usize,
+    checked: Option<super::super::checked_control::RuntimeBoundary>,
 }
 
 impl NativeOwnerStorage {
@@ -350,6 +351,7 @@ impl NativeOwnerStorage {
             dependencies: Box::new([]),
             closure: Box::new([]),
             live_dependents: 0,
+            checked: None,
         });
         Ok(index)
     }
@@ -371,9 +373,15 @@ impl NativeOwnerStorage {
 
     fn quarantine(slots: &mut [NativeOwnerSlot], index: usize) {
         slots[index].quarantined = true;
+        if let Some(checked) = &mut slots[index].checked {
+            checked.quarantine();
+        }
         for position in 0..slots[index].closure.len() {
             let dependency = slots[index].closure[position];
             slots[dependency].quarantined = true;
+            if let Some(checked) = &mut slots[dependency].checked {
+                checked.quarantine();
+            }
         }
     }
 
@@ -406,6 +414,11 @@ impl NativeOwnerStorage {
     /// reservation or source code runs here. Unresolved storage is not retried.
     pub(crate) fn close(&self) -> bool {
         let mut slots = self.slots.borrow_mut();
+        for slot in slots.iter_mut() {
+            if let Some(checked) = &mut slot.checked {
+                checked.output_failed();
+            }
+        }
         for index in (0..slots.len()).rev() {
             Self::destroy(&mut slots, index);
         }
@@ -615,7 +628,11 @@ impl NativeOwnerGuard {
             (consumes, status) = plan.invoke(operands);
             if consumes {
                 NativeOwnerStorage::record_consumed(&mut slots, self.slot);
-            } else {
+            }
+            if let Some(checked) = &mut slots[self.slot].checked {
+                checked.finished(consumes);
+            }
+            if !consumes {
                 NativeOwnerStorage::quarantine(&mut slots, self.slot);
             }
         }
@@ -634,6 +651,173 @@ impl NativeOwnerGuard {
 impl Drop for NativeOwnerGuard {
     fn drop(&mut self) {
         self.storage.abandon(self.slot);
+    }
+}
+
+/// Nonowning bookkeeping for an already reserved physical slot. It has no
+/// address/callback/entry method and cannot approve or invoke native code.
+#[derive(Debug)]
+pub(crate) struct NativeOwnerBoundary {
+    storage: Rc<NativeOwnerStorage>,
+    slot: usize,
+}
+impl NativeOwnerBoundary {
+    pub(crate) fn publish(
+        &self,
+        activation: usize,
+        scope: crate::core::NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), NativeOwnerAdmissionError> {
+        self.storage.slots.borrow_mut()[self.slot]
+            .checked
+            .as_mut()
+            .ok_or(NativeOwnerAdmissionError::Authority)?
+            .publish(activation, scope, work)
+            .map_err(control_error)
+    }
+    /// Exactly the Acquire/Body/Finish boundary-return observers are prepaid
+    /// at reservation. This retain supplies no native entry or owner authority.
+    pub(crate) fn prepaid_scope_observer(&self) -> Self {
+        Self {
+            storage: Rc::clone(&self.storage),
+            slot: self.slot,
+        }
+    }
+    pub(crate) fn closing(
+        &self,
+        activation: usize,
+        scope: crate::core::NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), NativeOwnerAdmissionError> {
+        self.storage.slots.borrow_mut()[self.slot]
+            .checked
+            .as_mut()
+            .ok_or(NativeOwnerAdmissionError::Authority)?
+            .closing(activation, scope, work)
+            .map_err(control_error)
+    }
+    pub(crate) fn output_failed(&self) {
+        if let Some(control) = &mut self.storage.slots.borrow_mut()[self.slot].checked {
+            control.output_failed();
+        }
+    }
+    pub(crate) fn source_continued(
+        &self,
+        activation: usize,
+        scope: crate::core::NodeId,
+    ) -> Result<(), NativeOwnerAdmissionError> {
+        self.storage.slots.borrow_mut()[self.slot]
+            .checked
+            .as_mut()
+            .ok_or(NativeOwnerAdmissionError::Authority)?
+            .source_continued(activation, scope)
+            .map_err(control_error)
+    }
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> super::super::checked_control::BoundarySnapshot {
+        self.storage.slots.borrow()[self.slot]
+            .checked
+            .as_ref()
+            .unwrap()
+            .snapshot()
+    }
+}
+#[derive(Debug)]
+pub(crate) struct NativeOwnerBorrowRecord {
+    boundary: NativeOwnerBoundary,
+    original: Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+}
+impl NativeOwnerBorrowRecord {
+    pub(crate) fn begin(&self) -> Result<(), NativeOwnerAdmissionError> {
+        self.boundary.storage.slots.borrow_mut()[self.boundary.slot]
+            .checked
+            .as_mut()
+            .ok_or(NativeOwnerAdmissionError::Authority)?
+            .begin_borrow(&self.original)
+            .map_err(control_error)
+    }
+    pub(crate) fn returned(self) -> NativeOwnerBoundary {
+        self.boundary.storage.slots.borrow_mut()[self.boundary.slot]
+            .checked
+            .as_mut()
+            .expect("prepared borrow record")
+            .borrowed();
+        self.boundary
+    }
+    pub(crate) fn output_failed(&self) {
+        self.boundary.output_failed();
+    }
+}
+fn control_error(error: super::super::checked_control::Failure) -> NativeOwnerAdmissionError {
+    if error == super::super::checked_control::Failure::Resource {
+        NativeOwnerAdmissionError::Work
+    } else {
+        NativeOwnerAdmissionError::Authority
+    }
+}
+impl NativeOwnerGuard {
+    pub(crate) fn checked_boundary(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<NativeOwnerBoundary>, NativeOwnerAdmissionError> {
+        if self.storage.slots.borrow()[self.slot].checked.is_none() {
+            return Ok(None);
+        }
+        pay(work, 1)?; // one nonowning Rc retain; never a second owner/authority
+        Ok(Some(NativeOwnerBoundary {
+            storage: Rc::clone(&self.storage),
+            slot: self.slot,
+        }))
+    }
+    pub(crate) fn prepare_checked_borrow(
+        &self,
+        receipt: &super::super::source_bindings::SourceOwnerScopeRequest,
+        original: &Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+        activation: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<NativeOwnerBorrowRecord>, NativeOwnerAdmissionError> {
+        {
+            let slots = self.storage.slots.borrow();
+            if let Some(control) = &slots[self.slot].checked {
+                control
+                    .borrow_request(receipt, activation, original, work)
+                    .map_err(control_error)?;
+            } else if receipt._scope.header().original.host.is_some() {
+                return Err(NativeOwnerAdmissionError::Authority);
+            } else {
+                return Ok(None);
+            }
+        }
+        pay(work, 1)?; // retain this exact admitted original, not its operation ID
+        let boundary = self
+            .checked_boundary(work)?
+            .ok_or(NativeOwnerAdmissionError::Authority)?;
+        Ok(Some(NativeOwnerBorrowRecord {
+            boundary,
+            original: Arc::clone(original),
+        }))
+    }
+    pub(crate) fn prepare_checked_finish(
+        &self,
+        receipt: &super::super::source_bindings::SourceOwnerScopeRequest,
+        activation: usize,
+        blocked: bool,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), NativeOwnerAdmissionError> {
+        if let Some(control) = &mut self.storage.slots.borrow_mut()[self.slot].checked {
+            control
+                .prepare_finish(receipt, activation, blocked, work)
+                .map_err(control_error)?;
+        } else if receipt._scope.header().original.host.is_some() {
+            return Err(NativeOwnerAdmissionError::Authority);
+        }
+        Ok(())
+    }
+    pub(crate) fn begin_checked_finish(&self) -> Result<(), NativeOwnerAdmissionError> {
+        if let Some(control) = &mut self.storage.slots.borrow_mut()[self.slot].checked {
+            control.begin_finish().map_err(control_error)?;
+        }
+        Ok(())
     }
 }
 
@@ -734,6 +918,52 @@ impl NativeOwnerGuardReady {
         })
     }
 
+    pub(crate) fn prepare_checked_boundary(
+        &mut self,
+        receipt: &super::super::source_bindings::SourceOwnerScopeRequest,
+        activation: usize,
+        limits: Option<super::super::checked_control::BoundaryLimits>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), NativeOwnerAdmissionError> {
+        if receipt._scope.header().original.host.is_none() {
+            return Ok(());
+        }
+        pay(work, 3)?; // owner identity, existing slot authority and activation
+        {
+            let slots = self.guard.storage.slots.borrow();
+            let slot = &slots[self.guard.slot];
+            if !Arc::ptr_eq(self.guard.owner(), &receipt._scope.header().owner)
+                || slot.checked.is_some()
+                || !slot
+                    .authority
+                    .as_ref()
+                    .is_some_and(|authority| authority.activation == activation)
+            {
+                return Err(NativeOwnerAdmissionError::Authority);
+            }
+        }
+        let checked = super::super::checked_control::RuntimeBoundary::reserve(
+            receipt,
+            activation,
+            limits.ok_or(NativeOwnerAdmissionError::Authority)?,
+            work,
+        )
+        .map_err(control_error)?;
+        self.guard.storage.slots.borrow_mut()[self.guard.slot].checked = Some(checked);
+        Ok(())
+    }
+    pub(crate) fn checked_boundary(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<NativeOwnerBoundary>, NativeOwnerAdmissionError> {
+        self.guard.checked_boundary(work)
+    }
+    pub(crate) fn begin_checked_acquire(&mut self) -> Result<(), NativeOwnerAdmissionError> {
+        if let Some(control) = &mut self.guard.storage.slots.borrow_mut()[self.guard.slot].checked {
+            control.begin_acquire().map_err(control_error)?;
+        }
+        Ok(())
+    }
     pub(crate) fn prepare_byte_callbacks(&mut self, callbacks: NativeByteCallbacks) {
         self.guard.bytes = Some(callbacks);
     }
@@ -877,6 +1107,14 @@ impl NativeOwnerCallReturned {
             .is_some()
         {
             self.guard.initialized_bytes = self.prepared_initialized_bytes;
+        }
+        {
+            let mut slots = self.guard.storage.slots.borrow_mut();
+            let index = self.guard.slot;
+            let present = slots[index].raw.address.is_some();
+            if let Some(checked) = &mut slots[index].checked {
+                checked.acquired(present);
+            }
         }
         NativeOwnerCallRecorded {
             guard: self.guard,

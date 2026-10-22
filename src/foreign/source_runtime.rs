@@ -14,9 +14,9 @@ mod view;
 pub use view::{NativeViewCallback, NativeViewReadCallback, NativeViewReturned};
 
 pub(crate) use owner::{
-    NativeByteAccess, NativeByteCallbacks, NativeOwnerAdmissionError, NativeOwnerDependency,
-    NativeOwnerDestruction, NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerStatus,
-    NativeOwnerStorage, NativeOwnerViewKind,
+    NativeByteAccess, NativeByteCallbacks, NativeOwnerAdmissionError, NativeOwnerBorrowRecord,
+    NativeOwnerBoundary, NativeOwnerDependency, NativeOwnerDestruction, NativeOwnerDisposition,
+    NativeOwnerGuard, NativeOwnerStatus, NativeOwnerStorage, NativeOwnerViewKind,
 };
 #[doc(hidden)]
 pub use owner::{
@@ -442,3 +442,8 @@ mod declared_constant_tests {
         );
     }
 }
+
+pub(crate) use super::checked_control::BoundaryLimits as CheckedOwnerLimits;
+
+#[cfg(test)]
+pub(crate) use super::checked_control::Continuation as CheckedOwnerContinuation;
