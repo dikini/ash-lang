@@ -1,0 +1,738 @@
+//! Deterministic producer observations, not approval or an executable capability.
+//! The existing producer cannot establish the full checked/native/tool/context
+//! closure. Missing fields stay explicit, including on otherwise matching data.
+use crate::types::TypeWorkBudget;
+use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::fs::File;
+use std::{io::Read, path::Path};
+
+const MAGIC: &[u8; 8] = b"ASHRCP01";
+const FIELDS: usize = 16;
+const RECORD_BYTES: usize = 42;
+
+/// Explicit opt-in bounds. These do not change ordinary build preparation limits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProducerReceiptLimits {
+    pub artifact_bytes: usize,
+    pub receipt_bytes: usize,
+    pub records: usize,
+    pub work: usize,
+}
+
+/// No variant grants protected approval or immutable execution authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReceiptFailure {
+    Resource,
+    Malformed,
+    Version,
+    Association,
+    Input,
+    IncompleteClosure,
+    ProtectedAuthorityUnavailable,
+}
+
+/// An observation of exact bytes. A digest is not a trust decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArtifactPin {
+    pub bytes: u64,
+    pub sha256: [u8; 32],
+}
+
+/// Field identities are versioned wire data, not a second semantic registry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum ReceiptField {
+    ProgramImage,
+    ExpectedFacts,
+    GeneratedRust,
+    OriginalMappings,
+    RuntimeFingerprint,
+    BuildConfiguration,
+    DeclaredNativeInputs,
+    FinalElf,
+    CheckedContracts,
+    RuntimeClosure,
+    NativeClosure,
+    HeaderClosure,
+    ToolClosure,
+    Policy,
+    Premises,
+    Context,
+}
+
+/// Independently decoded producer data. All current records describe the
+/// existing native build profile, not the strict checked whole-static profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProducerReceipt {
+    limits: ProducerReceiptLimits,
+    fields: [Option<ArtifactPin>; FIELDS],
+}
+
+fn pay(work: &mut TypeWorkBudget, amount: usize) -> Result<(), ReceiptFailure> {
+    work.charge(amount).map_err(|()| ReceiptFailure::Resource)
+}
+fn pin(bytes: &[u8], work: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
+    pay(work, bytes.len())?;
+    Ok(ArtifactPin {
+        bytes: u64::try_from(bytes.len()).map_err(|_| ReceiptFailure::Resource)?,
+        sha256: Sha256::digest(bytes).into(),
+    })
+}
+
+impl ProducerReceipt {
+    pub fn declared_limits(&self) -> ProducerReceiptLimits {
+        self.limits
+    }
+
+    pub fn pin(&self, field: ReceiptField) -> Option<ArtifactPin> {
+        self.fields[field as usize]
+    }
+
+    /// Strict bounded independent decoding. Unknown versions, fields, duplicate
+    /// or reordered records, trailing bytes and noncanonical missing pins refuse.
+    pub fn decode(bytes: &[u8], limits: ProducerReceiptLimits) -> Result<Self, ReceiptFailure> {
+        Self::decode_with_work(bytes, limits, &mut TypeWorkBudget::with_limit(limits.work))
+    }
+    /// Reads at most the configured receipt bound plus one refusal byte. This
+    /// does not establish protected ownership of the reader or its source.
+    pub fn read(
+        reader: &mut impl Read,
+        limits: ProducerReceiptLimits,
+    ) -> Result<Self, ReceiptFailure> {
+        let mut work = TypeWorkBudget::with_limit(limits.work);
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let remaining = limits
+                .receipt_bytes
+                .checked_sub(bytes.len())
+                .ok_or(ReceiptFailure::Resource)?;
+            let requested = remaining.clamp(1, buffer.len());
+            pay(&mut work, requested)?;
+            let count = reader
+                .read(&mut buffer[..requested])
+                .map_err(|_| ReceiptFailure::Input)?;
+            if count == 0 {
+                break;
+            }
+            if count > remaining {
+                return Err(ReceiptFailure::Resource);
+            }
+            pay(&mut work, count)?;
+            bytes
+                .try_reserve_exact(count)
+                .map_err(|_| ReceiptFailure::Resource)?;
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        Self::decode_with_work(&bytes, limits, &mut work)
+    }
+    fn decode_with_work(
+        bytes: &[u8],
+        limits: ProducerReceiptLimits,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ReceiptFailure> {
+        pay(work, 2)?;
+        if bytes.len() > limits.receipt_bytes || limits.records < FIELDS {
+            return Err(ReceiptFailure::Resource);
+        }
+        pay(work, bytes.len())?;
+        let mut cursor = Cursor { bytes, at: 0 };
+        if cursor.take(8)? != MAGIC {
+            return Err(ReceiptFailure::Malformed);
+        }
+        if cursor.take(4)? != 1_u32.to_le_bytes() {
+            return Err(ReceiptFailure::Version);
+        }
+        // role=existing-native, mode=existing-profile. Neither asserts static
+        // closure or reinterprets ordinary shared-library builds as checked.
+        if cursor.take(2)? != [0, 0] {
+            return Err(ReceiptFailure::Association);
+        }
+        let target_len = cursor.u32()? as usize;
+        if cursor.take(target_len)? != super::host::NATIVE_TARGET.as_bytes() {
+            return Err(ReceiptFailure::Association);
+        }
+        if cursor.u32()? as usize != FIELDS {
+            return Err(ReceiptFailure::Malformed);
+        }
+        let mut declared = [0_usize; 4];
+        for limit in &mut declared {
+            *limit = usize::try_from(u64::from_le_bytes(
+                cursor
+                    .take(8)?
+                    .try_into()
+                    .map_err(|_| ReceiptFailure::Malformed)?,
+            ))
+            .map_err(|_| ReceiptFailure::Resource)?;
+            if *limit == 0 {
+                return Err(ReceiptFailure::Malformed);
+            }
+        }
+        let declared = ProducerReceiptLimits {
+            artifact_bytes: declared[0],
+            receipt_bytes: declared[1],
+            records: declared[2],
+            work: declared[3],
+        };
+        if declared.artifact_bytes > limits.artifact_bytes
+            || declared.receipt_bytes > limits.receipt_bytes
+            || declared.records > limits.records
+            || declared.work > limits.work
+        {
+            return Err(ReceiptFailure::Resource);
+        }
+        if bytes.len() > declared.receipt_bytes || declared.records < FIELDS {
+            return Err(ReceiptFailure::Resource);
+        }
+        let mut fields = [None; FIELDS];
+        for (index, field) in fields.iter_mut().enumerate() {
+            pay(work, 1)?;
+            if cursor.take(1)? != [index as u8] {
+                return Err(ReceiptFailure::Malformed);
+            }
+            let present = cursor.take(1)?[0];
+            let size = u64::from_le_bytes(
+                cursor
+                    .take(8)?
+                    .try_into()
+                    .map_err(|_| ReceiptFailure::Malformed)?,
+            );
+            let digest: [u8; 32] = cursor
+                .take(32)?
+                .try_into()
+                .map_err(|_| ReceiptFailure::Malformed)?;
+            *field = match present {
+                0 if size == 0 && digest == [0; 32] => None,
+                1 if size
+                    <= u64::try_from(declared.artifact_bytes)
+                        .map_err(|_| ReceiptFailure::Resource)? =>
+                {
+                    Some(ArtifactPin {
+                        bytes: size,
+                        sha256: digest,
+                    })
+                }
+                1 => return Err(ReceiptFailure::Resource),
+                _ => return Err(ReceiptFailure::Malformed),
+            };
+        }
+        if cursor.at != bytes.len() {
+            return Err(ReceiptFailure::Malformed);
+        }
+        // Producer-required observations cannot be erased to make a smaller
+        // purported receipt. FinalElf may be absent during preparation only.
+        if fields[..6].iter().any(Option::is_none) {
+            return Err(ReceiptFailure::Association);
+        }
+        Ok(Self {
+            fields,
+            limits: declared,
+        })
+    }
+    fn encode(
+        &self,
+        work: &mut TypeWorkBudget,
+        limits: ProducerReceiptLimits,
+    ) -> Result<Vec<u8>, ReceiptFailure> {
+        let target = super::host::NATIVE_TARGET.as_bytes();
+        let size = 54_usize
+            .checked_add(target.len())
+            .and_then(|n| n.checked_add(FIELDS * RECORD_BYTES))
+            .ok_or(ReceiptFailure::Resource)?;
+        pay(work, 2)?;
+        if size > limits.receipt_bytes || limits.records < FIELDS {
+            return Err(ReceiptFailure::Resource);
+        }
+        pay(work, size)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(size)
+            .map_err(|_| ReceiptFailure::Resource)?;
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&(target.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(target);
+        bytes.extend_from_slice(&(FIELDS as u32).to_le_bytes());
+        for limit in [
+            self.limits.artifact_bytes,
+            self.limits.receipt_bytes,
+            self.limits.records,
+            self.limits.work,
+        ] {
+            bytes.extend_from_slice(
+                &u64::try_from(limit)
+                    .map_err(|_| ReceiptFailure::Resource)?
+                    .to_le_bytes(),
+            );
+        }
+        for (index, field) in self.fields.iter().enumerate() {
+            pay(work, 1)?;
+            bytes.push(index as u8);
+            bytes.push(u8::from(field.is_some()));
+            let field = field.unwrap_or(ArtifactPin {
+                bytes: 0,
+                sha256: [0; 32],
+            });
+            if field.bytes
+                > u64::try_from(limits.artifact_bytes).map_err(|_| ReceiptFailure::Resource)?
+            {
+                return Err(ReceiptFailure::Resource);
+            }
+            bytes.extend_from_slice(&field.bytes.to_le_bytes());
+            bytes.extend_from_slice(&field.sha256);
+        }
+        Ok(bytes)
+    }
+    /// Compares independently decoded data under explicit work bounds. The
+    /// expected value is another claim, not an approval or protected context.
+    pub fn matches_expected(
+        &self,
+        expected: &Self,
+        limits: ProducerReceiptLimits,
+    ) -> Result<(), ReceiptFailure> {
+        let mut work = TypeWorkBudget::with_limit(limits.work);
+        pay(&mut work, FIELDS * RECORD_BYTES + 32)?;
+        if self != expected {
+            return Err(ReceiptFailure::Association);
+        }
+        Ok(())
+    }
+    /// Existing-profile producer records lack checked required closure. Matching
+    /// claim hashes cannot fill absent originals, headers, tools or premises.
+    pub fn check_checked_applicability(&self) -> Result<(), ReceiptFailure> {
+        Err(ReceiptFailure::IncompleteClosure)
+    }
+    /// No protected context/store constructor exists in this slice. Same-UID
+    /// receipt files and exact claim matches remain untrusted producer data.
+    pub fn activate(&self) -> Result<std::convert::Infallible, ReceiptFailure> {
+        Err(ReceiptFailure::ProtectedAuthorityUnavailable)
+    }
+}
+
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+impl<'a> Cursor<'a> {
+    fn take(&mut self, count: usize) -> Result<&'a [u8], ReceiptFailure> {
+        let end = self
+            .at
+            .checked_add(count)
+            .ok_or(ReceiptFailure::Malformed)?;
+        let bytes = self
+            .bytes
+            .get(self.at..end)
+            .ok_or(ReceiptFailure::Malformed)?;
+        self.at = end;
+        Ok(bytes)
+    }
+    fn u32(&mut self) -> Result<u32, ReceiptFailure> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?
+                .try_into()
+                .map_err(|_| ReceiptFailure::Malformed)?,
+        ))
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ReceiptSeed {
+    receipt: ProducerReceipt,
+    limits: ProducerReceiptLimits,
+    work: TypeWorkBudget,
+    configuration: Option<[ArtifactPin; 3]>,
+}
+impl ReceiptSeed {
+    pub(super) fn receipt(&self) -> &ProducerReceipt {
+        &self.receipt
+    }
+    pub(super) fn from_emission(
+        build: &super::image::NativeBuildImage,
+        program: &crate::core::ValidatedEffectProgram,
+        provenance: &[(
+            crate::module::ModuleId,
+            std::sync::Arc<crate::source::SourceFile>,
+        )],
+        emission: &super::emit::NativeHostEmission,
+        configuration: &[u8],
+        limits: ProducerReceiptLimits,
+    ) -> Result<Self, ReceiptFailure> {
+        let mut work = TypeWorkBudget::with_limit(limits.work);
+        let (image, facts) = emission.payloads.bytes();
+        let applicability = super::checked_admission::Applicability {
+            version: 1,
+            mode: super::checked_admission::Mode::InProcess,
+            target: super::host::NATIVE_TARGET,
+            runtime: super::runtime_fingerprint(),
+            native_closure: [0; 32],
+            premises: [0; 32],
+            context: None,
+            limits: super::checked_admission::Limits {
+                image: limits.artifact_bytes,
+                facts: limits.artifact_bytes,
+                bridges: limits.records,
+                metadata: limits.receipt_bytes,
+            },
+        };
+        super::checked_admission::PassivePlan::admit(
+            build,
+            program,
+            provenance,
+            image,
+            facts,
+            &applicability,
+            &mut work,
+        )
+        .map_err(|error| {
+            if error == super::checked_admission::Failure::Resource {
+                ReceiptFailure::Resource
+            } else {
+                ReceiptFailure::Association
+            }
+        })?;
+        let mut fields = [None; FIELDS];
+        for (field, bytes) in [
+            (ReceiptField::ProgramImage, image),
+            (ReceiptField::ExpectedFacts, facts),
+            (ReceiptField::GeneratedRust, emission.rust_source.as_bytes()),
+            (
+                ReceiptField::RuntimeFingerprint,
+                &super::runtime_fingerprint()[..],
+            ),
+            (ReceiptField::BuildConfiguration, configuration),
+        ] {
+            if bytes.len() > limits.artifact_bytes {
+                return Err(ReceiptFailure::Resource);
+            }
+            fields[field as usize] = Some(pin(bytes, &mut work)?);
+        }
+        // Full ABI/source facts and typed wrapper source are separately pinned
+        // above. Preserve ordered emitted wire coordinates without a new registry.
+        pay(
+            &mut work,
+            build
+                .libraries
+                .len()
+                .checked_add(build.bridges.len())
+                .ok_or(ReceiptFailure::Resource)?,
+        )?;
+        let count = build
+            .libraries
+            .iter()
+            .try_fold(2_usize, |n, l| {
+                n.checked_add(4)?.checked_add(l.members.len())
+            })
+            .and_then(|n| {
+                build
+                    .bridges
+                    .len()
+                    .checked_mul(5)
+                    .and_then(|b| n.checked_add(b))
+            })
+            .and_then(|n| n.checked_mul(8))
+            .ok_or(ReceiptFailure::Resource)?;
+        if count > limits.artifact_bytes {
+            return Err(ReceiptFailure::Resource);
+        }
+        pay(&mut work, count)?;
+        let mut mappings = Vec::new();
+        mappings
+            .try_reserve_exact(count)
+            .map_err(|_| ReceiptFailure::Resource)?;
+        let mut number = |n: usize| -> Result<(), ReceiptFailure> {
+            mappings.extend_from_slice(
+                &u64::try_from(n)
+                    .map_err(|_| ReceiptFailure::Resource)?
+                    .to_le_bytes(),
+            );
+            Ok(())
+        };
+        number(build.libraries.len())?;
+        number(build.bridges.len())?;
+        for library in &build.libraries {
+            for n in [
+                library.image_library as usize,
+                library.module as usize,
+                library.ordinal as usize,
+                library.members.len(),
+            ] {
+                number(n)?;
+            }
+            for &member in &library.members {
+                number(member)?;
+            }
+        }
+        for bridge in &build.bridges {
+            for n in [
+                bridge.image_symbol,
+                bridge.symbol_index,
+                bridge.operation_module,
+                bridge.operation_effect,
+                bridge.operation_local,
+            ] {
+                number(n as usize)?;
+            }
+        }
+        fields[ReceiptField::OriginalMappings as usize] = Some(pin(&mappings, &mut work)?);
+        let receipt = ProducerReceipt { fields, limits };
+        // Admit storage/wire bounds now, before any native tool can run.
+        let _ = receipt.encode(&mut work, limits)?;
+        Ok(Self {
+            receipt,
+            limits,
+            work,
+            configuration: None,
+        })
+    }
+    pub(super) fn observe_native_inputs(
+        &mut self,
+        inputs: &[super::host::NativeLinkInput],
+    ) -> Result<(), ReceiptFailure> {
+        let mut combined = Sha256::new();
+        pay(&mut self.work, inputs.len())?;
+        let mut total = 0_usize;
+        for input in inputs {
+            let path = input.path().as_os_str().as_encoded_bytes();
+            total = total
+                .checked_add(49)
+                .and_then(|n| n.checked_add(path.len()))
+                .ok_or(ReceiptFailure::Resource)?;
+            if total > self.limits.artifact_bytes {
+                return Err(ReceiptFailure::Resource);
+            }
+            pay(
+                &mut self.work,
+                path.len().checked_add(8).ok_or(ReceiptFailure::Resource)?,
+            )?;
+            combined.update(
+                u64::try_from(path.len())
+                    .map_err(|_| ReceiptFailure::Resource)?
+                    .to_le_bytes(),
+            );
+            combined.update(path);
+            let observed = observe_file(input.path(), self.limits.artifact_bytes, &mut self.work)?;
+            pay(&mut self.work, 41)?;
+            combined.update([match input {
+                super::host::NativeLinkInput::StaticArchive(_) => 0,
+                super::host::NativeLinkInput::SharedLibrary(_) => 1,
+            }]);
+            combined.update(observed.bytes.to_le_bytes());
+            combined.update(observed.sha256);
+        }
+        self.receipt.fields[ReceiptField::DeclaredNativeInputs as usize] = Some(ArtifactPin {
+            bytes: u64::try_from(total).map_err(|_| ReceiptFailure::Resource)?,
+            sha256: combined.finalize().into(),
+        });
+        Ok(())
+    }
+    pub(super) fn verify_native_inputs(
+        &mut self,
+        inputs: &[super::host::NativeLinkInput],
+    ) -> Result<(), ReceiptFailure> {
+        let previous = self.receipt.pin(ReceiptField::DeclaredNativeInputs);
+        self.observe_native_inputs(inputs)?;
+        let observed = self.receipt.pin(ReceiptField::DeclaredNativeInputs);
+        self.receipt.fields[ReceiptField::DeclaredNativeInputs as usize] = previous;
+        if previous != observed {
+            return Err(ReceiptFailure::Association);
+        }
+        Ok(())
+    }
+    pub(super) fn verify_emitted_files(
+        &mut self,
+        paths: &[std::path::PathBuf; 3],
+    ) -> Result<(), ReceiptFailure> {
+        for (path, field) in paths.iter().zip([
+            ReceiptField::GeneratedRust,
+            ReceiptField::ProgramImage,
+            ReceiptField::ExpectedFacts,
+        ]) {
+            let observed = observe_file(path, self.limits.artifact_bytes, &mut self.work)?;
+            pay(&mut self.work, 40)?;
+            if Some(observed) != self.receipt.pin(field) {
+                return Err(ReceiptFailure::Association);
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn observe_configuration(
+        &mut self,
+        paths: &[std::path::PathBuf; 3],
+    ) -> Result<(), ReceiptFailure> {
+        let pins = [
+            observe_file(&paths[0], self.limits.artifact_bytes, &mut self.work)?,
+            observe_file(&paths[1], self.limits.artifact_bytes, &mut self.work)?,
+            observe_file(&paths[2], self.limits.artifact_bytes, &mut self.work)?,
+        ];
+        self.configuration = Some(pins);
+        Ok(())
+    }
+    pub(super) fn verify_configuration(
+        &mut self,
+        paths: &[std::path::PathBuf; 3],
+    ) -> Result<(), ReceiptFailure> {
+        let before = self.configuration.ok_or(ReceiptFailure::Association)?;
+        self.observe_configuration(paths)?;
+        let after = self.configuration.ok_or(ReceiptFailure::Association)?;
+        self.configuration = Some(before);
+        // Cargo may add its generated root package to Cargo.lock. Preserve both
+        // seed and resolved lock observations; manifest/toolchain must match.
+        if before[..2] != after[..2] {
+            return Err(ReceiptFailure::Association);
+        }
+        let mut sha = Sha256::new();
+        pay(&mut self.work, 40 * 7)?;
+        for entry in std::iter::once(
+            self.receipt
+                .pin(ReceiptField::BuildConfiguration)
+                .ok_or(ReceiptFailure::Association)?,
+        )
+        .chain(before)
+        .chain(after)
+        {
+            sha.update(entry.bytes.to_le_bytes());
+            sha.update(entry.sha256);
+        }
+        self.receipt.fields[ReceiptField::BuildConfiguration as usize] = Some(ArtifactPin {
+            bytes: 40 * 7,
+            sha256: sha.finalize().into(),
+        });
+        Ok(())
+    }
+    pub(super) fn finalize(mut self, file: &Path) -> Result<Vec<u8>, ReceiptFailure> {
+        if self.configuration.is_none()
+            || self
+                .receipt
+                .pin(ReceiptField::DeclaredNativeInputs)
+                .is_none()
+        {
+            return Err(ReceiptFailure::Association);
+        }
+        self.receipt.fields[ReceiptField::FinalElf as usize] = Some(observe_elf(
+            file,
+            self.limits.artifact_bytes,
+            &mut self.work,
+        )?);
+        self.receipt.encode(&mut self.work, self.limits)
+    }
+}
+
+/// A bounded observation of one opened regular object. No immutable-file,
+/// compilation/link correspondence or future pathname identity is asserted.
+#[cfg(unix)]
+fn observe_file(
+    path: &Path,
+    cap: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<ArtifactPin, ReceiptFailure> {
+    observe_object(path, cap, work, false)
+}
+#[cfg(unix)]
+fn observe_elf(
+    path: &Path,
+    cap: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<ArtifactPin, ReceiptFailure> {
+    observe_object(path, cap, work, true)
+}
+#[cfg(not(unix))]
+fn observe_file(_: &Path, _: usize, _: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
+    Err(ReceiptFailure::Input)
+}
+#[cfg(not(unix))]
+fn observe_elf(_: &Path, _: usize, _: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
+    Err(ReceiptFailure::Input)
+}
+#[cfg(unix)]
+fn observe_object(
+    path: &Path,
+    cap: usize,
+    work: &mut TypeWorkBudget,
+    elf: bool,
+) -> Result<ArtifactPin, ReceiptFailure> {
+    use std::os::unix::fs::MetadataExt;
+    pay(work, 3)?;
+    let named = std::fs::symlink_metadata(path).map_err(|_| ReceiptFailure::Input)?;
+    if !named.is_file() {
+        return Err(ReceiptFailure::Input);
+    }
+    let mut file = File::open(path).map_err(|_| ReceiptFailure::Input)?;
+    let before = file.metadata().map_err(|_| ReceiptFailure::Input)?;
+    let identity = |m: &std::fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mode(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    if !before.is_file() || identity(&named) != identity(&before) {
+        return Err(ReceiptFailure::Input);
+    }
+    if before.len() > cap as u64 {
+        return Err(ReceiptFailure::Resource);
+    }
+    let mut sha = Sha256::new();
+    let mut total = 0_usize;
+    let mut buffer = [0_u8; 8192];
+    let mut header = [0_u8; 64];
+    let mut header_len = 0;
+    loop {
+        // Charge the bounded attempted read before I/O; no refunds on failure.
+        let allowed = cap
+            .checked_sub(total)
+            .ok_or(ReceiptFailure::Resource)?
+            .min(buffer.len());
+        let count = allowed.max(1);
+        pay(work, count)?;
+        let read = file
+            .read(&mut buffer[..count])
+            .map_err(|_| ReceiptFailure::Input)?;
+        if read == 0 {
+            break;
+        }
+        total = total.checked_add(read).ok_or(ReceiptFailure::Resource)?;
+        if total > cap {
+            return Err(ReceiptFailure::Resource);
+        }
+        let prefix = read.min(header.len() - header_len);
+        header[header_len..header_len + prefix].copy_from_slice(&buffer[..prefix]);
+        header_len += prefix;
+        sha.update(&buffer[..read]);
+    }
+    pay(work, 1)?;
+    let after = file.metadata().map_err(|_| ReceiptFailure::Input)?;
+    if identity(&before) != identity(&after) || total as u64 != before.len() {
+        return Err(ReceiptFailure::Association);
+    }
+    if elf {
+        pay(work, header.len())?;
+        if header_len != 64
+            || &header[..7] != b"\x7fELF\x02\x01\x01"
+            || !matches!(u16::from_le_bytes([header[16], header[17]]), 2 | 3)
+            || u16::from_le_bytes([header[18], header[19]]) != 62
+            || u32::from_le_bytes(
+                header[20..24]
+                    .try_into()
+                    .map_err(|_| ReceiptFailure::Input)?,
+            ) != 1
+            || u16::from_le_bytes([header[52], header[53]]) != 64
+        {
+            return Err(ReceiptFailure::Input);
+        }
+    }
+    Ok(ArtifactPin {
+        bytes: total as u64,
+        sha256: sha.finalize().into(),
+    })
+}
+
+#[cfg(test)]
+#[path = "checked_receipt_tests.rs"]
+mod tests;

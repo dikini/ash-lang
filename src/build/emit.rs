@@ -360,6 +360,15 @@ pub(super) struct NativePayloads {
     expected_facts: Vec<u8>,
 }
 impl NativePayloads {
+    pub(super) fn bytes(&self) -> (&[u8], &[u8]) {
+        (&self.image, &self.expected_facts)
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_change_image(&mut self) {
+        self.image[0] ^= 1;
+    }
+
     pub(super) fn into_files(self) -> [(NativePayloadRole, Vec<u8>); 2] {
         [
             (NativePayloadRole::ProgramImage, self.image),

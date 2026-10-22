@@ -23,11 +23,24 @@ pub(super) enum ArtifactFailure {
 impl GeneratedArtifacts<'_> {
     // Copy out before cleanup; publish only after cleanup succeeds. Failure also
     // retires partial root artifacts, retaining source and diagnostics separately.
+    #[cfg(test)]
     pub fn finish(
         &self,
         succeeded: bool,
         output: &Path,
         log: &Path,
+    ) -> Result<(), ArtifactFailure> {
+        self.finish_with_observation(succeeded, output, log, |_| Ok(()))
+    }
+
+    // Optional producer observation occurs on the copied staging object after
+    // cleanup and before publication. It grants no immutable-execution promise.
+    pub(super) fn finish_with_observation(
+        &self,
+        succeeded: bool,
+        output: &Path,
+        log: &Path,
+        observe: impl FnOnce(&Path) -> io::Result<()>,
     ) -> Result<(), ArtifactFailure> {
         let linked = self.project.join("linked-program");
         let copied = if succeeded {
@@ -55,6 +68,10 @@ impl GeneratedArtifacts<'_> {
         if let Some(failure) = failure {
             self.remove_staging(&linked, log)?;
             return Err(failure);
+        }
+        if succeeded && let Err(error) = observe(&linked) {
+            self.remove_staging(&linked, log)?;
+            return Err(ArtifactFailure::Io(error));
         }
         if succeeded && let Err(error) = fs::rename(&linked, output) {
             self.remove_staging(&linked, log)?;

@@ -35,6 +35,9 @@ pub struct BuildConfiguration {
     /// Ordered whole-program linker dependencies; these grant no native dispatch authority.
     /// Shared libraries use the caller's ordinary loader configuration; no rpath is added.
     pub native_inputs: Vec<NativeLinkInput>,
+    /// Optional bounded producer observations. These are not checked approval;
+    /// absent native/header/tool/context closure remains an explicit refusal.
+    pub producer_receipt: Option<super::checked_receipt::ProducerReceiptLimits>,
 }
 
 impl BuildConfiguration {
@@ -46,6 +49,7 @@ impl BuildConfiguration {
             target: NATIVE_TARGET.to_owned(),
             cargo_target_directory: None,
             native_inputs: Vec::new(),
+            producer_receipt: None,
         }
     }
 }
@@ -62,7 +66,7 @@ pub enum NativeLinkInput {
     SharedLibrary(PathBuf),
 }
 impl NativeLinkInput {
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         match self {
             Self::StaticArchive(path) | Self::SharedLibrary(path) => path,
         }
@@ -84,11 +88,21 @@ pub struct PreparedProgramBuild {
     configuration: BuildConfiguration,
     generated_rust: String,
     native_payloads: Option<emit::NativePayloads>,
+    producer_receipt: Option<super::checked_receipt::ReceiptSeed>,
     preparation_work: usize,
     compilation_work: CompilationWork,
 }
 
 impl PreparedProgramBuild {
+    /// Borrows preparation observations when explicitly requested. FinalElf is
+    /// absent until linking; no approval or executable authority is returned.
+    #[must_use]
+    pub fn producer_receipt(&self) -> Option<&super::checked_receipt::ProducerReceipt> {
+        self.producer_receipt
+            .as_ref()
+            .map(super::checked_receipt::ReceiptSeed::receipt)
+    }
+
     /// Borrows the exact generated host source that will be compiled.
     #[must_use]
     pub fn generated_rust(&self) -> &str {
@@ -108,11 +122,19 @@ pub struct BuiltProgram {
     executable: PathBuf,
     generated_source: PathBuf,
     build_log: PathBuf,
+    producer_receipt: Option<PathBuf>,
     preparation_work: usize,
     compilation_work: CompilationWork,
 }
 
 impl BuiltProgram {
+    /// Returns bounded producer observations when explicitly requested. A matching
+    /// receipt does not authorize startup or certify complete native closure.
+    #[must_use]
+    pub fn producer_receipt(&self) -> Option<&Path> {
+        self.producer_receipt.as_deref()
+    }
+
     /// Returns the executable copied after successful native linking.
     #[must_use]
     pub fn executable(&self) -> &Path {
@@ -157,6 +179,7 @@ enum Failure {
     InvalidOutput,
     InvalidNativeInput(usize),
     PreparationResource,
+    Receipt(super::checked_receipt::ReceiptFailure),
     Bridge(super::bridge::ForeignBridgeFailure),
     Image(image::ImageFailure),
     Emission(emit::EmissionFailure),
@@ -177,6 +200,7 @@ impl BuildFailure {
             Failure::InvalidOutput => "build.invalid-output",
             Failure::InvalidNativeInput(_) => "build.native-input",
             Failure::PreparationResource => "build.preparation-resource",
+            Failure::Receipt(_) => "build.producer-receipt",
             Failure::Bridge(_) => "build.bridge-preparation",
             Failure::Image(_) => "build.core-preparation",
             Failure::Emission(_) => "build.host-emission",
@@ -195,6 +219,7 @@ impl BuildFailure {
             | Failure::InvalidOutput => "invocation",
             Failure::InvalidNativeInput(_) => "input",
             Failure::PreparationResource | Failure::Bridge(_) => "compiler",
+            Failure::Receipt(_) => "input",
             Failure::Io(_) | Failure::NativeTool(_) => "input",
             Failure::Source(_) => "source",
             Failure::Image(_) | Failure::Emission(_) => "compiler",
@@ -244,6 +269,7 @@ impl fmt::Display for BuildFailure {
             Failure::PreparationResource => {
                 formatter.write_str("native program preparation work or storage admission refused")
             }
+            Failure::Receipt(error) => write!(formatter, "producer receipt refused: {error:?}"),
             Failure::Bridge(error) => {
                 write!(formatter, "native bridge preparation refused: {error}")
             }
@@ -333,8 +359,12 @@ pub fn prepare_program(
         input.replace_path(path);
         validate_native_input(input, index)?;
     }
-    let (generated_rust, native_payloads) =
+    let (generated_rust, native_payloads, producer_receipt) =
         if let Some((core, provenance)) = program.pure_build_input() {
+            // Receipt observations currently require the existing native image facts.
+            if configuration.producer_receipt.is_some() {
+                return Err(BuildFailure(Failure::UnsupportedProgram));
+            }
             // Keep the established Pure path unchanged, including its unsafe policy.
             if !configuration.native_inputs.is_empty() {
                 return Err(BuildFailure(Failure::UnsupportedProgram));
@@ -344,6 +374,7 @@ pub fn prepare_program(
             (
                 emit::pure_host(&image, &super::runtime_fingerprint(), &mut work)
                     .map_err(|error| BuildFailure(Failure::Emission(error)))?,
+                None,
                 None,
             )
         } else if let Some((core, provenance)) = program.effect_build_input() {
@@ -357,7 +388,23 @@ pub fn prepare_program(
                     })?;
             let emission = emit::native_host(&image, &super::runtime_fingerprint(), &mut work)
                 .map_err(|error| BuildFailure(Failure::Emission(error)))?;
-            (emission.rust_source, Some(emission.payloads))
+            let receipt = configuration
+                .producer_receipt
+                .map(|limits| {
+                    let mut seed = super::checked_receipt::ReceiptSeed::from_emission(
+                        &image,
+                        core,
+                        provenance,
+                        &emission,
+                        configuration.target.as_bytes(),
+                        limits,
+                    )?;
+                    seed.observe_native_inputs(&configuration.native_inputs)?;
+                    Ok(seed)
+                })
+                .transpose()
+                .map_err(|error| BuildFailure(Failure::Receipt(error)))?;
+            (emission.rust_source, Some(emission.payloads), receipt)
         } else {
             return Err(BuildFailure(Failure::UnsupportedProgram));
         };
@@ -365,6 +412,7 @@ pub fn prepare_program(
         configuration,
         generated_rust,
         native_payloads,
+        producer_receipt,
         preparation_work: work.used(),
         compilation_work: *program.compilation_work(),
     })
@@ -440,7 +488,7 @@ fn fresh_project(parent: &Path) -> Result<PathBuf, BuildFailure> {
 /// Returns native-tool or filesystem failures. Failed linking preserves an
 /// existing destination executable and retains generated inputs and diagnostics,
 /// while retiring partial Cargo root artifacts. Cleanup failure prevents publication.
-pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, BuildFailure> {
+pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram, BuildFailure> {
     let native_host = prepared.native_payloads.is_some();
     let output = std::path::absolute(&prepared.configuration.output)?;
     let parent = output
@@ -497,6 +545,22 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         project.join("Cargo.lock"),
         include_bytes!("../../Cargo.lock"),
     )?;
+    let emission_paths = [
+        generated_source.clone(),
+        project.join("src/program-image.bin"),
+        project.join("src/expected-facts.bin"),
+    ];
+    let configuration_paths = [
+        project.join("Cargo.toml"),
+        project.join("rust-toolchain.toml"),
+        project.join("Cargo.lock"),
+    ];
+    if let Some(seed) = &mut prepared.producer_receipt {
+        seed.verify_emitted_files(&emission_paths)
+            .map_err(|error| BuildFailure(Failure::Receipt(error)))?;
+        seed.observe_configuration(&configuration_paths)
+            .map_err(|error| BuildFailure(Failure::Receipt(error)))?;
+    }
     let (target_directory, private_target) = match prepared.configuration.cargo_target_directory {
         Some(directory) => (std::path::absolute(directory)?, false),
         None => match std::env::var_os("CARGO_TARGET_DIR") {
@@ -542,6 +606,9 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(error_log))
         .status();
+    let receipt_path = project.join("producer-receipt.bin");
+    let mut receipt_failure = None;
+    let mut receipt_written = false;
     let finished = GeneratedArtifacts {
         project: &project,
         target_directory: &target_directory,
@@ -550,14 +617,37 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         profile: cargo_profile,
         private_target,
     }
-    .finish(
+    .finish_with_observation(
         status.as_ref().is_ok_and(|status| status.success()),
         &output,
         &build_log,
+        |linked| {
+            if let Some(mut seed) = prepared.producer_receipt.take() {
+                let observed = seed
+                    .verify_emitted_files(&emission_paths)
+                    .and_then(|()| seed.verify_native_inputs(&prepared.configuration.native_inputs))
+                    .and_then(|()| seed.verify_configuration(&configuration_paths))
+                    .and_then(|()| seed.finalize(linked));
+                match observed {
+                    Ok(bytes) => {
+                        fs::write(&receipt_path, bytes)?;
+                        receipt_written = true;
+                    }
+                    Err(error) => {
+                        receipt_failure = Some(error);
+                        return Err(io::Error::other("producer receipt refused"));
+                    }
+                }
+            }
+            Ok(())
+        },
     );
     let status = status?;
     if !status.success() {
         return Err(BuildFailure(Failure::NativeTool(build_log)));
+    }
+    if let Some(error) = receipt_failure {
+        return Err(BuildFailure(Failure::Receipt(error)));
     }
     finished.map_err(|failure| match failure {
         ArtifactFailure::Io(error) => BuildFailure::from(error),
@@ -567,6 +657,7 @@ pub fn build_prepared(prepared: PreparedProgramBuild) -> Result<BuiltProgram, Bu
         executable: output,
         generated_source,
         build_log,
+        producer_receipt: receipt_written.then_some(receipt_path),
         preparation_work: prepared.preparation_work,
         compilation_work: prepared.compilation_work,
     })
