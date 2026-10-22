@@ -3041,8 +3041,8 @@ impl<'a> Analysis<'a> {
         };
         let (successors, publication) = if let Some(data) = &mut self.data {
             state.charge_key(budget)?;
-            let index = if let Some(index) = observed_calls.get(&state) {
-                *index
+            let (index, new_record) = if let Some(index) = observed_calls.get(&state) {
+                (*index, false)
             } else {
                 // One ordinal in the existing exact-State map and
                 // one completed-phase field in its existing record.
@@ -3055,19 +3055,19 @@ impl<'a> Analysis<'a> {
                 state.charge_key(budget)?;
                 observed_calls.insert(saved, index);
                 calls.try_reserve(1).map_err(|_| Failure::Resource)?;
-                calls.push(ObservedCall {
-                    state: state.copy(budget)?,
-                    delivered: None,
-                });
-                index
+                (index, true)
             };
             let (successors, publication) = data.calls_after(
                 code,
                 state.value_context,
-                calls[index].delivered.as_ref(),
+                if new_record {
+                    None
+                } else {
+                    calls[index].delivered.as_ref()
+                },
                 budget,
             )?;
-            (successors, Some((index, publication)))
+            (successors, Some((index, new_record, publication)))
         } else {
             charge(budget, value.targets.len())?;
             let mut targets = Vec::new();
@@ -3171,8 +3171,16 @@ impl<'a> Analysis<'a> {
                 }
             }
         }
-        if let Some((index, publication)) = publication {
-            calls[index].delivered = Some(publication.publish(budget)?);
+        if let Some((index, new_record, publication)) = publication {
+            let delivered = Some(publication.publish(budget)?);
+            if new_record {
+                // The exact key and record capacity are already paid. Retain
+                // this owned state only after all successor/publication work
+                // succeeds, rather than copying it and dropping the original.
+                calls.push(ObservedCall { state, delivered });
+            } else {
+                calls[index].delivered = delivered;
+            }
         }
         Ok(())
     }
@@ -6245,6 +6253,242 @@ mod tests {
                 analysis.discover(&[1], None, &mut TypeWorkBudget::unbounded()),
                 Err(Failure::Invalid)
             ));
+        }
+    }
+
+    fn observed_call_graph() -> SummaryGraph {
+        let source = SourceFile::new("observed-control-call", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let ty = || Type::function(Type::Unit, Type::Unit);
+        SummaryGraph {
+            effects: true,
+            data: Some(Arc::new(
+                super::super::value::observed_control_call_graph_for_test(),
+            )),
+            callables: vec![
+                Callable {
+                    body: 0,
+                    ty: ty(),
+                    result: Value::default(),
+                },
+                Callable {
+                    body: 2,
+                    ty: ty(),
+                    result: Value::default(),
+                },
+            ]
+            .into(),
+            types: TypeArguments(vec![ty()]),
+            code: vec![
+                Control::Return,
+                Control::Call {
+                    value: Value::default(),
+                    ty: 0,
+                    source: span,
+                },
+                Control::Return,
+            ],
+        }
+    }
+
+    fn observed_call_analysis(graph: &SummaryGraph) -> Analysis<'_> {
+        let mut setup = TypeWorkBudget::default();
+        let mut analysis = Analysis::new(graph, None, &mut setup).unwrap();
+        analysis.data = Some(graph.data.as_ref().unwrap().start(&mut setup).unwrap());
+        analysis
+    }
+
+    fn observed_call_state(context: usize) -> State {
+        State {
+            position: Position { code: 1, next: 0 },
+            context,
+            value_context: 0,
+            stack: Address::Empty,
+            heap: Vec::new(),
+            abandoned: None,
+            cells: vec![CellContents {
+                occurrence: ProviderResourceOccurrence {
+                    code: 0,
+                    value_context: 0,
+                },
+                owner: (0, 0),
+                roots: vec![0, 1, 2],
+                enclosing: vec![(0, 0)].into(),
+                predecessors: vec![1, 2].into(),
+                shared: true,
+            }],
+        }
+    }
+
+    #[derive(Default)]
+    struct ObservedCallStage {
+        calls: Vec<ObservedCall>,
+        indices: HashMap<State, usize>,
+        pending: VecDeque<State>,
+        visited: HashSet<State>,
+    }
+
+    impl ObservedCallStage {
+        fn dispatch(
+            &mut self,
+            analysis: &mut Analysis<'_>,
+            state: State,
+            work: &mut TypeWorkBudget,
+        ) -> Result<(), Failure> {
+            analysis.discover_call(
+                state,
+                &mut self.calls,
+                &mut self.indices,
+                &mut self.pending,
+                &mut self.visited,
+                work,
+            )
+        }
+    }
+
+    #[test]
+    fn observed_call_owned_state_preserves_exact_records_and_late_prefixes() {
+        let graph = observed_call_graph();
+        let mut analysis = observed_call_analysis(&graph);
+        let mut stage = ObservedCallStage::default();
+        let expected = observed_call_state(0);
+        let mut work = TypeWorkBudget::default();
+        stage
+            .dispatch(&mut analysis, observed_call_state(0), &mut work)
+            .unwrap();
+        assert_eq!(stage.calls.len(), 1);
+        assert_eq!(stage.calls[0].state, expected);
+        assert_eq!(stage.indices.get(&expected), Some(&0));
+        assert!(stage.calls[0].delivered.is_some());
+        assert_eq!(stage.pending.len(), 1);
+
+        stage.pending.clear();
+        stage
+            .dispatch(&mut analysis, observed_call_state(0), &mut work)
+            .unwrap();
+        assert_eq!(stage.calls.len(), 1);
+        assert!(
+            stage.pending.is_empty(),
+            "the completed callee prefix is not replayed"
+        );
+        analysis
+            .data
+            .as_mut()
+            .unwrap()
+            .add_observed_control_call_target_for_test(&mut work)
+            .unwrap();
+        stage
+            .dispatch(&mut analysis, observed_call_state(0), &mut work)
+            .unwrap();
+        assert_eq!(stage.calls.len(), 1);
+        assert_eq!(stage.pending.len(), 1, "a new actual callee remains live");
+        assert_eq!(stage.pending[0].position.code, 2);
+
+        // An equal call port is not an equal control State. A separate valid
+        // type context must receive its own first observation and ordered record.
+        let distinct_context = analysis.contexts.len();
+        analysis.contexts.push(Context {
+            bindings: Vec::new(),
+            rows: Vec::new(),
+        });
+        stage.pending.clear();
+        stage
+            .dispatch(
+                &mut analysis,
+                observed_call_state(distinct_context),
+                &mut work,
+            )
+            .unwrap();
+        assert_eq!(stage.calls.len(), 2);
+        assert_eq!(
+            stage.indices.get(&observed_call_state(distinct_context)),
+            Some(&1)
+        );
+        assert_eq!(stage.calls[0].state, expected);
+        assert_eq!(stage.calls[1].state, observed_call_state(distinct_context));
+    }
+
+    #[test]
+    fn observed_call_first_publication_is_bounded_and_freshly_retryable() {
+        let graph = observed_call_graph();
+        let run = |work: &mut TypeWorkBudget| {
+            let mut analysis = observed_call_analysis(&graph);
+            let mut stage = ObservedCallStage::default();
+            let result = stage.dispatch(&mut analysis, observed_call_state(0), work);
+            if result.is_ok() {
+                assert_eq!(stage.calls.len(), 1);
+                assert_eq!(stage.indices.get(&stage.calls[0].state), Some(&0));
+                assert!(stage.calls[0].delivered.is_some());
+            } else {
+                assert!(
+                    stage.calls.is_empty(),
+                    "no completed record before publication"
+                );
+            }
+            result
+        };
+        let mut measured = TypeWorkBudget::default();
+        run(&mut measured).unwrap();
+        let cost = measured.used();
+        for prefix in [0, 7] {
+            for available in 0..cost {
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(run(&mut short), Err(Failure::Resource)));
+            }
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            run(&mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + cost);
+            assert!(matches!(run(&mut exact), Err(Failure::Resource)));
+            for _ in 0..2 {
+                let mut fresh = TypeWorkBudget::with_limit(prefix + cost);
+                fresh.charge(prefix).unwrap();
+                run(&mut fresh).unwrap();
+                assert_eq!(fresh.used(), prefix + cost);
+            }
+        }
+    }
+
+    #[test]
+    fn observed_call_late_publication_failure_does_not_advance_record() {
+        let graph = observed_call_graph();
+        let run = |work: &mut TypeWorkBudget| {
+            let mut analysis = observed_call_analysis(&graph);
+            let mut stage = ObservedCallStage::default();
+            let mut setup = TypeWorkBudget::default();
+            stage
+                .dispatch(&mut analysis, observed_call_state(0), &mut setup)
+                .unwrap();
+            stage.pending.clear();
+            analysis
+                .data
+                .as_mut()
+                .unwrap()
+                .add_observed_control_call_target_for_test(&mut setup)
+                .unwrap();
+            let result = stage.dispatch(&mut analysis, observed_call_state(0), work);
+            assert_eq!(stage.calls.len(), 1);
+            assert_eq!(stage.calls[0].state, observed_call_state(0));
+            let (remaining, _) = analysis
+                .data
+                .as_mut()
+                .unwrap()
+                .calls_after(1, 0, stage.calls[0].delivered.as_ref(), &mut setup)
+                .unwrap();
+            assert_eq!(remaining.targets.len(), usize::from(result.is_err()));
+            result
+        };
+        let mut measured = TypeWorkBudget::default();
+        run(&mut measured).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(measured.used());
+            run(&mut exact).unwrap();
+            assert_eq!(exact.used(), measured.used());
         }
     }
 

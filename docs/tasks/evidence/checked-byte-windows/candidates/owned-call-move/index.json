@@ -1,0 +1,430 @@
+{
+  "base": "a3c2bac83cd2e8447b002507996390e547a19143",
+  "records": [
+    {
+      "label": "owned/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/source.patch",
+      "sha256": "e213b37c80c3c93d3c88c96c2659e9e88b401440de6fbf5798a3b215c746f2a6",
+      "size": 13594,
+      "retained": "blobs/e213b37c80c3c93d3c88c96c2659e9e88b401440de6fbf5798a3b215c746f2a6.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "owned/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/pins.json",
+      "sha256": "5e5b5c44a2310448e9c3b1c60a484f8d156b5c0048b9bac0f087704b979e0418",
+      "size": 629174,
+      "retained": "blobs/c0c3f4f3c6a75f9d8e438b29af1f5befd42a3a75f45ff7b45838561063efc892.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/build-freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/build-freeze.json",
+      "sha256": "ad10f367942825feba3b747f03d5a9dc8e8eb698c33b65e5092343f5871417c7",
+      "size": 640391,
+      "retained": "blobs/7dec41a3d465f96e03fe7179d10ba56cab4bcb1eb54a447820230690447d0794.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/run.py",
+      "sha256": "8d202f7d04e9a676395f7289b1d6efded2700d110e9e7092be20c7f9e70638e5",
+      "size": 6876,
+      "retained": "blobs/8d202f7d04e9a676395f7289b1d6efded2700d110e9e7092be20c7f9e70638e5.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "owned/batch-results.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/batch-results.json",
+      "sha256": "0a28179d962bfe166b238751fa4328ec69a1efd0855cc259630dac661a10714d",
+      "size": 8508,
+      "retained": "blobs/0a28179d962bfe166b238751fa4328ec69a1efd0855cc259630dac661a10714d.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/owned-record-positive.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-positive.log",
+      "sha256": "13b0010d8c8016e9019ec7e4926ac18ee8b9ac4706a7f033a83a877935fdc8b7",
+      "size": 1890,
+      "retained": "blobs/13b0010d8c8016e9019ec7e4926ac18ee8b9ac4706a7f033a83a877935fdc8b7.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "owned/owned-record-positive.receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-positive.receipt.json",
+      "sha256": "77c6542f750581042d099dad83d31bfefcb4363678194bd34442f215299965f2",
+      "size": 1343,
+      "retained": "blobs/77c6542f750581042d099dad83d31bfefcb4363678194bd34442f215299965f2.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/owned-record-positive.inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-positive.inputs.json",
+      "sha256": "7627e52507eec516ed7e21ba1c0bfb2a4744a6fca4bf2f2fcd222a9a132871bb",
+      "size": 1271640,
+      "retained": "blobs/1e64dbd18f2b4065696612364933e69bde0b6f7aa21ab4032d7426defaab7f0e.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/owned-record-positive.process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-positive.process.json",
+      "sha256": "64d7603e8d55a2e3f06bf124240fe0537c70ee442ccf4af34a35495e299fce55",
+      "size": 339,
+      "retained": "blobs/64d7603e8d55a2e3f06bf124240fe0537c70ee442ccf4af34a35495e299fce55.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/owned-record-positive.resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-positive.resources.json",
+      "sha256": "521c496580e871e2c7d4e647b1e8b72e9d5053f76e2324ad3ab2f0b89dbbe3d0",
+      "size": 5083,
+      "retained": "blobs/521c496580e871e2c7d4e647b1e8b72e9d5053f76e2324ad3ab2f0b89dbbe3d0.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/owned-record-controls.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-controls.log",
+      "sha256": "8201e809da16cdb5b6d83b42cbc01f4396deb160dd0c51f9b25dbadb181fe013",
+      "size": 656,
+      "retained": "blobs/8201e809da16cdb5b6d83b42cbc01f4396deb160dd0c51f9b25dbadb181fe013.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "owned/owned-record-controls.receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-controls.receipt.json",
+      "sha256": "e5d8570caad516828a982dd42035f05b1c514ffa9db1e9dda781e27aa0ccf473",
+      "size": 1270,
+      "retained": "blobs/e5d8570caad516828a982dd42035f05b1c514ffa9db1e9dda781e27aa0ccf473.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/owned-record-controls.inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-controls.inputs.json",
+      "sha256": "7627e52507eec516ed7e21ba1c0bfb2a4744a6fca4bf2f2fcd222a9a132871bb",
+      "size": 1271640,
+      "retained": "blobs/1e64dbd18f2b4065696612364933e69bde0b6f7aa21ab4032d7426defaab7f0e.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/owned-record-controls.process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-controls.process.json",
+      "sha256": "becf557a23a3f8beae86b27db0bc23eff63dc414798d717532813accfa672fca",
+      "size": 272,
+      "retained": "blobs/becf557a23a3f8beae86b27db0bc23eff63dc414798d717532813accfa672fca.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/owned-record-controls.resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/owned-record-controls.resources.json",
+      "sha256": "43e6f98a90abe5e3ad6fcdb0ccb78e181ce5a348d990ed98f73402739b3e39e1",
+      "size": 124,
+      "retained": "blobs/43e6f98a90abe5e3ad6fcdb0ccb78e181ce5a348d990ed98f73402739b3e39e1.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/existing-live-prefix.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/existing-live-prefix.log",
+      "sha256": "c86b8acc549334b4be2d2c7c0315815d078457a1319b36f3fe77cc6527b375dc",
+      "size": 446,
+      "retained": "blobs/c86b8acc549334b4be2d2c7c0315815d078457a1319b36f3fe77cc6527b375dc.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "owned/existing-live-prefix.receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/existing-live-prefix.receipt.json",
+      "sha256": "9a736c19a7fcdca9fb9332ef39b18195873a9a3e9a43eea3d0eb8fb88044ed3e",
+      "size": 1342,
+      "retained": "blobs/9a736c19a7fcdca9fb9332ef39b18195873a9a3e9a43eea3d0eb8fb88044ed3e.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/existing-live-prefix.inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/existing-live-prefix.inputs.json",
+      "sha256": "7627e52507eec516ed7e21ba1c0bfb2a4744a6fca4bf2f2fcd222a9a132871bb",
+      "size": 1271640,
+      "retained": "blobs/1e64dbd18f2b4065696612364933e69bde0b6f7aa21ab4032d7426defaab7f0e.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/existing-live-prefix.process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/existing-live-prefix.process.json",
+      "sha256": "e1475c68179ca7dc9bad86374325a142d4a32b9e28b260bc618511faa5b2a871",
+      "size": 345,
+      "retained": "blobs/e1475c68179ca7dc9bad86374325a142d4a32b9e28b260bc618511faa5b2a871.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/existing-live-prefix.resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/existing-live-prefix.resources.json",
+      "sha256": "c793b173d846429b93ce5bd87df8595f0ab58fb8902ef1c2c573efd3bcef43f9",
+      "size": 125,
+      "retained": "blobs/c793b173d846429b93ce5bd87df8595f0ab58fb8902ef1c2c573efd3bcef43f9.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/two-owner-startup.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/two-owner-startup.log",
+      "sha256": "6f10fbf16c9f51f585d3e6acf68d25515fd0c78b8c0fa37f13a1dac5ba466bda",
+      "size": 988,
+      "retained": "blobs/6f10fbf16c9f51f585d3e6acf68d25515fd0c78b8c0fa37f13a1dac5ba466bda.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "owned/two-owner-startup.receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/two-owner-startup.receipt.json",
+      "sha256": "5c0b6d3a24143ea06c5f173c6f8ae0e50862924e95c2dc473f8cd326ce0c0a9c",
+      "size": 1337,
+      "retained": "blobs/5c0b6d3a24143ea06c5f173c6f8ae0e50862924e95c2dc473f8cd326ce0c0a9c.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/two-owner-startup.inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/two-owner-startup.inputs.json",
+      "sha256": "7627e52507eec516ed7e21ba1c0bfb2a4744a6fca4bf2f2fcd222a9a132871bb",
+      "size": 1271640,
+      "retained": "blobs/1e64dbd18f2b4065696612364933e69bde0b6f7aa21ab4032d7426defaab7f0e.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/two-owner-startup.process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/two-owner-startup.process.json",
+      "sha256": "e0c5174756a2394aab7d1e164e5a27d1126b3dcfaf31be4bfa3a9be567a804ec",
+      "size": 345,
+      "retained": "blobs/e0c5174756a2394aab7d1e164e5a27d1126b3dcfaf31be4bfa3a9be567a804ec.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/two-owner-startup.resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/two-owner-startup.resources.json",
+      "sha256": "a4bc9f67f2ba677c6e48c5c65b16f28927dcc4a06adeea6eaa6dc720ad2dd9f5",
+      "size": 125,
+      "retained": "blobs/a4bc9f67f2ba677c6e48c5c65b16f28927dcc4a06adeea6eaa6dc720ad2dd9f5.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/nested-cleanup-startup.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/nested-cleanup-startup.log",
+      "sha256": "34edfd300e561616f6de9d7c654fc3eb45aa7cf69171f6fe5d786196d39ae255",
+      "size": 600,
+      "retained": "blobs/34edfd300e561616f6de9d7c654fc3eb45aa7cf69171f6fe5d786196d39ae255.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "owned/nested-cleanup-startup.receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/nested-cleanup-startup.receipt.json",
+      "sha256": "64f814293ba7e3ecf671bd7e78305312dd4fb321d997f81bff0bf3d8ce70a551",
+      "size": 1355,
+      "retained": "blobs/64f814293ba7e3ecf671bd7e78305312dd4fb321d997f81bff0bf3d8ce70a551.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/nested-cleanup-startup.inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/nested-cleanup-startup.inputs.json",
+      "sha256": "7627e52507eec516ed7e21ba1c0bfb2a4744a6fca4bf2f2fcd222a9a132871bb",
+      "size": 1271640,
+      "retained": "blobs/1e64dbd18f2b4065696612364933e69bde0b6f7aa21ab4032d7426defaab7f0e.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/nested-cleanup-startup.process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/nested-cleanup-startup.process.json",
+      "sha256": "2bfde9eee80f1ce3deada9e48cdd3ac2004db0d46570277d92eb167a4eddf36c",
+      "size": 353,
+      "retained": "blobs/2bfde9eee80f1ce3deada9e48cdd3ac2004db0d46570277d92eb167a4eddf36c.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/nested-cleanup-startup.resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/nested-cleanup-startup.resources.json",
+      "sha256": "282066186b2ccb34ba8a42645b2467a5bad59c2a26101ecf478575c545920c3c",
+      "size": 125,
+      "retained": "blobs/282066186b2ccb34ba8a42645b2467a5bad59c2a26101ecf478575c545920c3c.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/dependent-cumulative-startup.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/dependent-cumulative-startup.log",
+      "sha256": "449aea914d5266bf730640512f3d7803072b254db44e58a31b22dd7030c239d2",
+      "size": 593,
+      "retained": "blobs/449aea914d5266bf730640512f3d7803072b254db44e58a31b22dd7030c239d2.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "owned/dependent-cumulative-startup.receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/dependent-cumulative-startup.receipt.json",
+      "sha256": "c45a8e5346e22c3fc4aa0416948c9fc2e6401563afe79821bb44e012c337e7ae",
+      "size": 1374,
+      "retained": "blobs/c45a8e5346e22c3fc4aa0416948c9fc2e6401563afe79821bb44e012c337e7ae.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/dependent-cumulative-startup.inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/dependent-cumulative-startup.inputs.json",
+      "sha256": "7627e52507eec516ed7e21ba1c0bfb2a4744a6fca4bf2f2fcd222a9a132871bb",
+      "size": 1271640,
+      "retained": "blobs/1e64dbd18f2b4065696612364933e69bde0b6f7aa21ab4032d7426defaab7f0e.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/dependent-cumulative-startup.process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/dependent-cumulative-startup.process.json",
+      "sha256": "4a688c6a80886554890d80b2ad42ca75ad9c4e8b2368a24c98367bbc288c3630",
+      "size": 360,
+      "retained": "blobs/4a688c6a80886554890d80b2ad42ca75ad9c4e8b2368a24c98367bbc288c3630.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "owned/dependent-cumulative-startup.resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owned-call-move/dependent-cumulative-startup.resources.json",
+      "sha256": "2a0d54e9d1ad2942efd5ef561310e369abaab9dcd713d3f31bc9b3deb8702c44",
+      "size": 125,
+      "retained": "blobs/2a0d54e9d1ad2942efd5ef561310e369abaab9dcd713d3f31bc9b3deb8702c44.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-pr101-fresh-artifact/before.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-pr101-fresh-artifact/before.json",
+      "sha256": "c2560499b65a440062502a8b3646e4753133e0ebbc7247b8514678d1bf958638",
+      "size": 629623,
+      "retained": "blobs/2ebf95fad671ab4104c25e29093a2893cad8dcc893688fc3342f43e4d0c91225.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-pr101-fresh-artifact/after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-pr101-fresh-artifact/after.json",
+      "sha256": "5314f36b70cc773fdbb74f427fedecc4fcdce30635b892cf7602db47c674231c",
+      "size": 627336,
+      "retained": "blobs/22a5466ecddbe640046a0ec577bd6b9df0f967ec1b92a66aa7d4854249071f1c.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-pr101-fresh-artifact/artifact.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-pr101-fresh-artifact/artifact.json",
+      "sha256": "de8f087a94d86a5584d627c75e7410f6ddc3c283c97d2aff7eee0e84f805f418",
+      "size": 211,
+      "retained": "blobs/de8f087a94d86a5584d627c75e7410f6ddc3c283c97d2aff7eee0e84f805f418.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-pr101-fresh-artifact/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-pr101-fresh-artifact/process.json",
+      "sha256": "fa19dda7c7e957bc5142c752add7bb407185f4d45e347f45524a708278419801",
+      "size": 342,
+      "retained": "blobs/fa19dda7c7e957bc5142c752add7bb407185f4d45e347f45524a708278419801.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-pr101-fresh-artifact/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-pr101-fresh-artifact/receipt.json",
+      "sha256": "99649407fa91425d68bc5d4c2850895dba9c8983df7f1d7cfdf9572a6d11084b",
+      "size": 740,
+      "retained": "blobs/99649407fa91425d68bc5d4c2850895dba9c8983df7f1d7cfdf9572a6d11084b.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-pr101-fresh-artifact/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-pr101-fresh-artifact/run.py",
+      "sha256": "717491afbcb5f9e1869a0a8410726eebf635fb38ddea4fd1802376c8a0bf8c82",
+      "size": 3954,
+      "retained": "blobs/717491afbcb5f9e1869a0a8410726eebf635fb38ddea4fd1802376c8a0bf8c82.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "checked-pr101-fresh-artifact/two-owner.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-pr101-fresh-artifact/two-owner.log",
+      "sha256": "202a5312d56f7efb73c686de3372d9e5768998a8fff9a664c19fabdd620c2ec1",
+      "size": 1695,
+      "retained": "blobs/202a5312d56f7efb73c686de3372d9e5768998a8fff9a664c19fabdd620c2ec1.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "checked-capture-coarse/before.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-coarse/before.json",
+      "sha256": "a7e03c9509aa1786828877e51dd66e88b35b533881f94ec052a91f270964db41",
+      "size": 628989,
+      "retained": "blobs/e8b87e97e3c731cc77a5f90b1dc9cf7167ea9d158602ad541473bd1741c8c112.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-capture-coarse/after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-coarse/after.json",
+      "sha256": "a7e03c9509aa1786828877e51dd66e88b35b533881f94ec052a91f270964db41",
+      "size": 628989,
+      "retained": "blobs/e8b87e97e3c731cc77a5f90b1dc9cf7167ea9d158602ad541473bd1741c8c112.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-capture-coarse/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-coarse/process.json",
+      "sha256": "1d51f6b28b4354346df01262eb5ffd39a2550343ba434839a18e41f25ea36830",
+      "size": 99,
+      "retained": "blobs/1d51f6b28b4354346df01262eb5ffd39a2550343ba434839a18e41f25ea36830.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-capture-coarse/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-coarse/receipt.json",
+      "sha256": "77252b2d93e33d075158c584c703e667282e1803105efa6017bcc0b9cb4c6a00",
+      "size": 1742,
+      "retained": "blobs/77252b2d93e33d075158c584c703e667282e1803105efa6017bcc0b9cb4c6a00.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-capture-coarse/rows.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-coarse/rows.json",
+      "sha256": "67c17a62793afe2e0a7e25c34b16acdc9c21ef2342975cf5da81f6414a23a781",
+      "size": 6580,
+      "retained": "blobs/67c17a62793afe2e0a7e25c34b16acdc9c21ef2342975cf5da81f6414a23a781.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "checked-capture-coarse/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-coarse/raw.log",
+      "sha256": "1fb4cf1a25d7edbf219206911f3852965f6e11fa74dd77c5e2c8c6b83ea300ce",
+      "size": 6033,
+      "retained": "blobs/1fb4cf1a25d7edbf219206911f3852965f6e11fa74dd77c5e2c8c6b83ea300ce.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "checked-capture-coarse/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-coarse/run.py",
+      "sha256": "de8d776d3c43d3076b5116420b49b1cfea23a3e749083e4e0797bb3a2810401f",
+      "size": 3746,
+      "retained": "blobs/de8d776d3c43d3076b5116420b49b1cfea23a3e749083e4e0797bb3a2810401f.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "checked-capture-coarse/tuple.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-coarse/tuple.json",
+      "sha256": "6d9109a6c83551439ee14e61f829ffc5cece09fa406b0d512e256a6162bda3d1",
+      "size": 631943,
+      "retained": "blobs/3f7d46997e2010b70a892071ef8008b6baf172e8836fc5e86ae0b5579bbf0d8c.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "coarse-package/probe.py",
+      "original_path": "/tmp/ash-checked-capture-coarse/probe.py",
+      "sha256": "a57c9d2b60f06854e5b3c07685643077053e68a834501212e3061e9d710e2f37",
+      "size": 13345,
+      "retained": "blobs/a57c9d2b60f06854e5b3c07685643077053e68a834501212e3061e9d710e2f37.gz",
+      "encoding": "raw-gzip"
+    },
+    {
+      "label": "coarse-package/proposal.json",
+      "original_path": "/tmp/ash-checked-capture-coarse/proposal.json",
+      "sha256": "b1c82e5d9c6e2bc180b9b965973eea3646b500a2a66610bb16ecc45c6ebe9e64",
+      "size": 3306,
+      "retained": "blobs/b1c82e5d9c6e2bc180b9b965973eea3646b500a2a66610bb16ecc45c6ebe9e64.gz",
+      "encoding": "json-map-template-gzip"
+    },
+    {
+      "label": "coarse-package/manifest.json",
+      "original_path": "/tmp/ash-checked-capture-coarse/manifest.json",
+      "sha256": "9602ff3b236b81ac694316805b9dca29029ec0f2450d6524ba7a60263ceac714",
+      "size": 945,
+      "retained": "blobs/9602ff3b236b81ac694316805b9dca29029ec0f2450d6524ba7a60263ceac714.gz",
+      "encoding": "json-map-template-gzip"
+    }
+  ],
+  "claims": "Historical fresh baseline Resource; valid coarse region attribution; owned-call standalone focused controls and startup3/3. Combined milestone regressions and Clippy pending. Content-addressed gzip blobs reconstruct each original file byte-for-byte."
+}
