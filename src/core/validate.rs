@@ -12913,7 +12913,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             return Ok(false);
         }
         Ok(matches!(function.value(), Type::Application(call, payload)
-            if matches!(call.as_ref(), Type::Nominal(id) if id.module().is_builtin_foreign() && id.declaration() == 1)
+            if matches!(call.as_ref(), Type::Nominal(id) if id.module().is_builtin_foreign() && matches!(id.declaration(), 1 | 12))
                 && **payload == Type::Bytes)
             && (fields[1] == Type::Int || extent(&fields[1]).is_some()))
     }
@@ -13070,7 +13070,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         };
         if fact.function() != function
             || fact.module() != intrinsic.module()
-            || fact.role() != role
+            || fact.role().operation_role() != role
             || fact.conversion_error_constructor().is_none()
             || !F::effect_row(&node.effects).is_empty()
             || !self.same_type_charged(&node.ty, &fact.annotation().ty)?
@@ -17900,13 +17900,37 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
         let outward = self.native_interpret_row(&body.effects, scope.interpretations(), id)?;
-        if !outward.is_empty() {
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let host = crate::foreign::source_access::checked_window_host_instance(
+            scope.family(),
+            scope.arguments(),
+            &self.program.registry,
+            &mut work,
+        );
+        self.charge_type_work(work.used())?;
+        let host = host.map_err(|error| {
+            if error.is_resource_exhaustion() {
+                resource()
+            } else {
+                invalid()
+            }
+        })?;
+        let expected = if let Some(host) = host.filter(|_| !outward.is_empty()) {
+            self.charge_type_work(1)?;
+            EffectRow::singleton(host)
+        } else {
+            EffectRow::empty()
+        };
+        if !self.same_effect_row_charged(&outward, &expected, id)? {
             return Err(ValidationError::new(
                 ValidationReason::ResourceEscape,
                 Some(id),
             ));
         }
-        if !self.same_effect_row_charged(&node.effects, &self.node(scope.state())?.effects, id)? {
+        let effects =
+            self.union_effect_rows_charged(&self.node(scope.state())?.effects, &expected, id)?;
+        if !self.same_effect_row_charged(&node.effects, &effects, id)? {
             return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
         }
         Ok(())

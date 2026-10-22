@@ -124,6 +124,10 @@ pub(super) const FORMALS: &[(&str, &[u32])] = &[
     ("pub type CheckedCompletion<E>", &[18]),
     ("pub type CheckedScope<A, I, E>", &[19, 20, 21]),
     ("pub effect NativeHost<H>", &[22]),
+    ("pub checked_byte_read<H, S>", &[23, 24]),
+    ("pub checked_byte_write<H, S>", &[25, 26]),
+    ("pub checked_copy_bytes<H, V>", &[27, 28]),
+    ("pub checked_copy_nul<H, V>", &[29, 30]),
 ];
 
 /// Exact formal-name coordinates to reserved builtin locals; not a role grant.
@@ -398,7 +402,7 @@ mod tests {
                 "ViolationCause"
             ]
         );
-        assert_eq!(module.surface.definitions.len(), 11);
+        assert_eq!(module.surface.definitions.len(), 15);
         assert!(!module.surface.definitions[10].public);
         let crate::surface::SurfaceDefinitionKind::Equational(metadata) =
             &module.surface.definitions[10].kind
@@ -467,6 +471,28 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(locals, expected);
         }
+        for (index, name, expected) in [
+            (11, "checked_byte_read", [23, 24]),
+            (12, "checked_byte_write", [25, 26]),
+            (13, "checked_copy_bytes", [27, 28]),
+            (14, "checked_copy_nul", [29, 30]),
+        ] {
+            let crate::surface::SurfaceDefinitionKind::Equational(value) =
+                &module.surface.definitions[index].kind
+            else {
+                panic!("canonical checked primitive");
+            };
+            assert_eq!(value.interface.name.text, name);
+            let locals = value
+                .interface
+                .type_parameters
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|formal| foreign_type_formal_local(source, formal.name.span).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(locals, expected);
+        }
         let mut seen = Vec::new();
         let formals = module
             .surface
@@ -493,7 +519,7 @@ mod tests {
             );
         }
         seen.sort_unstable();
-        assert_eq!(seen, (0..23).collect::<Vec<_>>());
+        assert_eq!(seen, (0..31).collect::<Vec<_>>());
         let (_, name, formal) = foreign_native_host_ranges(source).unwrap();
         assert_eq!(module.surface.effects[0].name.span.range(), name);
         assert_eq!(

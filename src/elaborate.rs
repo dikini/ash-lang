@@ -11980,19 +11980,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ReplaceData => {
                     Intrinsic::ForeignReplaceData { function: name.id }
                 }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyBytes => {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyBytes
+                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedCopyBytes => {
                     Intrinsic::ForeignCopyBytes { function: name.id }
                 }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyNul => {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyNul
+                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedCopyNul => {
                     Intrinsic::ForeignCopyNul { function: name.id }
                 }
                 crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ExtentValue => {
                     Intrinsic::ForeignExtentValue { function: name.id }
                 }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead => {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead
+                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedByteRead => {
                     Intrinsic::ForeignByteRead { function: name.id }
                 }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite => {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite
+                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedByteWrite => {
                     Intrinsic::ForeignByteWrite { function: name.id }
                 }
             }));

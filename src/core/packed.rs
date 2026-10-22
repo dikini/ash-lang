@@ -123,6 +123,59 @@ impl IntrinsicNode {
     /// Returns the fixed ordinary signature, including nominal result identity.
     #[must_use]
     pub fn expected_type(self) -> Type {
+        // The operation tags share the existing callable carrier, while distinct
+        // defining function IDs select the checked codec and latent Host row.
+        let function = match self.operation {
+            Intrinsic::ForeignByteRead { function }
+            | Intrinsic::ForeignByteWrite { function }
+            | Intrinsic::ForeignCopyBytes { function }
+            | Intrinsic::ForeignCopyNul { function } => Some(function),
+            _ => None,
+        };
+        if let Some(role) = function.and_then(|function| {
+            crate::foreign::scalar_preflight::ForeignScalarPreflightRole::checked_memory_local(
+                function.local(),
+            )
+        }) {
+            use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+            use crate::types::{
+                ComputationType, EffectId, EffectInstance, EffectRow, NominalTypeId,
+            };
+            let host = role.host_parameter(self.module).expect("checked role H");
+            let borrowed = role
+                .borrowed_parameter(self.module)
+                .expect("checked role State/view");
+            let mut fields = vec![Type::Variable(borrowed)];
+            fields.push(if role == Role::CheckedCopyBytes {
+                Type::Application(
+                    Box::new(Type::Nominal(NominalTypeId::new(self.module, 5))),
+                    Box::new(Type::Variable(borrowed)),
+                )
+            } else {
+                Type::Int
+            });
+            if role == Role::CheckedByteWrite {
+                fields.push(Type::Int);
+            }
+            let output = Type::Application(
+                Box::new(Type::Nominal(NominalTypeId::new(self.module, 12))),
+                Box::new(match role {
+                    Role::CheckedByteRead => Type::Int,
+                    Role::CheckedByteWrite => Type::Unit,
+                    _ => Type::Bytes,
+                }),
+            );
+            return Type::EffectfulFunction(
+                Box::new(Type::Tuple(fields.into_boxed_slice())),
+                Box::new(ComputationType::new(
+                    output,
+                    EffectRow::singleton(EffectInstance::new(
+                        EffectId::new(self.module, crate::module::FOREIGN_NATIVE_HOST_LOCAL),
+                        Box::new([Type::Variable(host)]),
+                    )),
+                )),
+            );
+        }
         let (input, output) = match self.operation {
             Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. } => (
                 Type::Int,

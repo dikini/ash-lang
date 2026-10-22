@@ -66,9 +66,14 @@ fn original_view() -> ResolvedRegistry {
 
 fn assert_distinct_original_codecs(view: &ResolvedRegistry) {
     assert_eq!(view.native_symbols.len(), 2);
-    assert_eq!(view.scalar_preflights.len(), 10);
+    assert_eq!(view.scalar_preflights.len(), 14);
     let checked = view.native_symbols.values().next().unwrap().call_codec();
-    let legacy = view.scalar_preflights.values().next().unwrap().call_codec();
+    let legacy = view
+        .scalar_preflights
+        .values()
+        .find(|fact| fact.role().host_parameter(fact.module()).is_none())
+        .unwrap()
+        .call_codec();
     assert_eq!(
         checked.module(),
         legacy.module(),
@@ -81,7 +86,18 @@ fn assert_distinct_original_codecs(view: &ResolvedRegistry) {
         assert_eq!(symbol.call_codec().ids(), checked.ids());
     }
     for preflight in view.scalar_preflights.values() {
-        assert_eq!(preflight.call_codec().ids(), legacy.ids());
+        assert_eq!(
+            preflight.call_codec().ids(),
+            if preflight
+                .role()
+                .host_parameter(preflight.module())
+                .is_some()
+            {
+                checked.ids()
+            } else {
+                legacy.ids()
+            }
+        );
     }
 }
 

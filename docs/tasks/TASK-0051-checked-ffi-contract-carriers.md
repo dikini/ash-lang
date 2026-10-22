@@ -387,6 +387,8 @@ stay open.
 The byte/window checkpoint's [test-first evidence](evidence/checked-byte-windows/test-first/README.md)
 records genuine initialized State and view/extent contract preparation, the
 missing checked builtin export, and a separately isolated checked Bytes-owner
-binding refusal. No product repair or connected four-primitive positive is yet
-claimed; source, body-free metadata, Core, static images and hostile/budget gates
-remain the assigned delivery work.
+binding refusal. An initial product candidate now compiles and passes the binding and builtin
+inventory controls; its actual source/summary positive still refuses generic
+source-template admission. The [candidate receipts](evidence/checked-byte-windows/candidates/README.md)
+retain exact reconstructed inputs and distinguish compile-only failures. Body-free
+metadata, Core, static images and hostile/budget gates remain assigned delivery work.
