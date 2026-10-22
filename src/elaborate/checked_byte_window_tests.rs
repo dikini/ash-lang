@@ -825,7 +825,7 @@ resource Probe<H, R> {{"
     );
     match byte_window_independent_core(&source) {
         Err(error) => {
-            assert_ne!(error.reason(), crate::core::ValidationReason::Resource);
+            assert_eq!(error.reason(), crate::core::ValidationReason::Registry);
             eprintln!(
                 "unused generic primitive body refused at independent Core: {:?}",
                 error.reason()
@@ -886,7 +886,7 @@ outside input = {
         Ok(_) => panic!("reachable ordinary helper gained uncovered primitive permission"),
         Err(error) => error,
     };
-    assert_ne!(error.reason(), crate::core::ValidationReason::Resource);
+    assert_eq!(error.reason(), crate::core::ValidationReason::Registry);
     eprintln!(
         "reachable ordinary primitive helper refused at independent Core: {:?}",
         error.reason()
