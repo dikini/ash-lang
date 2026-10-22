@@ -6422,16 +6422,7 @@ fn check_control_roots_with_rows(
     collect_cleanup_rows: bool,
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CleanupRequirement>, Failure> {
-    charge(budget, graph.code.len())?;
-    if graph.code.iter().any(|code| {
-        matches!(
-            code,
-            Control::Discard { .. }
-                | Control::Resource { .. }
-                | Control::Registration { .. }
-                | Control::Cleanup { .. }
-        )
-    }) {
+    if let Some(scan) = control::PrepaidControlCodeScan::for_roots(graph, budget)? {
         let mut queries = Vec::new();
         for root in roots {
             // Row authentication needs every original root, including roots
@@ -6442,7 +6433,7 @@ fn check_control_roots_with_rows(
                 queries.push(root);
             }
         }
-        let mut analysis = Analysis::new(graph, None, budget)?;
+        let mut analysis = Analysis::from_prepaid_control_scan(scan, None, budget)?;
         analysis.collect_cleanup_rows = collect_cleanup_rows;
         analysis.check(&queries, budget)?;
         return Ok(std::mem::take(&mut analysis.cleanup_rows));

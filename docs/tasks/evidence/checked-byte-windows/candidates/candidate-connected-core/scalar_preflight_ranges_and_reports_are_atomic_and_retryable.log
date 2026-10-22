@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'eval::machine::tests::scalar_preflight_ranges_and_reports_are_atomic_and_retryable' (63) panicked at src/eval/machine.rs:4384:14:
+checks preserve Pure Core
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test eval::machine::tests::scalar_preflight_ranges_and_reports_are_atomic_and_retryable ... FAILED
+
+failures:
+
+failures:
+    eval::machine::tests::scalar_preflight_ranges_and_reports_are_atomic_and_retryable
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2109 filtered out; finished in 0.05s
+

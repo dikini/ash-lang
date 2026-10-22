@@ -1,0 +1,11 @@
+{
+  "base": "e12c3e2dbfe85d57efb4b76e4c44b98cddbef160",
+  "files": {
+    "src/build/image.rs": "29c2f85d4b8e664102bd9dbedff263ffe3657ff889aa963aa56e5211170d750b",
+    "src/build/source_resource_image.rs": "38618b3d11b622410191ee2159a819b195562b087633a663cfed4ca48682c247",
+    "src/core/validate.rs": "d6932638aee2ef0f4aa4ea363cf8665e7efca65fb7de87e7405b4087d2a90a0f",
+    "src/core/validate/source_declarations.rs": "5076ef7b951def5e3461ebd6cf0708db18c1e8e4fd2423a0a0aa217c6bc1a148",
+    "src/core/validate/source_declarations/builtin_operation.rs": "c6cededbfd8cbb20ede8ea8cce3cbcd568593f04691a440f5e9f04be70de36d0"
+  },
+  "reviewed_iterator_repair": "c6cededbfd8cbb20ede8ea8cce3cbcd568593f04691a440f5e9f04be70de36d0"
+}

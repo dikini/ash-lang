@@ -173,6 +173,30 @@ impl Resolver {
             )
         })?;
         let codec = Arc::new(codec);
+        // Mint one immutable original per exact canonical codec family. Every
+        // callable in that family forwards this same reference through exports.
+        let checked_call = NominalTypeId::new(self.module, 12);
+        let checked_codec = CheckedForeignCallCodec::authenticate(
+            self.module,
+            span,
+            ForeignCallCodecIds {
+                call: checked_call,
+                returned: ConstructorId::new(checked_call, 0),
+                conversion_failed: ConstructorId::new(checked_call, 1),
+                conversion_error: NominalTypeId::new(self.module, 0),
+            },
+            registry,
+            &mut self.type_work,
+        )
+        .map_err(source_admission_failure)?;
+        self.type_work.charge(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "checked primitive codec storage exceeded work",
+            )
+        })?;
+        let checked_codec = Arc::new(checked_codec);
         let metadata = declarations.definitions.get(10).and_then(|definition| {
             if let ResolvedDefinitionKind::Equational(global) = &definition.kind {
                 Some(global)
@@ -180,7 +204,7 @@ impl Resolver {
                 None
             }
         });
-        if declarations.definitions.len() != 11
+        if declarations.definitions.len() != 15
             || loaded.surface().definitions.get(10).is_none_or(|definition| definition.public)
             || metadata.is_none_or(|metadata| metadata.interface.name.id != BinderId::resolved(self.module, 10)
                 || !metadata.interface.type_parameters.is_empty()
@@ -195,7 +219,7 @@ impl Resolver {
                 "builtin scalar preflight declaration inventory is invalid",
             ));
         }
-        for (definition, role) in declarations.definitions.iter().zip([
+        for role in [
             ForeignScalarPreflightRole::I64,
             ForeignScalarPreflightRole::SizeT,
             ForeignScalarPreflightRole::ByteRead,
@@ -206,7 +230,12 @@ impl Resolver {
             ForeignScalarPreflightRole::CopyBytes,
             ForeignScalarPreflightRole::CopyNul,
             ForeignScalarPreflightRole::ExtentValue,
-        ]) {
+            ForeignScalarPreflightRole::CheckedByteRead,
+            ForeignScalarPreflightRole::CheckedByteWrite,
+            ForeignScalarPreflightRole::CheckedCopyBytes,
+            ForeignScalarPreflightRole::CheckedCopyNul,
+        ] {
+            let definition = &declarations.definitions[role.local() as usize];
             let ResolvedDefinitionKind::Equational(global) = &definition.kind else {
                 return Err(error(
                     ResolveReason::InternalState,
@@ -215,25 +244,30 @@ impl Resolver {
                 ));
             };
             if global.interface.name.id != BinderId::resolved(self.module, role.local())
-                || match role.borrowed_parameter(self.module) {
-                    None => !global.interface.type_parameters.is_empty(),
-                    Some(expected) => {
-                        let parameters = &global.interface.type_parameters;
-                        let (name, _) =
-                            crate::module::foreign_scalar_preflight_ranges(span, role.local())
-                                .ok_or_else(|| {
-                                    error(
-                                        ResolveReason::InternalState,
-                                        span,
-                                        "sealed byte declaration range is invalid",
-                                    )
-                                })?;
-                        parameters.len() != 1 + usize::from(role.data_parameter(self.module).is_some())
-                            || parameters[0].id != expected
-                            || parameters[0].kind != crate::types::Kind::Type
-                            || !matches!(&parameters[0].origin, crate::source::Origin::Source(parameter) if parameter.source() == span.source() && parameter.range().start() == name.end()+1 && parameter.range().end() == name.end()+2)
-                            || role.data_parameter(self.module).is_some_and(|expected| parameters.get(1).is_none_or(|parameter| parameter.id != expected || parameter.kind != crate::types::Kind::Type || !matches!(&parameter.origin, crate::source::Origin::Source(origin) if origin.source() == span.source() && origin.range().start() == name.end()+4 && origin.range().end() == name.end()+5)))
-                    }
+                || {
+                    let parameters = &global.interface.type_parameters;
+                    self.type_work.charge(parameters.len()).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "builtin primitive formal verification exceeded work",
+                        )
+                    })?;
+                    let host = role.host_parameter(self.module);
+                    let borrowed = role.borrowed_parameter(self.module);
+                    let data = role.data_parameter(self.module);
+                    let count = usize::from(host.is_some())
+                        + usize::from(borrowed.is_some())
+                        + usize::from(data.is_some());
+                    parameters.len() != count || parameters.iter().enumerate().any(|(index, parameter)| {
+                        let expected = if host.is_some() {
+                            if index == 0 { host } else { borrowed }
+                        } else if index == 0 { borrowed } else { data };
+                        Some(parameter.id) != expected || parameter.kind != crate::types::Kind::Type
+                            || !matches!(&parameter.origin, crate::source::Origin::Source(origin)
+                                if crate::module::foreign_type_formal_local(span, *origin)
+                                    .is_some_and(|local| parameter.id == crate::types::TypeVariableId::resolved(self.module, local)))
+                    })
                 }
                 || !global.interface.requirements.is_empty()
             {
@@ -243,12 +277,24 @@ impl Resolver {
                     "builtin scalar preflight binder inventory is invalid",
                 ));
             }
+            self.type_work.charge(1).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "primitive codec retention exceeded work",
+                )
+            })?;
+            let selected_codec = Arc::clone(if role.host_parameter(self.module).is_some() {
+                &checked_codec
+            } else {
+                &codec
+            });
             let fact = CheckedForeignScalarPreflight::from_original(
                 role,
                 span,
                 &global.interface.name.origin,
                 &global.interface.annotation,
-                Arc::clone(&codec),
+                selected_codec,
                 &mut self.type_work,
             )
             .map_err(source_admission_failure)?;

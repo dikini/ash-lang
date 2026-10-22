@@ -10,6 +10,7 @@ use crate::source::ByteRange;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ForeignNominalCoordinates {
     pub(crate) declaration: ByteRange,
+    pub(crate) name: ByteRange,
     formals: [ByteRange; 3],
     formal_count: usize,
     constructors: [ByteRange; 6],
@@ -40,6 +41,7 @@ const fn range(start: usize, end: usize) -> ByteRange {
 const EMPTY_RANGE: ByteRange = range(0, 0);
 const EMPTY_NOMINAL: ForeignNominalCoordinates = ForeignNominalCoordinates {
     declaration: EMPTY_RANGE,
+    name: EMPTY_RANGE,
     formals: [EMPTY_RANGE; 3],
     formal_count: 0,
     constructors: [EMPTY_RANGE; 6],
@@ -148,6 +150,7 @@ const fn nominal_table() -> [ForeignNominalCoordinates; 18] {
             "invalid Foreign nominal name"
         );
         let mut row = EMPTY_NOMINAL;
+        row.name = range(name, name + NAMES[local].len());
         if text[cursor] == b'<' {
             cursor += 1;
             loop {
@@ -249,10 +252,10 @@ const HOST_START: usize = unique(FOREIGN_SOURCE.as_bytes(), b"pub effect NativeH
 pub(super) const HOST_NAME: ByteRange = range(HOST_START + 11, HOST_START + 21);
 pub(super) const HOST_FORMAL: ByteRange = range(HOST_START + 22, HOST_START + 23);
 
-const fn formal_table() -> [ByteRange; 23] {
+const fn formal_table() -> [ByteRange; 31] {
     let text = FOREIGN_SOURCE.as_bytes();
-    let mut rows = [EMPTY_RANGE; 23];
-    let mut seen = [false; 23];
+    let mut rows = [EMPTY_RANGE; 31];
+    let mut seen = [false; 31];
     let mut index = 0;
     while index < FORMALS.len() {
         let (header, locals) = FORMALS[index];
@@ -308,4 +311,4 @@ const fn formal_table() -> [ByteRange; 23] {
     rows
 }
 
-pub(super) const FORMAL_RANGES: [ByteRange; 23] = formal_table();
+pub(super) const FORMAL_RANGES: [ByteRange; 31] = formal_table();

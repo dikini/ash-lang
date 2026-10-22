@@ -1,0 +1,60 @@
+report_bytes 38232 overflow False sessions 2
+SESSION {"after": 17008, "before": 0, "graph": 323, "id": 0, "limit": 92622, "meter": 129167098015024, "reconciles": true, "restore": true, "roots": 0, "units": 17008}
+OPERATIONS [('build_graph', 17008)]
+SITE {"calls": 1435, "failures": 0, "file": "src/core/capture.rs", "function": "retain_compound_metadata_variables", "line": 1618, "op": 9, "requested": 0, "session": 0, "units": 1435}
+SITE {"calls": 533, "failures": 0, "file": "src/core/capture/control.rs", "function": "copy_slice", "line": 499, "op": 9, "requested": 0, "session": 0, "units": 1111}
+SITE {"calls": 541, "failures": 0, "file": "src/core/capture.rs", "function": "capture_projections", "line": 1383, "op": 9, "requested": 0, "session": 0, "units": 1082}
+SITE {"calls": 431, "failures": 0, "file": "src/core/capture.rs", "function": "retain", "line": 1525, "op": 9, "requested": 0, "session": 0, "units": 862}
+SITE {"calls": 808, "failures": 0, "file": "src/core/capture.rs", "function": "compile_with_boundary", "line": 3506, "op": 9, "requested": 0, "session": 0, "units": 808}
+SITE {"calls": 299, "failures": 0, "file": "src/core/capture.rs", "function": "retain_node", "line": 1983, "op": 9, "requested": 0, "session": 0, "units": 742}
+SITE {"calls": 646, "failures": 0, "file": "src/core/capture.rs", "function": "solve_capture_values", "line": 6145, "op": 9, "requested": 0, "session": 0, "units": 646}
+SITE {"calls": 641, "failures": 0, "file": "src/core/capture.rs", "function": "retain", "line": 1523, "op": 9, "requested": 0, "session": 0, "units": 641}
+SITE {"calls": 541, "failures": 0, "file": "src/core/capture.rs", "function": "capture_projections", "line": 1485, "op": 9, "requested": 0, "session": 0, "units": 604}
+SITE {"calls": 279, "failures": 0, "file": "src/core/capture.rs", "function": "compile_with_boundary", "line": 3508, "op": 9, "requested": 0, "session": 0, "units": 569}
+SITE {"calls": 426, "failures": 0, "file": "src/types.rs", "function": "charge", "line": 122, "op": 9, "requested": 0, "session": 0, "units": 426}
+SITE {"calls": 14, "failures": 0, "file": "src/core/source_resource.rs", "function": "charge", "line": 133, "op": 9, "requested": 0, "session": 0, "units": 400}
+SITE {"calls": 371, "failures": 0, "file": "src/core/capture/value.rs", "function": "position", "line": 3438, "op": 9, "requested": 0, "session": 0, "units": 371}
+SITE {"calls": 1, "failures": 0, "file": "src/core/capture.rs", "function": "compile_with_boundary", "line": 3389, "op": 9, "requested": 0, "session": 0, "units": 324}
+SITE {"calls": 1, "failures": 0, "file": "src/core/capture.rs", "function": "build_capture_graph", "line": 5944, "op": 9, "requested": 0, "session": 0, "units": 323}
+SITE {"calls": 1, "failures": 0, "file": "src/core/capture/value.rs", "function": "build_in_domain", "line": 3137, "op": 9, "requested": 0, "session": 0, "units": 323}
+SITE {"calls": 323, "failures": 0, "file": "src/core/capture/value.rs", "function": "build_in_domain", "line": 3174, "op": 9, "requested": 0, "session": 0, "units": 323}
+SITE {"calls": 1, "failures": 0, "file": "src/core/capture/value.rs", "function": "reply", "line": 542, "op": 9, "requested": 0, "session": 0, "units": 323}
+SITE {"calls": 1, "failures": 0, "file": "src/core/capture/value.rs", "function": "prepare", "line": 598, "op": 9, "requested": 0, "session": 0, "units": 323}
+SITE {"calls": 323, "failures": 0, "file": "src/core/capture.rs", "function": "compile_with_boundary", "line": 3450, "op": 9, "requested": 0, "session": 0, "units": 323}
+SITE {"calls": 315, "failures": 0, "file": "src/core/capture.rs", "function": "read", "line": 1849, "op": 9, "requested": 0, "session": 0, "units": 315}
+SITE {"calls": 315, "failures": 0, "file": "src/core/capture.rs", "function": "retain_node", "line": 1954, "op": 9, "requested": 0, "session": 0, "units": 315}
+SITE {"calls": 237, "failures": 0, "file": "src/core/capture.rs", "function": "copy", "line": 674, "op": 9, "requested": 0, "session": 0, "units": 313}
+SITE {"calls": 297, "failures": 0, "file": "src/core/capture/value.rs", "function": "push", "line": 1529, "op": 9, "requested": 0, "session": 0, "units": 297}
+SITE {"calls": 299, "failures": 0, "file": "src/core/capture.rs", "function": "read", "line": 1900, "op": 9, "requested": 0, "session": 0, "units": 288}
+FAILED []
+SIZES []
+SESSION {"after": 75976, "before": 17416, "graph": 405, "id": 1, "limit": 92622, "meter": 129167098015024, "reconciles": true, "restore": true, "roots": 14, "units": 58560}
+OPERATIONS [('discover_call', 21597), ('control_roots', 13345), ('state_key', 6879), ('state_copy', 5458), ('prune', 5083), ('dispatch', 2887), ('normalize', 2713), ('requested_clause', 339), ('copy_segment', 259)]
+SITE {"calls": 858, "failures": 0, "file": "src/core/capture/control.rs", "function": "charge_key", "line": 846, "op": 2, "requested": 0, "session": 1, "units": 6879}
+SITE {"calls": 672, "failures": 0, "file": "src/core/capture/control.rs", "function": "copy_slice", "line": 499, "op": 1, "requested": 0, "session": 1, "units": 5458}
+SITE {"calls": 88, "failures": 0, "file": "src/core/capture/control.rs", "function": "normalize", "line": 1025, "op": 3, "requested": 0, "session": 1, "units": 2713}
+SITE {"calls": 2517, "failures": 0, "file": "src/core/capture/value.rs", "function": "install_slot", "line": 6341, "op": 7, "requested": 0, "session": 1, "units": 2517}
+SITE {"calls": 535, "failures": 0, "file": "src/core/capture/value.rs", "function": "edge", "line": 6429, "op": 7, "requested": 0, "session": 1, "units": 2140}
+SITE {"calls": 1008, "failures": 0, "file": "src/core/capture/value.rs", "function": "atom", "line": 4765, "op": 7, "requested": 0, "session": 1, "units": 2016}
+SITE {"calls": 1963, "failures": 0, "file": "src/core/capture/value.rs", "function": "close", "line": 6483, "op": 7, "requested": 0, "session": 1, "units": 1963}
+SITE {"calls": 1769, "failures": 0, "file": "src/core/capture/value.rs", "function": "prepare_watch", "line": 4692, "op": 7, "requested": 0, "session": 1, "units": 1769}
+SITE {"calls": 142, "failures": 0, "file": "src/core/capture/control.rs", "function": "enqueue_normalized", "line": 2456, "op": 8, "requested": 0, "session": 1, "units": 1728}
+SITE {"calls": 1519, "failures": 0, "file": "src/core/capture/value.rs", "function": "close", "line": 6507, "op": 7, "requested": 0, "session": 1, "units": 1519}
+SITE {"calls": 729, "failures": 0, "file": "src/core/capture/value.rs", "function": "watch", "line": 6386, "op": 7, "requested": 0, "session": 1, "units": 1458}
+SITE {"calls": 1115, "failures": 0, "file": "src/core/capture/value.rs", "function": "resource_candidates", "line": 6235, "op": 8, "requested": 0, "session": 1, "units": 1115}
+SITE {"calls": 1090, "failures": 0, "file": "src/core/capture/value.rs", "function": "atom", "line": 4760, "op": 7, "requested": 0, "session": 1, "units": 1090}
+SITE {"calls": 1008, "failures": 0, "file": "src/core/capture/value.rs", "function": "atom", "line": 4776, "op": 7, "requested": 0, "session": 1, "units": 1083}
+SITE {"calls": 830, "failures": 0, "file": "src/core/capture/value.rs", "function": "enqueue", "line": 6365, "op": 7, "requested": 0, "session": 1, "units": 830}
+SITE {"calls": 823, "failures": 0, "file": "src/core/capture/value.rs", "function": "prepare_edge", "line": 4709, "op": 7, "requested": 0, "session": 1, "units": 823}
+SITE {"calls": 731, "failures": 0, "file": "src/core/capture/control.rs", "function": "prune_sorted_heap", "line": 1055, "op": 4, "requested": 0, "session": 1, "units": 731}
+SITE {"calls": 88, "failures": 0, "file": "src/core/capture/control.rs", "function": "prune_sorted_heap", "line": 1042, "op": 4, "requested": 0, "session": 1, "units": 679}
+SITE {"calls": 88, "failures": 0, "file": "src/core/capture/control.rs", "function": "prune_sorted_heap", "line": 1081, "op": 4, "requested": 0, "session": 1, "units": 679}
+SITE {"calls": 642, "failures": 0, "file": "src/core/capture/value.rs", "function": "close", "line": 6522, "op": 7, "requested": 0, "session": 1, "units": 642}
+SITE {"calls": 635, "failures": 0, "file": "src/core/capture/control.rs", "function": "prune_sorted_heap", "line": 1061, "op": 4, "requested": 0, "session": 1, "units": 635}
+SITE {"calls": 635, "failures": 0, "file": "src/core/capture/control.rs", "function": "prune_sorted_heap", "line": 1063, "op": 4, "requested": 0, "session": 1, "units": 635}
+SITE {"calls": 626, "failures": 0, "file": "src/core/capture/control.rs", "function": "prune_after_pop", "line": 1115, "op": 4, "requested": 0, "session": 1, "units": 626}
+SITE {"calls": 77, "failures": 0, "file": "src/core/capture/control.rs", "function": "prune_after_pop", "line": 1123, "op": 4, "requested": 0, "session": 1, "units": 626}
+SITE {"calls": 70, "failures": 0, "file": "src/core/capture/control.rs", "function": "rename", "line": 897, "op": 8, "requested": 0, "session": 1, "units": 593}
+FAILED []
+SIZES [{"calls": 672, "max_cells": 0, "max_heap": 17, "max_prefix": 0, "op": 1}, {"calls": 858, "max_cells": 0, "max_heap": 17, "max_prefix": 0, "op": 2}, {"calls": 88, "max_cells": 0, "max_heap": 18, "max_prefix": 0, "op": 3}, {"calls": 165, "max_cells": 0, "max_heap": 18, "max_prefix": 0, "op": 4}, {"calls": 10, "max_cells": 0, "max_heap": 16, "max_prefix": 7, "op": 5}, {"calls": 5, "max_cells": 0, "max_heap": 15, "max_prefix": 7, "op": 6}, {"calls": 54, "max_cells": 0, "max_heap": 15, "max_prefix": 27, "op": 7}, {"calls": 31, "max_cells": 0, "max_heap": 15, "max_prefix": 0, "op": 10}]
+ALL_RECONCILED True

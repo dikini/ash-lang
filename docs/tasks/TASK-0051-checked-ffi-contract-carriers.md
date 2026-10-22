@@ -371,3 +371,65 @@ unused lexical-host source-order limitation remains visible; no census guard
 was relaxed. [Borrow evidence](evidence/checked-scalar-borrow/README.md) retains
 all failed prerequisites and precise attribution. Exact-head review, root-assigned
 GitHub integration and partial acceptance follow; whole F3 and F-core remain open.
+
+PR #98 is retained at `c8a1fee5`; actual retention/partial acceptance and PM
+confirmation are complete. The next authorized
+[checked byte/copy window checkpoint](plans/checked-ffi-contract-carriers.md#checked-byte-and-copy-window-checkpoint)
+implements all four distinct checked primitives with real initialized State,
+view/Extent/window and any required declared dependency lineage. Source, body-free
+import/re-export, independent Core/transforms and static private-image validation
+must precede closure claims. Existing runtime activation remains refused. The
+first expected-positive preparation/admission gates and their actual failures
+are retained in the test-first evidence below. Whole F3 and its remaining generated-host/runtime/full-gate obligations
+stay open.
+
+The byte/window checkpoint's [test-first evidence](evidence/checked-byte-windows/test-first/README.md)
+records genuine initialized State and view/extent preparation, missing checked
+builtin exports and the isolated checked Bytes-owner binding refusal. The
+[candidate evidence](evidence/checked-byte-windows/candidates/README.md) retains
+reconstructible compile/preflow failures and the exact codec-family and defining-H
+kind repairs. The current candidate passes all five focused controls, including
+real all-four source checking and summary construction; two paid family/kind
+controls also pass on the same 591-input map (`c74e45c0`). Body-free import/
+re-export, linked independent Core/transforms, passive images, hostile controls,
+bounds and affected regressions remain assigned delivery work. No runtime or
+image activation claim follows.
+
+The next byte/window checkpoint passes actual direct/facade body-free consumers,
+linked independent default Core and identity/fold, retaining the exact original
+native/header/access facts and all four flow-proved calls. Its startup probes
+now expose real Resource regressions at unchanged 327680; these block delivery.
+Passive-image hostile completion, remaining window/Host/original controls and
+bounds/regressions remain pending. The candidate evidence records both positives
+and reds; no whole-F3, checked execution or image activation claim follows.
+
+The [owned-call State checkpoint](evidence/checked-byte-windows/candidates/owned-call-move/README.md)
+passes its focused controls and all three unchanged startup probes on the isolated
+parallel F3 configuration. Integration onto the retained passive milestone,
+affected regressions, Clippy and final review remain pending; no whole F3 or
+public checked execution acceptance follows.
+
+The [combined native-interpreter discriminator](evidence/checked-byte-windows/candidates/combined-native-fixture/README.md)
+records two fresh passing two-owner startup repeats, followed by a genuine
+native-interpreter fixture inventory failure in the affected batch. At that checkpoint the
+reviewed fixture-only complete-declaration repair and omission control were
+uncompiled. The final combined verification below supersedes those pending gates.
+
+
+The [final combined byte/window verification](evidence/checked-byte-windows/candidates/final-combined-verification/README.md)
+passes 473 distinct selected unit tests, two additional exact two-owner startup
+repeats, the compile/link-only producer-receipt integration, and Clippy with
+warnings denied on one frozen source/configuration map. The unchanged startup
+allowance is 327680: two-owner uses 327365, nested cleanup 320457, and dependent
+cumulative reconstruction/correspondence 325006. The dependent control retains
+exact, one-short, prefix and fresh-retry checks.
+
+The complete native fixture now includes authentic checked declarations; a
+canonical-first omission control rejects the same registry with only those
+declarations removed. Full checked private static-image reconstruction, hostile
+records and paid bounds pass. Earlier positive-fixture and lint failures remain
+qualified in evidence; no generated program was started by the receipt
+integration. Independent published-head review and milestone retention remain
+pending. Whole F3, public checked execution/protected activation, and the connected
+F-core gate remain open. The developer owns the next full workspace verification
+when F3/F4/F6 connect to the generated-host path.

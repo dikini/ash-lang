@@ -1,0 +1,10 @@
+{
+  "base": "eb108fced3439a25225df5b834f40a13ad7440e4",
+  "files": {
+    "src/core/capture.rs": "78f6981bac35f81a7970e8c7fc2179347d2dcbe5359a88efb80a3d5aad689506",
+    "src/core/capture/control.rs": "79482b86c51395fd6dd829b73ab735a3a4d9bf3be6fca1726447dca44103a5a1"
+  },
+  "patch_sha256": "02b72a95530723a4c2796d70d51d23bdc8fea61de9fd706870cf213cdf090255",
+  "inputs_count": 596,
+  "inputs_aggregate": "2c30e282c69b947419da6efb087f8a9f35b716c9e0ccdc33c53c0236d2d21b15"
+}

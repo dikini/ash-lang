@@ -1,7 +1,11 @@
 //! Original compiler-owned scalar checks and sealed byte declarations.
 //! A declaration fact grants no live native access or owner authority.
 
-use std::sync::Arc;
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use super::checked_source::{
     CheckedForeignCallCodec, ForeignAdmissionError, ForeignAdmissionReason, charge, failure,
@@ -12,6 +16,61 @@ use crate::{
     source::{Origin, Span, discard_origin_iteratively},
     types::{ConstructorId, Kind, Type, TypeVariableId, TypeWorkBudget, discard_type_iteratively},
 };
+
+/// Operation-local Host projection derived from complete scalar-table admission.
+/// It supplies no owner/native/executable authority and cannot be converted back
+/// into the single-use owner proof. The enclosing owner method returns it only
+/// after its independent native and owner checks succeed.
+pub(crate) struct ScalarOwnerHostAuthentication<'registry> {
+    registry: &'registry ResolvedRegistry,
+}
+
+pub(crate) fn consume_owner_scalar_authentication<'registry>(
+    registry: &ResolvedRegistry,
+    authentication: crate::resolved::ScalarPreflightOwnerAuthentication<'registry>,
+    work: &mut TypeWorkBudget,
+) -> Result<ScalarOwnerHostAuthentication<'registry>, crate::resolved::ResolvedBuildFailure> {
+    work.charge(2)
+        .map_err(|()| crate::resolved::ResolvedBuildFailure::TypeResource)?;
+    let proven = authentication.into_registry();
+    if !std::ptr::eq(registry, proven) {
+        return Err(crate::resolved::ResolvedBuildFailure::InvalidState);
+    }
+    Ok(ScalarOwnerHostAuthentication { registry: proven })
+}
+
+impl ScalarOwnerHostAuthentication<'_> {
+    pub(crate) fn is_canonical_native_host(
+        &self,
+        effect: &crate::resolved::ResolvedEffectDeclaration,
+        registry: &ResolvedRegistry,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ForeignAdmissionError> {
+        charge(work, 6, effect.span)?;
+        if !std::ptr::eq(registry, self.registry) {
+            return Err(failure(ForeignAdmissionReason::InvalidCodec, effect.span));
+        }
+        let module = effect.id.module();
+        if let Some(anchor) = registry.scalar_preflight(BinderId::resolved(module, 11))
+            && anchor.function() == BinderId::resolved(module, 11)
+            && anchor.module() == module
+            && anchor.role() == ForeignScalarPreflightRole::CheckedByteRead
+            && anchor.source() == effect.span
+            && anchor.call_codec().ids().call == crate::types::NominalTypeId::new(module, 12)
+        {
+            // Complete strict-table admission proved this exact checked codec
+            // against the same immutable registry. Every Host row is fresh.
+            return super::checked_builtins::host_matches(
+                effect,
+                registry,
+                module,
+                anchor.source(),
+                work,
+            );
+        }
+        super::checked_builtins::is_canonical_native_host(effect, registry, work)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ForeignScalarPreflightRole {
@@ -25,6 +84,10 @@ pub(crate) enum ForeignScalarPreflightRole {
     CopyBytes,
     CopyNul,
     ExtentValue,
+    CheckedByteRead,
+    CheckedByteWrite,
+    CheckedCopyBytes,
+    CheckedCopyNul,
 }
 
 impl ForeignScalarPreflightRole {
@@ -40,6 +103,41 @@ impl ForeignScalarPreflightRole {
             Self::CopyBytes => 7,
             Self::CopyNul => 8,
             Self::ExtentValue => 9,
+            Self::CheckedByteRead => 11,
+            Self::CheckedByteWrite => 12,
+            Self::CheckedCopyBytes => 13,
+            Self::CheckedCopyNul => 14,
+        }
+    }
+
+    pub(crate) const fn checked_memory_local(local: u32) -> Option<Self> {
+        match local {
+            11 => Some(Self::CheckedByteRead),
+            12 => Some(Self::CheckedByteWrite),
+            13 => Some(Self::CheckedCopyBytes),
+            14 => Some(Self::CheckedCopyNul),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn host_parameter(self, module: ModuleId) -> Option<TypeVariableId> {
+        let local = match self {
+            Self::CheckedByteRead => 23,
+            Self::CheckedByteWrite => 25,
+            Self::CheckedCopyBytes => 27,
+            Self::CheckedCopyNul => 29,
+            _ => return None,
+        };
+        Some(TypeVariableId::resolved(module, local))
+    }
+
+    pub(crate) const fn operation_role(self) -> Self {
+        match self {
+            Self::CheckedByteRead => Self::ByteRead,
+            Self::CheckedByteWrite => Self::ByteWrite,
+            Self::CheckedCopyBytes => Self::CopyBytes,
+            Self::CheckedCopyNul => Self::CopyNul,
+            other => other,
         }
     }
 
@@ -48,6 +146,8 @@ impl ForeignScalarPreflightRole {
             // Five preceding canonical nominal declarations bind one Type formal each.
             Self::ByteRead => Some(TypeVariableId::resolved(module, 5)),
             Self::ByteWrite => Some(TypeVariableId::resolved(module, 6)),
+            Self::CheckedByteRead => Some(TypeVariableId::resolved(module, 24)),
+            Self::CheckedByteWrite => Some(TypeVariableId::resolved(module, 26)),
             _ => None,
         }
     }
@@ -73,6 +173,8 @@ impl ForeignScalarPreflightRole {
             Self::CopyBytes => Some(TypeVariableId::resolved(module, 11)),
             Self::CopyNul => Some(TypeVariableId::resolved(module, 12)),
             Self::ExtentValue => Some(TypeVariableId::resolved(module, 13)),
+            Self::CheckedCopyBytes => Some(TypeVariableId::resolved(module, 28)),
+            Self::CheckedCopyNul => Some(TypeVariableId::resolved(module, 30)),
             _ => None,
         }
     }
@@ -87,6 +189,11 @@ impl ForeignScalarPreflightRole {
         module: ModuleId,
         parameters: &[(TypeVariableId, Kind)],
     ) -> bool {
+        if let Some(host) = self.host_parameter(module) {
+            return self.borrowed_parameter(module).is_some_and(|borrowed| {
+                parameters == [(host, Kind::Type), (borrowed, Kind::Type)]
+            });
+        }
         match (self.borrowed_parameter(module), self.data_parameter(module)) {
             (Some(state), Some(data)) => parameters == [(state, Kind::Type), (data, Kind::Type)],
             (Some(state), None) => parameters == [(state, Kind::Type)],
@@ -99,12 +206,36 @@ impl ForeignScalarPreflightRole {
         module: ModuleId,
         parameters: &[TypeVariableId],
     ) -> bool {
+        if let Some(host) = self.host_parameter(module) {
+            return self
+                .borrowed_parameter(module)
+                .is_some_and(|borrowed| parameters == [host, borrowed]);
+        }
         match (self.borrowed_parameter(module), self.data_parameter(module)) {
             (Some(state), Some(data)) => parameters == [state, data],
             (Some(state), None) => parameters == [state],
             _ => parameters.is_empty(),
         }
     }
+}
+
+/// Canonical checking dependencies only; this iterator authenticates no fact.
+pub(crate) fn checked_inventory_dependencies(
+    module: ModuleId,
+) -> impl Iterator<
+    Item = (
+        crate::types::NominalTypeId,
+        &'static crate::module::ForeignNominalCoordinates,
+        bool,
+    ),
+> {
+    (0..crate::module::ForeignCheckedNominalRole::ViolationCause.local() + 1).map(move |local| {
+        (
+            crate::types::NominalTypeId::new(module, local),
+            &crate::module::foreign_nominal_coordinates()[local as usize],
+            !matches!(local, 0 | 5),
+        )
+    })
 }
 
 pub(crate) struct CheckedForeignScalarPreflight {
@@ -210,12 +341,16 @@ impl CheckedForeignScalarPreflight {
                     .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, source))?,
             );
             let data = role.data_parameter(call_codec.module());
-            let count = 1 + usize::from(data.is_some());
+            let host = role.host_parameter(call_codec.module());
+            let count = 1 + usize::from(data.is_some()) + usize::from(host.is_some());
             charge(work, 2 + count, source)?;
             let mut parameters = Vec::new();
             parameters
                 .try_reserve_exact(count)
                 .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, source))?;
+            if let Some(host) = host {
+                parameters.push((host, Kind::Type));
+            }
             parameters.push((parameter, Kind::Type));
             if let Some(data) = data {
                 parameters.push((data, Kind::Type));
@@ -268,6 +403,26 @@ impl CheckedForeignScalarPreflight {
     pub(crate) fn matches_parameters(&self, parameters: &[(TypeVariableId, Kind)]) -> bool {
         self.role.matches_parameters(self.module(), parameters)
     }
+    /// Scheme-kind lookup only: callers must still enforce lexical type scope.
+    pub(crate) fn parameter_kind_with_charge<E>(
+        &self,
+        identity: TypeVariableId,
+        mut charge: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<&Kind>, E> {
+        let Type::Forall(parameters, _) = self.core_signature() else {
+            return Ok(None);
+        };
+        charge(parameters.len())?;
+        // The sealed fact retains its exact defining role, module and complete
+        // ordered formals. Never infer kind authority from a builtin namespace.
+        if !self.matches_parameters(parameters) {
+            return Ok(None);
+        }
+        Ok(parameters
+            .iter()
+            .find(|(parameter, _)| *parameter == identity)
+            .map(|(_, kind)| kind))
+    }
     pub(crate) fn call_codec(&self) -> &Arc<CheckedForeignCallCodec> {
         &self.call_codec
     }
@@ -306,6 +461,9 @@ impl CheckedForeignScalarPreflight {
             || !matches!(&self.annotation.origin, Origin::Source(span) if *span == self.annotation.span)
         {
             return Err(invalid());
+        }
+        if self.role.host_parameter(module).is_some() {
+            return self.authenticate_checked_memory_annotation(work);
         }
         if self.role.view_parameter(module).is_some() {
             return self.authenticate_view_annotation(work);
@@ -628,6 +786,39 @@ impl CheckedForeignScalarPreflight {
         Ok(())
     }
 
+    /// Checking dependencies of this sealed original, not source name routes.
+    /// Callers authenticate the original and fetch the actual exporting facts.
+    pub(crate) fn codec_nominal_dependencies(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            crate::types::NominalTypeId,
+            &'static crate::module::ForeignNominalCoordinates,
+            bool,
+        ),
+    > {
+        let checked = self.role.host_parameter(self.module()).is_some();
+        let range = if checked {
+            0..crate::module::ForeignCheckedNominalRole::ViolationCause.local() + 1
+        } else {
+            1..2
+        };
+        let module = self.module();
+        range.map(move |local| {
+            (
+                crate::types::NominalTypeId::new(module, local),
+                &crate::module::foreign_nominal_coordinates()[local as usize],
+                !matches!(local, 0 | 5),
+            )
+        })
+    }
+
+    pub(crate) fn codec_host_dependency(&self) -> Option<crate::types::EffectId> {
+        self.role.host_parameter(self.module()).map(|_| {
+            crate::types::EffectId::new(self.module(), crate::module::FOREIGN_NATIVE_HOST_LOCAL)
+        })
+    }
+
     pub(crate) fn authenticate(
         &self,
         registry: &ResolvedRegistry,
@@ -641,6 +832,41 @@ impl CheckedForeignScalarPreflight {
             registry,
             work,
         )?;
+        self.authenticate_registry_projection(registry, work)
+    }
+
+    // Only the whole-table entry below shares a codec proof. Standalone fact
+    // admission above always reconstructs that proof in the actual registry.
+    fn authenticate_registry_projection(
+        &self,
+        registry: &ResolvedRegistry,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ForeignAdmissionError> {
+        if self.role.host_parameter(self.module()).is_some() {
+            charge(work, 1, self.source)?;
+            let host = registry
+                .effect(crate::types::EffectId::new(
+                    self.module(),
+                    crate::module::FOREIGN_NATIVE_HOST_LOCAL,
+                ))
+                .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, self.source))?;
+            // The fresh checked codec proof above (or this table's identical
+            // family proof) already authenticated the full builtin inventory.
+            // Recheck this row's Host declaration/formal projection without
+            // repeating that same complete inventory walk.
+            if !super::checked_builtins::host_matches(
+                host,
+                registry,
+                self.module(),
+                self.source,
+                work,
+            )? {
+                return Err(failure(
+                    ForeignAdmissionReason::InvalidSignature,
+                    self.source,
+                ));
+            }
+        }
         charge(work, 2, self.source)?;
         let id = self
             .conversion_error_constructor()
@@ -665,3 +891,141 @@ impl CheckedForeignScalarPreflight {
         Ok(())
     }
 }
+
+/// Exact codec identity borrowed only for this immutable registry operation.
+/// The reference keeps allocation identity live; no proof or pointer escapes.
+#[derive(Clone, Copy)]
+struct CodecProofKey<'registry> {
+    module: ModuleId,
+    source: Span,
+    codec: &'registry Arc<CheckedForeignCallCodec>,
+}
+
+impl PartialEq for CodecProofKey<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module
+            && self.source == other.source
+            && Arc::ptr_eq(self.codec, other.codec)
+    }
+}
+impl Eq for CodecProofKey<'_> {}
+impl Hash for CodecProofKey<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.module.hash(state);
+        self.source.hash(state);
+        std::ptr::hash(Arc::as_ptr(self.codec), state);
+    }
+}
+
+/// Authenticate this immutable registry table, sharing only identical codec
+/// reconstruction within this call. No completed proof escapes the operation.
+pub(crate) fn authenticate_registry_families(
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ForeignAdmissionError> {
+    let mut proved = HashSet::<BinderId>::new();
+    for (function, fact) in registry.scalar_preflights() {
+        charge(work, 1, fact.source)?;
+        if function != fact.function() {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidSignature,
+                fact.source,
+            ));
+        }
+        fact.authenticate_original(work)?;
+        let anchor = BinderId::resolved(
+            fact.module(),
+            if fact.role.host_parameter(fact.module()).is_some() {
+                11
+            } else {
+                0
+            },
+        );
+        charge(work, 1, fact.source)?;
+        let common = registry
+            .scalar_preflight(anchor)
+            .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, fact.source))?;
+        if common.function() != anchor || !Arc::ptr_eq(common.call_codec(), fact.call_codec()) {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidSignature,
+                fact.source,
+            ));
+        }
+        // Paid fixed-identity hash/lookup; the mandatory anchor allocation
+        // comparison above still precedes reuse of this exact family proof.
+        charge(work, 1, fact.source)?;
+        let fresh = !proved.contains(&anchor);
+        if fresh {
+            CheckedForeignCallCodec::authenticate(
+                fact.module(),
+                fact.source,
+                fact.call_codec.ids(),
+                registry,
+                work,
+            )?;
+        }
+        // Every row still authenticates its own Host and ConversionError
+        // projections; the common codec proof alone is shared.
+        fact.authenticate_registry_projection(registry, work)?;
+        if fresh {
+            // Pay successful-key storage and its insertion lookup before either.
+            charge(work, 2, fact.source)?;
+            proved
+                .try_reserve(1)
+                .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
+            proved.insert(anchor);
+        }
+    }
+    Ok(())
+}
+
+/// Pointwise admission for an owned, possibly selective projection. Unlike the
+/// complete-table entry, this does not certify anchor/family continuity. Each
+/// literal codec allocation receives its own fresh proof in this target.
+pub(crate) fn admit_projected_preflights(
+    registry: ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<ResolvedRegistry, ForeignAdmissionError> {
+    let mut proved = HashSet::<CodecProofKey<'_>>::new();
+    for (function, fact) in registry.scalar_preflights() {
+        charge(work, 1, fact.source)?;
+        if function != fact.function() {
+            return Err(failure(
+                ForeignAdmissionReason::InvalidSignature,
+                fact.source,
+            ));
+        }
+        fact.authenticate_original(work)?;
+        // All three exact fixed-size key components participate in hashing
+        // and equality; pointer identity alone never substitutes for context.
+        let key = CodecProofKey {
+            module: fact.module(),
+            source: fact.source,
+            codec: fact.call_codec(),
+        };
+        charge(work, 3, fact.source)?;
+        let fresh = !proved.contains(&key);
+        if fresh {
+            CheckedForeignCallCodec::authenticate(
+                fact.module(),
+                fact.source,
+                fact.call_codec.ids(),
+                &registry,
+                work,
+            )?;
+        }
+        fact.authenticate_registry_projection(&registry, work)?;
+        if fresh {
+            // One retained key plus the three-component insertion lookup.
+            charge(work, 4, fact.source)?;
+            proved
+                .try_reserve(1)
+                .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
+            proved.insert(key);
+        }
+    }
+    drop(proved);
+    Ok(registry)
+}
+
+mod checked_memory;

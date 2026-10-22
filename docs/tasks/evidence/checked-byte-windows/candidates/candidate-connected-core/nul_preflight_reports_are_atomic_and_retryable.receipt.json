@@ -1,0 +1,12 @@
+{
+  "command": [
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "nul_preflight_reports_are_atomic_and_retryable",
+    "--nocapture"
+  ],
+  "exit_code": 101,
+  "artifact_sha256": "9543e05f9692837e05c75e0a586dfa48001461b0aef35bb1e31c1354ecdb1d31",
+  "artifact_inputs": "candidate-connected-core/run.inputs.json, aggregate9fbb3f0e; source.patch against2f5f3c61",
+  "qualification": "Pinned already-built artifact; does not claim current dirty source was compiled. No native FFI execution.",
+  "log_sha256": "8ca24e22687fa70443b157cbdb6b09c2a0501f2deafa1c5b1be96e4591a99b0b"
+}

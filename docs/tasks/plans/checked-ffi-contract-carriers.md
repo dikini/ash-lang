@@ -644,3 +644,208 @@ census limitation before flow. Its pinned failure remains evidence; equivalent
 declaration ordering isolates the assigned direct-handler case without changing
 the census. Final uniform affected regressions, startup defaults, images, Clippy
 and exact-head review remain the delivery gate. No F-core or whole-F3 pass follows.
+
+### Checked byte and copy window checkpoint
+
+Start from retained PR #98 at `c8a1fee506a00f68065cb08c6e2e9911d44a58aa`.
+This implements the remaining checked primitive part of CP-0024 and Slices 4–5
+as one coherent delivery: all four authenticated `@builtin.foreign` functions
+`checked_byte_read`, `checked_byte_write`, `checked_copy_bytes` and
+`checked_copy_nul`. It must not substitute another opaque scalar admission case.
+The earlier OriginalTemplate ordinary-formal/unused-host ordering limitation
+remains recorded; no source census exemption follows.
+
+Current Ash has legacy sealed byte/copy functions returning `Call` with empty
+ordinary rows. Existing initialized State, original access families, exact view/
+extent keys, direct provider windows and non-suspension rules supply the native
+lineage. The four checked functions are absent, and the checked binding subset
+still rejects the needed initialized-byte owner and access-producing shapes.
+The [test-first evidence](../evidence/checked-byte-windows/test-first/README.md)
+now records genuine preparation success. Initial resolution stops at the absent
+`checked_byte_read` export. A resolver-only spelling isolation then reaches the
+unchanged checked library and fails `ForeignContract / InvalidLibrary`: the
+checked owner gate requires Opaque and refuses this Bytes State. That control
+never source-checks legacy calls or grants checked permission. No product change
+preceded these receipts. Legacy canonical controls must remain valid.
+
+Use existing builtin declaration/fact, source-owner/access, primitive-call/window,
+summary/original publication, specialization and independent Core/image carriers.
+Preserve existing builtin identities and append distinct checked roles; source
+names, module membership or a serialized checked flag cannot create authority.
+Each checked signature has explicit first Type H, the exact State S or view V,
+canonical `CheckedCall`, and `NativeHost<H>`. Reconstruct H from the admitted
+owner and complete actual vector; never select a convenient same-kind formal.
+Pure scalar/NUL preflights, data/private-state functions and extent inspection
+keep their existing identities/codecs and authority restrictions.
+
+Retain the existing distinct Acquire/Handler/Finish live-State/window rules; the
+PR #98 Handler-only scalar Borrow subset is not a blanket byte-phase rule. Checked
+primitive function values retain their latent exact Host effect, and each applied
+occurrence must reconstruct it independently. Byte/copy failure alternatives are
+independent diagnostics, never private finish-request/outcome witnesses. Exact
+view/Extent value lineage, producing member and scalar keys remain required in
+addition to compatible types; NUL copying also requires its original Nul family
+and an independent bound.
+
+1. Establish one real checked byte State with authenticated initialized extent,
+   nullable acquisition, actual checked finish and independent source continuation.
+   Exercise both checked byte operations in its owning direct phase. Separately
+   establish a genuine original access query and preserving extent query inside
+   a direct fresh window, then exercise both checked copy operations on that
+   exact V/Extent/owner/window/key relation. No source pointer or view escapes.
+   If the real view requires a declared parent/child dependency, carry the exact
+   declared C-to-S originals, full vectors and revocation/liveness facts rather
+   than removing the dependency to manufacture a positive.
+2. Preserve exact original library/member/assumption, ABI representation,
+   initialized-output selection and complete ordered Type/Row facts through
+   genuine source and summaries. Require body-free import plus re-export, linked
+   independently validated Core, identity/fold and static private-image
+   reconstruction/validation. Static record validation does not authorize checked
+   runtime, bridge/native activation or generated checked execution.
+3. Require canonical positives before hostile controls: arbitrary/wrong H,
+   same-kind State/view/Extent donors, erased initialized extent, wrong native
+   ordering or preserving member, removed assumptions/dependencies, incomplete
+   Type/Row substitution, split/reordered/suspending windows and stale copied
+   contracts. Reject legacy byte/copy calls on checked owners/views independently;
+   also reject calls outside the owning phase/window and State/view forwarding
+   through ordinary helpers. Mutate retained real Core/image facts separately,
+   keeping ordinary registry shape and immutable originals intact where possible.
+4. Reuse paid work/storage and iterative teardown; compare originals before
+   publication. Measure exact, prefix, one-short, spent and fresh budgets plus
+   refusal atomicity at meaningful new boundaries. Preserve PR #97/#98 finish,
+   Current retirement, Host and source-continuation regressions, legacy byte/copy
+   behavior, both startup defaults and image checks. Freeze inputs/tools before
+   the final focused batch and independent exact-head review.
+
+The first required red gate is real checked contract preparation followed by
+expected-positive initialized owner/primitive resolution or source admission;
+record whichever precise boundary actually refuses. A separate builtin inventory
+probe may establish missing declarations but cannot replace connected lineage
+positives. The first two commands above establish preparation and the separate
+inventory/binding refusals only; connected source and later gates remain pending.
+
+Runtime/native/checked image execution, K/quarantine implementation, arbitrary
+raw pointers, general callbacks/helpers, privileged lifecycle transport,
+deployment and SQLite activation are excluded. Existing checked runtime/image
+refusal remains until its separately assigned prerequisites connect. F4/F6,
+SQLite, F7/F8 and the full milestone remain required overall. AD-0015 remains
+owner-free; all four whole-F3 criteria stay unchecked. Root assigns F-core only
+when the real generated-host F3/F4/F6 path and accepted F2 are ready. A concrete
+semantic omission or O/K conflict returns to CP/design, never a local rule.
+
+[Product candidate evidence](../evidence/checked-byte-windows/candidates/README.md)
+retains reconstructible compile failures and preflow failures. Exact diagnostics
+identified separate codec-family identity and missing defining-H scheme-kind
+correspondence, without relaxing source ordering, flow or lexical scope checks.
+The current frozen five-test candidate passes actual initialized-State/view
+preparation, default refusal, binding/inventory and all-four source/summary.
+Two additional controls pass family remint refusal and paid complete-formal kind
+lookup. Both commands share 591 equal inputs, aggregate `c74e45c0`.
+Body-free consumer/re-export, independent Core/transforms, passive image
+validation, hostile controls and affected bounds/regressions remain pending.
+No runtime or image activation permission follows.
+
+The next frozen candidate passes both actual body-free consumer routes and
+linked independent default Core/identity/fold (7/7 with the prior source gates).
+Foreign-free Pure, inert legacy import, checked-host image refusal and scalar/NUL
+atomicity controls pass. Passive-image tamper completion and stale formal-count
+fixtures need test-premise corrections. More materially, both buffer and the
+dependent-discard startup probes now exhaust the unchanged 327680 allowance;
+these are delivery blockers, with measured repeated codec proof work retained.
+No budget, startup fixture or activation guard may be relaxed to close them.
+
+The first measured operation-local family codec proof sharing preserves connected
+7/7, family controls 3/3 and image-subset 2/2, but default startup still exhausts
+the unchanged allowance. A second exact duplicate full-inventory replay through
+per-row Host checks is measured and a projection-preserving repair is authored,
+not executed. Its future results must not inherit the first candidate's passes.
+
+The second Host-proof sharing candidate passes four family controls, connected
+7/7, image subset 2/2 and complete passive-image tamper validation, at 591 equal
+inputs `837b5c5b`. Startup still fails at unchanged 327680. Complete caller/cost
+evidence separates repeated proofs inside immutable table operations from
+independent admission boundaries; no cap or validation waiver is permitted.
+
+The grouped immutable-table/owned-pointwise repair passes five focused controls
+(`704cc8e8`) but still fails all three unchanged startup probes. Selective size
+and legacy byte imports/re-exports reach the next case; direct checked-copy NUL
+then fails codec admission both before and after this repair, confirmed against
+exact `a99a9c4c` plus the same test overlay (`cd784d8a`). Preserve that distinction
+and diagnose its actual closure fact; no codec or budget waiver follows.
+
+The selective dependency repair now retains the exact canonical nominal,
+constructor-family and Host checking closure through direct imports and facades,
+without adding public names or other globals. A real coherent Call-constructor
+truncation initially authenticated; expected membership now comes from the
+existing immutable canonical inventory after original authentication. The fresh
+candidate passes 9 connected/source/privacy tests and 7 family/summary controls
+(including 2 summary tests), all at 591 equal inputs `57500e29`. All three startup
+probes still exhaust the unchanged allowance. Next measure exclusive capture
+charges with a reversible bounded diagnostic overlay; do not infer a cost repair
+from successful closure or relax any guard or budget.
+
+The reversible exclusive-charge observer and pinned pre-byte comparison are now
+retained as diagnostics. Both complete reports reconcile without overflow; small
+final-total variability also occurs with the observer off. Pre-byte startup
+passes near 311414 while the current candidate remains Resource. Most lost
+allowance (about 26872 cells) occurs before capture; graph work adds only 570.
+A baseline earlier-phase ledger is retained, with the current-side counterpart
+still required before a paid-work simplification is selected. Temporary source
+hooks were restored and removed; no product profiler, cap or guard change is
+part of this checkpoint.
+
+#### Coordinate and window-control checkpoint
+
+The paid canonical-coordinate factory and operation-local scalar/owner/Host
+chain have five passing focused controls. The connected checked-window matrix
+now passes 15 tests, including genuine donor/key positives, legacy-call and
+post-attempt refusals, and copied Core Host/vector/order mutations. See
+[the candidate receipts](../evidence/checked-byte-windows/candidates/coordinate-host-and-window-controls/README.md).
+The original startup limit remains 327680: nested cleanup passes at 327334,
+while two-owner and dependent startup remain Resource. Separate alternate-cap
+cost diagnostics measure deficits 6748 and 10443; they confer no default pass.
+Next work addresses repeated exact source/inventory proof within one immutable
+admission, then actual checked-owner static-image and remaining hostile/bounds
+and affected regression gates. PR101 and whole F3 remain incomplete.
+
+The first genuine checked-window static-image candidate compiles and encodes,
+but canonical restoration refuses at normalized prepared-library reconstruction,
+before owner/symbol rebinding or hostile image cases. See the
+[exact red record](../evidence/checked-byte-windows/candidates/checked-static-image-first/README.md).
+The next image repair must retain the full checked profile, assumptions and
+Host/member relations through fresh original-source reconstruction; the legacy
+wire/profile guards remain intact. This is not private-image completion.
+
+The operation-local builtin proof candidate has passing component controls and
+an actual selective-legacy source→linked independent Core positive; see
+[the qualified candidate record](../evidence/checked-byte-windows/candidates/operation-local-builtin-proof/README.md).
+Default startup remains 1/3: two-owner exhausts work, and dependent exhausts
+work in its post-restore static library comparison (masked as InvalidRecord by
+the fixture). The selective partial checker view additionally retains Host
+without its complete checking inventory; old and new source authentication
+agree on refusal, while the ordinary linked program passes. Restore this
+internal original-view positive through exact retained-Host metadata closure;
+do not accept a silent unsupported reclassification. The checked prepared-image
+carrier repair remains separate. No budget, public build or runtime gate moved.
+
+The restore-root byte witness candidate now passes eighteen focused non-startup
+controls, including full checked static-image reconstruction and its hostile/work
+bounds. Default startup is 2/3: nested cleanup uses 320798 and dependent discard,
+including original-library correspondence and cumulative bounds, uses 325013;
+two-owner discard still exhausts the unchanged 327680 allowance. See
+[the tested candidate and measurement limits](../evidence/checked-byte-windows/candidates/restore-root-byte-witness/README.md).
+The proposed resource-expression/context traversal was rejected without a product
+patch because accepted slot contexts need not belong to the interned path set;
+a complete paid fallback would erase its measured gross saving. Keep fresh
+semantic admission, remaining startup and affected regression gates open. This
+unmerged candidate does not complete PR101, whole F3 or runtime activation.
+
+The bounded prepaid control-inventory candidate passes three new payment/gate
+controls, the complete ordered owner-row control and the actual full static
+roundtrip. It preserves no-control skipped work and fresh semantic inventory;
+only unused structural payment is carried across the same lexical root call.
+See [the candidate evidence](../evidence/checked-byte-windows/candidates/prepaid-control-inventory/README.md).
+Startup remains 2/3: nested cleanup uses 320640 and dependent discard uses
+324967; two-owner still reports Resource at 327680. Measure its current actual
+prefix and failure phase before choosing another repair. No full regression,
+PR101 completion or runtime activation is claimed.

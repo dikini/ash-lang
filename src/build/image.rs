@@ -360,6 +360,7 @@ enum NodeTag {
     NativeInterpret {
         body: u32,
         interpretations: Slice,
+        host: Option<ForeignHostRecord>,
     },
     TypeAbstraction {
         parameters: Slice,
@@ -1328,6 +1329,10 @@ impl Encoder<'_> {
                             Intrinsic::ForeignByteWrite { function } => (function, Role::ByteWrite),
                             _ => return Err(ImageFailure::Unsupported(Unsupported::Intrinsic)),
                         };
+                        let role = if let Some(checked) = Role::checked_memory_local(function.local()) {
+                            if checked.operation_role() != role { return Err(ImageFailure::InvalidRecord); }
+                            checked
+                        } else { role };
                         NodeTag::ScalarPreflight {
                             function: self.binder_id(function)?,
                             role,
@@ -1568,7 +1573,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x11";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x13";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -1804,6 +1809,8 @@ macro_rules! wire_struct {
 mod source_forwarding_image;
 #[path = "source_resource_image.rs"]
 mod source_resource_image;
+#[path = "checked_prepared_image.rs"]
+mod checked_prepared_image;
 #[path = "source_resource_rows_image.rs"]
 mod source_resource_rows_image;
 use source_resource_image::{
@@ -2192,10 +2199,12 @@ impl Wire for NodeTag {
             Self::NativeInterpret {
                 body,
                 interpretations,
+                host,
             } => {
                 14u8.write(writer)?;
                 body.write(writer)?;
-                interpretations.write(writer)
+                interpretations.write(writer)?;
+                host.write(writer)
             }
             Self::TypeAbstraction { parameters, body } => {
                 15u8.write(writer)?;
@@ -2373,6 +2382,7 @@ impl Wire for NodeTag {
             14 => Self::NativeInterpret {
                 body: Wire::read(reader)?,
                 interpretations: Wire::read(reader)?,
+                host: Wire::read(reader)?,
             },
             15 => Self::TypeAbstraction {
                 parameters: Wire::read(reader)?,
@@ -3405,11 +3415,11 @@ impl Decoder<'_> {
                     Role::Nul => Intrinsic::ForeignCheckedNul { function },
                     Role::DataOf => Intrinsic::ForeignDataOf { function },
                     Role::ReplaceData => Intrinsic::ForeignReplaceData { function },
-                    Role::CopyBytes => Intrinsic::ForeignCopyBytes { function },
-                    Role::CopyNul => Intrinsic::ForeignCopyNul { function },
+                    Role::CopyBytes | Role::CheckedCopyBytes => Intrinsic::ForeignCopyBytes { function },
+                    Role::CopyNul | Role::CheckedCopyNul => Intrinsic::ForeignCopyNul { function },
                     Role::ExtentValue => Intrinsic::ForeignExtentValue { function },
-                    Role::ByteRead => Intrinsic::ForeignByteRead { function },
-                    Role::ByteWrite => Intrinsic::ForeignByteWrite { function },
+                    Role::ByteRead | Role::CheckedByteRead => Intrinsic::ForeignByteRead { function },
+                    Role::ByteWrite | Role::CheckedByteWrite => Intrinsic::ForeignByteWrite { function },
                 };
                 builder.with_caller_type_work(self.work, |builder| {
                     builder.intrinsic(operation, module, ty.into_inner(), origin.take())
@@ -6187,6 +6197,29 @@ main () = {
     }
 
     #[test]
+    fn foreign_free_default_compilation_keeps_pure_private_image() {
+        let tree = SourceTree::new();
+        tree.write("entry.ash", "main : Unit -> Int\nmain () = 42\n");
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert!(compiled.effect_build_input().is_none());
+        let (program, provenance) = compiled
+            .pure_build_input()
+            .expect("no Foreign or effectful scheme selects ordinary Pure Core");
+        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        assert!(!image.effect_dialect);
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        drop(image);
+        drop(compiled);
+        drop(tree);
+        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let restored = decoded.restore(&mut TypeWorkBudget::default()).unwrap();
+        assert_eq!(
+            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            "42"
+        );
+    }
+
+    #[test]
     fn checked_builtin_image_legacy_import_roundtrip_authenticates_inert_host() {
         let tree = SourceTree::new();
         tree.write(
@@ -6194,8 +6227,18 @@ main () = {
             "import @builtin.foreign as Foreign\nmain : Unit -> Int\nmain () = 42\n",
         );
         let compiled = compile_path(tree.configuration()).unwrap();
-        let (program, provenance) = compiled.pure_build_input().unwrap();
-        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        assert!(compiled.pure_build_input().is_none());
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            "x86_64-unknown-linux-gnu",
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert!(build.bridges.is_empty());
+        assert!(build.libraries.is_empty());
+        let image = build.image;
         assert_eq!(image.effects.len(), 1);
         assert!(image.operations.is_empty());
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
@@ -6203,9 +6246,14 @@ main () = {
         drop(compiled);
         drop(tree);
         let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        let restored = decode().restore(&mut TypeWorkBudget::default()).unwrap();
+        let restored = decode()
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
         assert_eq!(
-            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
             "42"
         );
         let mutations: &[fn(&mut PureImage)] = &[
@@ -6220,7 +6268,9 @@ main () = {
             let mut image = decode();
             mutate(&mut image);
             assert!(
-                image.restore(&mut TypeWorkBudget::default()).is_err(),
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
                 "accepted altered inert image metadata {index}"
             );
         }
@@ -6295,8 +6345,23 @@ main () = {
         let tree = SourceTree::new();
         tree.write("entry.ash", "import @builtin.foreign as Foreign\nmain : Unit -> Bool\nmain () = match Foreign.checked_i64 42 {\n    Foreign.Returned(value) => value == 42\n    Foreign.ConversionFailed(_) => false\n}\n");
         let compiled = compile_path(tree.configuration()).unwrap();
-        let (program, provenance) = compiled.pure_build_input().unwrap();
-        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        assert!(
+            compiled.pure_build_input().is_none(),
+            "retained checked schemes have latent Host rows and select Effect Core"
+        );
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        assert!(!program.nodes().iter().any(|node| matches!(&node.kind,
+            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::NativeInterpret(boundary)) if boundary.host().is_some())));
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            "x86_64-unknown-linux-gnu",
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert!(build.bridges.is_empty());
+        assert!(build.libraries.is_empty());
+        let image = build.image;
         let mut roles = image
             .scalar_preflights
             .iter()
@@ -6315,35 +6380,77 @@ main () = {
                 Role::ReplaceData,
                 Role::CopyBytes,
                 Role::CopyNul,
-                Role::ExtentValue
+                Role::ExtentValue,
+                Role::CheckedByteRead,
+                Role::CheckedByteWrite,
+                Role::CheckedCopyBytes,
+                Role::CheckedCopyNul
             ]
         );
-        assert_eq!(image.call_codecs.len(), 1);
-        assert_eq!(
-            image.scalar_preflights[0].codec,
-            image.scalar_preflights[1].codec
-        );
+        assert_eq!(image.call_codecs.len(), 2);
+        let codec_for = |role| {
+            image
+                .scalar_preflights
+                .iter()
+                .find(|fact| fact.role == role)
+                .unwrap()
+                .codec
+        };
+        let legacy = codec_for(Role::I64);
+        let checked = codec_for(Role::CheckedByteRead);
+        assert_ne!(legacy, checked);
+        for fact in &image.scalar_preflights {
+            assert_eq!(
+                fact.codec,
+                if fact.role.host_parameter(ModuleId::new(0)).is_some() {
+                    checked
+                } else {
+                    legacy
+                }
+            );
+        }
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
         drop(image);
         drop(compiled);
         drop(tree);
         let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        let restored = decode().restore(&mut TypeWorkBudget::default()).unwrap();
+        let restored = decode()
+            .restore_effect(&mut TypeWorkBudget::default())
+            .unwrap();
         assert_eq!(
-            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
             "true"
         );
         fn data_parameters(image: &PureImage) -> usize {
-            image
-                .types
+            let fact = image
+                .scalar_preflights
                 .iter()
-                .find_map(|record| match record.tag {
-                    TypeTag::Forall { parameters } if parameters.len == 2 => {
-                        Some(parameters.start as usize)
-                    }
-                    _ => None,
-                })
-                .expect("canonical Data declaration has both ordered formals")
+                .find(|fact| fact.role == Role::DataOf)
+                .unwrap();
+            let BinderIdentity::Resolved { module, local } = fact.function else {
+                panic!("canonical DataOf binder")
+            };
+            assert_eq!(local, Role::DataOf.local());
+            let mut starts = image.types.iter().filter_map(|record| {
+                let TypeTag::Forall { parameters } = record.tag else { return None };
+                let formals = parameters.get(&image.quantifiers).unwrap();
+                if formals.len() == 2 && formals.iter().zip([7, 8]).all(|(formal, expected)|
+                    matches!(formal.id, TypeVariableIdentity::Resolved { module: m, local: l } if m == module && l == expected)
+                    && matches!(image.kinds[usize::try_from(formal.kind).unwrap()], KindRecord::Type)) {
+                    Some(parameters.start as usize)
+                } else { None }
+            }).collect::<Vec<_>>();
+            starts.sort_unstable();
+            starts.dedup();
+            assert_eq!(
+                starts.len(),
+                1,
+                "one interned exact DataOf formal vector, not an arbitrary two-formal signature"
+            );
+            starts[0]
         }
         let mutations: &[fn(&mut PureImage)] = &[
             |image| {
@@ -6376,7 +6483,11 @@ main () = {
                     | Role::ReplaceData
                     | Role::CopyBytes
                     | Role::CopyNul
-                    | Role::ExtentValue => Role::I64,
+                    | Role::ExtentValue
+                    | Role::CheckedByteRead
+                    | Role::CheckedByteWrite
+                    | Role::CheckedCopyBytes
+                    | Role::CheckedCopyNul => Role::I64,
                 }
             },
             |image| image.scalar_preflights[0].annotation.provenance = u32::MAX,
@@ -6392,6 +6503,43 @@ main () = {
             },
             |image| {
                 image.call_codecs.push(image.call_codecs[0]);
+            },
+            |image| {
+                let checked = image
+                    .scalar_preflights
+                    .iter()
+                    .find(|f| f.role == Role::CheckedByteRead)
+                    .unwrap()
+                    .codec;
+                let reminted = index(image.call_codecs.len()).unwrap();
+                image
+                    .call_codecs
+                    .push(image.call_codecs[usize::try_from(checked).unwrap()]);
+                image
+                    .scalar_preflights
+                    .iter_mut()
+                    .find(|f| f.role == Role::CheckedCopyNul)
+                    .unwrap()
+                    .codec = reminted;
+            },
+            |image| {
+                image
+                    .scalar_preflights
+                    .retain(|f| f.role != Role::CheckedByteRead);
+            },
+            |image| {
+                let legacy = image
+                    .scalar_preflights
+                    .iter()
+                    .find(|f| f.role == Role::I64)
+                    .unwrap()
+                    .codec;
+                image
+                    .scalar_preflights
+                    .iter_mut()
+                    .find(|f| f.role == Role::CheckedCopyNul)
+                    .unwrap()
+                    .codec = legacy;
             },
             |image| {
                 let builtin = image
@@ -6413,14 +6561,16 @@ main () = {
                 *module = u32::MAX;
             },
             |image| {
-                image.nodes[0].effects = Some(0);
+                image.nodes[0].effects = Some(u32::MAX);
             },
         ];
         for (case, mutate) in mutations.iter().enumerate() {
             let mut corrupted = decode();
             mutate(&mut corrupted);
             assert!(
-                corrupted.restore(&mut TypeWorkBudget::default()).is_err(),
+                corrupted
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
                 "forged case {case}"
             );
         }
@@ -7476,6 +7626,7 @@ struct PreparedSymbolRecord {
 
 #[derive(Clone, Copy, Debug)]
 struct PreparedLibraryRecord {
+    checked: Option<Slice>,
     module: u32,
     name: Slice,
     public: bool,
@@ -7555,6 +7706,12 @@ struct CallCodecRecord {
     returned: ConstructorIdentity,
     conversion_failed: ConstructorIdentity,
     conversion_error: NominalId,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ForeignHostRecord {
+    identity: TypeVariableIdentity,
+    effect: EffectIdentity,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -7708,6 +7865,7 @@ wire_struct!(
 );
 wire_struct!(
     PreparedLibraryRecord,
+    checked,
     module,
     name,
     public,
@@ -7761,6 +7919,7 @@ wire_struct!(
     codec
 );
 wire_struct!(NativeInterpretationRecord, effect, symbol);
+wire_struct!(ForeignHostRecord, identity, effect);
 
 impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
     const MINIMUM: usize = 1;
@@ -7776,6 +7935,10 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
             Self::CopyBytes => 7,
             Self::CopyNul => 8,
             Self::ExtentValue => 9,
+            Self::CheckedByteRead => 10,
+            Self::CheckedByteWrite => 11,
+            Self::CheckedCopyBytes => 12,
+            Self::CheckedCopyNul => 13,
         }
         .write(writer)
     }
@@ -7791,6 +7954,10 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
             7 => Ok(Self::CopyBytes),
             8 => Ok(Self::CopyNul),
             9 => Ok(Self::ExtentValue),
+            10 => Ok(Self::CheckedByteRead),
+            11 => Ok(Self::CheckedByteWrite),
+            12 => Ok(Self::CheckedCopyBytes),
+            13 => Ok(Self::CheckedCopyNul),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -8423,7 +8590,7 @@ impl Encoder<'_> {
                         && !matches!(input, StructuralInput::Type(Type::Forall(parameters, _))
                         if parameters.first().and_then(|(id,_)| id.module()).is_some_and(|module| {
                             use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
-                            [Role::ByteRead, Role::ByteWrite, Role::DataOf, Role::ReplaceData, Role::CopyBytes, Role::CopyNul, Role::ExtentValue].iter().any(|role| role.matches_parameters(module, parameters))
+                            [Role::ByteRead, Role::ByteWrite, Role::DataOf, Role::ReplaceData, Role::CopyBytes, Role::CopyNul, Role::ExtentValue, Role::CheckedByteRead, Role::CheckedByteWrite, Role::CheckedCopyBytes, Role::CheckedCopyNul].iter().any(|role| role.matches_parameters(module, parameters))
                         }))
                     {
                         return Err(ImageFailure::Unsupported(Unsupported::Type));
@@ -8755,6 +8922,10 @@ impl Decoder<'_> {
             Role::CopyBytes,
             Role::CopyNul,
             Role::ExtentValue,
+            Role::CheckedByteRead,
+            Role::CheckedByteWrite,
+            Role::CheckedCopyBytes,
+            Role::CheckedCopyNul,
         ] {
             charge(self.work, 1)?;
             if role.matches_parameters(module, &restored) {
@@ -9867,9 +10038,11 @@ impl Encoder<'_> {
             )?;
         }
         let symbols = Slice::of(&self.image.prepared_symbols, start)?;
+        let checked = self.checked_prepared_projection(original)?;
         let slot = push(
             &mut self.image.prepared_libraries,
             PreparedLibraryRecord {
+                checked,
                 module,
                 name,
                 public: original.public(),
@@ -10483,14 +10656,15 @@ impl Encoder<'_> {
                 })
             }
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
-                // Static host authority is not executable image admission.
-                if boundary.host().is_some() {
-                    return Err(ImageFailure::Unsupported(Unsupported::EffectOperation));
-                }
                 let start = self.image.interpretations.len();
                 for interpretation in boundary.interpretations() {
                     charge(self.work, 1)?;
                     admit_closed_native_instance(interpretation.effect(), self.work)?;
+                    if boundary.host().is_some() {
+                        if interpretation.symbol().prepared().checked_contract().is_none() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                    } else {
                     // Fixed literals retain their original role; they cannot
                     // introduce an ordinary address or owner interpreter.
                     charge(self.work, interpretation.symbol().symbol().operands().len())?;
@@ -10530,6 +10704,7 @@ impl Encoder<'_> {
                             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                         }
                     }
+                    }
                     let effect =
                         self.encode_structural(StructuralInput::Instance(interpretation.effect()))?;
                     let symbol = self.encode_native_symbol(interpretation.symbol())?;
@@ -10542,6 +10717,12 @@ impl Encoder<'_> {
                 Ok(NodeTag::NativeInterpret {
                     body: self.node(boundary.body())?,
                     interpretations: Slice::of(&self.image.interpretations, start)?,
+                    host: boundary.host().map(|host| -> Result<_, ImageFailure> {
+                        Ok(ForeignHostRecord {
+                            identity: self.type_variable(host.identity())?,
+                            effect: self.effect_identity(host.effect())?,
+                        })
+                    }).transpose()?,
                 })
             }
             _ => Err(ImageFailure::Unsupported(Unsupported::EffectOperation)),
@@ -11419,7 +11600,7 @@ impl Decoder<'_> {
     }
 
     fn extended_registry(&mut self) -> Result<RestoredNativeRegistry, ImageFailure> {
-        use crate::foreign::{checked_source::*, source_contract::*};
+        use crate::foreign::checked_source::*;
         use crate::resolved::ResolvedEffectBuffer;
         let mut registry = self.registry()?;
         let mut nominal_owners = HashMap::new();
@@ -11593,9 +11774,7 @@ impl Decoder<'_> {
             .map_err(|_| ImageFailure::RegistryAdmission)?;
         let mut prepared = Vec::new();
         for record in &self.image.prepared_libraries {
-            let parts = self.prepared_parts(*record)?;
-            let library = restore_prepared_library(parts, self.work)
-                .map_err(|_| ImageFailure::RegistryAdmission)?;
+            let library = self.restore_prepared_record(*record)?;
             charge(self.work, 1)?;
             push(&mut prepared, Arc::new(library), self.work)?;
         }
@@ -11666,7 +11845,8 @@ impl Decoder<'_> {
             if nominal != self.nominal(record.nominal)? {
                 return Err(ImageFailure::InvalidRecord);
             }
-            let owner = crate::foreign::source_owner::bind_foreign_owner(
+            let bind_owner = if library.checked_contract().is_some() { crate::foreign::source_owner::bind_checked_foreign_owner } else { crate::foreign::source_owner::bind_foreign_owner };
+            let owner = bind_owner(
                 NativeLibraryId::new(library.module(), record.library_ordinal),
                 Arc::clone(library),
                 owner_index,
@@ -11675,7 +11855,7 @@ impl Decoder<'_> {
                 &registry,
                 self.work,
             )
-            .map_err(|_| ImageFailure::RegistryAdmission)?;
+            .map_err(|error| if error.is_resource_exhaustion() { ImageFailure::Resource } else { ImageFailure::RegistryAdmission })?;
             charge(self.work, 1)?;
             push(&mut owners, Arc::new(owner), self.work)?;
         }
@@ -11797,7 +11977,7 @@ impl Decoder<'_> {
                 context,
                 self.work,
             )
-            .map_err(|_| ImageFailure::RegistryAdmission)?;
+            .map_err(|error| if error.is_resource_exhaustion() { ImageFailure::Resource } else { ImageFailure::RegistryAdmission })?;
             if symbol.operation() != operation {
                 return Err(ImageFailure::InvalidRecord);
             }
@@ -11859,11 +12039,12 @@ impl Decoder<'_> {
             push(&mut scalar_preflights, Arc::new(fact), self.work)?;
         }
         drop(contexts);
-        for fact in scalar_preflights {
-            registry
-                .retain_scalar_preflight(fact, self.work)
-                .map_err(|_| ImageFailure::RegistryAdmission)?;
-        }
+        registry = registry
+            .with_scalar_preflights(
+                scalar_preflights.iter().map(|fact| (fact.function(), fact)),
+                self.work,
+            )
+            .map_err(|_| ImageFailure::RegistryAdmission)?;
         charge(
             self.work,
             self.image
@@ -12082,6 +12263,15 @@ impl PureImage {
             work,
         )
         .map_err(ImageFailure::Validation)?;
+        // One root-owned byte predicate. It carries no registry/context proof;
+        // every nested validator checks its own complete live module relation.
+        let restored_builtin_bytes = if self.source_templates.is_empty() {
+            None
+        } else {
+            Some(crate::core::validate::RestoreBuiltinForeignBytes::new(
+                &source_arena, &module_arena, work,
+            ).map_err(ImageFailure::Validation)?)
+        };
         let mut decoder = Decoder {
             image,
             expected_fact_prefixes,
@@ -12093,7 +12283,7 @@ impl PureImage {
             work,
         };
         let templates =
-            decoder.source_templates(&registry, &symbols, &binder_ids, &coordinate_loan)?;
+            decoder.source_templates(&registry, &symbols, &binder_ids, &coordinate_loan, restored_builtin_bytes.as_ref())?;
         let catalog = decoder.method_catalog(
             self.main_method_catalog
                 .ok_or(ImageFailure::InvalidRecord)?,
@@ -12169,6 +12359,7 @@ impl PureImage {
         drop(module_sources);
         drop(decoder);
         drop(coordinate_loan);
+        drop(restored_builtin_bytes);
         let sources = source_arena;
         let modules = module_arena;
         Ok(RestoredEffectImage {
@@ -12454,6 +12645,7 @@ impl Decoder<'_> {
             NodeTag::NativeInterpret {
                 body,
                 interpretations,
+                host,
             } => {
                 let body = *get(nodes, body)?;
                 let records = interpretations.get(&self.image.interpretations)?;
@@ -12467,6 +12659,11 @@ impl Decoder<'_> {
                     let effect = self.structural(record.effect)?.instance()?;
                     admit_closed_native_instance(&effect, self.work)?;
                     let symbol = get(symbols, record.symbol)?;
+                    if host.is_some() {
+                        if symbol.prepared().checked_contract().is_none() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                    } else {
                     charge(self.work, symbol.symbol().operands().len())?;
                     if symbol.owner().is_some()
                         || !matches!(
@@ -12504,16 +12701,24 @@ impl Decoder<'_> {
                             return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                         }
                     }
+                    }
                     interpretations.push(crate::core::NativeInterpretation::new(
                         effect,
                         Arc::clone(symbol),
                     ));
                 }
+                let host = host.map(|host| -> Result<_, ImageFailure> {
+                    Ok(crate::core::effect::ForeignHostIdentity {
+                        identity: self.type_variable(host.identity)?,
+                        effect: self.effect_identity(host.effect)?,
+                    })
+                }).transpose()?;
                 return builder
                     .with_caller_type_work(self.work, |builder| {
-                        builder.native_interpret(
+                        builder.native_interpret_with_host(
                             body,
                             interpretations.into_boxed_slice(),
+                            host,
                             ty.into_inner(),
                             effects,
                             origin.take(),
@@ -13042,4 +13247,20 @@ pub(crate) fn encode_effect_for_build(
         bridges,
         libraries,
     })
+}
+
+#[cfg(test)]
+pub(crate) fn checked_window_static_image_controls(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(ModuleId, Arc<SourceFile>)],
+) {
+    source_resource_image::checked_window_static_image_controls(program, provenance);
+}
+
+#[cfg(test)]
+pub(crate) fn checked_zero_assumption_scalar_image_controls(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(ModuleId, Arc<SourceFile>)],
+) {
+    checked_prepared_image::zero_assumption_scalar_controls(program, provenance)
 }

@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'build::image::tests::checked_builtin_image_legacy_import_roundtrip_authenticates_inert_host' (61) panicked at src/build/image.rs:6201:65:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test build::image::tests::checked_builtin_image_legacy_import_roundtrip_authenticates_inert_host ... FAILED
+
+failures:
+
+failures:
+    build::image::tests::checked_builtin_image_legacy_import_roundtrip_authenticates_inert_host
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2109 filtered out; finished in 0.05s
+

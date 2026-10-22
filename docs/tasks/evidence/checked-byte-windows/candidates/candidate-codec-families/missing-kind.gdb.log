@@ -1,0 +1,31 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x55b788c: src/core/validate.rs:11880. (2 locations)
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 447167)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 447167)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1.1, ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::valid_core_type_kind<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd6b50, ty=0x7ffff011f3b0, type_binders=0x7ffff7bd5530) at src/core/validate.rs:11880
+11880	                    return Err(match parameter {
+$1 = (*mut ash::types::TypeVariableId) 0x7ffff0104ff0
+$2 = (*mut ash::types::Kind) 0x7ffff0105000
+#0  ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::valid_core_type_kind<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd6b50, ty=0x7ffff011f3b0, type_binders=0x7ffff7bd5530) at src/core/validate.rs:11880
+#1  0x000055555aaffc09 in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_node_types<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bd6b50, nominal_parameter_owners=0x7ffff7bd6850, type_binders=0x7ffff7bd5530, authenticated_method_evidence=0x7ffff7bd5170) at src/core/validate.rs:12700
+#2  0x000055555a241c53 in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::run_effect_with_registry (self=0x7ffff7bd6b50, nominal_parameter_owners=0x7ffff7bd6850, native_registry=0x7ffff7bd6888) at src/core/validate.rs:16281
+#3  0x000055555a22dca2 in ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::run_effect (self=0x7ffff7bd6b50) at src/core/validate.rs:16266
+#4  0x000055555a26c9ed in ash::core::validate::check_source_resource_structure_with_handler_graph (program=0x7ffff7be1d70, original=0x7ffff00ece80, answer=true, sources=..., module_sources=..., globals=..., handler_graph=..., original_provider=..., work=0x7ffff7be4410) at src/core/validate.rs:3793
+#5  0x000055555a22d07d in ash::core::validate::SourceResourceStructureSession::check_with_handler_graph (self=0x7ffff7be1e40, program=0x7ffff7be1d70, original=0x7ffff00ece80, answer=true, sources=..., module_sources=..., globals=0x7ffff7bd8b18, handler_graph=..., work=0x7ffff7be4410) at src/core/validate.rs:3905
+#6  0x000055555cbcc995 in ash::core::source_resource::CheckedSourceResourceTemplate::admit_with_globals (header=..., acquire=..., finish=..., handler=..., handler_inputs=..., globals=..., sources=..., module_sources=..., work=0x7ffff7be4410, session=0x7ffff7be1e40) at src/core/source_resource.rs:1308
+#7  0x000055555ad8f13c in ash::elaborate::source_resource::compile::{closure#1} () at src/elaborate/source_resource.rs:1359
+#8  0x000055555ba84cb3 in ash::elaborate::source_resource::compile (module=0x7ffff7bf91d0, registry=0x7ffff7be84a8, interfaces=..., schemes=..., work=0x7ffff7bf0f90, coverage=0x7ffff7bf0fb0, constraints=0x7ffff7bfa370, original_provider=..., rewrite_work_limit=177952) at src/elaborate/source_resource.rs:1269
+#9  0x000055555c06db26 in ash::elaborate::check_module_with_budget_family::{closure#0}<ash::core::effect::EffectOperationFamily> () at src/elaborate.rs:22753

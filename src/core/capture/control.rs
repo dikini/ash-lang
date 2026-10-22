@@ -1606,9 +1606,80 @@ struct ControlCodeInventory<'a> {
     owner_rows: Vec<&'a EffectRow>,
 }
 
+/// Unused traversal payment from this root call's short-circuit control gate.
+/// This is neither an owner-row inventory nor a semantic admission result.
+/// Keep it lexical: the caller only filters queries on the same unmoved meter
+/// before consuming it. No meter replacement, reset or submeter is permitted.
+pub(super) struct PrepaidControlCodeScan<'a> {
+    graph: &'a SummaryGraph,
+    prefix: usize,
+    unused: usize,
+    meter: *const TypeWorkBudget,
+    used: usize,
+}
+
+impl<'a> PrepaidControlCodeScan<'a> {
+    pub(super) fn for_roots(
+        graph: &'a SummaryGraph,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Self>, Failure> {
+        let count = graph.code.len();
+        // Preserve the old no-control path: full structural payment, but no
+        // owner-row traversal, allocation or validation at all.
+        charge(budget, count)?;
+        let Some(first) = graph.code.iter().position(|code| {
+            matches!(
+                code,
+                Control::Discard { .. }
+                    | Control::Resource { .. }
+                    | Control::Registration { .. }
+                    | Control::Cleanup { .. }
+            )
+        }) else {
+            return Ok(None);
+        };
+        let prefix = first.checked_add(1).ok_or(Failure::Resource)?;
+        let unused = count.checked_sub(prefix).ok_or(Failure::Invalid)?;
+        charge(budget, 1)?;
+        Ok(Some(Self {
+            graph,
+            prefix,
+            unused,
+            meter: std::ptr::from_ref(budget),
+            used: budget.used(),
+        }))
+    }
+
+    fn into_inventory(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<ControlCodeInventory<'a>, Failure> {
+        charge(budget, 1)?;
+        if !std::ptr::eq(self.meter, std::ptr::from_ref(budget))
+            || budget.used() < self.used
+            || self.prefix.checked_add(self.unused) != Some(self.graph.code.len())
+        {
+            return Err(Failure::Invalid);
+        }
+        // The first gate spent prefix visits; only unused visits remain paid.
+        // Pay the repeated prefix so the complete fresh scan below is covered.
+        charge(budget, self.prefix)?;
+        ControlCodeInventory::from_paid_scan(self.graph, budget)
+    }
+}
+
 impl<'a> ControlCodeInventory<'a> {
     fn prepare(graph: &'a SummaryGraph, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
         charge(budget, graph.code.len())?;
+        Self::from_paid_scan(graph, budget)
+    }
+
+    // Enter only after full payment above or consumption of one lexical gate
+    // receipt. Every original row is visited in unchanged code/member order.
+    fn from_paid_scan(
+        graph: &'a SummaryGraph,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
         let mut has_resource = false;
         let mut owner_rows = Vec::new();
         for code in &graph.code {
@@ -1667,6 +1738,14 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         Self::from_code_inventory(ControlCodeInventory::prepare(graph, budget)?, seed, budget)
+    }
+
+    pub(super) fn from_prepaid_control_scan(
+        scan: PrepaidControlCodeScan<'a>,
+        seed: Option<&'a Type>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        Self::from_code_inventory(scan.into_inventory(budget)?, seed, budget)
     }
 
     fn from_code_inventory(
@@ -2962,8 +3041,8 @@ impl<'a> Analysis<'a> {
         };
         let (successors, publication) = if let Some(data) = &mut self.data {
             state.charge_key(budget)?;
-            let index = if let Some(index) = observed_calls.get(&state) {
-                *index
+            let (index, new_record) = if let Some(index) = observed_calls.get(&state) {
+                (*index, false)
             } else {
                 // One ordinal in the existing exact-State map and
                 // one completed-phase field in its existing record.
@@ -2976,19 +3055,19 @@ impl<'a> Analysis<'a> {
                 state.charge_key(budget)?;
                 observed_calls.insert(saved, index);
                 calls.try_reserve(1).map_err(|_| Failure::Resource)?;
-                calls.push(ObservedCall {
-                    state: state.copy(budget)?,
-                    delivered: None,
-                });
-                index
+                (index, true)
             };
             let (successors, publication) = data.calls_after(
                 code,
                 state.value_context,
-                calls[index].delivered.as_ref(),
+                if new_record {
+                    None
+                } else {
+                    calls[index].delivered.as_ref()
+                },
                 budget,
             )?;
-            (successors, Some((index, publication)))
+            (successors, Some((index, new_record, publication)))
         } else {
             charge(budget, value.targets.len())?;
             let mut targets = Vec::new();
@@ -3092,8 +3171,16 @@ impl<'a> Analysis<'a> {
                 }
             }
         }
-        if let Some((index, publication)) = publication {
-            calls[index].delivered = Some(publication.publish(budget)?);
+        if let Some((index, new_record, publication)) = publication {
+            let delivered = Some(publication.publish(budget)?);
+            if new_record {
+                // The exact key and record capacity are already paid. Retain
+                // this owned state only after all successor/publication work
+                // succeeds, rather than copying it and dropping the original.
+                calls.push(ObservedCall { state, delivered });
+            } else {
+                calls[index].delivered = delivered;
+            }
         }
         Ok(())
     }
@@ -6169,6 +6256,242 @@ mod tests {
         }
     }
 
+    fn observed_call_graph() -> SummaryGraph {
+        let source = SourceFile::new("observed-control-call", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let ty = || Type::function(Type::Unit, Type::Unit);
+        SummaryGraph {
+            effects: true,
+            data: Some(Arc::new(
+                super::super::value::observed_control_call_graph_for_test(),
+            )),
+            callables: vec![
+                Callable {
+                    body: 0,
+                    ty: ty(),
+                    result: Value::default(),
+                },
+                Callable {
+                    body: 2,
+                    ty: ty(),
+                    result: Value::default(),
+                },
+            ]
+            .into(),
+            types: TypeArguments(vec![ty()]),
+            code: vec![
+                Control::Return,
+                Control::Call {
+                    value: Value::default(),
+                    ty: 0,
+                    source: span,
+                },
+                Control::Return,
+            ],
+        }
+    }
+
+    fn observed_call_analysis(graph: &SummaryGraph) -> Analysis<'_> {
+        let mut setup = TypeWorkBudget::default();
+        let mut analysis = Analysis::new(graph, None, &mut setup).unwrap();
+        analysis.data = Some(graph.data.as_ref().unwrap().start(&mut setup).unwrap());
+        analysis
+    }
+
+    fn observed_call_state(context: usize) -> State {
+        State {
+            position: Position { code: 1, next: 0 },
+            context,
+            value_context: 0,
+            stack: Address::Empty,
+            heap: Vec::new(),
+            abandoned: None,
+            cells: vec![CellContents {
+                occurrence: ProviderResourceOccurrence {
+                    code: 0,
+                    value_context: 0,
+                },
+                owner: (0, 0),
+                roots: vec![0, 1, 2],
+                enclosing: vec![(0, 0)].into(),
+                predecessors: vec![1, 2].into(),
+                shared: true,
+            }],
+        }
+    }
+
+    #[derive(Default)]
+    struct ObservedCallStage {
+        calls: Vec<ObservedCall>,
+        indices: HashMap<State, usize>,
+        pending: VecDeque<State>,
+        visited: HashSet<State>,
+    }
+
+    impl ObservedCallStage {
+        fn dispatch(
+            &mut self,
+            analysis: &mut Analysis<'_>,
+            state: State,
+            work: &mut TypeWorkBudget,
+        ) -> Result<(), Failure> {
+            analysis.discover_call(
+                state,
+                &mut self.calls,
+                &mut self.indices,
+                &mut self.pending,
+                &mut self.visited,
+                work,
+            )
+        }
+    }
+
+    #[test]
+    fn observed_call_owned_state_preserves_exact_records_and_late_prefixes() {
+        let graph = observed_call_graph();
+        let mut analysis = observed_call_analysis(&graph);
+        let mut stage = ObservedCallStage::default();
+        let expected = observed_call_state(0);
+        let mut work = TypeWorkBudget::default();
+        stage
+            .dispatch(&mut analysis, observed_call_state(0), &mut work)
+            .unwrap();
+        assert_eq!(stage.calls.len(), 1);
+        assert_eq!(stage.calls[0].state, expected);
+        assert_eq!(stage.indices.get(&expected), Some(&0));
+        assert!(stage.calls[0].delivered.is_some());
+        assert_eq!(stage.pending.len(), 1);
+
+        stage.pending.clear();
+        stage
+            .dispatch(&mut analysis, observed_call_state(0), &mut work)
+            .unwrap();
+        assert_eq!(stage.calls.len(), 1);
+        assert!(
+            stage.pending.is_empty(),
+            "the completed callee prefix is not replayed"
+        );
+        analysis
+            .data
+            .as_mut()
+            .unwrap()
+            .add_observed_control_call_target_for_test(&mut work)
+            .unwrap();
+        stage
+            .dispatch(&mut analysis, observed_call_state(0), &mut work)
+            .unwrap();
+        assert_eq!(stage.calls.len(), 1);
+        assert_eq!(stage.pending.len(), 1, "a new actual callee remains live");
+        assert_eq!(stage.pending[0].position.code, 2);
+
+        // An equal call port is not an equal control State. A separate valid
+        // type context must receive its own first observation and ordered record.
+        let distinct_context = analysis.contexts.len();
+        analysis.contexts.push(Context {
+            bindings: Vec::new(),
+            rows: Vec::new(),
+        });
+        stage.pending.clear();
+        stage
+            .dispatch(
+                &mut analysis,
+                observed_call_state(distinct_context),
+                &mut work,
+            )
+            .unwrap();
+        assert_eq!(stage.calls.len(), 2);
+        assert_eq!(
+            stage.indices.get(&observed_call_state(distinct_context)),
+            Some(&1)
+        );
+        assert_eq!(stage.calls[0].state, expected);
+        assert_eq!(stage.calls[1].state, observed_call_state(distinct_context));
+    }
+
+    #[test]
+    fn observed_call_first_publication_is_bounded_and_freshly_retryable() {
+        let graph = observed_call_graph();
+        let run = |work: &mut TypeWorkBudget| {
+            let mut analysis = observed_call_analysis(&graph);
+            let mut stage = ObservedCallStage::default();
+            let result = stage.dispatch(&mut analysis, observed_call_state(0), work);
+            if result.is_ok() {
+                assert_eq!(stage.calls.len(), 1);
+                assert_eq!(stage.indices.get(&stage.calls[0].state), Some(&0));
+                assert!(stage.calls[0].delivered.is_some());
+            } else {
+                assert!(
+                    stage.calls.is_empty(),
+                    "no completed record before publication"
+                );
+            }
+            result
+        };
+        let mut measured = TypeWorkBudget::default();
+        run(&mut measured).unwrap();
+        let cost = measured.used();
+        for prefix in [0, 7] {
+            for available in 0..cost {
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(run(&mut short), Err(Failure::Resource)));
+            }
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            run(&mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + cost);
+            assert!(matches!(run(&mut exact), Err(Failure::Resource)));
+            for _ in 0..2 {
+                let mut fresh = TypeWorkBudget::with_limit(prefix + cost);
+                fresh.charge(prefix).unwrap();
+                run(&mut fresh).unwrap();
+                assert_eq!(fresh.used(), prefix + cost);
+            }
+        }
+    }
+
+    #[test]
+    fn observed_call_late_publication_failure_does_not_advance_record() {
+        let graph = observed_call_graph();
+        let run = |work: &mut TypeWorkBudget| {
+            let mut analysis = observed_call_analysis(&graph);
+            let mut stage = ObservedCallStage::default();
+            let mut setup = TypeWorkBudget::default();
+            stage
+                .dispatch(&mut analysis, observed_call_state(0), &mut setup)
+                .unwrap();
+            stage.pending.clear();
+            analysis
+                .data
+                .as_mut()
+                .unwrap()
+                .add_observed_control_call_target_for_test(&mut setup)
+                .unwrap();
+            let result = stage.dispatch(&mut analysis, observed_call_state(0), work);
+            assert_eq!(stage.calls.len(), 1);
+            assert_eq!(stage.calls[0].state, observed_call_state(0));
+            let (remaining, _) = analysis
+                .data
+                .as_mut()
+                .unwrap()
+                .calls_after(1, 0, stage.calls[0].delivered.as_ref(), &mut setup)
+                .unwrap();
+            assert_eq!(remaining.targets.len(), usize::from(result.is_err()));
+            result
+        };
+        let mut measured = TypeWorkBudget::default();
+        run(&mut measured).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(measured.used());
+            run(&mut exact).unwrap();
+            assert_eq!(exact.used(), measured.used());
+        }
+    }
+
     #[test]
     fn tail_resume_preserves_captured_resource_and_outside_live_clause() {
         let graph = SummaryGraph {
@@ -8053,6 +8376,213 @@ mod tests {
     }
 
     #[test]
+    fn prepaid_control_scan_keeps_no_control_rows_and_queries_unobserved() {
+        let source = SourceFile::new("no-control-scan", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let instance = EffectInstance::new_kinded(
+            EffectId::new(ModuleId::new(0), 0),
+            Box::new([KindedArgument::RowArg(EffectRow::open(
+                EffectRowVariable::rigid(TypeVariableId::new(0)),
+                Box::new([]),
+            ))]),
+        );
+        let request = Request::effect(&instance, span, &mut TypeWorkBudget::unbounded()).unwrap();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::NativeInterpret {
+                    body: usize::MAX,
+                    effects: vec![request.clone()],
+                },
+                Control::Handler {
+                    body: usize::MAX,
+                    effect: request,
+                    clauses: Vec::new(),
+                    owning_resource: None,
+                },
+            ],
+        };
+        // These rows need more work if prepared, and their unreachable bodies
+        // are not valid query roots. The historical no-control path reads neither.
+        assert!(matches!(
+            ControlCodeInventory::prepare(
+                &graph,
+                &mut TypeWorkBudget::with_limit(graph.code.len())
+            ),
+            Err(Failure::Resource)
+        ));
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + graph.code.len() - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(
+                super::super::check_control_roots_with_rows(
+                    &graph,
+                    vec![usize::MAX],
+                    true,
+                    &mut short
+                ),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + graph.code.len());
+                exact.charge(prefix).unwrap();
+                assert!(
+                    super::super::check_control_roots_with_rows(
+                        &graph,
+                        vec![usize::MAX],
+                        true,
+                        &mut exact
+                    )
+                    .unwrap()
+                    .is_empty()
+                );
+                assert_eq!(exact.used(), prefix + graph.code.len());
+                assert!(matches!(
+                    PrepaidControlCodeScan::for_roots(&graph, &mut exact),
+                    Err(Failure::Resource)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn prepaid_control_scan_keeps_discard_gate_distinct_and_literal_meters_bound() {
+        let source = SourceFile::new("discard-control-scan", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::Return,
+                Control::Discard {
+                    owner: 0,
+                    node: 0,
+                    local: true,
+                    row_type: 0,
+                    source: span,
+                },
+            ],
+        };
+        let donor = SummaryGraph {
+            effects: false,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![Control::Return],
+        };
+        let mut work = TypeWorkBudget::unbounded();
+        let scan = PrepaidControlCodeScan::for_roots(&graph, &mut work)
+            .unwrap()
+            .unwrap();
+        let inventory = scan.into_inventory(&mut work).unwrap();
+        assert!(std::ptr::eq(inventory.graph, &graph));
+        assert!(!std::ptr::eq(inventory.graph, &donor));
+        assert!(
+            !inventory.has_resource,
+            "Discard alone must not require a Value graph"
+        );
+        Analysis::from_code_inventory(inventory, None, &mut work).unwrap();
+        Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
+
+        let mut original = TypeWorkBudget::unbounded();
+        let scan = PrepaidControlCodeScan::for_roots(&graph, &mut original)
+            .unwrap()
+            .unwrap();
+        let original_used = original.used();
+        let mut other = TypeWorkBudget::unbounded();
+        assert!(matches!(
+            scan.into_inventory(&mut other),
+            Err(Failure::Invalid)
+        ));
+        assert_eq!(
+            original.used(),
+            original_used,
+            "a refusal does not refund gate work"
+        );
+        assert_eq!(other.used(), 1, "the rejected consume is itself paid");
+        let scan = PrepaidControlCodeScan::for_roots(&graph, &mut original)
+            .unwrap()
+            .unwrap();
+        Analysis::from_prepaid_control_scan(scan, None, &mut original).unwrap();
+    }
+
+    #[test]
+    fn prepaid_control_scan_preserves_native_prefix_rows_and_pruned_root_checks() {
+        let source = SourceFile::new("native-prefix-control-scan", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let instance = EffectInstance::new_kinded(
+            EffectId::new(ModuleId::new(0), 0),
+            Box::new([KindedArgument::RowArg(EffectRow::open(
+                EffectRowVariable::rigid(TypeVariableId::new(0)),
+                Box::new([]),
+            ))]),
+        );
+        let request = Request::effect(&instance, span, &mut TypeWorkBudget::unbounded()).unwrap();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::Return,
+                Control::NativeInterpret {
+                    body: 0,
+                    effects: vec![request],
+                },
+                Control::Discard {
+                    owner: 0,
+                    node: 0,
+                    local: true,
+                    row_type: 0,
+                    source: span,
+                },
+            ],
+        };
+        let mut work = TypeWorkBudget::unbounded();
+        let standalone = ControlCodeInventory::prepare(&graph, &mut work).unwrap();
+        assert_eq!(standalone.owner_rows.len(), 1);
+        let scan = PrepaidControlCodeScan::for_roots(&graph, &mut work)
+            .unwrap()
+            .unwrap();
+        let prepaid = scan.into_inventory(&mut work).unwrap();
+        assert_eq!(prepaid.owner_rows.len(), standalone.owner_rows.len());
+        assert!(std::ptr::eq(
+            prepaid.owner_rows[0],
+            standalone.owner_rows[0]
+        ));
+
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::Return,
+                Control::Resource {
+                    body: 0,
+                    effect: Request::unknown(span),
+                },
+            ],
+        };
+        // Return is pruned, but an empty query list still constructs Analysis.
+        // The missing required Value graph must therefore remain a refusal.
+        assert!(matches!(
+            super::super::check_control_roots_with_rows(
+                &graph,
+                vec![0],
+                false,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(Failure::Invalid)
+        ));
+    }
+
+    #[test]
     fn complete_code_inventory_preserves_nested_owner_rows_and_hidden_resource_gates() {
         let module = ModuleId::new(0);
         let source = SourceFile::new("code-inventory", "x").unwrap();
@@ -8162,6 +8692,37 @@ mod tests {
         };
         let mut measured = TypeWorkBudget::unbounded();
         run(&mut measured).unwrap();
+        let prepaid_run = |budget: &mut TypeWorkBudget| {
+            let scan = PrepaidControlCodeScan::for_roots(&graph, budget)?.unwrap();
+            assert_eq!(scan.prefix, 4);
+            assert_eq!(scan.unused, graph.code.len() - 4);
+            let inventory = scan.into_inventory(budget)?;
+            assert!(std::ptr::eq(inventory.graph, &graph));
+            assert!(inventory.has_resource);
+            assert_eq!(inventory.owner_rows.len(), expected_rows.len());
+            for (actual, expected) in inventory.owner_rows.iter().zip(&expected_rows) {
+                assert!(std::ptr::eq(*actual, *expected));
+            }
+            Ok::<(), Failure>(())
+        };
+        let mut prepaid_measured = TypeWorkBudget::unbounded();
+        prepaid_run(&mut prepaid_measured).unwrap();
+        // The standalone inventory already pays E. The gate adds P repeated
+        // visits and its two receipt operations, rather than a second full E.
+        assert_eq!(prepaid_measured.used(), measured.used() + 4 + 2);
+        for prefix in [0, 7] {
+            let cost = prepaid_measured.used();
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(prepaid_run(&mut short), Err(Failure::Resource)));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                prepaid_run(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+                assert!(matches!(prepaid_run(&mut exact), Err(Failure::Resource)));
+            }
+        }
         for prefix in [0, 9] {
             for available in 0..measured.used() {
                 let mut short = TypeWorkBudget::with_limit(prefix + available);

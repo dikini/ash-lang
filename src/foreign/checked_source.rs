@@ -623,43 +623,38 @@ pub(crate) fn bind_checked_foreign_symbol(
         .map(PreparedForeignSymbol::call)
     {
         Some(PreparedForeignCall::Scalar { .. }) => true,
-        Some(PreparedForeignCall::Owner(
-            super::source_contract::PreparedOwnerCall::Acquire {
-                application,
-                initialized_bytes: None,
-                ..
-            }
-            | super::source_contract::PreparedOwnerCall::Teardown { application, .. },
-        )) => {
-            charge(work, 1, effect.span)?;
-            prepared
-                .owners()
-                .get(application.owner())
-                .is_some_and(|owner| {
-                    owner.retained_parameters().is_empty()
-                        && owner.representation()
-                            == super::source_contract::PreparedAddressRepresentation::Opaque
-                })
-        }
-        Some(PreparedForeignCall::Owner(super::source_contract::PreparedOwnerCall::Borrow {
-            application,
-            current_operand: 0,
-            ..
-        })) => {
+        Some(PreparedForeignCall::Owner(role)) => {
+            use super::source_contract::{
+                PreparedAddressRepresentation as Representation, PreparedOwnerCall,
+            };
             charge(work, 1, effect.span)?;
             let symbol = &prepared.symbols()[symbol_index];
-            symbol.operands().len() == 1
-                && matches!(symbol.operands()[0].source(), PreparedOperandSource::Current(path) if path == &[0])
-                && effect.operations.first().is_some_and(|operation| {
-                    matches!(&operation.annotation.ty, Type::Function(domain, _) if !matches!(domain.as_ref(), Type::Tuple(_)))
-                })
-                && symbol.access_result().is_none()
-                && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
-                && prepared.owners().get(application.owner()).is_some_and(|owner| {
-                    owner.retained_parameters().is_empty()
-                        && owner.representation()
-                            == super::source_contract::PreparedAddressRepresentation::Opaque
-                })
+            prepared.owners().get(role.application().owner()).is_some_and(|owner| {
+                owner.retained_parameters().is_empty() && match role {
+                    PreparedOwnerCall::Acquire { initialized_bytes, .. } => matches!(
+                        (owner.representation(), initialized_bytes),
+                        (Representation::Opaque, None) | (Representation::Bytes, Some(_))
+                    ),
+                    PreparedOwnerCall::Teardown { .. } => matches!(owner.representation(), Representation::Opaque | Representation::Bytes),
+                    PreparedOwnerCall::Borrow { .. } if symbol.access_result().is_some() => {
+                        // The shared symbol validator proves the exact original
+                        // access application, producing key and extent relation.
+                        // A live window is independently required at each use.
+                        matches!(owner.representation(), Representation::Opaque | Representation::Bytes)
+                    }
+                    PreparedOwnerCall::Borrow { current_operand: 0, .. } => {
+                        // Preserve the narrower PR98 scalar-Current subset.
+                        symbol.operands().len() == 1
+                            && matches!(symbol.operands()[0].source(), PreparedOperandSource::Current(path) if path == &[0])
+                            && effect.operations.first().is_some_and(|operation| {
+                                matches!(&operation.annotation.ty, Type::Function(domain, _) if !matches!(domain.as_ref(), Type::Tuple(_)))
+                            })
+                            && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
+                            && owner.representation() == Representation::Opaque
+                    }
+                    _ => false,
+                }
+            })
         }
         _ => false,
     };
@@ -1148,7 +1143,8 @@ pub(crate) fn restore_foreign_symbol(
         .registry
         .effect(effect)
         .ok_or_else(|| failure(ForeignAdmissionReason::InvalidOperation, span))?;
-    let symbol = bind_foreign_symbol(library, prepared, symbol_index, original, context, work)?;
+    let bind = if prepared.checked_contract().is_some() { bind_checked_foreign_symbol } else { bind_foreign_symbol };
+    let symbol = bind(library, prepared, symbol_index, original, context, work)?;
     // Binding establishes the complete immutable source correspondence. Final
     // reconstructed Core validation remains the independent crossed-boundary gate.
     charge(work, 1, span)?;

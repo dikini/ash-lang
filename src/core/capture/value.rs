@@ -415,6 +415,45 @@ pub(super) fn provider_capture_graph_for_test(
     }
 }
 
+#[cfg(test)]
+pub(super) fn observed_control_call_graph_for_test() -> Graph {
+    let source = crate::source::SourceFile::new("observed-call.ash", "x").unwrap();
+    let span = source
+        .span(crate::source::ByteRange::new(0, 1).unwrap())
+        .unwrap();
+    Graph {
+        expressions: vec![
+            Expr::Scalar,
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 0,
+                captures: Vec::new(),
+            },
+            Expr::Slot,
+            Expr::Call {
+                function: 2,
+                arguments: Vec::new(),
+                scalar: false,
+                type_application: false,
+            },
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 0,
+                captures: Vec::new(),
+            },
+        ],
+        globals: vec![(2, 1)],
+        provider: Vec::new(),
+        sources: vec![span; 5],
+        exports: Vec::new(),
+        positions: HashMap::from([(1, 3)]),
+        targets: HashMap::from([(1, 0), (4, 1)]),
+        metadata: HashMap::new(),
+        evidence: Vec::new(),
+        evidence_index: Vec::new(),
+    }
+}
+
 pub(super) struct CallSuccessors {
     pub(super) targets: Vec<(usize, usize)>,
     pub(super) unknown: bool,
@@ -5376,6 +5415,16 @@ impl<'a> Analysis<'a> {
             },
             PendingCallPrefix(DeliveredCallPrefix { end, opaque }),
         ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn add_observed_control_call_target_for_test(
+        &mut self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let function = self.slot(2, 0, budget)?;
+        self.atom(function, Atom::Closure(4, 0), budget)?;
+        self.close(budget)
     }
 
     pub(super) fn dispatch(

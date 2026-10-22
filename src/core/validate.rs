@@ -11,6 +11,7 @@ mod source_declarations;
 
 pub(crate) use source_declarations::DeclarationCoordinateLoan;
 pub(crate) use source_declarations::DeclarationCoordinates;
+pub(crate) use source_declarations::RestoreBuiltinForeignBytes;
 
 use std::{
     cell::Cell,
@@ -3733,6 +3734,7 @@ pub(crate) fn check_source_resource_structure(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn check_source_resource_structure_with_globals(
     program: &UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
@@ -3752,6 +3754,8 @@ fn check_source_resource_structure_with_globals(
         globals,
         None,
         None,
+        None,
+        None,
         work,
     )
 }
@@ -3766,12 +3770,18 @@ fn check_source_resource_structure_with_handler_graph(
     globals: Option<&super::source_resource::SourceResourceGlobals>,
     handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
     original_provider: Option<&crate::elaborate::provider::SourceOriginalProviderContext<'_>>,
+    coordinate_loan: Option<&DeclarationCoordinateLoan<'_>>,
+    restored_builtin_bytes: Option<&RestoreBuiltinForeignBytes<'_>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
     if handler_graph.is_some_and(|graph| !answer || !graph.authenticates(program, original)) {
         return Err(ValidationError::new(ValidationReason::Registry, None));
     }
     let mut validator = Validator::new_modules(program, sources, module_sources)?;
+    // Retain syntax only from the same live reconstruction arena. Conditional
+    // graphs and provider contexts still receive complete fresh authentication.
+    validator.source_coordinate_loan = coordinate_loan;
+    validator.restored_builtin_bytes = restored_builtin_bytes;
     validator.source_handler_graph = handler_graph;
     validator.source_original_provider = original_provider;
     validator.provider_external_types = globals.map(|globals| &**globals);
@@ -3803,6 +3813,7 @@ fn check_source_resource_structure_with_handler_graph(
 pub(crate) struct SourceResourceStructureSession<'context> {
     admitted: Option<OriginalTemplateRegistryAdmission>,
     coordinate_loan: Option<&'context DeclarationCoordinateLoan<'context>>,
+    restored_builtin_bytes: Option<&'context RestoreBuiltinForeignBytes<'context>>,
     original_provider:
         Option<&'context crate::elaborate::provider::SourceOriginalProviderContext<'context>>,
 }
@@ -3826,16 +3837,31 @@ impl<'context> SourceResourceStructureSession<'context> {
         Self {
             admitted: None,
             coordinate_loan: None,
+            restored_builtin_bytes: None,
             original_provider,
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_coordinate_loan(
         coordinate_loan: &'context DeclarationCoordinateLoan<'context>,
     ) -> Self {
         Self {
             admitted: None,
             coordinate_loan: Some(coordinate_loan),
+            restored_builtin_bytes: None,
+            original_provider: None,
+        }
+    }
+
+    pub(crate) fn with_restore_source_loans(
+        coordinate_loan: &'context DeclarationCoordinateLoan<'context>,
+        restored_builtin_bytes: Option<&'context RestoreBuiltinForeignBytes<'context>>,
+    ) -> Self {
+        Self {
+            admitted: None,
+            coordinate_loan: Some(coordinate_loan),
+            restored_builtin_bytes,
             original_provider: None,
         }
     }
@@ -3911,6 +3937,8 @@ impl<'context> SourceResourceStructureSession<'context> {
                 Some(globals),
                 handler_graph,
                 self.original_provider,
+                self.coordinate_loan,
+                self.restored_builtin_bytes,
                 work,
             );
         }
@@ -3918,18 +3946,23 @@ impl<'context> SourceResourceStructureSession<'context> {
         // their graph-local provider instances. Those contexts keep their full
         // fresh registry check; the receipt carries no lexical exemption.
         if !program.method_evidence.lexical_owners().is_empty() {
-            return check_source_resource_structure_with_globals(
+            return check_source_resource_structure_with_handler_graph(
                 program,
                 original,
                 answer,
                 sources,
                 module_sources,
                 Some(globals),
+                None,
+                None,
+                self.coordinate_loan,
+                self.restored_builtin_bytes,
                 work,
             );
         }
         let mut validator = Validator::new_modules(program, sources, module_sources)?;
         validator.source_coordinate_loan = self.coordinate_loan;
+        validator.restored_builtin_bytes = self.restored_builtin_bytes;
         validator.provider_external_types = Some(globals);
         if !program
             .registry
@@ -4348,6 +4381,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     source_resource_context: SourceResourceValidationContext,
     source_coordinate_loan: Option<&'program DeclarationCoordinateLoan<'source>>,
+    restored_builtin_bytes: Option<&'program RestoreBuiltinForeignBytes<'source>>,
     authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
     unused_ordering: std::cell::RefCell<HashSet<crate::types::TypeVariableId>>,
     type_work: Cell<usize>,
@@ -4755,6 +4789,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_fragment_locals: None,
             source_resource_context: SourceResourceValidationContext::FinalProgram,
             source_coordinate_loan: None,
+            restored_builtin_bytes: None,
             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
             unused_ordering: std::cell::RefCell::new(HashSet::new()),
             type_work: Cell::new(0),
@@ -8714,6 +8749,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<RegistryParameterOwners, ValidationError> {
         self.validate_reserved_builtin_sources()?;
         self.validate_scalar_preflight_registry()?;
+        self.validate_registry_contents(original)
+    }
+
+    fn validate_registry_contents(
+        &self,
+        original: Option<&source_declarations::OriginalDeclarationProvenance>,
+    ) -> Result<RegistryParameterOwners, ValidationError> {
         if let Some(canonical) = self.contextual_registry {
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
@@ -8980,6 +9022,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn validate_reserved_builtin_sources(&self) -> Result<(), ValidationError> {
+        self.validate_reserved_builtin_sources_with_operation(None)
+    }
+    fn validate_reserved_builtin_sources_with_operation(
+        &self, operation: Option<&source_declarations::BuiltinForeignSourceAuthentication<'_, '_>>,
+    ) -> Result<(), ValidationError> {
         let authenticate = |module: ModuleId, source: SourceId| {
             self.charge_type_work(1)?;
             if !module.is_builtin_foreign() {
@@ -8989,6 +9036,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .sources
                 .get(&source)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            if let Some(operation) = operation {
+                let mut work = TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+                let result = operation.covers(&self.program.registry, module, source, &mut work);
+                self.charge_type_work(work.used())?;
+                if result? { return Ok(()); }
+            }
             self.charge_type_work(source.text().len())?;
             if source.text() != crate::module::foreign_builtin_source_text() {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -9014,7 +9067,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
-    fn validate_scalar_preflight_registry(&self) -> Result<(), ValidationError> {
+    fn validate_scalar_preflight_registry(
+        &self,
+    ) -> Result<crate::resolved::ScalarPreflightOwnerAuthentication<'program>, ValidationError>
+    {
         let registry = &self.program.registry;
         for (function, fact) in registry.scalar_preflights() {
             self.charge_type_work(1)?;
@@ -9029,23 +9085,21 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            let mut work = TypeWorkBudget::with_limit(
-                self.type_work_limit.saturating_sub(self.type_work.get()),
-            );
-            let result = fact.authenticate(registry, &mut work);
-            self.charge_type_work(work.used())?;
-            result.map_err(|failure| {
-                ValidationError::new(
-                    if failure.is_resource_exhaustion() {
-                        ValidationReason::Resource
-                    } else {
-                        ValidationReason::Registry
-                    },
-                    None,
-                )
-            })?;
         }
-        Ok(())
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = registry.authenticate_scalar_preflights_for_owners(&mut work);
+        self.charge_type_work(work.used())?;
+        result.map_err(|failure| {
+            ValidationError::new(
+                if failure == crate::resolved::ResolvedBuildFailure::TypeResource {
+                    ValidationReason::Resource
+                } else {
+                    ValidationReason::Registry
+                },
+                None,
+            )
+        })
     }
 
     fn validate_global_parameter_rows(
@@ -9898,19 +9952,37 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_effect_registry(
         &self,
         module_sources: Option<&HashMap<ModuleId, SourceId>>,
         parameter_owners: &mut RegistryParameterOwners,
     ) -> Result<(), ValidationError> {
+        self.validate_effect_registry_with_preflights(module_sources, parameter_owners, None)
+    }
+
+    fn validate_effect_registry_with_preflights(
+        &self,
+        module_sources: Option<&HashMap<ModuleId, SourceId>>,
+        parameter_owners: &mut RegistryParameterOwners,
+        preflights: Option<crate::resolved::ScalarPreflightOwnerAuthentication<'program>>,
+    ) -> Result<(), ValidationError> {
         let mut owner_work =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let owner_result = self
-            .program
-            .registry
-            .authenticate_owner_definitions(&mut owner_work);
+        let owner_result = match preflights {
+            Some(authentication) => self
+                .program
+                .registry
+                .authenticate_owner_definitions_with_preflights(authentication, &mut owner_work)
+                .map(Some),
+            None => self
+                .program
+                .registry
+                .authenticate_owner_definitions(&mut owner_work)
+                .map(|()| None),
+        };
         self.charge_type_work(owner_work.used())?;
-        owner_result.map_err(|failure| {
+        let host_authentication = owner_result.map_err(|failure| {
             ValidationError::new(
                 if matches!(failure, crate::resolved::ResolvedBuildFailure::TypeResource) {
                     ValidationReason::Resource
@@ -9968,11 +10040,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let mut work = TypeWorkBudget::with_limit(
                     self.type_work_limit.saturating_sub(self.type_work.get()),
                 );
-                let result = crate::foreign::checked_builtins::is_canonical_native_host(
-                    effect,
-                    &self.program.registry,
-                    &mut work,
-                );
+                let result = match &host_authentication {
+                    Some(authentication) => authentication.is_canonical_native_host(
+                        effect,
+                        &self.program.registry,
+                        &mut work,
+                    ),
+                    None => crate::foreign::checked_builtins::is_canonical_native_host(
+                        effect,
+                        &self.program.registry,
+                        &mut work,
+                    ),
+                };
                 self.charge_type_work(work.used())?;
                 !result.map_err(|failure| {
                     ValidationError::new(
@@ -11802,16 +11881,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let mut found = None;
             for (_, fact) in self.program.registry.scalar_preflights() {
                 self.charge_type_work(1)?;
-                if (fact.role().borrowed_parameter(fact.module()) == Some(identity)
-                    || fact.role().data_parameter(fact.module()) == Some(identity))
-                    && let Type::Forall(parameters, _) = fact.core_signature()
+                if let Some(kind) = fact
+                    .parameter_kind_with_charge(identity, |amount| self.charge_type_work(amount))?
                 {
                     // Registry authentication established this sealed defining
-                    // declaration. This admits its scheme kind only; lexical
-                    // scope still rejects an unbound S or a forged application.
-                    let index =
-                        usize::from(fact.role().data_parameter(fact.module()) == Some(identity));
-                    found = parameters.get(index).map(|(_, kind)| kind);
+                    // declaration. Its full scheme includes checked H before
+                    // S/V; this grants no lexical TypeAbstraction binder.
+                    if let Some(previous) = found
+                        && !self.same_kind_charged(previous, kind)?
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                    found = Some(kind);
                 }
             }
             if found.is_some() {
@@ -12913,7 +12994,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             return Ok(false);
         }
         Ok(matches!(function.value(), Type::Application(call, payload)
-            if matches!(call.as_ref(), Type::Nominal(id) if id.module().is_builtin_foreign() && id.declaration() == 1)
+            if matches!(call.as_ref(), Type::Nominal(id) if id.module().is_builtin_foreign() && matches!(id.declaration(), 1 | 12))
                 && **payload == Type::Bytes)
             && (fields[1] == Type::Int || extent(&fields[1]).is_some()))
     }
@@ -13070,7 +13151,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         };
         if fact.function() != function
             || fact.module() != intrinsic.module()
-            || fact.role() != role
+            || fact.role().operation_role() != role
             || fact.conversion_error_constructor().is_none()
             || !F::effect_row(&node.effects).is_empty()
             || !self.same_type_charged(&node.ty, &fact.annotation().ty)?
@@ -16180,6 +16261,22 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         ),
         ValidationError,
     > {
+        // One literal operation owns these proofs. They are never stored in
+        // Validator, the template session, or the syntax coordinate loan.
+        let original_context = matches!(self.source_resource_context, SourceResourceValidationContext::OriginalTemplate { .. });
+        let source_operation = if original_context {
+            let mut work = TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+            let modules = self.module_sources.as_ref().ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            let result = match self.restored_builtin_bytes {
+                Some(bytes) => source_declarations::BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+                    &self.program.registry, &self.sources, modules, &self.source_resource_context, Some(bytes), &mut work),
+                None => source_declarations::BuiltinForeignSourceAuthentication::new(
+                    &self.program.registry, &self.sources, modules, &self.source_resource_context, &mut work),
+            };
+            self.charge_type_work(work.used())?;
+            Some(result?)
+        } else { None };
+        let early_preflights = if original_context { Some(self.validate_scalar_preflight_registry()?) } else { None };
         let original = if matches!(
             self.source_resource_context,
             SourceResourceValidationContext::OriginalTemplate { .. }
@@ -16191,22 +16288,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 .module_sources
                 .as_ref()
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            let result = if let Some(loan) = self.source_coordinate_loan {
-                source_declarations::authenticate_with_coordinate_loan(
-                    &self.program.registry,
-                    &self.sources,
-                    modules,
-                    &mut work,
-                    loan,
-                )
-            } else {
-                source_declarations::authenticate(
-                    &self.program.registry,
-                    &self.sources,
-                    modules,
-                    &mut work,
-                )
-            };
+            let result = source_declarations::authenticate_with_builtin_operation(
+                &self.program.registry, &self.sources, modules, &mut work,
+                self.source_coordinate_loan, source_operation.as_ref().expect("original operation"),
+                early_preflights.as_ref().expect("completed scalar table"), &self.source_resource_context);
             self.charge_type_work(work.used())?;
             let original = result?;
             let unused = self.unused_ordering_candidates(&original.ordering_candidates)?;
@@ -16220,8 +16305,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         } else {
             None
         };
-        let mut owners = self.validate_registry_with_original_provenance(original.as_ref())?;
-        self.validate_effect_registry(self.module_sources.as_ref(), &mut owners)?;
+        self.validate_reserved_builtin_sources_with_operation(source_operation.as_ref())?;
+        let preflights = match early_preflights { Some(proof) => proof, None => self.validate_scalar_preflight_registry()? };
+        let mut owners = self.validate_registry_contents(original.as_ref())?;
+        self.validate_effect_registry_with_preflights(
+            self.module_sources.as_ref(),
+            &mut owners,
+            Some(preflights),
+        )?;
         let empty_type_binders = CoreTypeBinders::new();
         for nominal in self
             .program
@@ -17900,13 +17991,37 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
         let outward = self.native_interpret_row(&body.effects, scope.interpretations(), id)?;
-        if !outward.is_empty() {
+        let mut work =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let host = crate::foreign::source_access::checked_window_host_instance(
+            scope.family(),
+            scope.arguments(),
+            &self.program.registry,
+            &mut work,
+        );
+        self.charge_type_work(work.used())?;
+        let host = host.map_err(|error| {
+            if error.is_resource_exhaustion() {
+                resource()
+            } else {
+                invalid()
+            }
+        })?;
+        let expected = if let Some(host) = host.filter(|_| !outward.is_empty()) {
+            self.charge_type_work(1)?;
+            EffectRow::singleton(host)
+        } else {
+            EffectRow::empty()
+        };
+        if !self.same_effect_row_charged(&outward, &expected, id)? {
             return Err(ValidationError::new(
                 ValidationReason::ResourceEscape,
                 Some(id),
             ));
         }
-        if !self.same_effect_row_charged(&node.effects, &self.node(scope.state())?.effects, id)? {
+        let effects =
+            self.union_effect_rows_charged(&self.node(scope.state())?.effects, &expected, id)?;
+        if !self.same_effect_row_charged(&node.effects, &effects, id)? {
             return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
         }
         Ok(())

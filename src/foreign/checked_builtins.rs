@@ -141,6 +141,34 @@ pub(crate) fn is_canonical_native_host(
     }
 }
 
+/// Borrow a complete checked-family inventory already proved in this literal
+/// registry operation; every Host/H22/origin projection remains fresh and paid.
+pub(crate) fn is_canonical_native_host_with_preflights(
+    effect: &ResolvedEffectDeclaration, registry: &ResolvedRegistry,
+    preflights: &crate::resolved::ScalarPreflightOwnerAuthentication<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ForeignAdmissionError> {
+    charge(work, 2, effect.span)?;
+    if !std::ptr::eq(registry, preflights.registry()) {
+        return Ok(false);
+    }
+    let mut covered = false;
+    for (_, fact) in registry.scalar_preflights() {
+        charge(work, 1, effect.span)?;
+        if fact.module() == effect.id.module() && fact.source() == effect.span
+            && fact.role().host_parameter(fact.module()).is_some()
+            && fact.call_codec().ids().call == NominalTypeId::new(fact.module(), 12) {
+            covered = true;
+        }
+    }
+    if covered {
+        host_matches(effect, registry, effect.id.module(), effect.span, work)
+    } else {
+        // Empty, legacy-only and uncovered selective inventories are not proofs.
+        is_canonical_native_host(effect, registry, work)
+    }
+}
+
 // Independent expected payload shapes, in original nominal order. This checks
 // canonical data roles; it is not a native binding or dispatch inventory.
 enum Payload {
@@ -532,7 +560,9 @@ pub(crate) fn is_canonical_native_host_declaration(
         && original(&parameter.origin, source, formal))
 }
 
-fn host_matches(
+// Host-only declaration and formal projection, combined by callers with the
+// checked inventory proof. Scalar preflights invoke this after their codec proof.
+pub(super) fn host_matches(
     effect: &ResolvedEffectDeclaration,
     registry: &ResolvedRegistry,
     module: ModuleId,

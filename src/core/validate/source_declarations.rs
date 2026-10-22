@@ -4,6 +4,9 @@
 //! particular, a retained nominal/effect ID cannot choose its defining slot.
 
 mod coordinate_loan;
+mod builtin_operation;
+pub(super) use builtin_operation::BuiltinForeignSourceAuthentication;
+pub(crate) use builtin_operation::RestoreBuiltinForeignBytes;
 mod resource_selectors;
 
 pub(crate) use coordinate_loan::DeclarationCoordinateLoan;
@@ -554,6 +557,83 @@ impl ResourceBinderCoordinates {
 }
 
 impl DeclarationCoordinates {
+    /// Reconstructs syntax coordinates for an exact defining module/source pair.
+    /// The compiler-owned Foreign text has compile-time syntax coordinates;
+    /// every consuming registry still proves its semantic correspondence.
+    fn from_module_source(
+        module: ModuleId,
+        source: &SourceFile,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        Self::from_module_source_with_byte_proof(module, source, work, None)
+    }
+    fn from_module_source_with_byte_proof(
+        module: ModuleId, source: &SourceFile, work: &mut TypeWorkBudget,
+        operation: Option<(&BuiltinForeignSourceAuthentication<'_, '_>, &ResolvedRegistry)>,
+    ) -> Result<Self, ValidationError> {
+        if !module.is_builtin_foreign() {
+            return Self::from_source(source, work);
+        }
+        let covered = operation.map(|(proof, registry)| proof.covers(registry, module, source, work)).transpose()?.unwrap_or(false);
+        if !covered {
+            charge(work, source.text().len())?;
+            if source.text() != crate::module::foreign_builtin_source_text() { return Err(registry()); }
+        }
+        let mut result = Self::default();
+        for (owner, coordinates) in crate::module::foreign_nominal_coordinates()
+            .iter()
+            .enumerate()
+        {
+            charge(work, 1)?;
+            let origin = source
+                .span(coordinates.declaration)
+                .map_err(|_| registry())?;
+            let name = source.span(coordinates.name).map_err(|_| registry())?;
+            push(
+                &mut result.nominals,
+                NominalCoordinate {
+                    origin,
+                    name,
+                    role: NominalRole::Data {
+                        newtype: false,
+                        constructors: coordinates.constructors().len(),
+                    },
+                },
+                work,
+            )?;
+            charge(work, 1)?;
+            result
+                .nominal_origins
+                .try_reserve(1)
+                .map_err(|_| resource())?;
+            if result.nominal_origins.insert(origin, owner).is_some() {
+                return Err(registry());
+            }
+            for (member, range) in coordinates.constructors().iter().copied().enumerate() {
+                let origin = source.span(range).map_err(|_| registry())?;
+                let index = result.constructors.len();
+                push(
+                    &mut result.constructors,
+                    ConstructorCoordinate {
+                        owner: ordinal(owner)?,
+                        ordinal: ordinal(member)?,
+                        origin,
+                    },
+                    work,
+                )?;
+                charge(work, 1)?;
+                result
+                    .constructor_origins
+                    .try_reserve(1)
+                    .map_err(|_| resource())?;
+                if result.constructor_origins.insert(origin, index).is_some() {
+                    return Err(registry());
+                }
+            }
+        }
+        Ok(result)
+    }
+
     pub(crate) fn from_source(
         source: &SourceFile,
         work: &mut TypeWorkBudget,
@@ -869,15 +949,17 @@ pub(super) struct OriginalDeclarationProvenance {
     pub(super) omitted_builtin_formals: HashSet<TypeVariableId>,
 }
 
+#[cfg(test)]
 pub(super) fn authenticate(
     registry: &ResolvedRegistry,
     sources: &HashMap<SourceId, &SourceFile>,
     modules: &HashMap<ModuleId, SourceId>,
     work: &mut TypeWorkBudget,
 ) -> Result<OriginalDeclarationProvenance, ValidationError> {
-    authenticate_with_coordinates(registry, sources, modules, work, None)
+    authenticate_with_coordinates(registry, sources, modules, work, None, None)
 }
 
+#[cfg(test)]
 pub(super) fn authenticate_with_coordinate_loan(
     registry: &ResolvedRegistry,
     sources: &HashMap<SourceId, &SourceFile>,
@@ -885,7 +967,30 @@ pub(super) fn authenticate_with_coordinate_loan(
     work: &mut TypeWorkBudget,
     loan: &DeclarationCoordinateLoan<'_>,
 ) -> Result<OriginalDeclarationProvenance, ValidationError> {
-    authenticate_with_coordinates(registry, sources, modules, work, Some(loan))
+    authenticate_with_coordinates(registry, sources, modules, work, Some(loan), None)
+}
+
+// Keep borrowed authority/context inputs and the mutable meter explicit here.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn authenticate_with_builtin_operation(
+    registry: &ResolvedRegistry,
+    sources: &HashMap<SourceId, &SourceFile>,
+    modules: &HashMap<ModuleId, SourceId>,
+    work: &mut TypeWorkBudget,
+    loan: Option<&DeclarationCoordinateLoan<'_>>,
+    operation: &BuiltinForeignSourceAuthentication<'_, '_>,
+    preflights: &crate::resolved::ScalarPreflightOwnerAuthentication<'_>,
+    context: &super::SourceResourceValidationContext,
+) -> Result<OriginalDeclarationProvenance, ValidationError> {
+    operation.context_matches(registry, sources, modules, context, work)?;
+    authenticate_with_coordinates(
+        registry,
+        sources,
+        modules,
+        work,
+        loan,
+        Some((operation, preflights)),
+    )
 }
 
 fn authenticate_with_coordinates(
@@ -894,16 +999,21 @@ fn authenticate_with_coordinates(
     modules: &HashMap<ModuleId, SourceId>,
     work: &mut TypeWorkBudget,
     loan: Option<&DeclarationCoordinateLoan<'_>>,
+    operation: Option<(&BuiltinForeignSourceAuthentication<'_, '_>, &crate::resolved::ScalarPreflightOwnerAuthentication<'_>)>,
 ) -> Result<OriginalDeclarationProvenance, ValidationError> {
     let mut original = OriginalDeclarationProvenance::default();
     for (module, source) in modules {
         charge(work, 1)?;
         let source = *sources.get(source).ok_or_else(registry_error)?;
         let shared = loan
-            .map(|loan| loan.get(*module, source, work))
+            .map(|loan| if operation.is_none() { loan.get(*module, source, work) } else { loan.get_with_factory(*module, source, work, |work| {
+                DeclarationCoordinates::from_module_source_with_byte_proof(*module, source, work, operation.map(|(proof, _)| (proof, registry)))
+            }) })
             .transpose()?;
         let fresh = if shared.is_none() {
-            Some(DeclarationCoordinates::from_source(source, work)?)
+            Some(DeclarationCoordinates::from_module_source_with_byte_proof(
+                *module, source, work, operation.map(|(proof, _)| (proof, registry)),
+            )?)
         } else {
             None
         };
@@ -913,7 +1023,11 @@ fn authenticate_with_coordinates(
             .expect("one coordinate owner");
         // Only syntax is shared. Each immutable registry/context still proves
         // all declarations, retained resource binders and unused candidates.
-        authenticate_module(registry, *module, source, coordinates, work, &mut original)?;
+        if operation.is_some() {
+            authenticate_module_with_operation(registry, *module, source, coordinates, work, &mut original, operation)?;
+        } else {
+            authenticate_module(registry, *module, source, coordinates, work, &mut original)?;
+        }
         coordinates.resource_binders.authenticate(
             registry,
             *module,
@@ -947,6 +1061,18 @@ fn authenticate_module(
     coordinates: &DeclarationCoordinates,
     work: &mut TypeWorkBudget,
     original: &mut OriginalDeclarationProvenance,
+) -> Result<(), ValidationError> {
+    authenticate_module_with_operation(registry, module, source, coordinates, work, original, None)
+}
+
+fn authenticate_module_with_operation(
+    registry: &ResolvedRegistry,
+    module: ModuleId,
+    source: &SourceFile,
+    coordinates: &DeclarationCoordinates,
+    work: &mut TypeWorkBudget,
+    original: &mut OriginalDeclarationProvenance,
+    operation: Option<(&BuiltinForeignSourceAuthentication<'_, '_>, &crate::resolved::ScalarPreflightOwnerAuthentication<'_>)>,
 ) -> Result<(), ValidationError> {
     for nominal in registry.nominals() {
         charge(work, 1)?;
@@ -1070,18 +1196,16 @@ fn authenticate_module(
             // NativeHost is compiler metadata, not a parsed effect declaration.
             // Its exception requires the actual immutable defining source and
             // independently reconstructed complete builtin inventory.
-            charge(work, source.text().len())?;
-            if source.text() != crate::module::foreign_builtin_source_text()
-                || !crate::foreign::checked_builtins::is_canonical_native_host(
-                    effect, registry, work,
-                )
-                .map_err(|error| {
-                    if error.is_resource_exhaustion() {
-                        resource()
-                    } else {
-                        registry_error()
-                    }
-                })?
+            let covered = operation.map(|(proof, _)| proof.covers(registry, module, source, work)).transpose()?.unwrap_or(false);
+            if !covered {
+                charge(work, source.text().len())?;
+                if source.text() != crate::module::foreign_builtin_source_text() { return Err(registry_error()); }
+            }
+            let canonical = match operation {
+                Some((_, preflights)) => crate::foreign::checked_builtins::is_canonical_native_host_with_preflights(effect, registry, preflights, work),
+                None => crate::foreign::checked_builtins::is_canonical_native_host(effect, registry, work),
+            }.map_err(|error| if error.is_resource_exhaustion() { resource() } else { registry_error() })?;
+            if !canonical
             {
                 return Err(registry_error());
             }
@@ -3446,7 +3570,7 @@ main () = 42
     }
 
     #[test]
-    fn checked_builtin_original_selective_legacy_view_has_no_host_or_omission_proof() {
+    fn checked_builtin_original_selective_legacy_view_retains_complete_host_checking_closure() {
         let directory =
             std::env::temp_dir().join(format!("ash-selective-host-{}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
@@ -3482,7 +3606,7 @@ main () = 42
             .registry()
             .source_original_checker_view(
                 resolved.imported_facts(),
-                &mut TypeWorkBudget::unbounded(),
+                &mut TypeWorkBudget::default(),
             )
             .unwrap();
         assert!(
@@ -3490,8 +3614,18 @@ main () = 42
                 loaded.id(),
                 crate::module::FOREIGN_NATIVE_HOST_LOCAL
             ))
-            .is_none()
+            .is_some()
         );
+        for (id, coordinates, family) in crate::foreign::scalar_preflight::checked_inventory_dependencies(loaded.id()) {
+            if family {
+                let fact=view.nominal(id).expect("retained Host requires each materialized checking family");
+                assert_eq!(view.nominal_parameters(id).unwrap().len(),coordinates.formals().len());
+                assert_eq!(fact.constructors.len(),coordinates.constructors().len());
+            } else {
+                assert!(view.nominal(id).is_none(),"opaque checking kind remains nonmaterialized");
+                assert!(view.nominal_kind(id).is_some());
+            }
+        }
         let sources = graph
             .modules()
             .iter()
@@ -3509,10 +3643,152 @@ main () = 42
                 .map(|source| (source.id(), *source))
                 .collect(),
             &modules.iter().copied().collect(),
-            &mut TypeWorkBudget::unbounded(),
+            &mut TypeWorkBudget::default(),
         )
         .unwrap();
-        assert!(proof.omitted_builtin_formals.is_empty());
-        assert!(original_registry_phase_modules(&sources, &modules, view).is_ok());
+        let _ = proof; // Full standalone source authentication completed above.
+        assert!(original_registry_phase_modules(&sources, &modules, view).is_ok(), "fresh operation phase must agree with standalone source authentication");
+    }
+}
+
+#[cfg(test)]
+mod canonical_foreign_coordinate_tests {
+    use super::*;
+
+    fn assert_same(left: &DeclarationCoordinates, right: &DeclarationCoordinates) {
+        assert_eq!(left.nominal_origins, right.nominal_origins);
+        assert_eq!(left.constructor_origins, right.constructor_origins);
+        assert_eq!(left.nominals.len(), right.nominals.len());
+        for (left, right) in left.nominals.iter().zip(&right.nominals) {
+            assert_eq!(
+                (left.origin, left.name, left.role),
+                (right.origin, right.name, right.role)
+            );
+        }
+        assert_eq!(left.constructors.len(), right.constructors.len());
+        for (left, right) in left.constructors.iter().zip(&right.constructors) {
+            assert_eq!(
+                (left.owner, left.ordinal, left.origin),
+                (right.owner, right.ordinal, right.origin)
+            );
+        }
+        for coordinates in [left, right] {
+            assert!(coordinates.effects.is_empty());
+            assert!(coordinates.effect_origins.is_empty());
+            assert!(coordinates.resource_binders.bindings.is_empty());
+            assert!(coordinates.resource_selectors.is_empty());
+        }
+    }
+
+    #[test]
+    fn canonical_foreign_coordinates_match_complete_parser_product_and_source_identity() {
+        let module = ModuleId::builtin_foreign_for_test(4);
+        for name in ["foreign-one", "foreign-two"] {
+            let source =
+                SourceFile::new(name, crate::module::foreign_builtin_source_text()).unwrap();
+            let parsed =
+                DeclarationCoordinates::from_source(&source, &mut TypeWorkBudget::default())
+                    .unwrap();
+            let canonical = DeclarationCoordinates::from_module_source(
+                module,
+                &source,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap();
+            assert_same(&canonical, &parsed);
+            assert!(
+                canonical
+                    .nominals
+                    .iter()
+                    .all(|row| row.origin.source() == source.id()
+                        && row.name.source() == source.id())
+            );
+            assert!(
+                canonical
+                    .constructors
+                    .iter()
+                    .all(|row| row.origin.source() == source.id())
+            );
+        }
+        let ordinary = SourceFile::new("ordinary", "type Example = Example(Unit)\n").unwrap();
+        let ordinary_module = ModuleId::from(ordinary.id());
+        assert_same(
+            &DeclarationCoordinates::from_module_source(
+                ordinary_module,
+                &ordinary,
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap(),
+            &DeclarationCoordinates::from_source(&ordinary, &mut TypeWorkBudget::default())
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn canonical_foreign_coordinates_refuse_changed_source_and_pay_each_fresh_construction() {
+        let module = ModuleId::builtin_foreign_for_test(4);
+        let source =
+            SourceFile::new("foreign", crate::module::foreign_builtin_source_text()).unwrap();
+        let mut measured = TypeWorkBudget::default();
+        let canonical =
+            DeclarationCoordinates::from_module_source(module, &source, &mut measured).unwrap();
+        let used = measured.used();
+        assert!(used > source.text().len());
+        for prefix in [0, 7] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + used);
+            exact.charge(prefix).unwrap();
+            assert_same(
+                &canonical,
+                &DeclarationCoordinates::from_module_source(module, &source, &mut exact).unwrap(),
+            );
+            assert_eq!(exact.used(), prefix + used);
+            assert_eq!(
+                DeclarationCoordinates::from_module_source(module, &source, &mut exact)
+                    .err()
+                    .unwrap()
+                    .reason(),
+                ValidationReason::Resource
+            );
+        }
+        for limit in [used - 1, 0] {
+            assert_eq!(
+                DeclarationCoordinates::from_module_source(
+                    module,
+                    &source,
+                    &mut TypeWorkBudget::with_limit(limit)
+                )
+                .err()
+                .unwrap()
+                .reason(),
+                ValidationReason::Resource
+            );
+        }
+        for text in [
+            format!("{}\n", source.text()),
+            source
+                .text()
+                .replacen("ConversionError", "ConversionErr0r", 1),
+        ] {
+            let changed = SourceFile::new("changed", text).unwrap();
+            assert_eq!(
+                DeclarationCoordinates::from_module_source(
+                    module,
+                    &changed,
+                    &mut TypeWorkBudget::default()
+                )
+                .err()
+                .unwrap()
+                .reason(),
+                ValidationReason::Registry
+            );
+        }
+        for _ in 0..2 {
+            let mut fresh = TypeWorkBudget::default();
+            assert_same(
+                &canonical,
+                &DeclarationCoordinates::from_module_source(module, &source, &mut fresh).unwrap(),
+            );
+            assert_eq!(fresh.used(), used);
+        }
     }
 }

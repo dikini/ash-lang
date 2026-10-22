@@ -1023,3 +1023,5 @@ pub(crate) fn checked_owner_passive_program() -> (
     }
     (core, provenance)
 }
+#[path = "checked_byte_window_tests.rs"]
+mod checked_byte_window_tests;

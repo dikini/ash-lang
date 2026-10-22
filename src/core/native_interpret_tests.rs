@@ -152,6 +152,14 @@ impl Fixture {
     }
 
     fn program(&self, unit: bool) -> UnvalidatedEffectProgram {
+        self.program_with_checked_declarations(unit, true)
+    }
+
+    fn program_with_checked_declarations(
+        &self,
+        unit: bool,
+        include_checked: bool,
+    ) -> UnvalidatedEffectProgram {
         let symbol = if unit { &self.stop } else { &self.scalar };
         let origin = Origin::Source(
             self.graph
@@ -167,11 +175,14 @@ impl Fixture {
         );
         let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&self.registry));
         // Keep every sealed generic builtin's actual declaration in this
-        // independently built forest. Retaining only byte_read/byte_write
-        // leaves the newer Data/copy parameter inventory unconsumed.
+        // independently built forest. Checked functions also own their H and
+        // borrowed parameters, even though this fixture never applies them.
         let declarations = self
             .registry
             .scalar_preflights()
+            .filter(|(_, fact)| {
+                include_checked || fact.role().host_parameter(fact.module()).is_none()
+            })
             .filter_map(|(_, fact)| {
                 fact.role()
                     .borrowed_parameter(fact.module())
@@ -183,7 +194,7 @@ impl Fixture {
             .unwrap();
         let mut members = Vec::new();
         for (fact, parameter) in declarations {
-            let operation = match fact.role() {
+            let operation = match fact.role().operation_role() {
                 crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead => {
                     crate::core::packed::Intrinsic::ForeignByteRead {
                         function: fact.function(),
@@ -221,10 +232,15 @@ impl Fixture {
                 }
                 _ => unreachable!(),
             };
-            let mut parameters = vec![(parameter, crate::types::Kind::Type)];
+            let mut parameters = Vec::new();
+            if let Some(host) = fact.role().host_parameter(fact.module()) {
+                parameters.push((host, crate::types::Kind::Type));
+            }
+            parameters.push((parameter, crate::types::Kind::Type));
             if let Some(data) = fact.role().data_parameter(fact.module()) {
                 parameters.push((data, crate::types::Kind::Type));
             }
+            assert!(fact.matches_parameters(&parameters));
             let intrinsic = builder
                 .intrinsic(
                     operation,
@@ -408,6 +424,30 @@ fn native_interpret_accepts_scalar_and_zero_argument_void_and_revalidates_transf
         }
         fixture.validate(rebuilt).unwrap();
     }
+}
+
+#[test]
+fn native_interpret_requires_complete_checked_builtin_parameter_rows() {
+    let fixture = Fixture::new();
+    fixture
+        .validate(fixture.program(false))
+        .expect("complete original declarations independently admit the native scalar boundary");
+    assert_eq!(
+        fixture
+            .registry
+            .scalar_preflights()
+            .filter(|(_, fact)| fact.role().host_parameter(fact.module()).is_some())
+            .count(),
+        4,
+    );
+    let incomplete = fixture.program_with_checked_declarations(false, false);
+    assert!(Arc::ptr_eq(&incomplete.registry, &fixture.registry));
+    let error = match fixture.validate(incomplete) {
+        Err(error) => error,
+        Ok(_) => panic!("retaining checked parameter rows without their declarations must refuse"),
+    };
+    assert_eq!(error.reason(), super::ValidationReason::Registry);
+    assert_eq!(error.node, None);
 }
 
 #[derive(Clone, Copy, Debug)]

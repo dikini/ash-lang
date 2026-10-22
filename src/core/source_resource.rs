@@ -832,15 +832,20 @@ impl CheckedSourceResourceHeader {
         if checked
             && (!owner.owner().retained_parameters().is_empty()
                 || !matches!(
-                    owner.owner().representation(),
-                    PreparedAddressRepresentation::Opaque
-                )
-                || !matches!(
-                    acquire.owner_role(),
-                    Some(PreparedOwnerCall::Acquire {
-                        initialized_bytes: None,
-                        ..
-                    })
+                    (owner.owner().representation(), acquire.owner_role()),
+                    (
+                        PreparedAddressRepresentation::Opaque,
+                        Some(PreparedOwnerCall::Acquire {
+                            initialized_bytes: None,
+                            ..
+                        })
+                    ) | (
+                        PreparedAddressRepresentation::Bytes,
+                        Some(PreparedOwnerCall::Acquire {
+                            initialized_bytes: Some(_),
+                            ..
+                        })
+                    )
                 )
                 || !matches!(
                     teardown.owner_role(),
@@ -2291,7 +2296,7 @@ fn eval_flow<'a>(
                     .scalar_preflight(function)
                     .ok_or_else(invalid)?;
                 if fact.function() != function
-                    || fact.role() != role
+                    || fact.role().operation_role() != role
                     || fact.module() != intrinsic.module()
                     || !same(&stored.ty, fact.signature(), work)?
                 {
@@ -2556,7 +2561,7 @@ fn eval_flow<'a>(
                             let FlowFact::Tuple(fields) = facts.fact(argument)? else {
                                 return Err(invalid());
                             };
-                            let write = fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite;
+                            let write = fact.role().operation_role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite;
                             if fields.len() != 2 + usize::from(write) || path.consumed || path.attempted_teardown
                                 || header.owner.owner().representation() != crate::foreign::source_contract::PreparedAddressRepresentation::Bytes
                                 || !matches!(header.acquire.owner_role(), Some(PreparedOwnerCall::Acquire {initialized_bytes:Some(_), ..}))
@@ -2645,10 +2650,12 @@ fn eval_flow<'a>(
                     else {
                         return Err(invalid());
                     };
-                    if application.arguments().len() != 1
+                    let fact = program.registry.scalar_preflight(function).ok_or_else(invalid)?;
+                    let offset = primitive_host_offset(fact, header, application.arguments(), work)?;
+                    if application.arguments().len() != 1 + offset
                         || !application.row_arguments().is_empty()
                         || !window
-                            .matches_view_type(&application.arguments()[0], work)
+                            .matches_view_type(&application.arguments()[offset], work)
                             .map_err(|()| resource())?
                     {
                         return Err(invalid());
@@ -2670,11 +2677,12 @@ fn eval_flow<'a>(
                         .scalar_preflight(function)
                         .ok_or_else(invalid)?;
                     let data = fact.role().data_parameter(fact.module()).is_some();
-                    if application.arguments().len() != 1 + usize::from(data)
+                    let offset = primitive_host_offset(fact, header, application.arguments(), work)?;
+                    if application.arguments().len() != 1 + usize::from(data) + offset
                         || !application.row_arguments().is_empty()
-                        || !same(&application.arguments()[0], &header.original.state.ty, work)?
+                        || !same(&application.arguments()[offset], &header.original.state.ty, work)?
                         || data
-                            && !same(&application.arguments()[1], &header.original.data.ty, work)?
+                            && !same(&application.arguments()[offset + 1], &header.original.data.ty, work)?
                     {
                         return Err(invalid());
                     }
@@ -3238,6 +3246,41 @@ fn eval_flow<'a>(
         _ => Err(invalid()),
     }
 }
+/// Validate H against the original selected resource host before retaining an
+/// applied primitive occurrence. Pure data/extent inspection remains unchanged.
+fn primitive_host_offset(
+    fact: &crate::foreign::scalar_preflight::CheckedForeignScalarPreflight,
+    header: &CheckedSourceResourceHeader,
+    arguments: &[Type],
+    work: &mut TypeWorkBudget,
+) -> Result<usize, ValidationError> {
+    use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+    charge(work, 2)?;
+    let memory = matches!(
+        fact.role().operation_role(),
+        Role::ByteRead | Role::ByteWrite | Role::CopyBytes | Role::CopyNul
+    );
+    let checked = fact.role().host_parameter(fact.module()).is_some();
+    if memory && checked != header.owner.prepared().checked_contract().is_some() {
+        return Err(invalid());
+    }
+    if checked {
+        let selector = header.original.host.ok_or_else(invalid)?;
+        let selected = header
+            .original
+            .parameters
+            .get(selector.position)
+            .ok_or_else(invalid)?;
+        let actual = arguments.first().ok_or_else(invalid)?;
+        if !same(actual, &Type::Variable(selected.id), work)? {
+            return Err(invalid());
+        }
+        Ok(1)
+    } else {
+        Ok(0)
+    }
+}
+
 fn admit_view_primitive(
     program: &UnvalidatedEffectProgram,
     function: crate::resolved::BinderId,
@@ -3264,7 +3307,7 @@ fn admit_view_primitive(
         if fields.len() != 2 {
             return Err(invalid());
         }
-        match fact.role() {
+        match fact.role().operation_role() {
             Role::CopyBytes => {
                 let FlowFact::WindowExtent { view } = facts.fact(fields[1])? else {
                     return Err(invalid());
@@ -3409,6 +3452,12 @@ fn eval_window_request<'a>(
         }) {
             let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
             push(&mut results, (refusal, path.copy(work)?), work)?;
+        }
+        if symbol.prepared().checked_contract().is_some() {
+            // Every checked query also has an independent boundary alternative;
+            // it never carries an owner finish-request or disposition witness.
+            let boundary = facts.wrapped(ConstructorId::new(call.call, 2), 0, work)?;
+            push(&mut results, (boundary, path.copy(work)?), work)?;
         }
         let output = match symbol.symbol().access_result() {
             Some(PreparedAccessResult::View { keys, .. }) => {
@@ -8756,3 +8805,12 @@ pub(crate) mod checked_lifecycle_core_tests;
 #[cfg(test)]
 #[path = "source_resource/checked_borrow_core_tests.rs"]
 pub(crate) mod checked_borrow_core_tests;
+
+// Private canonical-first byte-window authority mutation controls.
+#[cfg(test)]
+#[path = "source_resource/checked_byte_window_core_tests.rs"]
+pub(crate) mod checked_byte_window_core_tests;
+
+#[cfg(test)]
+#[path = "source_resource/coordinate_reuse_tests.rs"]
+pub(crate) mod coordinate_reuse_tests;
