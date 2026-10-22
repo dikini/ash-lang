@@ -1,0 +1,31 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x76a8d2b: file src/core/source_resource.rs, line 32.
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 50595)]
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_source_retains_exact_native_owner_and_assumptions' (50595) panicked at src/elaborate/checked_scalar_borrow_tests.rs:10:10:
+genuine scalar Borrow canonical source and summary must pass first: Source(TypeDiagnostic { diagnostic: Diagnostic { reason: Argument, primary: SourceLabel { span: Span { source: SourceId(0), range: ByteRange { start: 1628, end: 3498 } }, message: "source resource lifecycle and handlers must preserve the admitted owner flow" }, related: [], expected: None, found: None, help: None }, context: Plain })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_source_retains_exact_native_owner_and_assumptions ... FAILED
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_source_retains_exact_native_owner_and_assumptions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2096 filtered out; finished in 0.05s
+
+[Thread 0x7ffff7bff6c0 (LWP 50595) exited]
+[Inferior 1 (process 50592) exited with code 0145]
+/tmp/ash-pr98/borrow-template.gdb:6: Error in sourced command file:
+No stack.

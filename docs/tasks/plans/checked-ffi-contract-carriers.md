@@ -609,6 +609,9 @@ Current and resumes the complete checked result, without source State forwarding
    facts. Ordinary handlers cannot simulate native authority, and direct calls
    outside the owning phase remain refused. Existing post-finish Current
    retirement, finish outcome and source-continuation controls must stay green.
+   A checked Borrow BoundaryFailed alternative remains independent diagnostic
+   data: visit its actual branch, reject Current transport, and never mint the
+   private finish request/outcome witness from that result.
    Independently mutate retained Core operation/vector/row/original facts.
 5. Preserve default work limits and bounded traversal. Cover exact, nonzero
    prefix, one-short, spent, fresh and refusal-atomicity behavior for newly

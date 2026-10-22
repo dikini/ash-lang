@@ -1,0 +1,38 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 5 tests
+
+thread 'foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals' (49229) panicked at src/foreign/checked_source/checked_borrow_tests.rs:238:10:
+called `Result::unwrap()` on an `Err` value: ForeignAdmissionError { reason: InvalidCodec, span: Span { source: SourceId(8), range: ByteRange { start: 0, end: 2518 } } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'foreign::checked_source::checked_borrow_tests::checked_borrow_extra_scalar_operand_prepares_but_does_not_bind' (49230) panicked at src/foreign/checked_source/checked_borrow_tests.rs:267:10:
+called `Result::unwrap()` on an `Err` value: ForeignAdmissionError { reason: InvalidCodec, span: Span { source: SourceId(9), range: ByteRange { start: 0, end: 2518 } } }
+
+thread 'foreign::checked_source::checked_borrow_tests::checked_borrow_nested_current_domain_prepares_but_does_not_bind' (49231) panicked at src/foreign/checked_source/checked_borrow_tests.rs:311:10:
+called `Result::unwrap()` on an `Err` value: ForeignAdmissionError { reason: InvalidCodec, span: Span { source: SourceId(5), range: ByteRange { start: 0, end: 2518 } } }
+
+thread 'foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_parameter_operation_and_origin_substitution' (49228) panicked at src/foreign/checked_source/checked_borrow_tests.rs:195:10:
+called `Result::unwrap()` on an `Err` value: ForeignAdmissionError { reason: InvalidCodec, span: Span { source: SourceId(6), range: ByteRange { start: 0, end: 2518 } } }
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals ... FAILED
+test foreign::checked_source::checked_borrow_tests::checked_borrow_extra_scalar_operand_prepares_but_does_not_bind ... FAILED
+test foreign::checked_source::checked_borrow_tests::checked_borrow_nested_current_domain_prepares_but_does_not_bind ... FAILED
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_parameter_operation_and_origin_substitution ... FAILED
+
+thread 'foreign::checked_source::checked_borrow_tests::checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work' (49227) panicked at src/foreign/checked_source/checked_borrow_tests.rs:148:54:
+called `Result::unwrap()` on an `Err` value: ForeignAdmissionError { reason: InvalidCodec, span: Span { source: SourceId(7), range: ByteRange { start: 0, end: 2518 } } }
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work ... FAILED
+
+failures:
+
+failures:
+    foreign::checked_source::checked_borrow_tests::checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work
+    foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_parameter_operation_and_origin_substitution
+    foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals
+    foreign::checked_source::checked_borrow_tests::checked_borrow_extra_scalar_operand_prepares_but_does_not_bind
+    foreign::checked_source::checked_borrow_tests::checked_borrow_nested_current_domain_prepares_but_does_not_bind
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 2092 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p ash --lib`

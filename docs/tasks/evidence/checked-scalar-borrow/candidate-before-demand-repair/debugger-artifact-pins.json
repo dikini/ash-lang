@@ -1,0 +1,12 @@
+{
+  "binary": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "sha256": "1668af050b8a93b44e3d7f404292c407cbd2cd3d66fa3f87405de7e31f545a1c",
+  "script_sha256": "7a28b1ddc9542bfba650ad339bdaff80f015e3be50a2254e114d61498019d8df",
+  "scope": "Debugger stops/inspection only; no passing source test or checked native execution. Nested Rust enum pretty-print decoding is unreliable and not used as complete actual-vector evidence.",
+  "logs": {
+    "borrow-validation-gdb.log": "4ebbbc8294f3d27898dd6a76e146537566a5d4f2d2da76808d005f12ac38b469",
+    "borrow-template-gdb.log": "505808a2b126c1ce6ec3453cc874b81566b24616f9da5d81878d809e4e5f3de4",
+    "borrow-demand-gdb.log": "4d230afb66242935510c75b645e7bf8f0a7b319fcbebeb1c2bbf5cd2908e7a31",
+    "borrow-demand-rows-gdb.log": "a17177377ce1ce90eec311bfbbf1f4ea6ed1ab95fecf4edaa5286641804d7328"
+  }
+}

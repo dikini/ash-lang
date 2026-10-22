@@ -584,6 +584,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ) && symbol
                 .owner()
                 .is_some_and(|owner| Arc::ptr_eq(owner, &header.owner));
+            if borrow
+                && symbol.prepared().checked_contract().is_some()
+                && context.phase != Phase::Handler
+            {
+                return Err(contract_error(
+                    request.effect.span,
+                    "checked Current Borrow requires its owning resource's direct handler",
+                ));
+            }
             let exact = borrow
                 || match context.phase {
                     Phase::Acquire => Arc::ptr_eq(symbol, &header.acquire),

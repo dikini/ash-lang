@@ -1,0 +1,34 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x4d370e3: file src/core/validate.rs, line 2663.
+Breakpoint 2 at 0x4d30e38: file src/core/validate.rs, line 2715.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 52515)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 52515)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::core::validate::ValidationError::new (reason=ash::core::validate::ValidationReason::ResourceEscape, node=...) at src/core/validate.rs:2663
+2663	            cause: None,
+#0  ash::core::validate::ValidationError::new (reason=ash::core::validate::ValidationReason::ResourceEscape, node=...) at src/core/validate.rs:2663
+#1  0x000055555dd35853 in ash::core::provider::invalid (node=...) at src/core/provider.rs:236
+#2  0x000055555c911cac in ash::core::provider::row::demand::DirectDemandProof::reconstruct (recipe=0x7ffff7bd3ff0, entry=0x7ffff7bd39e8, work=0x7ffff7be4230) at src/core/provider/row/demand.rs:1169
+#3  0x000055555b0599d1 in ash::core::provider::row::HandlerRowRecipeDraft::reconstruct (entry=0x7ffff7bd7be0, work=0x7ffff7be4230) at src/core/provider/row.rs:647
+#4  0x000055555bce375f in ash::core::source_resource::{impl#13}::admit_with_globals::{closure#4} (graph=0x7ffff7bd89a8) at src/core/source_resource.rs:1258
+#5  0x000055555a63c41b in core::option::Option<&ash::core::source_resource::handler_rows::SourceHandlerGraph>::map<&ash::core::source_resource::handler_rows::SourceHandlerGraph, core::result::Result<ash::core::provider::row::HandlerRowRecipeDraft, ash::core::validate::ValidationError>, ash::core::source_resource::{impl#13}::admit_with_globals::{closure_env#4}> (self=..., f=...) at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162
+#6  0x000055555cbbdd09 in ash::core::source_resource::CheckedSourceResourceTemplate::admit_with_globals (header=..., acquire=..., finish=..., handler=..., handler_inputs=..., globals=..., sources=..., module_sources=..., work=0x7ffff7be4230, session=0x7ffff7be1c60) at src/core/source_resource.rs:1257
+#7  0x000055555ad7a42c in ash::elaborate::source_resource::compile::{closure#1} () at src/elaborate/source_resource.rs:1359
+#8  0x000055555a4b5543 in ash::elaborate::source_resource::compile (module=0x7ffff7bf8ff0, registry=0x7ffff7be82c8, interfaces=..., schemes=..., work=0x7ffff7bf0db0, coverage=0x7ffff7bf0dd0, constraints=0x7ffff7bfa190, original_provider=..., rewrite_work_limit=99824) at src/elaborate/source_resource.rs:1269
+#9  0x000055555c088fc6 in ash::elaborate::check_module_with_budget_family::{closure#0}<ash::core::effect::EffectOperationFamily> () at src/elaborate.rs:22749
+#10 0x000055555bfcc205 in ash::elaborate::check_module_with_budget_family<ash::core::effect::EffectOperationFamily> (resolved=..., provider_codes=0x7ffff7bfa130, type_work=0x7ffff7bfa140, coverage_work=0x7ffff7bfa188, constraint_work=0x7ffff7bfa190, rewrite_work=..., source_capture_observer=...) at src/elaborate.rs:22624
+#11 0x000055555bb4ec15 in ash::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work (resolved=..., provider_codes=0x7ffff7bfa130, type_work=0x7ffff7bfa140, coverage_work=0x7ffff7bfa188, constraint_work=0x7ffff7bfa190, rewrite_work=...) at src/elaborate.rs:22519
+#12 0x000055555c904fb7 in ash::elaborate::checked_owner_lifecycle_tests::check_graph (graph=0x7ffff7bfdbf8) at src/elaborate/checked_owner_lifecycle_tests.rs:87
+#13 0x000055555bf6d7e2 in ash::elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::canonical (source=...) at src/elaborate/checked_scalar_borrow_tests.rs:9
+#14 0x000055555bf6f3d8 in ash::elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_source_retains_exact_native_owner_and_assumptions () at src/elaborate/checked_scalar_borrow_tests.rs:26
+#15 0x000055555bf4bd37 in ash::elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_source_retains_exact_native_owner_and_assumptions::{closure#0} () at src/elaborate/checked_scalar_borrow_tests.rs:25
+#16 0x000055555a462676 in core::ops::function::FnOnce::call_once<ash::elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_source_retains_exact_native_owner_and_assumptions::{closure_env#0}, ()> () at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#17 0x000055555e0ee8eb in core::ops::function::FnOnce::call_once<fn() -> core::result::Result<(), alloc::string::String>, ()> () at library/core/src/ops/function.rs:250
+reason = ash::core::validate::ValidationReason::ResourceEscape
+node = core::option::Option<ash::core::dialect::NodeId>::Some(ash::core::dialect::NodeId {arena: ash::core::dialect::ArenaId (3), index: 11})
