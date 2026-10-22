@@ -530,3 +530,61 @@ fn checked_hidden_private_state_does_not_retain_an_unreferenced_passive_owner() 
     assert!(!summary.nominal_names_by_id.contains_key(&unused.id));
     authenticate(summary, &mut TypeWorkBudget::default()).unwrap();
 }
+
+#[test]
+fn checked_scalar_borrow_summary_rejects_exact_native_original_and_contract_erasure() {
+    let source = include_str!("../../tests/fixtures/checked-scalar-borrow/owner.ash");
+    let graph = graph_for_source(source, None);
+    for erase_original in [false, true] {
+        let module = check_graph(&graph).unwrap().pop().unwrap();
+        let mut summary = module.into_exports();
+        authenticate(&summary, &mut TypeWorkBudget::default())
+            .expect("real Borrow producer summary authenticates before erasure");
+        let read = summary
+            .effects
+            .iter()
+            .find(|effect| effect.spelling == "Read")
+            .unwrap()
+            .id;
+        let operation = crate::types::OperationId::new(read, 0);
+        let original = Arc::clone(&summary.native_symbols[&operation]);
+        assert!(matches!(
+            original.owner_role(),
+            Some(crate::foreign::source_contract::PreparedOwnerCall::Borrow { .. })
+        ));
+        let headers = summary
+            .source_resource_facts
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let publication = Arc::clone(summary.terms["run"].publication.as_ref().unwrap());
+        if erase_original {
+            assert!(Arc::ptr_eq(
+                &summary.native_symbols.remove(&operation).unwrap(),
+                &original
+            ));
+        } else {
+            let effect = summary
+                .effects
+                .iter_mut()
+                .find(|effect| effect.id == read)
+                .unwrap();
+            assert!(effect.native_contract.take().is_some());
+            assert!(Arc::ptr_eq(&summary.native_symbols[&operation], &original));
+        }
+        assert!(Arc::ptr_eq(
+            summary.terms["run"].publication.as_ref().unwrap(),
+            &publication
+        ));
+        assert!(headers.iter().all(|original| {
+            summary
+                .source_resource_facts
+                .values()
+                .any(|header| Arc::ptr_eq(original, header))
+        }));
+        assert_eq!(
+            authenticate(&summary, &mut TypeWorkBudget::default()),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+    }
+}

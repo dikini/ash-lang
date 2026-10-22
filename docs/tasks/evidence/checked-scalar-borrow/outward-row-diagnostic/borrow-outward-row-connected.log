@@ -1,0 +1,33 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 09s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 14 tests
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect' (175992) panicked at src/elaborate/checked_scalar_borrow_tests.rs:10:10:
+genuine scalar Borrow canonical source and summary must pass first: Source(TypeDiagnostic { diagnostic: Diagnostic { reason: Argument, primary: SourceLabel { span: Span { source: SourceId(3), range: ByteRange { start: 1628, end: 3788 } }, message: "source resource lifecycle and handlers must preserve the admitted owner flow" }, related: [], expected: None, found: None, help: None }, context: Plain })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect ... FAILED
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_finish_phase_does_not_gain_handler_permission ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_source_retains_exact_native_owner_and_assumptions ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_requires_exact_interpreted_membership ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_acquisition_phase_does_not_gain_handler_permission ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_ordinary_handler_cannot_simulate_native_result ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_body_free_consumer_links_core_and_transforms ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_no_resource_context_cannot_transport_state ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_failure_branch_cannot_request_native_finish ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_retains_complete_type_row_formal_vector ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_independent_boundary_result_can_be_forwarded ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_independent_core_checks_read_vectors_membership_and_host_row ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_handler_requires_exact_host_and_owned_actuals ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_body_free_reexport_keeps_defining_native_fact ... ok
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_scalar_borrow_tests::checked_scalar_borrow_boundary_branch_cannot_transport_current_to_an_ordinary_effect
+
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 2086 filtered out; finished in 0.59s
+
+error: test failed, to rerun pass `-p ash --lib`

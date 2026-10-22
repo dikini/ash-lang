@@ -1,0 +1,7 @@
+{
+  "markdownlint": "5 documents, MD013 excluded for existing long formal/source lines",
+  "relative_links": 49,
+  "rustfmt": "all11changedRustfiles pass",
+  "ash_indent": "actualproductfixture pass",
+  "whitespace": "passes excluding exact raw logs/unified source overlays/generated diagnostic source; preserved historical bytes"
+}

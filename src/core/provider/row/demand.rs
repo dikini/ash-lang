@@ -942,8 +942,28 @@ impl DirectDemandProof {
             }
             match &stored.kind {
                 EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                    charge(work, 1)?;
+                    let host = program
+                        .registry
+                        .native_symbol(request.operation())
+                        .map(|symbol| {
+                            crate::foreign::checked_source::checked_host_instance(
+                                symbol,
+                                request.effect(),
+                                work,
+                            )
+                        })
+                        .transpose()
+                        .map_err(|failure| {
+                            if failure.is_resource_exhaustion() {
+                                resource()
+                            } else {
+                                invalid(equation.node)
+                            }
+                        })?
+                        .flatten();
                     let row = rebuild_effect_row_with_budget(
-                        std::iter::once(request.effect()),
+                        std::iter::once(request.effect()).chain(host.iter()),
                         None,
                         std::iter::empty(),
                         clone_type_with_budget,

@@ -1,0 +1,21 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.21s
+     Running tests/checked_foreign_scalar_borrow.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_scalar_borrow-160dea2bf4b538b4)
+
+running 3 tests
+test checked_foreign_scalar_borrow_prepares_current_scalar_and_original_host ... ok
+test checked_foreign_scalar_borrow_default_profile_still_refuses ... ok
+
+thread 'checked_foreign_scalar_borrow_binds_through_explicit_static_profile' (28161) panicked at tests/checked_foreign_scalar_borrow.rs:157:10:
+prepared scalar checked Borrow must bind before direct-handler source checking: Resolution(ResolveError(ResolveErrorData { diagnostic: Diagnostic { reason: ForeignContract, primary: SourceLabel { span: Span { source: SourceId(2), range: ByteRange { start: 1055, end: 1344 } }, message: "foreign source admission rejected InvalidLibrary" }, related: [], expected: None, found: None, help: None }, context: None }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test checked_foreign_scalar_borrow_binds_through_explicit_static_profile ... FAILED
+
+failures:
+
+failures:
+    checked_foreign_scalar_borrow_binds_through_explicit_static_profile
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p ash --test checked_foreign_scalar_borrow`

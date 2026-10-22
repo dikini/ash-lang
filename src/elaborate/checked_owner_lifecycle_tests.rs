@@ -979,3 +979,6 @@ fn checked_owner_lifecycle_constructed_call_result_does_not_prove_finish_attempt
         "require semantic source refusal after genuine parsing/resolution, not setup/resource/internal failure: {error:?}"
     );
 }
+
+#[path = "checked_scalar_borrow_tests.rs"]
+mod checked_scalar_borrow_tests;

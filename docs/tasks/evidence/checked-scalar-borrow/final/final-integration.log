@@ -1,0 +1,96 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.34s
+     Running tests/checked_foreign_contracts.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_contracts-75a670a079bdf2f6)
+
+running 9 tests
+test checked_contract_metadata_parses_without_changing_full_parameter_order ... ok
+test an_empty_authored_assumption_set_cannot_erase_native_assumption_floors ... ok
+test checked_metadata_cannot_be_ignored_by_legacy_preparation ... ok
+test checked_preparation_keeps_exact_host_and_assumption_member_coordinates ... ok
+test checked_host_selection_requires_one_actual_type_formal ... ok
+test legacy_refuses_each_checked_metadata_role_and_passive_preparation_requires_opt_in ... ok
+test assumption_references_require_the_original_local_library_members ... ok
+test checked_owners_and_symbols_must_share_the_exact_host_argument ... ok
+test initialized_output_and_input_copy_floors_survive_empty_authored_sets ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/checked_foreign_host.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_host-411266a04b37db48)
+
+running 13 tests
+test checked_foreign_host_syntax_preserves_nested_lexical_boundaries ... ok
+test checked_foreign_core_rejects_replayed_reserved_module_with_rewritten_bytes ... ok
+test checked_foreign_host_builtin_legacy_resolved_formals_do_not_shift ... ok
+test checked_foreign_default_resolution_refuses_required_host_closure ... ok
+test checked_foreign_host_identity_cannot_escape_as_a_latent_call ... ok
+test checked_foreign_host_does_not_discharge_a_same_kind_unrelated_actual ... ok
+test checked_foreign_closed_scalar_host_checks_through_explicit_static_api ... ok
+test checked_foreign_host_preserves_an_unrelated_effect_for_its_ordinary_handler ... ok
+test checked_foreign_empty_host_core_is_static_and_refuses_runtime ... ok
+test checked_foreign_host_identity_is_unavailable_outside_or_in_a_sibling_scope ... ok
+test checked_foreign_nested_hosts_select_only_their_exact_fresh_identity ... ok
+test checked_foreign_scalar_host_core_reconstructs_and_survives_transforms ... ok
+test checked_foreign_unexecuted_branch_still_refuses_default_resolution_and_runtime ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/checked_foreign_lifecycle.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_lifecycle-84ad89226c52295f)
+
+running 3 tests
+test checked_owner_lifecycle_source_fixture_loads ... ok
+test checked_owner_lifecycle_fallible_scalar_finish_does_not_borrow_void_refinement ... ok
+test checked_owner_lifecycle_source_checks_under_exact_host ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/checked_foreign_owners.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_owners-0ae7b1c4bdbbd419)
+
+running 10 tests
+test checked_foreign_passive_owner_is_refused_by_legacy_abi_preparation ... ok
+test checked_foreign_owner_preparation_retains_distinct_host_owned_slots_and_assumptions ... ok
+test checked_foreign_owner_preparation_rejects_owned_or_same_kind_wrong_host ... ok
+test checked_foreign_passive_opaque_dependency_remains_unsupported_after_preparation ... ok
+direct checked owner request refusal: TypeDiagnostic { diagnostic: Diagnostic { reason: Argument, primary: SourceLabel { span: Span { source: SourceId(2), range: ByteRange { start: 1135, end: 1143 } }, message: "source owner operation requires its exact checked lifecycle phase" }, related: [], expected: None, found: None, help: None }, context: Plain }
+test checked_foreign_host_does_not_authorize_direct_owner_acquisition ... ok
+test checked_foreign_passive_owner_declarations_resolve_and_check_explicitly ... ok
+test checked_foreign_passive_owner_is_refused_by_default_resolution ... ok
+test checked_foreign_public_passive_owner_import_preserves_original_metadata_without_calls ... ok
+test checked_foreign_passive_owner_preserves_complete_row_and_type_formals ... ok
+test checked_foreign_passive_void_teardown_preserves_consumed_and_retained_outcomes ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/checked_foreign_scalar_borrow.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_scalar_borrow-160dea2bf4b538b4)
+
+running 3 tests
+test checked_foreign_scalar_borrow_prepares_current_scalar_and_original_host ... ok
+test checked_foreign_scalar_borrow_default_profile_still_refuses ... ok
+test checked_foreign_scalar_borrow_binds_through_explicit_static_profile ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/checked_foreign_wrappers.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_wrappers-d19b8ff85fbff406)
+
+running 19 tests
+test checked_selected_method_only_requires_body_free_consumer_opt_in ... ok
+test checked_closed_wrapper_requires_opt_in_for_a_body_free_consumer ... ok
+test checked_imported_wrapper_rejects_a_reordered_host_actual ... ok
+test checked_branch_only_native_dependencies_survive_a_closed_host_row ... ok
+test checked_higher_order_wrapper_retains_its_private_closed_callee ... ok
+test checked_closed_wrapper_reexport_preserves_its_original_host_contract ... ok
+test checked_constructor_payload_private_leaf_survives_renamed_reexport ... ok
+test checked_capture_only_private_nominal_survives_hidden_reexport ... ok
+test checked_imported_generic_wrapper_preserves_complete_actuals_through_core ... ok
+test checked_recursive_wrapper_retains_its_private_closed_callee ... ok
+test checked_closed_wrapper_keeps_internal_host_bound_across_two_instantiations ... ok
+test checked_selected_module_direct_method_preserves_body_free_core ... ok
+test checked_constructor_payload_private_leaf_survives_body_free_consumer_and_core ... ok
+test checked_opaque_snapshot_keeps_native_requirements_without_constructor_access ... ok
+test checked_selected_capture_only_private_nominal_survives_body_free_core ... ok
+test legacy_native_wrapper_summary_remains_valid_without_checked_opt_in ... ok
+test checked_capture_only_private_nominal_survives_body_free_consumer_and_core ... ok
+test checked_selected_module_method_prerequisites_preserve_body_free_core ... ok
+test checked_selected_opaque_prerequisite_reexport_preserves_two_contract_core ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+

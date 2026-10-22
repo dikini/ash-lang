@@ -1,0 +1,11 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.83s
+     Running tests/checked_foreign_scalar_borrow.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_scalar_borrow-160dea2bf4b538b4)
+
+running 3 tests
+test checked_foreign_scalar_borrow_prepares_current_scalar_and_original_host ... ok
+test checked_foreign_scalar_borrow_default_profile_still_refuses ... ok
+test checked_foreign_scalar_borrow_binds_through_explicit_static_profile ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

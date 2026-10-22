@@ -283,8 +283,13 @@ nonnull native acquisition. Its private payload and refusal result cannot carry
 the acquired state. A refusal after a provisional acquisition preserves the
 cleanup obligation. Finish may report consumption only after the consuming
 native call; a retained result must return the exact current state after a
-witnessed pre-call refusal. Original handler clauses cannot request native
-owner operations or return owned state through `resume`. The supported phase
+witnessed pre-call refusal. Original handler clauses cannot return owned state
+through `resume`. The checked subset admits one opaque direct Current scalar
+Borrow only in its owning resource's direct handler, with exact native/State/H/R
+facts and interpreted membership. Checked acquisition and finish cannot borrow
+that permission. The Borrow reply's boundary-failure branch remains independent
+diagnostic data and supplies no finish request/outcome witness. Other native
+handler requests still require separate phase evidence. The supported phase
 bodies use ordinary matches, bindings, constructors, tuples and independent
 scalar primitives, authenticated scalar preflight calls and sealed common byte
 calls; handler clauses resume an independent payload. A byte call borrows the
@@ -322,7 +327,11 @@ the original handler's synthetic callback application does not supply a second
 body or a source callback feature. The original handler has a compiler-private
 continuation-row parameter in addition to the header and answer formals. Its
 complete specialization retains the client's residual row, with direct handler
-requests accounted separately. Partial enclosing normalization preserves this
+requests accounted separately. Each checked native request contributes both its
+original native instance and the exact Host reconstructed from its complete
+actual vector. Direct-demand authentication and substituted row realization
+repeat that relation without trusting a claimed or stored row. Partial enclosing
+normalization preserves this
 claim; after control equations are solved, strict finalization normalizes all
 instance Type/Row payloads and substitutions together. It never rewrites the
 immutable defining template or freshening maps. Unresolved or altered claims

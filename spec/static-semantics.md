@@ -1057,6 +1057,17 @@ no codec authority. The resource interprets only its listed exact native
 instances and keeps `NativeHost<H>` through acquisition, calls and completion;
 the lexical host removes that exact obligation and never interprets owner calls.
 
+A checked opaque owner also admits a scalar Borrow whose source domain is the
+exact State application, with one direct Current operand and no view, Access or
+extra source operand. Its result is canonical `Foreign.CheckedCall<Int>` and its
+complete Type/Row vector and original assumptions remain attached. Only its
+owning resource's direct handler may request that Borrow, with exact interpreted
+membership and matching State/H/R actuals. Checked acquisition, finish and
+ordinary callable contexts supply no Borrow permission. The independent
+BoundaryFailed alternative grants no private finish witness and cannot transport
+Current through the handler's result. Byte/window/dependency and general helper
+transport remain excluded from this static subset.
+
 The admitted checked finish request is a void teardown whose sole native operand
 is the exact Current State. It has no scalar/NUL operand conversion or native
 result decoding. Symbolic checking follows its declared consumed or retained

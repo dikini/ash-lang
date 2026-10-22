@@ -641,6 +641,26 @@ pub(crate) fn bind_checked_foreign_symbol(
                             == super::source_contract::PreparedAddressRepresentation::Opaque
                 })
         }
+        Some(PreparedForeignCall::Owner(super::source_contract::PreparedOwnerCall::Borrow {
+            application,
+            current_operand: 0,
+            ..
+        })) => {
+            charge(work, 1, effect.span)?;
+            let symbol = &prepared.symbols()[symbol_index];
+            symbol.operands().len() == 1
+                && matches!(symbol.operands()[0].source(), PreparedOperandSource::Current(path) if path == &[0])
+                && effect.operations.first().is_some_and(|operation| {
+                    matches!(&operation.annotation.ty, Type::Function(domain, _) if !matches!(domain.as_ref(), Type::Tuple(_)))
+                })
+                && symbol.access_result().is_none()
+                && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
+                && prepared.owners().get(application.owner()).is_some_and(|owner| {
+                    owner.retained_parameters().is_empty()
+                        && owner.representation()
+                            == super::source_contract::PreparedAddressRepresentation::Opaque
+                })
+        }
         _ => false,
     };
     if prepared.checked_contract().is_none() || !supported {
@@ -2094,3 +2114,7 @@ mod tests {
         assert_eq!(first, second);
     }
 }
+
+#[cfg(test)]
+#[path = "checked_source/checked_borrow_tests.rs"]
+mod checked_borrow_tests;

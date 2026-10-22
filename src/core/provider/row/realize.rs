@@ -169,8 +169,26 @@ impl HandlerRowRecipeDraft {
                             return Err(invalid(equation.node));
                         };
                         let effect = instance(request.effect(), work)?;
+                        charge(work, 1)?;
+                        let host = program
+                            .registry
+                            .native_symbol(request.operation())
+                            .map(|symbol| {
+                                crate::foreign::checked_source::checked_host_instance(
+                                    symbol, &effect, work,
+                                )
+                            })
+                            .transpose()
+                            .map_err(|failure| {
+                                if failure.is_resource_exhaustion() {
+                                    resource()
+                                } else {
+                                    invalid(equation.node)
+                                }
+                            })?
+                            .flatten();
                         let requested = crate::types::rebuild_effect_row_with_budget(
-                            std::iter::once(&effect),
+                            std::iter::once(&effect).chain(host.iter()),
                             None,
                             std::iter::empty(),
                             crate::types::clone_type_with_budget,

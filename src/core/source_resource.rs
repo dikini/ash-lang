@@ -2849,6 +2849,11 @@ fn eval_flow<'a>(
             if phase == SourceResourcePhase::Handler && borrowed.is_none() {
                 return Err(invalid());
             }
+            if borrowed.is_some_and(|symbol| symbol.prepared().checked_contract().is_some())
+                && phase != SourceResourcePhase::Handler
+            {
+                return Err(invalid());
+            }
             let expected = if let Some(borrowed) = borrowed {
                 borrowed
             } else if phase == SourceResourcePhase::Acquire {
@@ -2928,6 +2933,12 @@ fn eval_flow<'a>(
                     }) {
                         let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
                         push(&mut results, (refusal, path.copy(work)?), work)?;
+                    }
+                    if expected.prepared().checked_contract().is_some() {
+                        // A Borrow failure is independent diagnostic data, never
+                        // this owner's private finish outcome/request witness.
+                        let boundary = facts.wrapped(ConstructorId::new(call.call, 2), 0, work)?;
+                        push(&mut results, (boundary, path.copy(work)?), work)?;
                     }
                     let returned = facts.wrapped(call.returned, 0, work)?;
                     push(&mut results, (returned, path), work)?;
@@ -4370,6 +4381,12 @@ impl SourceResourceScopeNode {
         let Some(symbol) = program.registry().native_symbol(call.operation()) else {
             return Ok(false);
         };
+        if matches!(symbol.owner_role(), Some(PreparedOwnerCall::Borrow { .. }))
+            && symbol.prepared().checked_contract().is_some()
+            && phase != SourceResourcePhase::Handler
+        {
+            return Ok(false);
+        }
         let expected = match phase {
             SourceResourcePhase::Acquire => Some(&self.header().acquire),
             SourceResourcePhase::Finish => Some(&self.header().teardown),
@@ -4726,6 +4743,12 @@ impl SourceResourceScopeNode {
                     }
                     visit(*target, work)?;
                     continue;
+                }
+                if matches!(symbol.owner_role(), Some(PreparedOwnerCall::Borrow { .. }))
+                    && symbol.prepared().checked_contract().is_some()
+                    && phase != 2
+                {
+                    return Err(invalid());
                 }
                 if original_call.operation() != call.operation()
                     || !(expected.is_some_and(|expected| Arc::ptr_eq(expected, symbol))
@@ -8729,3 +8752,7 @@ mod checked_owner_tests;
 #[cfg(test)]
 #[path = "source_resource/checked_lifecycle_core_tests.rs"]
 pub(crate) mod checked_lifecycle_core_tests;
+
+#[cfg(test)]
+#[path = "source_resource/checked_borrow_core_tests.rs"]
+pub(crate) mod checked_borrow_core_tests;

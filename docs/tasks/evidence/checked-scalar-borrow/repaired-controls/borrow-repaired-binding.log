@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 5 tests
+
+thread 'foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_parameter_operation_and_origin_substitution' (109340) panicked at src/foreign/checked_source/checked_borrow_tests.rs:327:9:
+mutation 4 must refuse
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_parameter_operation_and_origin_substitution ... FAILED
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work ... ok
+
+thread 'foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals' (109341) panicked at src/foreign/checked_source/checked_borrow_tests.rs:356:13:
+actual original Read exact State full vector
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals ... FAILED
+test foreign::checked_source::checked_borrow_tests::checked_borrow_nested_current_domain_prepares_but_does_not_bind ... ok
+test foreign::checked_source::checked_borrow_tests::checked_borrow_extra_scalar_operand_prepares_but_does_not_bind ... ok
+
+failures:
+
+failures:
+    foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_parameter_operation_and_origin_substitution
+    foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 2094 filtered out; finished in 0.13s
+
+error: test failed, to rerun pass `-p ash --lib`
