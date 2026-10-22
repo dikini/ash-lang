@@ -644,3 +644,87 @@ census limitation before flow. Its pinned failure remains evidence; equivalent
 declaration ordering isolates the assigned direct-handler case without changing
 the census. Final uniform affected regressions, startup defaults, images, Clippy
 and exact-head review remain the delivery gate. No F-core or whole-F3 pass follows.
+
+### Checked byte and copy window checkpoint
+
+Start from retained PR #98 at `c8a1fee506a00f68065cb08c6e2e9911d44a58aa`.
+This implements the remaining checked primitive part of CP-0024 and Slices 4–5
+as one coherent delivery: all four authenticated `@builtin.foreign` functions
+`checked_byte_read`, `checked_byte_write`, `checked_copy_bytes` and
+`checked_copy_nul`. It must not substitute another opaque scalar admission case.
+The earlier OriginalTemplate ordinary-formal/unused-host ordering limitation
+remains recorded; no source census exemption follows.
+
+Current Ash has legacy sealed byte/copy functions returning `Call` with empty
+ordinary rows. Existing initialized State, original access families, exact view/
+extent keys, direct provider windows and non-suspension rules supply the native
+lineage. The four checked functions are absent, and the checked binding subset
+still rejects the needed initialized-byte owner and access-producing shapes.
+Those are inspected exclusions, not observed test failures. First run genuine
+checked preparation and canonical expected-positive resolution/source controls
+when root assigns the Cargo slot; preserve the actual first refusal and inputs
+before changing product code. Legacy canonical controls must remain valid.
+
+Use existing builtin declaration/fact, source-owner/access, primitive-call/window,
+summary/original publication, specialization and independent Core/image carriers.
+Preserve existing builtin identities and append distinct checked roles; source
+names, module membership or a serialized checked flag cannot create authority.
+Each checked signature has explicit first Type H, the exact State S or view V,
+canonical `CheckedCall`, and `NativeHost<H>`. Reconstruct H from the admitted
+owner and complete actual vector; never select a convenient same-kind formal.
+Pure scalar/NUL preflights, data/private-state functions and extent inspection
+keep their existing identities/codecs and authority restrictions.
+
+Retain the existing distinct Acquire/Handler/Finish live-State/window rules; the
+PR #98 Handler-only scalar Borrow subset is not a blanket byte-phase rule. Checked
+primitive function values retain their latent exact Host effect, and each applied
+occurrence must reconstruct it independently. Byte/copy failure alternatives are
+independent diagnostics, never private finish-request/outcome witnesses. Exact
+view/Extent value lineage, producing member and scalar keys remain required in
+addition to compatible types; NUL copying also requires its original Nul family
+and an independent bound.
+
+1. Establish one real checked byte State with authenticated initialized extent,
+   nullable acquisition, actual checked finish and independent source continuation.
+   Exercise both checked byte operations in its owning direct phase. Separately
+   establish a genuine original access query and preserving extent query inside
+   a direct fresh window, then exercise both checked copy operations on that
+   exact V/Extent/owner/window/key relation. No source pointer or view escapes.
+   If the real view requires a declared parent/child dependency, carry the exact
+   declared C-to-S originals, full vectors and revocation/liveness facts rather
+   than removing the dependency to manufacture a positive.
+2. Preserve exact original library/member/assumption, ABI representation,
+   initialized-output selection and complete ordered Type/Row facts through
+   genuine source and summaries. Require body-free import plus re-export, linked
+   independently validated Core, identity/fold and static private-image
+   reconstruction/validation. Static record validation does not authorize checked
+   runtime, bridge/native activation or generated checked execution.
+3. Require canonical positives before hostile controls: arbitrary/wrong H,
+   same-kind State/view/Extent donors, erased initialized extent, wrong native
+   ordering or preserving member, removed assumptions/dependencies, incomplete
+   Type/Row substitution, split/reordered/suspending windows and stale copied
+   contracts. Reject legacy byte/copy calls on checked owners/views independently;
+   also reject calls outside the owning phase/window and State/view forwarding
+   through ordinary helpers. Mutate retained real Core/image facts separately,
+   keeping ordinary registry shape and immutable originals intact where possible.
+4. Reuse paid work/storage and iterative teardown; compare originals before
+   publication. Measure exact, prefix, one-short, spent and fresh budgets plus
+   refusal atomicity at meaningful new boundaries. Preserve PR #97/#98 finish,
+   Current retirement, Host and source-continuation regressions, legacy byte/copy
+   behavior, both startup defaults and image checks. Freeze inputs/tools before
+   the final focused batch and independent exact-head review.
+
+The first required red gate is real checked contract preparation followed by
+expected-positive initialized owner/primitive resolution or source admission;
+record whichever precise boundary actually refuses. A separate builtin inventory
+probe may establish missing declarations but cannot replace connected lineage
+positives. No result is claimed before the sole assigned Cargo run.
+
+Runtime/native/checked image execution, K/quarantine implementation, arbitrary
+raw pointers, general callbacks/helpers, privileged lifecycle transport,
+deployment and SQLite activation are excluded. Existing checked runtime/image
+refusal remains until its separately assigned prerequisites connect. F4/F6,
+SQLite, F7/F8 and the full milestone remain required overall. AD-0015 remains
+owner-free; all four whole-F3 criteria stay unchecked. Root assigns F-core only
+when the real generated-host F3/F4/F6 path and accepted F2 are ready. A concrete
+semantic omission or O/K conflict returns to CP/design, never a local rule.
