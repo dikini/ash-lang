@@ -1,0 +1,152 @@
+{
+  "test_methods": 15,
+  "receipt_bearing_cases": 14,
+  "additional_pre_run_cli_refusals": 1,
+  "pure_assertions": [
+    "bounded read(MAX_CONFIG+1)",
+    "cumulative watched paths limit"
+  ],
+  "evidence_directory": "/tmp/ash-owner-build-monitor/safe-test-evidence-qs383sxt",
+  "source_before_after_equal": true,
+  "sources": {
+    "build_monitor.py": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+    "test_monitor.py": "49f9440a5ad421a071d8f0e53c42d3ac09413b58bc2e9436366b3527bbb5763d"
+  },
+  "cases": [
+    {
+      "case": "test_direct_sidefile_bound_observes_overshoot-0",
+      "receipt_sha256": "3c4ed0f5685b49589343264046c6adf957923218037390516ddfcffbf48aea09",
+      "returncode": 1,
+      "reason": "watched_file_limit",
+      "child_exit": -9,
+      "reaped_count": 1,
+      "final_limit_failures": [
+        "watched_file_limit"
+      ]
+    },
+    {
+      "case": "test_late_output_after_last_sample_is_refused-1",
+      "receipt_sha256": "0a9a63e0ae6ab9f27c4744f9a381d53de55eb82e7fc8355cce56902d8899d562",
+      "returncode": 1,
+      "reason": "output_limit",
+      "child_exit": 0,
+      "reaped_count": 1,
+      "final_limit_failures": [
+        "output_limit"
+      ]
+    },
+    {
+      "case": "test_late_sidefile_after_last_sample_is_refused-2",
+      "receipt_sha256": "a54453dd07ce1f502443b1e156508df869cdd9c0173a3a132ebf34265df317cb",
+      "returncode": 1,
+      "reason": "watched_file_limit",
+      "child_exit": 0,
+      "reaped_count": 1,
+      "final_limit_failures": [
+        "watched_file_limit"
+      ]
+    },
+    {
+      "case": "test_normal_and_nonzero_exit-3",
+      "receipt_sha256": "81f2ac492e080dddd17beff914e2edbd3d11ec3a98ff60281c390b8489d02cf3",
+      "returncode": 0,
+      "reason": "exit",
+      "child_exit": 0,
+      "reaped_count": 1,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_normal_and_nonzero_exit-4",
+      "receipt_sha256": "8f45bd45d3128f829728dffc06fcd0e896f27a811593a9fcd324cc13b7b1698f",
+      "returncode": 1,
+      "reason": "exit",
+      "child_exit": 7,
+      "reaped_count": 1,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_output_bound-5",
+      "receipt_sha256": "0dfa431c2415d32e3dc2fa2487009f9bb9ec2848eeed805fffebea0330d2f2e1",
+      "returncode": 1,
+      "reason": "output_limit",
+      "child_exit": -9,
+      "reaped_count": 1,
+      "final_limit_failures": [
+        "output_limit"
+      ]
+    },
+    {
+      "case": "test_owned_escaped_descendant_is_refused_and_reaped-6",
+      "receipt_sha256": "04a08885517a339ff8ea8a72c11ead9ff0869afcbe9a207c3e0ff7375c9bcdf9",
+      "returncode": 1,
+      "reason": "unsupported_group_escape",
+      "child_exit": -9,
+      "reaped_count": 2,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_postspawn_setup_failure_reaps-7",
+      "receipt_sha256": "0d29a529739f826862bc73fe2d51abe7cb2a3e2f780c7512eb7e1d73bca71995",
+      "returncode": 1,
+      "reason": "monitor_error",
+      "child_exit": -9,
+      "reaped_count": 1,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_setup_refusal_starts_no_child-8",
+      "receipt_sha256": "ceede0f1c872ab02abb5968d7f26533a6a6ffed2731130c70e19da41bd1a2c24",
+      "returncode": 78,
+      "reason": "setup_refusal",
+      "child_exit": null,
+      "reaped_count": 0,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_successful_leader_cannot_leave_descendants-9",
+      "receipt_sha256": "8af57ff7e04a1cefcbf5ebcdde605426109bcdfa85c6d3bbb955d7aad5945c71",
+      "returncode": 1,
+      "reason": "leader_exit_with_descendants",
+      "child_exit": 0,
+      "reaped_count": 2,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_timeout_reaps_descendant-10",
+      "receipt_sha256": "24d92ac79c1e6052d927311d3694573a682dd53adc6feca503ca04646b4040e5",
+      "returncode": 1,
+      "reason": "deadline",
+      "child_exit": -9,
+      "reaped_count": 2,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_unrelated_owned_control_group_is_not_signalled-11",
+      "receipt_sha256": "f3ecf77ed22015f3d9e0cb63479431c3791e8450a7fa7dbaf2ca29644cefd36c",
+      "returncode": 1,
+      "reason": "deadline",
+      "child_exit": -9,
+      "reaped_count": 1,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_unsupported_subreaper_refuses_before_spawn-12",
+      "receipt_sha256": "bdfe5bab3796d7a4a1c2e8e3341e674488d0b0e40d637d9f8e9ac86e3497d064",
+      "returncode": 78,
+      "reason": "setup_refusal",
+      "child_exit": null,
+      "reaped_count": 0,
+      "final_limit_failures": []
+    },
+    {
+      "case": "test_wrong_tool_pin_refuses_before_spawn-13",
+      "receipt_sha256": "ce527f91d5f316c50a6bb9225403746b7978854580fc74e4acf0e6db8b1f012d",
+      "returncode": 78,
+      "reason": "setup_refusal",
+      "child_exit": null,
+      "reaped_count": 0,
+      "final_limit_failures": []
+    }
+  ],
+  "scope": "Only benign self-authored Python children; no compiler, owner build or foreign image execution."
+}

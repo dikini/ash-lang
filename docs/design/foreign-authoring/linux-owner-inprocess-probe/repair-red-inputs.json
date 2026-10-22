@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "path": "historical-d247/build_monitor.py",
+      "size": 17586,
+      "sha256": "d247f459596822d4305aa4f8021a5ebea44c78104ef98e0442db87b140d16a8f"
+    },
+    {
+      "path": "historical-d247/test-finalization-red.py",
+      "size": 11485,
+      "sha256": "e10086f91ad74c65edd31ea5e57f1a345073cef5a60a905dde7ec35f69395656"
+    },
+    {
+      "path": "red-finalization.log",
+      "size": 2267,
+      "sha256": "db2e49cae0529d79f16c17cbfd99b17ef319aa5fce572dd5ffb65f9bd7f8f7ac"
+    }
+  ]
+}

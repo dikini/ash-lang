@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "628ea4b19f384f2970b4344ed3c224469d53c558aa46c50daccb6563367cc3b1",
+  "monitor": {
+    "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "size_before": 17586,
+    "size_after": 17586,
+    "hashed_bytes": 17586,
+    "sha256": "d247f459596822d4305aa4f8021a5ebea44c78104ef98e0442db87b140d16a8f",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 5341
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-cxro60uy/build-run-p_0_b2ns",
+  "output_path": "/tmp/ash-build-monitor-test-cxro60uy/build-run-p_0_b2ns/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "from pathlib import Path; import time\nwhile not Path(\"late-ready\").exists(): time.sleep(.001)\nPath(\"whole-static.map\").write_bytes(b\"x\"*32768)"
+  ],
+  "child_pid": 9,
+  "child_exit": 0,
+  "reason": "exit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 0,
+  "retained_output_bytes": 0,
+  "output_truncated": false,
+  "watched_files": [],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 9,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "limits": {
+    "deadline_seconds": 2,
+    "output_bytes": 16384,
+    "sidefile_bytes": 1024
+  },
+  "environment_keys": [],
+  "executable": {
+    "path": "/usr/bin/python3.14",
+    "size_before": 7477160,
+    "size_after": 7477160,
+    "hashed_bytes": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347805
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 9,
+  "child_session": 9,
+  "elapsed_seconds": 0.04464561599979788,
+  "observed_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-cxro60uy/build-run-p_0_b2ns/output.log",
+    "size_before": 0,
+    "size_after": 0,
+    "hashed_bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 13251
+  }
+}
