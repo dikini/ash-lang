@@ -1,0 +1,906 @@
+//! Passive CP-0024 O/X/K bookkeeping. No evaluator or native entry point uses it.
+//!
+//! A native observation is an input from a future trusted bridge, not evidence
+//! manufactured by this ledger. Source E and native addresses never enter it.
+#![allow(
+    dead_code,
+    reason = "TASK0053 passive implementation is not runtime activation"
+)]
+
+use crate::{core::source_resource::CheckedSourceResourceHeader, types::TypeWorkBudget};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Failure {
+    Resource,
+    Stale,
+    State,
+    Original,
+    Unsupported,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Group {
+    ledger: u64,
+    index: usize,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Owner {
+    ledger: u64,
+    index: usize,
+    generation: u64,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Call {
+    owner: Owner,
+    serial: u64,
+    kind: CallKind,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CallKind {
+    Acquire,
+    Borrow,
+    Finish,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Native {
+    NoOwner,
+    Owned,
+    Consumed,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum K {
+    Absent,
+    Pending,
+    Closing,
+    Discharged,
+    Transferred,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Delivery {
+    Pending,
+    Published,
+    Failed,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Access {
+    Unpublished,
+    Usable,
+    Quarantined,
+    Retired,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Outcome {
+    call: Call,
+    observed: Observed,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ClosingSnapshot {
+    owner: Owner,
+    operation: crate::types::OperationId,
+    completion: Completion,
+    native: Native,
+    unresolved: bool,
+}
+/// One locally issued finish result. Non-Clone; never replaces source execution.
+pub(super) struct FinishWitness(ClosingSnapshot);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum History {
+    Native(Outcome),
+    Closed(ClosingSnapshot),
+    Transferred {
+        owner: Owner,
+        native: Native,
+        unresolved: bool,
+        pending: Option<Call>,
+    },
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Continuation {
+    Absent,
+    Required,
+    Completed,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Completion {
+    Observed(Native),
+    SessionLost,
+    Quarantined,
+    DependencyBlocked,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Close {
+    NativeFinish,
+    Local,
+    Wait,
+    Already,
+    Transferred,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Observed {
+    Acquired,
+    Null,
+    Borrowed,
+    FinishedConsumed,
+    FinishedRetained,
+}
+
+struct GroupState {
+    lost: bool,
+    quarantined: bool,
+    owner_bound: bool,
+}
+struct Record<'p> {
+    // These exact originals outlive every record and pending observation.
+    header: &'p CheckedSourceResourceHeader,
+    group: Group,
+    generation: u64,
+    serial: u64,
+    pending: Option<Call>,
+    access: Access,
+    native: Native,
+    unresolved: bool,
+    k: K,
+    delivery: Delivery,
+    continuation: Continuation,
+    completion: Option<Completion>,
+    closing: Option<ClosingSnapshot>,
+    witness_issued: bool,
+}
+
+pub(super) struct Ledger<'p> {
+    identity: u64,
+    groups: Vec<GroupState>,
+    records: Vec<Record<'p>>,
+    group_limit: usize,
+    owner_limit: usize,
+    history: Vec<History>,
+    observed_calls: usize,
+    call_limit: usize,
+    in_flight: usize,
+    terminal: bool,
+}
+
+fn pay(work: &mut TypeWorkBudget, count: usize) -> Result<(), Failure> {
+    work.charge(count).map_err(|()| Failure::Resource)
+}
+
+impl<'p> Ledger<'p> {
+    pub(super) fn reserve(
+        groups: usize,
+        owners: usize,
+        calls: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        // Fixed owner cells include pending, observation, K, report and source
+        // continuation. Terminal transfer and native-return writes are prepaid.
+        let cells = owners
+            .checked_mul(24)
+            .and_then(|n| n.checked_add(groups.checked_mul(3)?))
+            .and_then(|n| n.checked_add(calls.checked_mul(6)?))
+            .and_then(|n| n.checked_add(groups.checked_mul(owners)?.checked_mul(4)?))
+            .and_then(|n| n.checked_add(4))
+            .ok_or(Failure::Resource)?;
+        pay(work, cells)?;
+        let mut group_cells = Vec::new();
+        group_cells
+            .try_reserve_exact(groups)
+            .map_err(|_| Failure::Resource)?;
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(owners)
+            .map_err(|_| Failure::Resource)?;
+        let mut history = Vec::new();
+        history
+            .try_reserve_exact(calls.checked_add(owners).ok_or(Failure::Resource)?)
+            .map_err(|_| Failure::Resource)?;
+        let identity = NEXT
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .map_err(|_| Failure::Resource)?;
+        Ok(Self {
+            identity,
+            groups: group_cells,
+            records,
+            group_limit: groups,
+            owner_limit: owners,
+            history,
+            observed_calls: 0,
+            call_limit: calls,
+            in_flight: 0,
+            terminal: false,
+        })
+    }
+
+    pub(super) fn group(&mut self, work: &mut TypeWorkBudget) -> Result<Group, Failure> {
+        pay(work, 4)?;
+        if self.terminal || self.groups.len() == self.group_limit {
+            return Err(Failure::Resource);
+        }
+        let group = Group {
+            ledger: self.identity,
+            index: self.groups.len(),
+        };
+        self.groups.push(GroupState {
+            lost: false,
+            quarantined: false,
+            owner_bound: false,
+        });
+        Ok(group)
+    }
+
+    fn group_index(&self, group: Group) -> Result<usize, Failure> {
+        if group.ledger != self.identity || group.index >= self.groups.len() {
+            return Err(Failure::Stale);
+        }
+        Ok(group.index)
+    }
+
+    pub(super) fn owner(
+        &mut self,
+        group: Group,
+        header: &'p CheckedSourceResourceHeader,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Owner, Failure> {
+        pay(work, 10)?;
+        let group_index = self.group_index(group)?;
+        // An independent owner consumes one fresh provisional group, even if
+        // another owner uses the same source H/header. Dependencies are unsupported.
+        if self.groups[group_index].owner_bound {
+            return Err(Failure::State);
+        }
+        if self.terminal
+            || self.groups[group_index].lost
+            || self.groups[group_index].quarantined
+            || self.records.len() == self.owner_limit
+        {
+            return Err(Failure::Resource);
+        }
+        // This first increment supports the dependency-free exact void finish.
+        // It does not reinterpret status-dependent contracts as void contracts.
+        if !header.dependencies.is_empty()
+            || header.original.host.is_none()
+            || !matches!(
+                header.codec.report,
+                crate::core::source_resource::SourceResourceReportCodec::CheckedScope { .. }
+            )
+            || !matches!(
+                header.teardown.owner_role(),
+                Some(super::source_contract::PreparedOwnerCall::Teardown { .. })
+            )
+            || !header
+                .acquire
+                .owner()
+                .is_some_and(|owner| std::sync::Arc::ptr_eq(owner, &header.owner))
+            || !header
+                .teardown
+                .owner()
+                .is_some_and(|owner| std::sync::Arc::ptr_eq(owner, &header.owner))
+        {
+            return Err(Failure::Unsupported);
+        }
+        let owner = Owner {
+            ledger: self.identity,
+            index: self.records.len(),
+            generation: 1,
+        };
+        self.records.push(Record {
+            header,
+            group,
+            generation: 1,
+            serial: 0,
+            pending: None,
+            access: Access::Unpublished,
+            native: Native::NoOwner,
+            unresolved: false,
+            k: K::Absent,
+            delivery: Delivery::Pending,
+            continuation: Continuation::Absent,
+            completion: None,
+            closing: None,
+            witness_issued: false,
+        });
+        self.groups[group_index].owner_bound = true;
+        Ok(owner)
+    }
+
+    fn index(&self, owner: Owner) -> Result<usize, Failure> {
+        if owner.ledger != self.identity {
+            return Err(Failure::Stale);
+        }
+        match self.records.get(owner.index) {
+            Some(record) if record.generation == owner.generation => Ok(owner.index),
+            _ => Err(Failure::Stale),
+        }
+    }
+
+    pub(super) fn enter(
+        &mut self,
+        owner: Owner,
+        kind: CallKind,
+        original: &std::sync::Arc<super::checked_source::CheckedForeignSymbol>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Call, Failure> {
+        // Pay all fixed observation/commit work BEFORE marking native entry.
+        pay(work, 12)?;
+        let index = self.index(owner)?;
+        if self
+            .observed_calls
+            .checked_add(self.in_flight)
+            .is_none_or(|n| n >= self.call_limit)
+        {
+            return Err(Failure::Resource);
+        }
+        let record = &mut self.records[index];
+        let group = &self.groups[record.group.index];
+        if self.terminal
+            || group.lost
+            || group.quarantined
+            || record.pending.is_some()
+            || record.unresolved
+        {
+            return Err(Failure::State);
+        }
+        let expected = match kind {
+            CallKind::Acquire
+                if record.k == K::Absent
+                    && record.native == Native::NoOwner
+                    && record.serial == 0 =>
+            {
+                &record.header.acquire
+            }
+            CallKind::Finish if record.k == K::Closing && record.native == Native::Owned => {
+                &record.header.teardown
+            }
+            // Borrow needs a separately authenticated operation binding; this
+            // increment never accepts an arbitrary original on operation ID alone.
+            _ => return Err(Failure::Unsupported),
+        };
+        if !std::sync::Arc::ptr_eq(expected, original) {
+            return Err(Failure::Original);
+        }
+        let serial = record.serial.checked_add(1).ok_or(Failure::Resource)?;
+        let call = Call {
+            owner,
+            serial,
+            kind,
+        };
+        record.serial = serial;
+        self.in_flight += 1;
+        record.pending = Some(call);
+        record.unresolved = true;
+        Ok(call)
+    }
+
+    pub(super) fn observed(&mut self, call: Call, observation: Observed) -> Result<(), Failure> {
+        let index = self.index(call.owner)?;
+        let record = &mut self.records[index];
+        let group = &self.groups[record.group.index];
+        if self.terminal
+            || group.lost
+            || group.quarantined
+            || record.k == K::Discharged
+            || record.pending != Some(call)
+        {
+            return Err(Failure::Stale);
+        }
+        let native = match (call.kind, observation) {
+            (CallKind::Acquire, Observed::Acquired) => Native::Owned,
+            (CallKind::Acquire, Observed::Null) => Native::NoOwner,
+            (CallKind::Finish, Observed::FinishedConsumed)
+                if matches!(
+                    record.header.teardown.owner_role(),
+                    Some(super::source_contract::PreparedOwnerCall::Teardown {
+                        consumes: true,
+                        ..
+                    })
+                ) =>
+            {
+                Native::Consumed
+            }
+            (CallKind::Finish, Observed::FinishedRetained)
+                if matches!(
+                    record.header.teardown.owner_role(),
+                    Some(super::source_contract::PreparedOwnerCall::Teardown {
+                        consumes: false,
+                        ..
+                    })
+                ) =>
+            {
+                Native::Owned
+            }
+            _ => return Err(Failure::Original),
+        };
+        // O4 and K3: no allocation, conversion, reporting or callback intervenes.
+        self.history.push(History::Native(Outcome {
+            call,
+            observed: observation,
+        }));
+        self.observed_calls += 1;
+        self.in_flight -= 1;
+        record.native = native;
+        record.unresolved = false;
+        record.pending = None;
+        record.delivery = Delivery::Pending;
+        if call.kind == CallKind::Finish {
+            record.completion = Some(Completion::Observed(native));
+            let snapshot = ClosingSnapshot {
+                owner: call.owner,
+                operation: record.header.teardown.operation(),
+                completion: Completion::Observed(native),
+                native,
+                unresolved: false,
+            };
+            record.closing = Some(snapshot);
+            self.history.push(History::Closed(snapshot));
+            record.k = K::Discharged;
+        }
+        Ok(())
+    }
+
+    pub(super) fn publish_acquired(
+        &mut self,
+        owner: Owner,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        pay(work, 4)?;
+        let index = self.index(owner)?;
+        let record = &mut self.records[index];
+        let group = &self.groups[record.group.index];
+        if self.terminal
+            || group.lost
+            || group.quarantined
+            || record.unresolved
+            || record.pending.is_some()
+            || record.native != Native::Owned
+            || record.k != K::Absent
+            || record.serial == 0
+        {
+            return Err(Failure::State);
+        }
+        record.access = Access::Usable;
+        record.k = K::Pending;
+        record.delivery = Delivery::Published;
+        Ok(())
+    }
+
+    pub(super) fn close(
+        &mut self,
+        owner: Owner,
+        structural: bool,
+        dependency_blocked: bool,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Close, Failure> {
+        pay(work, 8)?;
+        let index = self.index(owner)?;
+        let record = &mut self.records[index];
+        if matches!(record.k, K::Discharged | K::Transferred) {
+            return Ok(Close::Already);
+        } // K7
+        if self.terminal {
+            if matches!(record.k, K::Pending | K::Closing) {
+                record.k = K::Transferred;
+                return Ok(Close::Transferred);
+            }
+            return Err(Failure::State);
+        } // K8 applies only to unfinished published obligations
+        if record.k == K::Pending && !structural {
+            return Ok(Close::Wait);
+        }
+        if record.k == K::Pending {
+            record.access = Access::Retired;
+            record.k = K::Closing;
+            record.continuation = Continuation::Required;
+        }
+        if record.k != K::Closing {
+            return Err(Failure::State);
+        }
+        let group = &self.groups[record.group.index];
+        let local = if group.lost {
+            Some(Completion::SessionLost)
+        } else if group.quarantined {
+            Some(Completion::Quarantined)
+        } else if dependency_blocked {
+            Some(Completion::DependencyBlocked)
+        } else {
+            None
+        };
+        if let Some(completion) = local {
+            record.completion = Some(completion);
+            let snapshot = ClosingSnapshot {
+                owner,
+                operation: record.header.teardown.operation(),
+                completion,
+                native: record.native,
+                unresolved: record.unresolved,
+            };
+            record.closing = Some(snapshot);
+            self.history.push(History::Closed(snapshot));
+            record.k = K::Discharged;
+            return Ok(Close::Local);
+        }
+        if record.pending.is_some() {
+            return Err(Failure::State);
+        }
+        Ok(Close::NativeFinish)
+    }
+
+    pub(super) fn lose_group(&mut self, group: Group, quarantine: bool) -> Result<(), Failure> {
+        let index = self.group_index(group)?;
+        if if quarantine {
+            self.groups[index].quarantined
+        } else {
+            self.groups[index].lost
+        } {
+            return Ok(());
+        }
+        // Each group can install these two irreversible events once. Reservation
+        // prepays two full owner revocation walks; no event is erased by X1.
+        if quarantine {
+            self.groups[index].quarantined = true;
+        } else {
+            self.groups[index].lost = true;
+        }
+        // Group flags revoke access without changing the last observation.
+        for record in &mut self.records {
+            if record.group == group {
+                record.access = if quarantine {
+                    Access::Quarantined
+                } else {
+                    Access::Retired
+                };
+            }
+        }
+        // Entered unresolved facts stay unresolved; neither loss nor quarantine
+        // creates a native observation or pretends ownership was consumed.
+        Ok(())
+    }
+
+    pub(super) fn output_failed(&mut self) {
+        // O8/K8 storage and traversal were reserved before any owner entry.
+        if self.terminal {
+            return;
+        }
+        self.terminal = true;
+        for (index, record) in self.records.iter_mut().enumerate() {
+            record.access = Access::Retired;
+            record.delivery = Delivery::Failed;
+            if matches!(record.k, K::Pending | K::Closing) {
+                self.history.push(History::Transferred {
+                    owner: Owner {
+                        ledger: self.identity,
+                        index,
+                        generation: record.generation,
+                    },
+                    native: record.native,
+                    unresolved: record.unresolved,
+                    pending: record.pending,
+                });
+                record.k = K::Transferred;
+            }
+        }
+    }
+
+    pub(super) fn finish_witness(
+        &mut self,
+        owner: Owner,
+        work: &mut TypeWorkBudget,
+    ) -> Result<FinishWitness, Failure> {
+        pay(work, 4)?;
+        let index = self.index(owner)?;
+        let record = &mut self.records[index];
+        if self.terminal || record.k != K::Discharged || record.witness_issued {
+            return Err(Failure::State);
+        }
+        let snapshot = record.closing.ok_or(Failure::State)?;
+        record.witness_issued = true;
+        Ok(FinishWitness(snapshot))
+    }
+
+    pub(super) fn source_continued(
+        &mut self,
+        owner: Owner,
+        witness: FinishWitness,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        pay(work, 3)?;
+        let index = self.index(owner)?;
+        let record = &mut self.records[index];
+        if self.terminal
+            || record.k != K::Discharged
+            || record.continuation != Continuation::Required
+            || !record.witness_issued
+            || record.closing != Some(witness.0)
+            || witness.0.owner != owner
+        {
+            return Err(Failure::State);
+        }
+        record.continuation = Continuation::Completed;
+        record.delivery = Delivery::Published;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_header(test: impl FnOnce(&CheckedSourceResourceHeader)) {
+        let (program, _provenance) = crate::elaborate::checked_owner_passive_program();
+        let fact = program
+            .registry()
+            .source_resource_facts()
+            .find(|fact| {
+                matches!(
+                    fact.codec.kind,
+                    crate::surface::SurfaceResourceReportCodecKind::CheckedScope
+                )
+            })
+            .unwrap();
+        let header = CheckedSourceResourceHeader::admit(
+            fact,
+            program.registry(),
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        test(&header);
+    }
+
+    fn acquired<'p>(header: &'p CheckedSourceResourceHeader) -> (Ledger<'p>, Owner) {
+        let mut work = TypeWorkBudget::default();
+        let mut ledger = Ledger::reserve(2, 2, 4, &mut work).unwrap();
+        let group = ledger.group(&mut work).unwrap();
+        let owner = ledger.owner(group, header, &mut work).unwrap();
+        let call = ledger
+            .enter(owner, CallKind::Acquire, &header.acquire, &mut work)
+            .unwrap();
+        ledger.observed(call, Observed::Acquired).unwrap();
+        ledger.publish_acquired(owner, &mut work).unwrap();
+        (ledger, owner)
+    }
+
+    #[test]
+    fn checked_control_finish_commit_survives_source_failure_without_replay() {
+        with_header(|header| {
+            let (mut ledger, owner) = acquired(header);
+            let mut work = TypeWorkBudget::default();
+            assert_eq!(
+                ledger.close(owner, true, false, &mut work),
+                Ok(Close::NativeFinish)
+            );
+            let call = ledger
+                .enter(owner, CallKind::Finish, &header.teardown, &mut work)
+                .unwrap();
+            ledger.observed(call, Observed::FinishedConsumed).unwrap();
+            let witness = ledger.finish_witness(owner, &mut work).unwrap();
+            assert!(ledger.finish_witness(owner, &mut work).is_err());
+            ledger.output_failed();
+            let record = &ledger.records[owner.index];
+            assert_eq!(record.native, Native::Consumed);
+            assert_eq!(ledger.history.len(), 3);
+            assert!(matches!(
+                ledger.history[1],
+                History::Native(Outcome {
+                    observed: Observed::FinishedConsumed,
+                    ..
+                })
+            ));
+            assert!(matches!(
+                ledger.history[2],
+                History::Closed(ClosingSnapshot {
+                    completion: Completion::Observed(Native::Consumed),
+                    ..
+                })
+            ));
+            assert_eq!(record.k, K::Discharged);
+            assert_eq!(
+                record.completion,
+                Some(Completion::Observed(Native::Consumed))
+            );
+            assert_eq!(record.continuation, Continuation::Required);
+            assert_eq!(
+                ledger.close(owner, true, true, &mut work),
+                Ok(Close::Already)
+            ); // K7 before K8
+            assert_eq!(
+                ledger.observed(call, Observed::FinishedConsumed),
+                Err(Failure::Stale)
+            );
+            assert!(
+                ledger
+                    .enter(owner, CallKind::Finish, &header.teardown, &mut work)
+                    .is_err()
+            );
+            assert!(ledger.source_continued(owner, witness, &mut work).is_err());
+        });
+    }
+
+    #[test]
+    fn checked_control_groups_loss_precedence_and_stale_handles_are_distinct() {
+        with_header(|header| {
+            let (mut ledger, owner) = acquired(header);
+            let mut work = TypeWorkBudget::default();
+            let first_group = ledger.records[owner.index].group;
+            assert_eq!(
+                ledger.owner(first_group, header, &mut work),
+                Err(Failure::State)
+            );
+            assert_eq!(ledger.records.len(), 1);
+            let other_group = ledger.group(&mut work).unwrap();
+            assert_ne!(first_group, other_group);
+            let other = ledger.owner(other_group, header, &mut work).unwrap(); // same header/H, different group
+            assert_eq!(
+                ledger.owner(other_group, header, &mut work),
+                Err(Failure::State)
+            );
+            assert_eq!(ledger.records.len(), 2);
+            let other_call = ledger
+                .enter(other, CallKind::Acquire, &header.acquire, &mut work)
+                .unwrap();
+            ledger.observed(other_call, Observed::Acquired).unwrap();
+            ledger.publish_acquired(other, &mut work).unwrap();
+            let group = ledger.records[owner.index].group;
+            ledger.lose_group(group, true).unwrap();
+            ledger.lose_group(group, false).unwrap();
+            assert_eq!(ledger.close(owner, false, true, &mut work), Ok(Close::Wait));
+            assert_eq!(ledger.close(owner, true, true, &mut work), Ok(Close::Local));
+            assert_eq!(
+                ledger.records[owner.index].completion,
+                Some(Completion::SessionLost)
+            );
+            assert_eq!(ledger.records[owner.index].native, Native::Owned); // no fabricated consumption
+            assert_eq!(
+                ledger.close(other, true, false, &mut work),
+                Ok(Close::NativeFinish)
+            );
+            let stale = Owner {
+                generation: 2,
+                ..other
+            };
+            assert_eq!(
+                ledger.enter(stale, CallKind::Finish, &header.teardown, &mut work),
+                Err(Failure::Stale)
+            );
+            assert_eq!(
+                ledger.enter(other, CallKind::Finish, &header.acquire, &mut work),
+                Err(Failure::Original)
+            );
+            let call = ledger
+                .enter(other, CallKind::Finish, &header.teardown, &mut work)
+                .unwrap();
+            ledger.output_failed(); // K8 preserves unresolved call, does not finish/replay it
+            assert_eq!(ledger.records[other.index].k, K::Transferred);
+            assert!(ledger.records[other.index].unresolved);
+            assert_eq!(
+                ledger.observed(call, Observed::FinishedConsumed),
+                Err(Failure::Stale)
+            );
+        });
+    }
+
+    #[test]
+    fn checked_control_unpublished_guard_and_prepaid_loss_survive_terminal() {
+        with_header(|header| {
+            let mut work = TypeWorkBudget::default();
+            let mut ledger = Ledger::reserve(1, 1, 2, &mut work).unwrap();
+            let group = ledger.group(&mut work).unwrap();
+            let owner = ledger.owner(group, header, &mut work).unwrap();
+            let call = ledger
+                .enter(owner, CallKind::Acquire, &header.acquire, &mut work)
+                .unwrap();
+            ledger.observed(call, Observed::Acquired).unwrap();
+            ledger.output_failed();
+            assert_eq!(ledger.records[owner.index].k, K::Absent);
+            assert_eq!(ledger.records[owner.index].native, Native::Owned);
+            assert_eq!(ledger.records[owner.index].access, Access::Retired);
+            assert_eq!(ledger.records[owner.index].group, group);
+            assert_eq!(
+                ledger.close(owner, true, false, &mut work),
+                Err(Failure::State)
+            );
+            // No native guard/disposal is wired yet: the retained fact cannot
+            // be presented as a disposed allocation or a discharged K.
+
+            let (mut ledger, owner) = acquired(header);
+            let group = ledger.records[owner.index].group;
+            assert_eq!(
+                ledger.close(owner, true, false, &mut work),
+                Ok(Close::NativeFinish)
+            );
+            let call = ledger
+                .enter(owner, CallKind::Finish, &header.teardown, &mut work)
+                .unwrap();
+            let mut exhausted = TypeWorkBudget::with_limit(0);
+            ledger.lose_group(group, true).unwrap(); // prepaid irreversible event
+            ledger.lose_group(group, false).unwrap();
+            assert_eq!(exhausted.used(), 0);
+            assert_eq!(
+                ledger.close(owner, true, false, &mut exhausted),
+                Err(Failure::Resource)
+            );
+            ledger.output_failed();
+            assert!(ledger.groups[group.index].lost && ledger.groups[group.index].quarantined);
+            assert_eq!(ledger.records[owner.index].native, Native::Owned);
+            assert!(ledger.records[owner.index].unresolved);
+            assert_eq!(ledger.records[owner.index].pending, Some(call));
+            assert_eq!(ledger.records[owner.index].access, Access::Retired);
+            assert_eq!(ledger.records[owner.index].k, K::Transferred);
+        });
+    }
+
+    #[test]
+    fn checked_control_local_close_witness_retains_reason_and_required_source_step() {
+        with_header(|header| {
+            for quarantine in [false, true] {
+                let (mut ledger, owner) = acquired(header);
+                let mut work = TypeWorkBudget::default();
+                if quarantine {
+                    ledger
+                        .lose_group(ledger.records[owner.index].group, true)
+                        .unwrap();
+                }
+                assert_eq!(ledger.close(owner, true, true, &mut work), Ok(Close::Local));
+                let expected = if quarantine {
+                    Completion::Quarantined
+                } else {
+                    Completion::DependencyBlocked
+                };
+                let witness = ledger.finish_witness(owner, &mut work).unwrap();
+                assert_eq!(witness.0.owner, owner);
+                assert_eq!(witness.0.operation, header.teardown.operation());
+                assert_eq!(witness.0.completion, expected);
+                assert_eq!(witness.0.native, Native::Owned);
+                assert!(!witness.0.unresolved);
+                assert!(ledger.finish_witness(owner, &mut work).is_err());
+                assert_eq!(
+                    ledger.records[owner.index].continuation,
+                    Continuation::Required
+                );
+                // This is a passive transition input, not authentication of a
+                // dependency graph or execution of the authored source finish.
+                ledger.source_continued(owner, witness, &mut work).unwrap();
+                assert_eq!(
+                    ledger.records[owner.index].continuation,
+                    Continuation::Completed
+                );
+                assert_eq!(
+                    ledger.close(owner, true, true, &mut work),
+                    Ok(Close::Already)
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn checked_control_short_work_and_capacity_refuse_before_entry_and_retry_fresh() {
+        with_header(|header| {
+            let measure = |work: &mut TypeWorkBudget| {
+                let mut ledger = Ledger::reserve(1, 1, 2, work)?;
+                let group = ledger.group(work)?;
+                let owner = ledger.owner(group, header, work)?;
+                ledger.enter(owner, CallKind::Acquire, &header.acquire, work)?;
+                Ok::<_, Failure>(ledger)
+            };
+            let mut measured = TypeWorkBudget::default();
+            measure(&mut measured).unwrap();
+            for prefix in [0, 7] {
+                let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+                exact.charge(prefix).unwrap();
+                assert!(measure(&mut exact).is_ok());
+                let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(measure(&mut short), Err(Failure::Resource)));
+                assert!(matches!(measure(&mut short), Err(Failure::Resource))); // spent retry
+            }
+            assert!(measure(&mut TypeWorkBudget::default()).is_ok());
+            let mut work = TypeWorkBudget::default();
+            let mut ledger = Ledger::reserve(1, 0, 0, &mut work).unwrap();
+            let group = ledger.group(&mut work).unwrap();
+            assert_eq!(
+                ledger.owner(group, header, &mut work),
+                Err(Failure::Resource)
+            );
+            assert!(ledger.records.is_empty());
+        });
+    }
+}

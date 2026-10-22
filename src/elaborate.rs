@@ -43040,3 +43040,5 @@ impl CoreElaborator<EffectOperationFamily> {
 #[cfg(test)]
 #[path = "elaborate/checked_owner_lifecycle_tests.rs"]
 mod checked_owner_lifecycle_tests;
+#[cfg(test)]
+pub(crate) use checked_owner_lifecycle_tests::checked_owner_passive_program;

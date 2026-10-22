@@ -143,6 +143,9 @@ pub(crate) struct ForeignBridgeFailure {
 }
 
 impl ForeignBridgeFailure {
+    pub(super) fn is_resource(&self) -> bool {
+        self.reason == ForeignBridgeReason::Resource
+    }
     #[cfg(test)]
     pub(crate) const fn reason(self) -> ForeignBridgeReason {
         self.reason
@@ -219,6 +222,35 @@ impl fmt::Debug for TargetResolvedForeignBridge {
 }
 
 impl TargetResolvedForeignBridge {
+    /// Fresh passive association, not executable permission or approval.
+    pub(super) fn authenticate_in_program(
+        &self,
+        target: &str,
+        program: &crate::core::ValidatedEffectProgram,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ForeignBridgeFailure> {
+        let expected =
+            plan_foreign_bridge_in_program(Arc::clone(&self.symbol), target, program, work)?;
+        let comparison = self
+            .operands
+            .len()
+            .checked_add(self.rust_function_name.len())
+            .and_then(|n| n.checked_add(7))
+            .ok_or_else(|| fail(ForeignBridgeReason::Resource, self.span))?;
+        charge(work, comparison, self.span)?;
+        if !Arc::ptr_eq(&self.symbol, &expected.symbol)
+            || self.target != expected.target
+            || self.operands != expected.operands
+            || self.result != expected.result
+            || self.call != expected.call
+            || self.span != expected.span
+            || self.rust_function_name != expected.rust_function_name
+        {
+            return Err(fail(ForeignBridgeReason::InvalidAuthority, self.span));
+        }
+        Ok(())
+    }
+
     pub(crate) const fn call(&self) -> TargetBridgeCall {
         self.call
     }

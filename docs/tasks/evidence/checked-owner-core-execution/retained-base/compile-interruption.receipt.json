@@ -1,0 +1,15 @@
+{
+  "session": 11635,
+  "session_exit": 143,
+  "runner_completed": false,
+  "test_selected": null,
+  "behavioral_credit": false,
+  "classification": "interrupted during compile; cause not observed",
+  "host_process_check": "No matching Cargo/rustc/passive-runner process in separate escalated host ps check after terminal",
+  "inputs_equal_freeze": true,
+  "input_count": 3668,
+  "aggregate": "c3114a82f7f13ec066f0f00f1c0aecb17914401e20fc9762bab20596c0bbf23b",
+  "raw_sha256": "c752aeaabb34ef25984dd3f18446977fcc87d9510c96165d0ea5a9c1a1158b7a",
+  "raw_bytes": 89,
+  "retry": false
+}
