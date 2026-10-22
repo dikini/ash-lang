@@ -645,3 +645,37 @@ fn checked_byte_window_same_family_donor_extent_cannot_authorize_another_view() 
     );
     byte_window_source_refuses(&hostile);
 }
+
+#[test]
+fn checked_byte_window_zero_assumption_scalar_image_profile_and_minimum_premises() {
+    let source = r#"import @builtin.foreign as Foreign
+foreign checked library Native {
+    profile "x86_64-unknown-linux-gnu"
+    repr I32 = signed(32)
+    symbol Abs<H> : Int -> Foreign.CheckedCall<Int> {
+        name "abs"
+        abi (I32) -> I32
+        host H
+        assumes {}
+        operand 0 from 0 scalar
+        output result as scalar
+        outcome otherwise { readable result }
+    }
+}
+main : Unit -> Int
+main () = 42
+"#;
+    let graph = graph_with_entry(source, None);
+    let checked = check_graph(&graph).expect("real zero-assumption checked source checks");
+    let linked = link_modules(checked, graph.entry()).unwrap();
+    let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+    let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+    let typed = elaborator.synthesize_effect_module_program(&linked).unwrap();
+    let program = elaborator.finish(typed.node).unwrap();
+    let sources = graph.modules().iter().map(|module| module.source()).collect::<Vec<_>>();
+    let modules = graph.modules().iter().map(|module| (module.id(), module.source().id())).collect::<Vec<_>>();
+    let core = crate::core::validate_effect_modules(program, &sources, &modules)
+        .expect("zero-assumption source reaches independent Core");
+    let provenance = graph.modules().iter().map(|module| (module.id(), Arc::new(module.source().clone()))).collect::<Vec<_>>();
+    crate::build::checked_zero_assumption_scalar_image_controls(&core, &provenance);
+}

@@ -1143,7 +1143,8 @@ pub(crate) fn restore_foreign_symbol(
         .registry
         .effect(effect)
         .ok_or_else(|| failure(ForeignAdmissionReason::InvalidOperation, span))?;
-    let symbol = bind_foreign_symbol(library, prepared, symbol_index, original, context, work)?;
+    let bind = if prepared.checked_contract().is_some() { bind_checked_foreign_symbol } else { bind_foreign_symbol };
+    let symbol = bind(library, prepared, symbol_index, original, context, work)?;
     // Binding establishes the complete immutable source correspondence. Final
     // reconstructed Core validation remains the independent crossed-boundary gate.
     charge(work, 1, span)?;

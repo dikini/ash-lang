@@ -1573,7 +1573,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x12";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x13";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -1809,6 +1809,8 @@ macro_rules! wire_struct {
 mod source_forwarding_image;
 #[path = "source_resource_image.rs"]
 mod source_resource_image;
+#[path = "checked_prepared_image.rs"]
+mod checked_prepared_image;
 #[path = "source_resource_rows_image.rs"]
 mod source_resource_rows_image;
 use source_resource_image::{
@@ -7624,6 +7626,7 @@ struct PreparedSymbolRecord {
 
 #[derive(Clone, Copy, Debug)]
 struct PreparedLibraryRecord {
+    checked: Option<Slice>,
     module: u32,
     name: Slice,
     public: bool,
@@ -7862,6 +7865,7 @@ wire_struct!(
 );
 wire_struct!(
     PreparedLibraryRecord,
+    checked,
     module,
     name,
     public,
@@ -10034,9 +10038,11 @@ impl Encoder<'_> {
             )?;
         }
         let symbols = Slice::of(&self.image.prepared_symbols, start)?;
+        let checked = self.checked_prepared_projection(original)?;
         let slot = push(
             &mut self.image.prepared_libraries,
             PreparedLibraryRecord {
+                checked,
                 module,
                 name,
                 public: original.public(),
@@ -11594,7 +11600,7 @@ impl Decoder<'_> {
     }
 
     fn extended_registry(&mut self) -> Result<RestoredNativeRegistry, ImageFailure> {
-        use crate::foreign::{checked_source::*, source_contract::*};
+        use crate::foreign::checked_source::*;
         use crate::resolved::ResolvedEffectBuffer;
         let mut registry = self.registry()?;
         let mut nominal_owners = HashMap::new();
@@ -11768,9 +11774,7 @@ impl Decoder<'_> {
             .map_err(|_| ImageFailure::RegistryAdmission)?;
         let mut prepared = Vec::new();
         for record in &self.image.prepared_libraries {
-            let parts = self.prepared_parts(*record)?;
-            let library = restore_prepared_library(parts, self.work)
-                .map_err(|_| ImageFailure::RegistryAdmission)?;
+            let library = self.restore_prepared_record(*record)?;
             charge(self.work, 1)?;
             push(&mut prepared, Arc::new(library), self.work)?;
         }
@@ -11841,7 +11845,8 @@ impl Decoder<'_> {
             if nominal != self.nominal(record.nominal)? {
                 return Err(ImageFailure::InvalidRecord);
             }
-            let owner = crate::foreign::source_owner::bind_foreign_owner(
+            let bind_owner = if library.checked_contract().is_some() { crate::foreign::source_owner::bind_checked_foreign_owner } else { crate::foreign::source_owner::bind_foreign_owner };
+            let owner = bind_owner(
                 NativeLibraryId::new(library.module(), record.library_ordinal),
                 Arc::clone(library),
                 owner_index,
@@ -11850,7 +11855,7 @@ impl Decoder<'_> {
                 &registry,
                 self.work,
             )
-            .map_err(|_| ImageFailure::RegistryAdmission)?;
+            .map_err(|error| if error.is_resource_exhaustion() { ImageFailure::Resource } else { ImageFailure::RegistryAdmission })?;
             charge(self.work, 1)?;
             push(&mut owners, Arc::new(owner), self.work)?;
         }
@@ -11972,7 +11977,7 @@ impl Decoder<'_> {
                 context,
                 self.work,
             )
-            .map_err(|_| ImageFailure::RegistryAdmission)?;
+            .map_err(|error| if error.is_resource_exhaustion() { ImageFailure::Resource } else { ImageFailure::RegistryAdmission })?;
             if symbol.operation() != operation {
                 return Err(ImageFailure::InvalidRecord);
             }
@@ -13240,4 +13245,12 @@ pub(crate) fn checked_window_static_image_controls(
     provenance: &[(ModuleId, Arc<SourceFile>)],
 ) {
     source_resource_image::checked_window_static_image_controls(program, provenance);
+}
+
+#[cfg(test)]
+pub(crate) fn checked_zero_assumption_scalar_image_controls(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(ModuleId, Arc<SourceFile>)],
+) {
+    checked_prepared_image::zero_assumption_scalar_controls(program, provenance)
 }

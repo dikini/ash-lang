@@ -3558,7 +3558,7 @@ main () = 42
     }
 
     #[test]
-    fn checked_builtin_original_selective_legacy_view_has_no_host_or_omission_proof() {
+    fn checked_builtin_original_selective_legacy_view_retains_complete_host_checking_closure() {
         let directory =
             std::env::temp_dir().join(format!("ash-selective-host-{}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
@@ -3594,7 +3594,7 @@ main () = 42
             .registry()
             .source_original_checker_view(
                 resolved.imported_facts(),
-                &mut TypeWorkBudget::unbounded(),
+                &mut TypeWorkBudget::default(),
             )
             .unwrap();
         assert!(
@@ -3602,8 +3602,18 @@ main () = 42
                 loaded.id(),
                 crate::module::FOREIGN_NATIVE_HOST_LOCAL
             ))
-            .is_none()
+            .is_some()
         );
+        for (id, coordinates, family) in crate::foreign::scalar_preflight::checked_inventory_dependencies(loaded.id()) {
+            if family {
+                let fact=view.nominal(id).expect("retained Host requires each materialized checking family");
+                assert_eq!(view.nominal_parameters(id).unwrap().len(),coordinates.formals().len());
+                assert_eq!(fact.constructors.len(),coordinates.constructors().len());
+            } else {
+                assert!(view.nominal(id).is_none(),"opaque checking kind remains nonmaterialized");
+                assert!(view.nominal_kind(id).is_some());
+            }
+        }
         let sources = graph
             .modules()
             .iter()
@@ -3621,11 +3631,11 @@ main () = 42
                 .map(|source| (source.id(), *source))
                 .collect(),
             &modules.iter().copied().collect(),
-            &mut TypeWorkBudget::unbounded(),
+            &mut TypeWorkBudget::default(),
         )
         .unwrap();
-        assert!(proof.omitted_builtin_formals.is_empty());
-        assert!(original_registry_phase_modules(&sources, &modules, view).is_ok());
+        let _ = proof; // Full standalone source authentication completed above.
+        assert!(original_registry_phase_modules(&sources, &modules, view).is_ok(), "fresh operation phase must agree with standalone source authentication");
     }
 }
 

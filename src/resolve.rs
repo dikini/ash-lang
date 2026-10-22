@@ -4568,7 +4568,7 @@ impl Resolver {
                                     *span,
                                 )?;
                             }
-                            self.retain_imported_effect(effect, *span)?;
+                            self.retain_imported_effect(effect, dependency.summary, *span)?;
                             if import.public {
                                 self.public_import_candidate
                                     .try_insert_effect(
@@ -5022,7 +5022,7 @@ impl Resolver {
             for operation in &fact.operations {
                 self.retain_type_nominals(&operation.annotation.ty, summary, import_span)?;
             }
-            self.retain_imported_effect(fact, import_span)?;
+            self.retain_imported_effect(fact, summary, import_span)?;
         }
 
         for (spelling, exported) in summary.constructors() {
@@ -5054,8 +5054,29 @@ impl Resolver {
     fn retain_imported_effect(
         &mut self,
         exported: &ResolvedEffectDeclaration,
+        summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        // Host may be referenced by a retained capture graph independently of
+        // the selected function's preflight role. Keep its checking inventory,
+        // without publishing any additional source names or callable facts.
+        if exported.id.module().is_builtin_foreign()
+            && exported.id.declaration() == crate::module::FOREIGN_NATIVE_HOST_LOCAL
+        {
+            if !crate::foreign::checked_builtins::is_canonical_native_host_declaration(exported, exported.span, &mut self.type_work)
+                .map_err(|failure| error(if failure.is_resource_exhaustion() { ResolveReason::TypeResourceExhausted } else { ResolveReason::InternalState }, span, "retained Host declaration authentication failed"))? {
+                return Err(error(ResolveReason::InternalState, span, "retained Host is not canonical"));
+            }
+            for (id, _, constructors) in crate::foreign::scalar_preflight::checked_inventory_dependencies(exported.id.module()) {
+                self.type_work.charge(1).map_err(|()| error(ResolveReason::TypeResourceExhausted, span, "Host checking dependency traversal exceeded work"))?;
+                let fact = summary.nominal_fact(id).ok_or_else(|| error(ResolveReason::InternalState, span, "retained Host lost an original checking dependency"))?;
+                if constructors {
+                    self.retain_imported_constructor_family(fact, summary, span)?;
+                } else {
+                    self.retain_scheme_nominal_fact(fact, span)?;
+                }
+            }
+        }
         let retained =
             clone_resolved_effect_with_budget(exported, &mut self.type_work).map_err(|()| {
                 error(
@@ -5840,7 +5861,7 @@ impl Resolver {
                             problem: "missing",
                         })
                     })?;
-                    self.retain_imported_effect(declaration, span)?;
+                    self.retain_imported_effect(declaration, summary, span)?;
                 }
             }
             methods.push(crate::resolved::CheckedImplementationMethodFact {
@@ -6152,7 +6173,7 @@ impl Resolver {
                         "scalar preflight lost its original host dependency",
                     )
                 })?;
-                self.retain_imported_effect(fact, span)?;
+                self.retain_imported_effect(fact, summary, span)?;
             }
         }
         if capture_graph_visits
@@ -6196,7 +6217,7 @@ impl Resolver {
                         problem: "missing",
                     })
                 })?;
-                self.retain_imported_effect(declaration, span)?;
+                self.retain_imported_effect(declaration, summary, span)?;
             }
         }
         Ok(())
@@ -6351,7 +6372,7 @@ impl Resolver {
                                 "an exported argument references missing effect metadata",
                             )
                         })?;
-                        self.retain_imported_effect(effect, span)?;
+                        self.retain_imported_effect(effect, summary, span)?;
                         self.type_work
                             .charge(instance.arguments().len())
                             .map_err(|()| resource())?;
@@ -6636,7 +6657,7 @@ impl Resolver {
                     problem: "missing",
                 })
             })?;
-            self.retain_imported_effect(exported, span)?;
+            self.retain_imported_effect(exported, summary, span)?;
         }
         Ok(())
     }
@@ -22665,7 +22686,7 @@ impl Resolver {
                     "resource contract effect metadata is missing",
                 )
             })?;
-            self.retain_imported_effect(effect, span)?;
+            self.retain_imported_effect(effect, summary, span)?;
             self.type_work
                 .charge(effect.operations.len())
                 .map_err(|()| exhausted())?;
@@ -22710,7 +22731,7 @@ impl Resolver {
                         "resource family effect metadata is missing",
                     )
                 })?;
-                self.retain_imported_effect(effect, span)?;
+                self.retain_imported_effect(effect, summary, span)?;
                 self.type_work
                     .charge(effect.operations.len())
                     .map_err(|()| exhausted())?;
@@ -22885,7 +22906,7 @@ impl Resolver {
                     "source resource effect metadata is missing",
                 )
             })?;
-            self.retain_imported_effect(effect, span)?;
+            self.retain_imported_effect(effect, summary, span)?;
             for operation in &effect.operations {
                 self.retain_type_nominals(&operation.annotation.ty, summary, span)?;
             }

@@ -519,3 +519,6 @@ mod source_owner_post_record_tests;
 // Static checked-image reconstruction test seam; no public build admission.
 #[cfg(test)]
 pub(crate) use image::checked_window_static_image_controls;
+
+#[cfg(test)]
+pub(crate) use image::checked_zero_assumption_scalar_image_controls;

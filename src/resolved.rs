@@ -10644,7 +10644,107 @@ pub(crate) enum BuiltinCellSummaryMutationForTest {
     HandleKind,
 }
 
+#[cfg(test)]
+mod retained_host_closure_tests;
+
 impl ExportSummary {
+    fn retain_hidden_constructor_from_resolved(
+        &mut self, resolved: &ResolvedModule, constructor_id: ConstructorId,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+            if self
+                .constructor_names_by_id
+                .contains_key(&constructor_id)
+            {
+                return Ok(());
+            }
+            type_work
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let (spelling, payload, scheme, origin) = if constructor_id.owner().module()
+                == resolved.module
+            {
+                let constructor = resolved
+                    .registry
+                    .constructor(constructor_id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let owner = resolved
+                    .registry
+                    .nominal(constructor_id.owner())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let parameters = resolved
+                    .registry
+                    .nominal_parameters(constructor_id.owner())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let payload = if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                    owner.representation.as_ref()
+                } else {
+                    constructor.payload.as_ref()
+                };
+                (
+                    constructor.spelling.as_str(),
+                    payload,
+                    canonical_constructor_scheme(
+                        constructor_id.owner(),
+                        parameters,
+                        payload,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                    &constructor.origin,
+                )
+            } else {
+                let constructor = resolved
+                    .imported
+                    .constructor(constructor_id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                (
+                    constructor.spelling.as_str(),
+                    constructor.payload.as_ref(),
+                    constructor
+                        .scheme
+                        .clone_with_budget(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                    &constructor.origin,
+                )
+            };
+            let original = if constructor_id.owner().module() == resolved.module {
+                ConstructorOriginal::from_checked(&resolved.registry, type_work)?
+            } else {
+                resolved
+                    .imported
+                    .constructor(constructor_id)
+                    .and_then(|constructor| constructor.original.as_ref())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?
+                    .retain(type_work)?
+            };
+            if self
+                .hidden_constructors
+                .insert(
+                    constructor_id,
+                    ExportedConstructor {
+                        original: Some(original),
+                        id: constructor_id,
+                        spelling: spelling.to_owned(),
+                        payload: payload
+                            .map(|payload| clone_type_with_budget(payload, type_work))
+                            .transpose()
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                        scheme,
+                        origin: origin.clone(),
+                    },
+                )
+                .is_some()
+            {
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            self.hidden_constructor_order.push(constructor_id);
+        Ok(())
+    }
+
+
     pub(crate) fn source_resource_facts(
         &self,
     ) -> impl Iterator<Item = &Arc<SourceResourceTypeFact>> {
@@ -11629,6 +11729,29 @@ impl ExportSummary {
                     0,
                 ),
             );
+        }
+
+        for effect in &self.effects {
+            type_work.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if !effect.id.module().is_builtin_foreign() || effect.id.declaration() != crate::module::FOREIGN_NATIVE_HOST_LOCAL { continue; }
+            if !crate::foreign::checked_builtins::is_canonical_native_host_declaration(effect,effect.span,type_work).map_err(scalar_preflight_failure)? {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for (id, coordinates, family) in crate::foreign::scalar_preflight::checked_inventory_dependencies(effect.id.module()) {
+                type_work.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                let fact=self.nominal_fact(id).ok_or(ResolvedBuildFailure::InvalidState)?;
+                if fact.parameter_count != coordinates.formals().len() || fact.constructor_count != coordinates.constructors().len() {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                if family {
+                    type_work.charge(fact.constructors.len()).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    if fact.constructors.len()!=fact.constructor_count || fact.constructors.iter().enumerate().any(|(ordinal,member)| member.owner()!=id || usize::try_from(member.constructor())!=Ok(ordinal) || self.constructor_by_id(*member).is_none()) {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                } else if !fact.constructors.is_empty() {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
         }
 
         // Operation signatures may name any retained nominal. Check their
@@ -14370,95 +14493,7 @@ impl ExportSummary {
             .try_reserve_exact(hidden_constructor_count)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for constructor_id in constructor_family_order {
-            if summary
-                .constructor_names_by_id
-                .contains_key(&constructor_id)
-            {
-                continue;
-            }
-            type_work
-                .charge(1)
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            let (spelling, payload, scheme, origin) = if constructor_id.owner().module()
-                == resolved.module
-            {
-                let constructor = resolved
-                    .registry
-                    .constructor(constructor_id)
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                let owner = resolved
-                    .registry
-                    .nominal(constructor_id.owner())
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                let parameters = resolved
-                    .registry
-                    .nominal_parameters(constructor_id.owner())
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                let payload = if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
-                    owner.representation.as_ref()
-                } else {
-                    constructor.payload.as_ref()
-                };
-                (
-                    constructor.spelling.as_str(),
-                    payload,
-                    canonical_constructor_scheme(
-                        constructor_id.owner(),
-                        parameters,
-                        payload,
-                        type_work,
-                    )
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                    &constructor.origin,
-                )
-            } else {
-                let constructor = resolved
-                    .imported
-                    .constructor(constructor_id)
-                    .ok_or(ResolvedBuildFailure::InvalidState)?;
-                (
-                    constructor.spelling.as_str(),
-                    constructor.payload.as_ref(),
-                    constructor
-                        .scheme
-                        .clone_with_budget(type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                    &constructor.origin,
-                )
-            };
-            let original = if constructor_id.owner().module() == resolved.module {
-                ConstructorOriginal::from_checked(&resolved.registry, type_work)?
-            } else {
-                resolved
-                    .imported
-                    .constructor(constructor_id)
-                    .and_then(|constructor| constructor.original.as_ref())
-                    .ok_or(ResolvedBuildFailure::InvalidState)?
-                    .retain(type_work)?
-            };
-            if summary
-                .hidden_constructors
-                .insert(
-                    constructor_id,
-                    ExportedConstructor {
-                        original: Some(original),
-                        id: constructor_id,
-                        spelling: spelling.to_owned(),
-                        payload: payload
-                            .map(|payload| clone_type_with_budget(payload, type_work))
-                            .transpose()
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                        scheme,
-                        origin: origin.clone(),
-                    },
-                )
-                .is_some()
-            {
-                {
-                    return Err(ResolvedBuildFailure::InvalidState);
-                }
-            }
-            summary.hidden_constructor_order.push(constructor_id);
+            summary.retain_hidden_constructor_from_resolved(resolved, constructor_id, type_work)?;
         }
 
         // Freeze the complete retained effect inventory before selecting hidden
@@ -14718,6 +14753,45 @@ impl ExportSummary {
                     {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
+                }
+            }
+        }
+
+        // A capture/type/method/report may retain Host without a checked
+        // preflight term. Freeze that actual effect inventory first, then retain
+        // its complete checking closure using only already admitted facts.
+        let mut host_modules = Vec::new();
+        for effect in &summary.effects {
+            type_work.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if effect.id.module().is_builtin_foreign() && effect.id.declaration() == crate::module::FOREIGN_NATIVE_HOST_LOCAL {
+                if !crate::foreign::checked_builtins::is_canonical_native_host_declaration(effect,effect.span,type_work).map_err(scalar_preflight_failure)? {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                type_work.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                host_modules.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                host_modules.push(effect.id.module());
+            }
+        }
+        for module in host_modules {
+            for (id, _, family) in crate::foreign::scalar_preflight::checked_inventory_dependencies(module) {
+                type_work.charge(2).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                preflight_nominal_roots.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                preflight_nominal_roots.push(id);
+                if !family { continue; }
+                constructor_owners.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                constructor_owners.insert(id);
+                let constructors = if module == resolved.module {
+                    resolved.registry.nominal(id).map(|fact|fact.constructors.as_ref())
+                } else {
+                    resolved.imported.nominal(id).filter(|fact|fact.access == ImportedTypeAccess::Transparent).map(|fact|fact.constructors.as_ref())
+                }.ok_or(ResolvedBuildFailure::InvalidState)?;
+                for constructor in constructors {
+                    type_work.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    if summary.constructor_by_id(*constructor).is_some() { continue; }
+                    type_work.charge(2).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    summary.hidden_constructors.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    summary.hidden_constructor_order.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    summary.retain_hidden_constructor_from_resolved(resolved,*constructor,type_work)?;
                 }
             }
         }
