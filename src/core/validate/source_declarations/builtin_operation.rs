@@ -336,7 +336,7 @@ mod tests {
         );
     }
     #[test]
-    fn builtin_operation_selective_legacy_projection_does_not_certify_checked_inventory() {
+    fn builtin_operation_selective_legacy_projection_retains_complete_host_checking_inventory() {
         let graph = graph_with_source(
             "import @builtin.foreign (checked_i64 as signed)\nmain : Unit -> Int\nmain () = 42\n",
         );
@@ -374,13 +374,24 @@ mod tests {
         assert!(view
             .scalar_preflights()
             .all(|(_, fact)| fact.role().host_parameter(fact.module()).is_none()));
-        let missing_nominals = (0..18)
-            .filter(|local| {
-                view.nominal(crate::types::NominalTypeId::new(loaded.id(), *local))
-                    .is_none()
-            })
-            .collect::<Vec<_>>();
-        eprintln!("SELECTIVE_CHECKING_VIEW missing_nominals={missing_nominals:?} host_present=true legacy_functions_only=true");
+        for (id, coordinates, family) in
+            crate::foreign::scalar_preflight::checked_inventory_dependencies(loaded.id())
+        {
+            if family {
+                let fact = view.nominal(id).expect("retained Host checking family");
+                assert_eq!(
+                    view.nominal_parameters(id).unwrap().len(),
+                    coordinates.formals().len()
+                );
+                assert_eq!(fact.constructors.len(), coordinates.constructors().len());
+            } else {
+                assert!(
+                    view.nominal(id).is_none(),
+                    "opaque checking kind is not materialized"
+                );
+                assert!(view.nominal_kind(id).is_some());
+            }
+        }
         let scalar = view
             .authenticate_scalar_preflights_for_owners(&mut work)
             .unwrap();
@@ -392,7 +403,7 @@ mod tests {
             ))
             .unwrap();
         let mut full = TypeWorkBudget::default();
-        assert!(!crate::foreign::checked_builtins::is_canonical_native_host(
+        assert!(crate::foreign::checked_builtins::is_canonical_native_host(
             original_host,
             &view,
             &mut full,
@@ -400,7 +411,7 @@ mod tests {
         .unwrap());
         let mut fallback = TypeWorkBudget::default();
         assert!(
-            !crate::foreign::checked_builtins::is_canonical_native_host_with_preflights(
+            crate::foreign::checked_builtins::is_canonical_native_host_with_preflights(
                 original_host,
                 &view,
                 &scalar,
@@ -423,19 +434,12 @@ mod tests {
         let operation =
             BuiltinForeignSourceAuthentication::new(&view, &sources, &modules, &context, &mut work)
                 .unwrap();
-        let error = authenticate_with_builtin_operation(
+        authenticate_with_builtin_operation(
             &view, &sources, &modules, &mut work, None, &operation, &scalar, &context,
         )
-        .expect_err("partial legacy projection cannot certify complete checked source inventory");
-        assert_eq!(error.reason(), ValidationReason::Registry);
-        let old = authenticate(&view, &sources, &modules, &mut TypeWorkBudget::default())
-            .expect_err("the old full path has the same incomplete checked-inventory boundary");
-        eprintln!(
-            "SELECTIVE_SOURCE_AUTH old={:?} operation={:?}",
-            old.reason(),
-            error.reason()
-        );
-        assert_eq!(old.reason(), error.reason());
+        .expect("actual retained Host has complete checking metadata in the operation path");
+        authenticate(&view, &sources, &modules, &mut TypeWorkBudget::default())
+            .expect("standalone source authentication accepts the same complete projection");
     }
 
     #[test]

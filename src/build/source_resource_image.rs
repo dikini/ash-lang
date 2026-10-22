@@ -4620,6 +4620,7 @@ pub(super) fn checked_window_static_image_controls(
     canonical.compare_native_expectations(&expected, &mut TypeWorkBudget::default()).unwrap();
     let mut measured = TypeWorkBudget::default();
     canonical.restore_effect(&mut measured).expect("whole checked image independent source/template/Core reconstruction");
+    super::checked_prepared_image::checked_projection_hostile_controls(&canonical);
     let cost = measured.used();
     assert!(cost > 0);
     for prefix in [0, 7] {
@@ -4660,6 +4661,6 @@ pub(super) fn checked_window_static_image_controls(
         }
     }
     let mut old = bytes;
-    old[PRIVATE_MAGIC.len() - 1] = 0x11;
+    old[PRIVATE_MAGIC.len() - 1] = 0x12;
     assert!(PureImage::decode_bytes(&old, &mut TypeWorkBudget::default()).is_err(), "old wire version must not reinterpret the new header layout");
 }

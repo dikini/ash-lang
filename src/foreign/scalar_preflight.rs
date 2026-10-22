@@ -215,6 +215,15 @@ impl ForeignScalarPreflightRole {
     }
 }
 
+/// Canonical checking dependencies only; this iterator authenticates no fact.
+pub(crate) fn checked_inventory_dependencies(module: ModuleId) -> impl Iterator<Item = (crate::types::NominalTypeId, &'static crate::module::ForeignNominalCoordinates, bool)> {
+    (0..crate::module::ForeignCheckedNominalRole::ViolationCause.local() + 1).map(move |local| (
+        crate::types::NominalTypeId::new(module, local),
+        &crate::module::foreign_nominal_coordinates()[local as usize],
+        !matches!(local, 0 | 5),
+    ))
+}
+
 pub(crate) struct CheckedForeignScalarPreflight {
     function: BinderId,
     role: ForeignScalarPreflightRole,

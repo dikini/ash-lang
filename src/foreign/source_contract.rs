@@ -4383,6 +4383,47 @@ pub(crate) fn same_prepared_library_parts(
         charge(work, 1, candidate.span)?;
         return Ok(false);
     }
+    same_prepared_library_parts_abi(original, candidate, work)
+}
+
+/// Full old normalized ABI comparison plus the actual assumption member count.
+/// Caller separately compares the complete checked projection of a freshly
+/// source-prepared library. This comparator is not an authority constructor.
+pub(crate) fn same_prepared_library_parts_after_checked_source(
+    original: &PreparedForeignLibrary,
+    candidate: &PrivatePreparedLibraryParts,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ForeignContractError> {
+    let span = candidate.span;
+    charge(work, 1, span)?;
+    let Some(checked) = original.checked_contract() else { return Ok(false); };
+    let count = candidate.representations.len().checked_add(candidate.constants.len())
+        .and_then(|v|v.checked_add(candidate.sentinels.len()))
+        .and_then(|v|v.checked_add(candidate.owners.len()))
+        .and_then(|v|v.checked_add(candidate.accesses.len()))
+        .and_then(|v|v.checked_add(candidate.symbols.len()))
+        .and_then(|v|v.checked_add(checked.assumptions().len()))
+        .ok_or_else(||failure(ForeignContractReason::WorkExhausted,span))?;
+    // Profile occupies one source-member slot; as in legacy restoration, all
+    // other original member positions must be <= the complete nonprofile count.
+    for member in candidate.representations.iter().map(|v|v.member_index)
+        .chain(candidate.constants.iter().map(|v|v.member_index))
+        .chain(candidate.sentinels.iter().map(|v|v.member_index))
+        .chain(candidate.owners.iter().map(|v|v.member_index))
+        .chain(candidate.accesses.iter().map(|v|v.member_index()))
+        .chain(candidate.symbols.iter().map(|v|v.member_index))
+        .chain(checked.assumptions().iter().map(|v|v.member_index())) {
+        charge(work, 1, span)?;
+        if member > count { return Ok(false); }
+    }
+    same_prepared_library_parts_abi(original,candidate,work)
+}
+
+fn same_prepared_library_parts_abi(
+    original: &PreparedForeignLibrary,
+    candidate: &PrivatePreparedLibraryParts,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ForeignContractError> {
     let span = candidate.span;
     charge(work, 5, span)?;
     if !access_image::same_accesses(&original.accesses, &candidate.accesses, span, work)? {
