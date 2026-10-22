@@ -1,0 +1,40 @@
+{
+  "command": [
+    "timeout",
+    "--kill-after=10s",
+    "180s",
+    "gdb",
+    "-q",
+    "--batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "set breakpoint pending on",
+    "-ex",
+    "source /tmp/ash-checked-byte-windows/operation-proof-candidate/dependent-admission-reason.py",
+    "-ex",
+    "run",
+    "-ex",
+    "python require_hit()",
+    "--args",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 9.165,
+  "inputs_equal": true,
+  "count": 593,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "30a3d91aeb095743e07819c6acecca17f33e4080c882dc0366541ee015cded3f",
+  "log_sha256": "1bc7dc78813adf46b4189d96a38010b9bf207cba4893e1ac14f604a8f42b2962",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

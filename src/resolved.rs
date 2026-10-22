@@ -19237,6 +19237,7 @@ pub(crate) struct ScalarPreflightOwnerAuthentication<'registry> {
 }
 
 impl<'registry> ScalarPreflightOwnerAuthentication<'registry> {
+    pub(crate) fn registry(&self) -> &'registry ResolvedRegistry { self.registry }
     pub(crate) fn into_registry(self) -> &'registry ResolvedRegistry {
         self.registry
     }
