@@ -383,3 +383,10 @@ first expected-positive checked preparation/admission gate has not run; root's
 F2 pipeline currently owns Cargo. No inspected code exclusion is reported as a
 red test. Whole F3 and its remaining generated-host/runtime/full-gate obligations
 stay open.
+
+The byte/window checkpoint's [test-first evidence](evidence/checked-byte-windows/test-first/README.md)
+records genuine initialized State and view/extent contract preparation, the
+missing checked builtin export, and a separately isolated checked Bytes-owner
+binding refusal. No product repair or connected four-primitive positive is yet
+claimed; source, body-free metadata, Core, static images and hostile/budget gates
+remain the assigned delivery work.
