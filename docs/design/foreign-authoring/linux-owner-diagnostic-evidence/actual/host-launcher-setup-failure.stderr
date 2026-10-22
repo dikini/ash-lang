@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/tmp/execute-owner-diagnostic-host.py", line 21, in <module>
+    assert pin(a['path'])=={k:a[k] for k in ['path','size','sha256']}
+           ~~~^^^^^^^^^^^
+  File "/tmp/execute-owner-diagnostic-host.py", line 6, in pin
+    with p.open('rb') as f:
+         ^^^^^^
+AttributeError: 'str' object has no attribute 'open'

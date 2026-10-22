@@ -1,0 +1,96 @@
+{
+  "scope": "One assigned sandbox invocation, retained refusal",
+  "execution_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/execution-manifest.json",
+    "size": 2852,
+    "sha256": "b257a33b93b9b89e5a4d820ef68cec0fdb9e0daf4cb5cb435f07e0540cb002b0"
+  },
+  "execution": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-execution.json",
+    "size": 6194,
+    "sha256": "65f7df12ce654684ad8d705b36b02213c0ff816120b7e6723a29fbff2248f507"
+  },
+  "stdout": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stdout.json",
+    "size": 3173,
+    "sha256": "271ae62e980700879479f10e4f2ff00288278dabc8b71f40fd73753c6fefb2d3"
+  },
+  "stderr": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stderr.log",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "case_result": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011/result.json",
+    "size": 3039,
+    "sha256": "82108e918d6dd7745818c0d49406bb056ab39a829c2b029a04454193a18b4089"
+  },
+  "lifecycle": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011/lifecycle.json",
+    "size": 241,
+    "sha256": "6dd7793e8430f7564acde8112c50d7a22b44377aaa5517953c703d4d747c6423"
+  },
+  "harness_exit": 78,
+  "child_exit": 125,
+  "child_output": "trusted child setup/exec refusal errno=13\n",
+  "child_reaped": true,
+  "child_failure": null,
+  "diagnostic_success": false,
+  "nullable_refusal_observed": false,
+  "sealed_object": {
+    "create_flags": 19,
+    "mode_octal": "0o500",
+    "seals": 15,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65",
+    "size_bytes": 71022184
+  },
+  "negative_count": 6,
+  "negatives": {
+    "changed_image": {
+      "child_created": false,
+      "reason": "final sealed image mismatch"
+    },
+    "changed_receipt": {
+      "child_created": false,
+      "reason": "receipt digest mismatch"
+    },
+    "image_sha256": {
+      "child_created": false,
+      "reason": "diagnostic approval mismatch"
+    },
+    "missing_approval": {
+      "child_created": false,
+      "reason": "exact diagnostic approval absent"
+    },
+    "receipt_sha256": {
+      "child_created": false,
+      "reason": "diagnostic approval mismatch"
+    },
+    "unsupported_receipt": {
+      "child_created": false,
+      "reason": "receipt digest mismatch"
+    }
+  },
+  "sealed_mutation_refusals": {
+    "grow": {
+      "errno": 1,
+      "refused": true
+    },
+    "shrink": {
+      "errno": 1,
+      "refused": true
+    },
+    "write": {
+      "errno": 1,
+      "refused": true
+    }
+  },
+  "all_pins_before_after_equal": true,
+  "temporary_candidate_removed": true,
+  "remaining_case_files": [
+    "lifecycle.json",
+    "result.json"
+  ],
+  "no_retry_or_host_fallback": true,
+  "claim_limit": "Setup/exec refusal errno13; no successful image entry or native owner result established. All actual records preserved. No AD/strict checked/fullF2 acceptance."
+}

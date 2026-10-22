@@ -1,0 +1,31 @@
+--- /tmp/execute-owner-diagnostic-host.py
++++ /tmp/ash-owner-launcher-repair/execute-host.py
+@@ -1,7 +1,8 @@
+ from pathlib import Path
+-import os,stat,json,hashlib,subprocess,time
++import os,stat,json,hashlib,time,sys
+ R=Path('/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic')
+ def pin(p):
++ p=Path(p)
+  h=hashlib.sha256();n=0
+  with p.open('rb') as f:
+   while b:=f.read(65536):h.update(b);n+=len(b)
+@@ -24,6 +25,18 @@
+ before=[pin(Path(a['path'])) for a in t['pins']];assert before==t['pins']
+ assert pin(R/'root-approval.json')['sha256']=='24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd'
+ assert pin(Path('/usr/bin/python3.14'))==t['interpreter']
++historical_anchors={
++ R/'host-tool-approval-rejection.json':'3b6dac7764dfa20585767d1690c9195a3e8fb48aca8e87c2bb9a93c9425b2ba3',
++ R/'host-launcher-setup-failure.json':'f902c585c3ac57349b3e80e4afc4a5cb1989e9da0d1d168cdae3757c80a89114',
++ R/'host-launcher-setup-failure.stderr':'144a437303c58f9cdeb8c97829f99329ae358d4b4a4d1797a67a618e9b5191fb'}
++for path,expected in historical_anchors.items():assert pin(path)['sha256']==expected
++failed_setup=json.loads((R/'host-launcher-setup-failure.json').read_text())
++assert pin(failed_setup['launcher']['path'])==failed_setup['launcher']
++if sys.argv[1:]==['--precheck-only']:
++ print(json.dumps({'status':'PRECHECK_ONLY_PASS_NO_CHILD','artifact_pins':before,'interpreter':pin('/usr/bin/python3.14'),'sandbox_inventory':sandbox_inventory,'sandbox_record_count':len(sandbox_rows),'sandbox_provenance_pins_equal':True,'historical_failures_equal':True,'private_directory_identity_equal':True,'readonly_controls_equal':True,'host_outputs_absent':True,'subprocess_imported':'subprocess' in sys.modules,'harness_imported':'diagnostic' in sys.modules,'child_created':False},indent=2))
++ raise SystemExit(0)
++if sys.argv[1:]:raise SystemExit('unknown operator option')
++import subprocess
+ record={'scope':'One separately root-assigned normal-tool-escalated trusted owner diagnostic; sandbox refusal preserved; no retry','launch':pin(L),'before':before,'interpreter_before':pin(Path('/usr/bin/python3.14')),'argv':t['argv'],'cwd':t['cwd'],'environment':t['environment'],'directory_identity':t['directory'],'started_unix':time.time()}
+ record['sandbox_inventory_before']=sandbox_inventory
+ p=R/'host-execution.json'

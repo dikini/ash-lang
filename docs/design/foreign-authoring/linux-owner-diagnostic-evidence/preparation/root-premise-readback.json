@@ -1,0 +1,14 @@
+{
+  "kind": "ROOT_RESIDUAL_PREMISE_APPLICABILITY_READBACK_NOT_EXECUTION_APPROVAL",
+  "source": "Root task message after independent header+closure delivery clearance",
+  "exact_premise": {
+    "path": "/tmp/ash-owner-header-closure-delivery/payload/docs/design/foreign-authoring/linux-owner-header-closure-evidence/ownerful-premise.proposed.json",
+    "size": 23612,
+    "sha256": "9e4ca3f8f46d61e8a8e8c5a0508d10dfd5cf5c6948ceacc61ade558e8aee882e"
+  },
+  "exact_image_sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65",
+  "exact_receipt_sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69",
+  "ownerful_assumptions_scope": "Root accepts reviewed native/runtime/build/allocator/C-locale/loading/startup/error/unwind/shutdown/host-loss premises as TRUSTED ASSUMPTIONS for ONE bounded existing-profile owner diagnostic only.",
+  "excluded": "Not empirical proof, ownerful AD, strict checked execution approval, per-image/harness/policy/context activation approval or execution assignment.",
+  "authority": "Final exact independent root approval and separate command assignment are still absent; this record cannot be passed as approval."
+}

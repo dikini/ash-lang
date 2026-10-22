@@ -1,0 +1,661 @@
+{
+  "originals": [
+    {
+      "retained_path": "actual/actual-handoff.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/actual-handoff.json",
+        "size": 3376,
+        "sha256": "1114d83eabdc2ed5bcaf517d56a9e738ab5f354293f794a11864c2d9c9646844"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/case-p__lm011/lifecycle.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011/lifecycle.json",
+        "size": 241,
+        "sha256": "6dd7793e8430f7564acde8112c50d7a22b44377aaa5517953c703d4d747c6423"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/case-p__lm011/result.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011/result.json",
+        "size": 3039,
+        "sha256": "82108e918d6dd7745818c0d49406bb056ab39a829c2b029a04454193a18b4089"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/case-w3hn5tw1/lifecycle.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-w3hn5tw1/lifecycle.json",
+        "size": 222,
+        "sha256": "9208ce70aa5066a1d3c3ea300e3d9c9d22a6f69073c1144f0e013a8161b8adc3"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/case-w3hn5tw1/result.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-w3hn5tw1/result.json",
+        "size": 3019,
+        "sha256": "c67d22519f79513080ebb67b9ced9669515fb0bbce27d5e8c08a570fd672b666"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/diagnostic.py",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/diagnostic.py",
+        "size": 22555,
+        "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/execution-manifest.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/execution-manifest.json",
+        "size": 2852,
+        "sha256": "b257a33b93b9b89e5a4d820ef68cec0fdb9e0daf4cb5cb435f07e0540cb002b0"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-approval-request-manifest.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-approval-request-manifest.json",
+        "size": 891,
+        "sha256": "161f750ef3992b19c527ac45638309b2ea3db749ea172ce1d1a656d1f5edce30"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-execution.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-execution.json",
+        "size": 6843,
+        "sha256": "b0c599cf5225facd1b208aac70051e360f877320ed3caf0237d12f81e35433d5"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-launch-proposal.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launch-proposal.json",
+        "size": 5607,
+        "sha256": "57fff96d43acbefdbe95c4a6fe27a0478e9d944e62d274f1f8f441599146e449"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-launcher-setup-failure.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launcher-setup-failure.json",
+        "size": 1712,
+        "sha256": "f902c585c3ac57349b3e80e4afc4a5cb1989e9da0d1d168cdae3757c80a89114"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-launcher-setup-failure.stderr",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launcher-setup-failure.stderr",
+        "size": 360,
+        "sha256": "144a437303c58f9cdeb8c97829f99329ae358d4b4a4d1797a67a618e9b5191fb"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-preparation-readback.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-preparation-readback.json",
+        "size": 696,
+        "sha256": "baa9dc9e1a16016d333c8fa9b3eebf41d4bf08b7bf48ca260a52684d28145086"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-stderr.log",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-stdout.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stdout.json",
+        "size": 3153,
+        "sha256": "a777be64e6fd858c9e81ec5a0afca2e457beef720b57c767166f080c1888cf1f"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-tool-approval-rejection.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-tool-approval-rejection.json",
+        "size": 1949,
+        "sha256": "3b6dac7764dfa20585767d1690c9195a3e8fb48aca8e87c2bb9a93c9425b2ba3"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/launch-proposal.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/launch-proposal.json",
+        "size": 3776,
+        "sha256": "a165be2f6fc49885753fe8f7c5c95d2561bf37d690eacc8014ffb01227303eea"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/policy.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/policy.json",
+        "size": 3172,
+        "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/root-approval.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json",
+        "size": 1495,
+        "sha256": "24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/sandbox-execution.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-execution.json",
+        "size": 6194,
+        "sha256": "65f7df12ce654684ad8d705b36b02213c0ff816120b7e6723a29fbff2248f507"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/sandbox-stderr.log",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stderr.log",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/sandbox-stdout.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stdout.json",
+        "size": 3173,
+        "sha256": "271ae62e980700879479f10e4f2ff00288278dabc8b71f40fd73753c6fefb2d3"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-execution-manifest.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-execution-manifest.json",
+        "size": 7036,
+        "sha256": "c327f6cd2e07bf1d3bd2107e143c557e80e9f31bcc9e386a4f37f208547a0ba1"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "actual/host-actual-handoff.json",
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-actual-handoff.json",
+        "size": 3704,
+        "sha256": "190642b00a55b3034106901cd277c1085f482fc83a2ff4729601e82e0680f6e7"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/README.md",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/README.md",
+        "size": 4323,
+        "sha256": "be380afa9375d7d92f2a78dd22b0632500b4a3b67caf0c5c190c90f86ee1b2aa"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/diagnostic.py",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/diagnostic.py",
+        "size": 22555,
+        "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/expected-rendering.json",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/expected-rendering.json",
+        "size": 2792,
+        "sha256": "6c82aa4a7a196ea1a7b95ec268c50fb80fdeb2a74616f79d00139c3b062c63e6"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/policy.json",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/policy.json",
+        "size": 3172,
+        "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/proposal.json",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/proposal.json",
+        "size": 6269,
+        "sha256": "e74019623651729339a04b32768499ff22bcd60cad5252bc1c3c96d2167bd272"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/root-premise-readback.json",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/root-premise-readback.json",
+        "size": 1185,
+        "sha256": "5766090504c86a0e6bc9c0cccd44cf2bbd2a2152832fb815dfdd8d2a17f6cafe"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/run_safe_tests.py",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/run_safe_tests.py",
+        "size": 994,
+        "sha256": "ff415bd0709b0e32266044667d1505a975c1003bdc324ee0937a7faf08b42926"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/safe-command.json",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/safe-command.json",
+        "size": 2081,
+        "sha256": "033aba34cd2256906bcc4352c870685b4dfb0410cf06b042e685e1403ea5aa33"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/safe-receipt.json",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/safe-receipt.json",
+        "size": 3964,
+        "sha256": "7d76b750c3ffad82f2ad6c607b741b3d3936a4415e05c45e91ac7ccfb7c54795"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/safe.stderr",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/safe.stderr",
+        "size": 2131,
+        "sha256": "15024b4cd5bec96684ca3aa372c3647e5a31498a0d4b3618bca1a0d31f5bc6e1"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/safe.stdout",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/safe.stdout",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/scalar-to-owner.patch",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/scalar-to-owner.patch",
+        "size": 25424,
+        "sha256": "e85ae6ddfb9ebed64f1516bdd489eedc0a294c80bc61a45d98608faabfaea23d"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/test_diagnostic.py",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/test_diagnostic.py",
+        "size": 11826,
+        "sha256": "7afdb884a5412f6bbedfe30eca489741258fbd413e883838feeeccfb6dec6113"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/manifest.json",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/manifest.json",
+        "size": 2036,
+        "sha256": "f24d47c2c7ec4921b29a4cbce59a996b72811a83ef7c6b03a5fb06405e4c8b5e"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "preparation/handoff.json",
+      "source": {
+        "path": "/tmp/ash-owner-diagnostic-preparation/handoff.json",
+        "size": 1508,
+        "sha256": "0fde5708a99eeeb36071a4bb417422ab16be492240969ef4b9979fd638dbe84e"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/execute-host.py",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/execute-host.py",
+        "size": 4855,
+        "sha256": "e52be075e7b3a92b5492aa5dc1644c9718e3be27364477f94d8cadb5b5fe40ef"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/launcher.patch",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/launcher.patch",
+        "size": 2376,
+        "sha256": "d376c9fa94b2da430225a301f2300149736a7a99aa806b1398dba1439868c931"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/precheck.stderr",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/precheck.stderr",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/precheck.stdout",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/precheck.stdout",
+        "size": 2886,
+        "sha256": "feef90e27b3ca2cc9b24ccf141495c0d234f484989f9c2b278b086235de11b59"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/receipt.json",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/receipt.json",
+        "size": 2166,
+        "sha256": "ecf401fa4855fe0d5f926c62fada2df9da7e777b02ac64dd5b73c9aa960f00e3"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/test.stderr",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/test.stderr",
+        "size": 288,
+        "sha256": "cf27731c1dcf523a05efe34ddcbdd88668bb7ca2be032c149eeb4fa3978d7185"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/test.stdout",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/test.stdout",
+        "size": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/test_pin.py",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/test_pin.py",
+        "size": 1043,
+        "sha256": "10ed86e3131014f8145d05317bee647be2530c62302cb4fb9ebc345b51a980cb"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/manifest.json",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/manifest.json",
+        "size": 1254,
+        "sha256": "b30d468689e348eb6e266b61a22f68053fac10109ccbdfc5d4287594f7be54d6"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "launcher-repair/handoff.json",
+      "source": {
+        "path": "/tmp/ash-owner-launcher-repair/handoff.json",
+        "size": 835,
+        "sha256": "5d444cd1192285409ef077ed5491e558c6f0f796d8f4d690811b74ddf4d75f8e"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "operators/failed-host-launcher.py",
+      "source": {
+        "path": "/tmp/execute-owner-diagnostic-host.py",
+        "size": 3640,
+        "sha256": "cdefa2dce925972f08b5de94c15a2d32b3593ff389aefa5c3fd228b3ea93e750"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    },
+    {
+      "retained_path": "operators/sandbox-launcher.py",
+      "source": {
+        "path": "/tmp/execute-owner-diagnostic-sandbox.py",
+        "size": 2768,
+        "sha256": "fabb29fa46c7249a23ff55da5c55e6eadbeea07bb9b9f0da33edbd7803b0dde1"
+      },
+      "retention": "EXACT_ORIGINAL_BYTES"
+    }
+  ],
+  "exact_original_count": 51,
+  "copied_original_bytes": 197436,
+  "external_omissions": [
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+        "size": 2941,
+        "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+        "size": 71022184,
+        "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-manifest.json",
+        "size": 48307,
+        "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+        "size": 1946,
+        "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/whole-static.map",
+        "size": 100345205,
+        "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+        "size": 814765,
+        "sha256": "a17ca66398d6cb9d4f46d2cf2fa82b0197682b8b5c76dd9624995c2733c1160b"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/docs/design/foreign-authoring/linux-inprocess-probe/generated-ash/diagnostic/diagnostic.py",
+        "size": 21331,
+        "sha256": "7e16e3104ed86acd2eb162bf054d3dce7df51300a43a67145ed9e6884cf6c77f"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/docs/design/foreign-authoring/linux-inprocess-probe/generated-ash/diagnostic/policy.json",
+        "size": 2302,
+        "sha256": "b39884904664be89ca29f756b8bf6f39558e81603a3a3a45d2901676795f8976"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/docs/design/foreign-authoring/linux-inprocess-probe/generated-ash/diagnostic/test_diagnostic.py",
+        "size": 8140,
+        "sha256": "7b7e746bd9cd2ce0f2f6dcee89d48d99afe9effa3b48ee91351f04387d950424"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/src/build/mod.rs",
+        "size": 19920,
+        "sha256": "502f83463386316e3c7672460def1f3101df6e130f3d1122be7fcd917ab5626b"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/src/eval/source_resource_phases.rs",
+        "size": 97345,
+        "sha256": "2aa60f11787c8cdb4daf39ea91b7ef3cb727a18f35ea0b1f2002c5ad5a89cfe7"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/src/eval/value.rs",
+        "size": 15814,
+        "sha256": "771acc38c6c140486d01f2a3eca1605bbd7d8c1221fa78b7d49303d10602d07b"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/tests/source_resource_execution.rs",
+        "size": 117943,
+        "sha256": "6ab082de7dc04e9ec35942f78e6b4c896c61603085bdc6b3d46cdf8073d9a9d4"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+        "size": 12369,
+        "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+        "size": 4399,
+        "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+        "size": 17310,
+        "sha256": "4fff8df2dfb0ac63ec78179b74bba872f3e1b317a2c86dc46659e5bd6485df26"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-generation-stage2/experiment/entry.ash",
+        "size": 148,
+        "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-generation-stage2/experiment/owner.ash",
+        "size": 2671,
+        "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+        "size": 2248,
+        "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+        "size": 2809,
+        "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-header-closure-delivery/payload/docs/design/foreign-authoring/linux-owner-header-closure-evidence/ownerful-premise.proposed.json",
+        "size": 23612,
+        "sha256": "9e4ca3f8f46d61e8a8e8c5a0508d10dfd5cf5c6948ceacc61ade558e8aee882e"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+        "size": 6923,
+        "sha256": "7e95c8961f0786037353b303c5501a562f45c874dcf883f59debe536e591dd8e"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/usr/bin/python3.14",
+        "size": 7477160,
+        "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    },
+    {
+      "source": {
+        "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+        "size": 6238972,
+        "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+      },
+      "qualification": "Exact external image/receipt/source/runtime/input. Bytes omitted; no binaries/maps/cache or system source vendor copy. Repository-only reconstruction depends on separately retained evidence and unavailable external inputs."
+    }
+  ],
+  "inventory_counts": "Actual host inventory22 rows includes unchanged sandbox/history records. Nine-row sandbox inventory and thirteen-row preparation/eight-row repair inventories overlap copied records; do not sum as extra native observations.",
+  "reproduction_limit": "Original absolute paths/status labels/approvals are immutable historical bytes. They are neither portable commands nor replay/startup authority. Manual approval context is experimental, not protected F6-store enforcement. Source/header/static antecedents are retained in earlier evidence deliveries."
+}

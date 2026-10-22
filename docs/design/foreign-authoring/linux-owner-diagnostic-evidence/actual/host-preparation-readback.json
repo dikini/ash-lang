@@ -1,0 +1,15 @@
+{
+  "status": "PREPARATION_ONLY_NO_HOST_LAUNCH",
+  "proposal": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launch-proposal.json",
+    "size": 5607,
+    "sha256": "57fff96d43acbefdbe95c4a6fe27a0478e9d944e62d274f1f8f441599146e449"
+  },
+  "all_eight_artifact_pins_equal": true,
+  "interpreter_equal": true,
+  "directory_equal": true,
+  "all_sandbox_inventory_records_equal": true,
+  "host_outputs_absent": true,
+  "argv_cwd_environment_controls_unchanged": true,
+  "expected_existing_case": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011"
+}

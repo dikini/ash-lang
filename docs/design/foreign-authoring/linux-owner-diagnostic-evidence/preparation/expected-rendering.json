@@ -1,0 +1,51 @@
+{
+  "status": "SOURCE_DERIVED_NOT_EXECUTED",
+  "source_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "inputs": [
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/owner.ash",
+      "size": 2671,
+      "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/entry.ash",
+      "size": 148,
+      "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/src/build/mod.rs",
+      "size": 19920,
+      "sha256": "502f83463386316e3c7672460def1f3101df6e130f3d1122be7fcd917ab5626b"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/src/eval/value.rs",
+      "size": 15814,
+      "sha256": "771acc38c6c140486d01f2a3eca1605bbd7d8c1221fa78b7d49303d10602d07b"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/src/eval/source_resource_phases.rs",
+      "size": 97345,
+      "sha256": "2aa60f11787c8cdb4daf39ea91b7ef3cb727a18f35ea0b1f2002c5ad5a89cfe7"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/tests/source_resource_execution.rs",
+      "size": 117943,
+      "sha256": "6ab082de7dc04e9ec35942f78e6b4c896c61603085bdc6b3d46cdf8073d9a9d4"
+    }
+  ],
+  "derivation": [
+    "Entry requests size 8 and reads the stored source data, not native memory. Producer size == 9 refusal branch is false for this entry.",
+    "Nonnull malloc yields Acquired(state,size), read handler resumes data 8, trusted declared void Free reports Consumed, resource scope projects Completed(8,Closed).",
+    "Nullable malloc null yields Refused unit and resource scope projects NotAcquired unit; renderer unit is () and constructor tuple payload uses comma-space.",
+    "ObservedValue renderer uses constructor spelling plus parentheses only when payload exists, flattens tuple constructor payloads with comma-space. PrivateProgramOutput delegates to observed value; generated main println appends newline.",
+    "Existing selected source_resource_execution tests include exact Completed(8, Closed) and NotAcquired(()) spellings; these are source evidence, not execution of this image."
+  ],
+  "acquired_utf8": "Completed(8, Closed)\n",
+  "nullable_utf8": "NotAcquired(())\n",
+  "meaning": "Only acquired exact output with status0/reaped/no harness failure counts intended diagnostic success. Nullable output is explicit non-acquired observation, not success. No destructor/native truth, native memory-read or checkedK claim."
+}

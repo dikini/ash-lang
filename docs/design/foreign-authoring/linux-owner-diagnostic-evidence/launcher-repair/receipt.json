@@ -1,0 +1,62 @@
+{
+  "status": "REPAIR_PREFLIGHT_ONLY_PASS",
+  "launcher": {
+    "path": "/tmp/ash-owner-launcher-repair/execute-host.py",
+    "size": 4855,
+    "sha256": "e52be075e7b3a92b5492aa5dc1644c9718e3be27364477f94d8cadb5b5fe40ef"
+  },
+  "launcher_before_sha_as_printed_in_prepare_call": "e52be075e7b3a92b5492aa5dc1644c9718e3be27364477f94d8cadb5b5fe40ef",
+  "after_matches_prepare_hash": true,
+  "diff": {
+    "path": "/tmp/ash-owner-launcher-repair/launcher.patch",
+    "size": 2376,
+    "sha256": "d376c9fa94b2da430225a301f2300149736a7a99aa806b1398dba1439868c931"
+  },
+  "tests": {
+    "path": "/tmp/ash-owner-launcher-repair/test_pin.py",
+    "size": 1043,
+    "sha256": "10ed86e3131014f8145d05317bee647be2530c62302cb4fb9ebc345b51a980cb"
+  },
+  "test_command": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/tmp/ash-owner-launcher-repair/test_pin.py"
+  ],
+  "test_exit": 0,
+  "test_methods": 2,
+  "test_stdout": {
+    "path": "/tmp/ash-owner-launcher-repair/test.stdout",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "test_stderr": {
+    "path": "/tmp/ash-owner-launcher-repair/test.stderr",
+    "size": 288,
+    "sha256": "cf27731c1dcf523a05efe34ddcbdd88668bb7ca2be032c149eeb4fa3978d7185"
+  },
+  "precheck_command": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/tmp/ash-owner-launcher-repair/execute-host.py",
+    "--precheck-only"
+  ],
+  "precheck_exit": 0,
+  "precheck_stdout": {
+    "path": "/tmp/ash-owner-launcher-repair/precheck.stdout",
+    "size": 2886,
+    "sha256": "feef90e27b3ca2cc9b24ccf141495c0d234f484989f9c2b278b086235de11b59"
+  },
+  "precheck_stderr": {
+    "path": "/tmp/ash-owner-launcher-repair/precheck.stderr",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "subprocess_or_harness_import": false,
+  "native_or_candidate_execution": false,
+  "all_previously_frozen_artifacts_and_history_unchanged": true,
+  "human_authorization": "Root relayed direct human approval for one host run and follow-up native runs. This receipt does not assign a native command; root exact assignment remains separate."
+}

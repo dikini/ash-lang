@@ -1,0 +1,11 @@
+{
+  "child_created": true,
+  "elapsed_seconds": 0.07195,
+  "exit_code": 0,
+  "failure": null,
+  "output_bytes": 21,
+  "output_utf8": "Completed(8, Closed)\n",
+  "pid": 730792,
+  "reaped": true,
+  "stage": "child-reaped"
+}

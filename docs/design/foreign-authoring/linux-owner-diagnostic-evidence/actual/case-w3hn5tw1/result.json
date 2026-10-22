@@ -1,0 +1,86 @@
+{
+  "approval_sha256": "24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd",
+  "architecture_accepted": false,
+  "candidate_path_changed_after_pin": true,
+  "child": {
+    "child_created": true,
+    "elapsed_seconds": 0.07195,
+    "exit_code": 0,
+    "failure": null,
+    "output_bytes": 21,
+    "output_utf8": "Completed(8, Closed)\n",
+    "pid": 730792,
+    "reaped": true,
+    "stage": "child-reaped"
+  },
+  "child_created": true,
+  "diagnostic_success": true,
+  "elf": {
+    "machine": "EM_X86_64",
+    "program_headers": 12,
+    "pt_dynamic": false,
+    "pt_interp": false,
+    "runtime_loading_excluded": false,
+    "type": "ET_EXEC"
+  },
+  "harness_sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a",
+  "kind": "trusted-existing-profile-owner-diagnostic",
+  "nullable_refusal_observed": false,
+  "policy_sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5",
+  "pre_execution_negatives": {
+    "changed_image": {
+      "child_created": false,
+      "reason": "final sealed image mismatch"
+    },
+    "changed_receipt": {
+      "child_created": false,
+      "reason": "receipt digest mismatch"
+    },
+    "image_sha256": {
+      "child_created": false,
+      "reason": "diagnostic approval mismatch"
+    },
+    "missing_approval": {
+      "child_created": false,
+      "reason": "exact diagnostic approval absent"
+    },
+    "receipt_sha256": {
+      "child_created": false,
+      "reason": "diagnostic approval mismatch"
+    },
+    "unsupported_receipt": {
+      "child_created": false,
+      "reason": "receipt digest mismatch"
+    }
+  },
+  "receipt_sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69",
+  "sealed_mutation_refusals": {
+    "grow": {
+      "errno": 1,
+      "refused": true
+    },
+    "shrink": {
+      "errno": 1,
+      "refused": true
+    },
+    "write": {
+      "errno": 1,
+      "refused": true
+    }
+  },
+  "sealed_object": {
+    "create_flags": 19,
+    "mode_octal": "0o500",
+    "seals": 15,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65",
+    "size_bytes": 71022184
+  },
+  "strict_profile_success": false,
+  "trusted_runtime_loading_premise": [
+    "Exact trusted evaluator/bridge/payload/facts/libc malloc/free owner baseline under host authority; not checked O/K/group execution.",
+    "Native allocation validity/compatible exact free once/synchronous truthful consuming return and runtime memory integrity trusted. Source stored8 is not a native read.",
+    "Known retained loader/localization/gconv and broader runtime-loading uncertainty explicitly accepted for diagnostic only; not strict no-loading success.",
+    "Startup/error/panic/unwind/destruction/host-loss behavior and ten missing link temporaries remain stated trust limits; process report/reaping does not prove native free or source completion on faults.",
+    "Kernel/Python/operator/fd/syscall correctness trusted; no process/credential/group/filesystem/syscall isolation or policy changes."
+  ]
+}

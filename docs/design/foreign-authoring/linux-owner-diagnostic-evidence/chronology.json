@@ -1,0 +1,69 @@
+{
+  "scope": "One successful native host diagnostic after preserved refusal/rejection/pre-spawn failure; no repeated successful/native run hidden",
+  "events": [
+    {
+      "order": 1,
+      "event": "Preparation and residual-premise applicability",
+      "record": "preparation/root-premise-readback.json",
+      "authority": "Root accepted trusted assumptions for one bounded legacy diagnostic, not ownerful AD or activation."
+    },
+    {
+      "order": 2,
+      "event": "Independent exact root approval and sandbox assignment",
+      "record": "actual/root-approval.json",
+      "launch": "actual/launch-proposal.json",
+      "authority": "Manual experimental approval for exact image/receipt/premise/harness/policy/purpose/context/mode/bounds; not a provisioned protected F6 store."
+    },
+    {
+      "order": 3,
+      "event": "Actual sandbox refusal",
+      "record": "actual/sandbox-execution.json",
+      "result": "actual/case-p__lm011/result.json",
+      "outcome": "Harness 78, child 125, setup/exec errno 13, reaped. No successful image entry or owner result."
+    },
+    {
+      "order": 4,
+      "event": "Separate host proposal, then automatic tool rejection",
+      "record": "actual/host-tool-approval-rejection.json",
+      "proposal": "actual/host-launch-proposal.json",
+      "outcome": "Escalation rejected before wrapper process creation; transcript did not yet provide trusted human approval for that exact host launch. No workaround or native execution."
+    },
+    {
+      "order": 5,
+      "event": "Direct human approval relayed by root",
+      "source": "Parent chat human answer, relayed in root assignment",
+      "quoted_answer": "Approve one host run",
+      "qualification": "Narrative authority readback; no fabricated raw chat export or cryptographic identity claim. Exact proposal/image/bounds and host authority were the question."
+    },
+    {
+      "order": 6,
+      "event": "Approved tool started operator, which failed before diagnostic spawn",
+      "record": "actual/host-launcher-setup-failure.json",
+      "stderr": "actual/host-launcher-setup-failure.stderr",
+      "source": "operators/failed-host-launcher.py",
+      "outcome": "Path/string helper AttributeError before Popen/host outputs/new case; no native outcome."
+    },
+    {
+      "order": 7,
+      "event": "Narrow operator repair and independent no-spawn precheck",
+      "record": "launcher-repair/receipt.json",
+      "diff": "launcher-repair/launcher.patch",
+      "outcome": "Two benign methods and default-sandbox --precheck-only passed; subprocess/harness not imported and no child created."
+    },
+    {
+      "order": 8,
+      "event": "Human follow-up authorization relayed by root",
+      "source": "Parent chat human instruction, relayed in root assignment",
+      "quoted_instruction": "the followup native runs are approved",
+      "qualification": "Covered necessary reviewed bounded follow-ups, not changed policy/credentials/unreviewed artifacts or unrestricted native execution."
+    },
+    {
+      "order": 9,
+      "event": "Fresh root assignment and normal-tool-approved actual host invocation",
+      "record": "actual/host-execution.json",
+      "result": "actual/case-w3hn5tw1/result.json",
+      "launcher": "launcher-repair/execute-host.py",
+      "outcome": "Harness 0, child 0/reaped, exact 21-byte Completed(8, Closed) newline; all pins and sandbox records before/after equal, candidate removed."
+    }
+  ]
+}
