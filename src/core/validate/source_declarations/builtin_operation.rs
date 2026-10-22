@@ -3,6 +3,70 @@
 use super::super::SourceResourceValidationContext;
 use super::*;
 
+/// A single restore's immutable resident-byte predicate, not registry authority.
+/// Borrowing the frozen arena prevents source replacement while it is in use.
+pub(crate) struct RestoreBuiltinForeignBytes<'source> {
+    sources: HashMap<ModuleId, (&'source SourceFile, Span)>,
+}
+
+impl<'source> RestoreBuiltinForeignBytes<'source> {
+    pub(crate) fn new(
+        sources: &'source [SourceFile],
+        modules: &[ModuleId],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        charge(work, 1)?;
+        if sources.len() != modules.len() {
+            return Err(registry_error());
+        }
+        let mut records = HashMap::new();
+        for (source, module) in sources.iter().zip(modules) {
+            charge(work, 1)?;
+            if !module.is_builtin_foreign() {
+                continue;
+            }
+            let span = Self::full_span(source, work)?;
+            charge(work, source.text().len())?;
+            if source.text() != crate::module::foreign_builtin_source_text() {
+                return Err(registry_error());
+            }
+            charge(work, 2)?;
+            records.try_reserve(1).map_err(|_| resource())?;
+            if records.insert(*module, (source, span)).is_some() {
+                return Err(registry_error());
+            }
+        }
+        // No partial or failed byte coverage escapes this constructor.
+        charge(work, 1)?;
+        Ok(Self { sources: records })
+    }
+
+    fn full_span(source: &SourceFile, work: &mut TypeWorkBudget) -> Result<Span, ValidationError> {
+        charge(work, 2)?;
+        let end = u32::try_from(source.text().len()).map_err(|_| resource())?;
+        let range = crate::source::ByteRange::new(0, end).map_err(|_| registry_error())?;
+        source.span(range).map_err(|_| registry_error())
+    }
+
+    fn covers(
+        &self,
+        module: ModuleId,
+        source: &SourceFile,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        charge(work, 4)?;
+        let Some((original, span)) = self.sources.get(&module) else {
+            return Ok(false);
+        };
+        if original.id() != source.id() || !std::ptr::eq(*original, source)
+            || *span != Self::full_span(source, work)?
+        {
+            return Err(registry_error());
+        }
+        Ok(true)
+    }
+}
+
 pub(in crate::core::validate) struct BuiltinForeignSourceAuthentication<'operation, 'source> {
     registry: &'operation ResolvedRegistry,
     sources: &'operation HashMap<SourceId, &'source SourceFile>,
@@ -15,6 +79,17 @@ impl<'operation, 'source> BuiltinForeignSourceAuthentication<'operation, 'source
         sources: &'operation HashMap<SourceId, &'source SourceFile>,
         modules: &'operation HashMap<ModuleId, SourceId>,
         context: &'operation SourceResourceValidationContext,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        Self::new_with_restore_bytes(registry, sources, modules, context, None, work)
+    }
+
+    pub(in crate::core::validate) fn new_with_restore_bytes(
+        registry: &'operation ResolvedRegistry,
+        sources: &'operation HashMap<SourceId, &'source SourceFile>,
+        modules: &'operation HashMap<ModuleId, SourceId>,
+        context: &'operation SourceResourceValidationContext,
+        restored: Option<&RestoreBuiltinForeignBytes<'_>>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ValidationError> {
         charge(work, 1)?;
@@ -34,9 +109,13 @@ impl<'operation, 'source> BuiltinForeignSourceAuthentication<'operation, 'source
             if source.id() != *id {
                 return Err(registry_error());
             }
-            charge(work, source.text().len())?;
-            if source.text() != crate::module::foreign_builtin_source_text() {
-                return Err(registry_error());
+            let covered = restored.map(|bytes| bytes.covers(*module, source, work))
+                .transpose()?.unwrap_or(false);
+            if !covered {
+                charge(work, source.text().len())?;
+                if source.text() != crate::module::foreign_builtin_source_text() {
+                    return Err(registry_error());
+                }
             }
         }
         // Publication occurs only after complete successful coverage. Retains
@@ -555,6 +634,154 @@ mod tests {
                 assert!(Arc::ptr_eq(previous, &coordinates));
             } else {
                 first = Some(coordinates);
+            }
+        }
+    }
+
+    #[test]
+    fn restore_bytes_keep_nested_proofs_fresh_and_exactly_source_bound() {
+        let module = ModuleId::builtin_foreign_for_test(77);
+        let arena = [SourceFile::new("root builtin", crate::module::foreign_builtin_source_text()).unwrap()];
+        let witness = RestoreBuiltinForeignBytes::new(&arena, &[module], &mut TypeWorkBudget::default()).unwrap();
+        let source = &arena[0];
+        let sources = HashMap::from([(source.id(), source)]);
+        let modules = HashMap::from([(module, source.id())]);
+        let first_registry = ResolvedRegistry::default();
+        let second_registry = ResolvedRegistry::default();
+        let first_context = context(module);
+        let second_context = SourceResourceValidationContext::OriginalTemplate {
+            resource: ResourceDefinitionId::new(module, 1), answer: true,
+        };
+        let mut first = TypeWorkBudget::default();
+        let first_proof = BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &first_registry, &sources, &modules, &first_context, Some(&witness), &mut first,
+        ).unwrap();
+        let mut second = TypeWorkBudget::default();
+        let second_proof = BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &second_registry, &sources, &modules, &second_context, Some(&witness), &mut second,
+        ).unwrap();
+        assert_eq!(first.used(), second.used());
+        assert!(first.used() < source.text().len(), "only exact root bytes receive a discount");
+        first_proof.context_matches(&first_registry, &sources, &modules, &first_context,
+            &mut TypeWorkBudget::default()).unwrap();
+        second_proof.context_matches(&second_registry, &sources, &modules, &second_context,
+            &mut TypeWorkBudget::default()).unwrap();
+        registry_error(first_proof.context_matches(&second_registry, &sources, &modules,
+            &second_context, &mut TypeWorkBudget::default()));
+        registry_error(second_proof.covers(&first_registry, module, source, &mut TypeWorkBudget::default()));
+
+        let clone = source.clone();
+        let clones = HashMap::from([(clone.id(), &clone)]);
+        registry_error(BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &first_registry, &clones, &modules, &first_context, Some(&witness), &mut TypeWorkBudget::default()));
+        let donor_module = ModuleId::builtin_foreign_for_test(78);
+        let donor_modules = HashMap::from([(donor_module, source.id())]);
+        let mut fallback = TypeWorkBudget::default();
+        BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &first_registry, &sources, &donor_modules, &first_context, Some(&witness), &mut fallback,
+        ).unwrap();
+        assert!(fallback.used() >= source.text().len(), "uncovered exact module pays full bytes");
+        // A corrupted private record cannot serve even this same source object.
+        let mut wrong_span = RestoreBuiltinForeignBytes::new(&arena, &[module], &mut TypeWorkBudget::default()).unwrap();
+        wrong_span.sources.get_mut(&module).unwrap().1 = source.span(crate::source::ByteRange::new(0, 0).unwrap()).unwrap();
+        registry_error(BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &first_registry, &sources, &modules, &first_context, Some(&wrong_span), &mut TypeWorkBudget::default()));
+        BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &first_registry, &sources, &modules, &first_context, Some(&witness), &mut TypeWorkBudget::default()).unwrap();
+    }
+
+    #[test]
+    fn restore_bytes_cover_unused_reserved_sources_and_failed_mint_never_escapes() {
+        let module = ModuleId::builtin_foreign_for_test(77);
+        let unused = ModuleId::builtin_foreign_for_test(78);
+        let arena = [SourceFile::new("root builtin", crate::module::foreign_builtin_source_text()).unwrap()];
+        let witness = RestoreBuiltinForeignBytes::new(&arena, &[module], &mut TypeWorkBudget::default()).unwrap();
+        let bad = SourceFile::new("unused bad builtin", "type Other = Other\n").unwrap();
+        let sources = HashMap::from([(arena[0].id(), &arena[0]), (bad.id(), &bad)]);
+        let modules = HashMap::from([(module, arena[0].id()), (unused, bad.id())]);
+        // A successful covered root does not erase an extra nested module.
+        registry_error(BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &ResolvedRegistry::default(), &sources, &modules, &context(module), Some(&witness),
+            &mut TypeWorkBudget::default()));
+        let bad_arena = [arena[0].clone(), bad];
+        for _ in 0..2 {
+            registry_error(RestoreBuiltinForeignBytes::new(&bad_arena, &[module, unused], &mut TypeWorkBudget::default()));
+        }
+        RestoreBuiltinForeignBytes::new(&arena, &[module], &mut TypeWorkBudget::default()).unwrap();
+        BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &ResolvedRegistry::default(), &HashMap::new(), &HashMap::new(),
+            &SourceResourceValidationContext::FinalProgram, Some(&witness), &mut TypeWorkBudget::default())
+            .err().map(|error| assert_eq!(error.reason(), ValidationReason::Registry)).expect("context still checked");
+    }
+
+    #[test]
+    fn restore_bytes_never_certify_a_new_registrys_host_or_source_projection() {
+        let graph = graph();
+        let loaded = graph.modules().iter().find(|m| m.id().is_builtin_foreign()).unwrap();
+        let resolved = crate::resolve::resolve_module(loaded, &[]).unwrap();
+        let registry = resolved.registry();
+        let arena = [loaded.source().clone()];
+        let witness = RestoreBuiltinForeignBytes::new(&arena, &[loaded.id()], &mut TypeWorkBudget::default()).unwrap();
+        let sources = HashMap::from([(arena[0].id(), &arena[0])]);
+        let modules = HashMap::from([(loaded.id(), arena[0].id())]);
+        let current = context(loaded.id());
+        let mut work = TypeWorkBudget::default();
+        let operation = BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            registry, &sources, &modules, &current, Some(&witness), &mut work).unwrap();
+        let scalar = registry.authenticate_scalar_preflights_for_owners(&mut work).unwrap();
+        authenticate_with_builtin_operation(registry, &sources, &modules, &mut work,
+            None, &operation, &scalar, &current).expect("genuine complete source and registry first");
+        let mut effects = registry.effects().iter().cloned().collect::<Vec<_>>();
+        effects.iter_mut().find(|effect| effect.id == EffectId::new(
+            loaded.id(), crate::module::FOREIGN_NATIVE_HOST_LOCAL)).unwrap().public = false;
+        let changed = registry.as_ref().clone().replace_effects_for_core_test(effects);
+        let another = SourceResourceValidationContext::OriginalTemplate {
+            resource: ResourceDefinitionId::new(loaded.id(), 1), answer: true,
+        };
+        // Bytes remain genuine. The NEW semantic operation must still refuse
+        // the changed Host projection, not borrow the first registry's proof.
+        BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            &changed, &sources, &modules, &another, Some(&witness), &mut TypeWorkBudget::default()).unwrap();
+        assert!(matches!(changed.authenticate_scalar_preflights_for_owners(&mut TypeWorkBudget::default()),
+            Err(crate::resolved::ResolvedBuildFailure::InvalidState)));
+        let fresh_operation = BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+            registry, &sources, &modules, &another, Some(&witness), &mut work).unwrap();
+        let fresh_scalar = registry.authenticate_scalar_preflights_for_owners(&mut work).unwrap();
+        authenticate_with_builtin_operation(registry, &sources, &modules, &mut work,
+            None, &fresh_operation, &fresh_scalar, &another).unwrap();
+    }
+
+    #[test]
+    fn restore_bytes_root_and_nested_work_is_exact_prefix_short_spent_and_fresh() {
+        let module = ModuleId::builtin_foreign_for_test(77);
+        let arena = [SourceFile::new("root builtin", crate::module::foreign_builtin_source_text()).unwrap()];
+        let sources = HashMap::from([(arena[0].id(), &arena[0])]);
+        let modules = HashMap::from([(module, arena[0].id())]);
+        let registry = ResolvedRegistry::default();
+        let first_context = context(module);
+        let second_context = SourceResourceValidationContext::OriginalTemplate {
+            resource: ResourceDefinitionId::new(module, 1), answer: true,
+        };
+        let run = |work: &mut TypeWorkBudget| {
+            let witness = RestoreBuiltinForeignBytes::new(&arena, &[module], work)?;
+            for current in [&first_context, &second_context] {
+                let proof = BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+                    &registry, &sources, &modules, current, Some(&witness), work)?;
+                proof.context_matches(&registry, &sources, &modules, current, work)?;
+                assert!(proof.covers(&registry, module, &arena[0], work)?);
+            }
+            Ok::<_, ValidationError>(())
+        };
+        let mut measured = TypeWorkBudget::default(); run(&mut measured).unwrap();
+        let cost = measured.used();
+        assert!(cost >= arena[0].text().len(), "every fresh restore pays its own root bytes");
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1); short.charge(prefix).unwrap();
+            assert_eq!(run(&mut short).unwrap_err().reason(), ValidationReason::Resource);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost); exact.charge(prefix).unwrap();
+                run(&mut exact).unwrap(); assert_eq!(exact.used(), prefix + cost);
+                assert_eq!(run(&mut exact).unwrap_err().reason(), ValidationReason::Resource);
             }
         }
     }

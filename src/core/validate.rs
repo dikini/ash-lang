@@ -11,6 +11,7 @@ mod source_declarations;
 
 pub(crate) use source_declarations::DeclarationCoordinateLoan;
 pub(crate) use source_declarations::DeclarationCoordinates;
+pub(crate) use source_declarations::RestoreBuiltinForeignBytes;
 
 use std::{
     cell::Cell,
@@ -3754,6 +3755,7 @@ fn check_source_resource_structure_with_globals(
         None,
         None,
         None,
+        None,
         work,
     )
 }
@@ -3769,6 +3771,7 @@ fn check_source_resource_structure_with_handler_graph(
     handler_graph: Option<&super::source_resource::SourceHandlerGraph<'_>>,
     original_provider: Option<&crate::elaborate::provider::SourceOriginalProviderContext<'_>>,
     coordinate_loan: Option<&DeclarationCoordinateLoan<'_>>,
+    restored_builtin_bytes: Option<&RestoreBuiltinForeignBytes<'_>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
     if handler_graph.is_some_and(|graph| !answer || !graph.authenticates(program, original)) {
@@ -3778,6 +3781,7 @@ fn check_source_resource_structure_with_handler_graph(
     // Retain syntax only from the same live reconstruction arena. Conditional
     // graphs and provider contexts still receive complete fresh authentication.
     validator.source_coordinate_loan = coordinate_loan;
+    validator.restored_builtin_bytes = restored_builtin_bytes;
     validator.source_handler_graph = handler_graph;
     validator.source_original_provider = original_provider;
     validator.provider_external_types = globals.map(|globals| &**globals);
@@ -3809,6 +3813,7 @@ fn check_source_resource_structure_with_handler_graph(
 pub(crate) struct SourceResourceStructureSession<'context> {
     admitted: Option<OriginalTemplateRegistryAdmission>,
     coordinate_loan: Option<&'context DeclarationCoordinateLoan<'context>>,
+    restored_builtin_bytes: Option<&'context RestoreBuiltinForeignBytes<'context>>,
     original_provider:
         Option<&'context crate::elaborate::provider::SourceOriginalProviderContext<'context>>,
 }
@@ -3832,16 +3837,31 @@ impl<'context> SourceResourceStructureSession<'context> {
         Self {
             admitted: None,
             coordinate_loan: None,
+            restored_builtin_bytes: None,
             original_provider,
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_coordinate_loan(
         coordinate_loan: &'context DeclarationCoordinateLoan<'context>,
     ) -> Self {
         Self {
             admitted: None,
             coordinate_loan: Some(coordinate_loan),
+            restored_builtin_bytes: None,
+            original_provider: None,
+        }
+    }
+
+    pub(crate) fn with_restore_source_loans(
+        coordinate_loan: &'context DeclarationCoordinateLoan<'context>,
+        restored_builtin_bytes: Option<&'context RestoreBuiltinForeignBytes<'context>>,
+    ) -> Self {
+        Self {
+            admitted: None,
+            coordinate_loan: Some(coordinate_loan),
+            restored_builtin_bytes,
             original_provider: None,
         }
     }
@@ -3918,6 +3938,7 @@ impl<'context> SourceResourceStructureSession<'context> {
                 handler_graph,
                 self.original_provider,
                 self.coordinate_loan,
+                self.restored_builtin_bytes,
                 work,
             );
         }
@@ -3935,11 +3956,13 @@ impl<'context> SourceResourceStructureSession<'context> {
                 None,
                 None,
                 self.coordinate_loan,
+                self.restored_builtin_bytes,
                 work,
             );
         }
         let mut validator = Validator::new_modules(program, sources, module_sources)?;
         validator.source_coordinate_loan = self.coordinate_loan;
+        validator.restored_builtin_bytes = self.restored_builtin_bytes;
         validator.provider_external_types = Some(globals);
         if !program
             .registry
@@ -4358,6 +4381,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     source_resource_context: SourceResourceValidationContext,
     source_coordinate_loan: Option<&'program DeclarationCoordinateLoan<'source>>,
+    restored_builtin_bytes: Option<&'program RestoreBuiltinForeignBytes<'source>>,
     authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
     unused_ordering: std::cell::RefCell<HashSet<crate::types::TypeVariableId>>,
     type_work: Cell<usize>,
@@ -4765,6 +4789,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_fragment_locals: None,
             source_resource_context: SourceResourceValidationContext::FinalProgram,
             source_coordinate_loan: None,
+            restored_builtin_bytes: None,
             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
             unused_ordering: std::cell::RefCell::new(HashSet::new()),
             type_work: Cell::new(0),
@@ -16242,8 +16267,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let source_operation = if original_context {
             let mut work = TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
             let modules = self.module_sources.as_ref().ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            let result = source_declarations::BuiltinForeignSourceAuthentication::new(
-                &self.program.registry, &self.sources, modules, &self.source_resource_context, &mut work);
+            let result = match self.restored_builtin_bytes {
+                Some(bytes) => source_declarations::BuiltinForeignSourceAuthentication::new_with_restore_bytes(
+                    &self.program.registry, &self.sources, modules, &self.source_resource_context, Some(bytes), &mut work),
+                None => source_declarations::BuiltinForeignSourceAuthentication::new(
+                    &self.program.registry, &self.sources, modules, &self.source_resource_context, &mut work),
+            };
             self.charge_type_work(work.used())?;
             Some(result?)
         } else { None };

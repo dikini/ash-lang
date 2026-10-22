@@ -1831,6 +1831,7 @@ impl Decoder<'_> {
         symbols: &[Arc<crate::foreign::checked_source::CheckedForeignSymbol>],
         binders: &[crate::resolved::BinderId],
         coordinate_loan: &crate::core::validate::DeclarationCoordinateLoan<'_>,
+        restored_builtin_bytes: Option<&crate::core::validate::RestoreBuiltinForeignBytes<'_>>,
     ) -> Result<Vec<RestoredSourceTemplate>, ImageFailure> {
         let mut templates = Vec::new();
         for record in &self.image.source_templates {
@@ -1895,11 +1896,12 @@ impl Decoder<'_> {
             }
             let declared_globals = globals.len();
             // The three forests share this exact defining view. A different
-            // original template still gets a fresh registry receipt; only
-            // syntax coordinates borrow the fixed source arena across views.
+            // original template still gets a fresh registry receipt. Syntax
+            // coordinates and a byte-only predicate borrow the fixed arena;
+            // every validator authenticates its own complete source relation.
             let mut structure_session =
-                crate::core::validate::SourceResourceStructureSession::with_coordinate_loan(
-                    coordinate_loan,
+                crate::core::validate::SourceResourceStructureSession::with_restore_source_loans(
+                    coordinate_loan, restored_builtin_bytes,
                 );
             let template = CheckedSourceResourceTemplate::admit_with_globals(
                 Arc::new(header),

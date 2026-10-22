@@ -827,3 +827,15 @@ agree on refusal, while the ordinary linked program passes. Restore this
 internal original-view positive through exact retained-Host metadata closure;
 do not accept a silent unsupported reclassification. The checked prepared-image
 carrier repair remains separate. No budget, public build or runtime gate moved.
+
+The restore-root byte witness candidate now passes eighteen focused non-startup
+controls, including full checked static-image reconstruction and its hostile/work
+bounds. Default startup is 2/3: nested cleanup uses 320798 and dependent discard,
+including original-library correspondence and cumulative bounds, uses 325013;
+two-owner discard still exhausts the unchanged 327680 allowance. See
+[the tested candidate and measurement limits](../evidence/checked-byte-windows/candidates/restore-root-byte-witness/README.md).
+The proposed resource-expression/context traversal was rejected without a product
+patch because accepted slot contexts need not belong to the interned path set;
+a complete paid fallback would erase its measured gross saving. Keep fresh
+semantic admission, remaining startup and affected regression gates open. This
+unmerged candidate does not complete PR101, whole F3 or runtime activation.

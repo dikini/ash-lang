@@ -1,0 +1,43 @@
+{
+  "command": [
+    "timeout",
+    "--signal=TERM",
+    "--kill-after=10s",
+    "180s",
+    "gdb",
+    "-q",
+    "-batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "set confirm off",
+    "-ex",
+    "set debuginfod enabled off",
+    "-ex",
+    "set breakpoint pending on",
+    "-ex",
+    "source /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-capture-byte-aggregate/topology-typed.py",
+    "-ex",
+    "run",
+    "--args",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 6.311,
+  "inputs_equal": true,
+  "count": 596,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "eecc1e8f1916bf8b280d4cf41bba0750c06713b049b4a57757416de51a53abfe",
+  "log_sha256": "7f4ec338b6cd9a6daa4fdd5792ba206724629bac9a7108ca2dbfdcc8727ed775",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

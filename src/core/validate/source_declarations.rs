@@ -6,6 +6,7 @@
 mod coordinate_loan;
 mod builtin_operation;
 pub(super) use builtin_operation::BuiltinForeignSourceAuthentication;
+pub(crate) use builtin_operation::RestoreBuiltinForeignBytes;
 mod resource_selectors;
 
 pub(crate) use coordinate_loan::DeclarationCoordinateLoan;
