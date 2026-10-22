@@ -253,3 +253,98 @@ pub(crate) fn mutate_and_authenticate(
     );
     error
 }
+
+/// Component evidence on the genuine admitted request, separate from source
+/// provider/capture guards. Removing the BoundaryFailed alternative fails this
+/// inventory even when earlier source checks would reject hostile branch code.
+pub(crate) fn assert_original_borrow_outcomes(program: &UnvalidatedEffectProgram) {
+    let (index, id) = selected(program);
+    let scope = scope(program, index);
+    scope
+        .authenticate(id, program, &mut TypeWorkBudget::default())
+        .unwrap();
+    let header = scope.header();
+    let original = scope.original().original_handler();
+    let (request_id, request, symbol) = original
+        .nodes
+        .iter()
+        .enumerate()
+        .find_map(|(index, stored)| {
+            let EffectExprKind::Operation(EffectOperation::Request(request)) = &stored.kind else {
+                return None;
+            };
+            let symbol = original.registry.native_symbol(request.operation())?;
+            (symbol.symbol().name() == "Read"
+                && matches!(symbol.owner_role(), Some(PreparedOwnerCall::Borrow { .. })))
+            .then_some((
+                NodeId::new(original.arena, u32::try_from(index).unwrap()),
+                request,
+                symbol,
+            ))
+        })
+        .expect("genuine original handler Read request");
+    assert!(Arc::ptr_eq(symbol.owner().unwrap(), &header.owner));
+    let EffectExprKind::Pure(PureExprKind::Variable(current)) =
+        &node(original, request.operand()).unwrap().kind
+    else {
+        panic!("the direct State-only request uses its actual Current binder");
+    };
+    let call = symbol.call_codec().ids();
+    for phase in [
+        SourceResourcePhase::Handler,
+        SourceResourcePhase::Acquire,
+        SourceResourcePhase::Finish,
+    ] {
+        let mut work = TypeWorkBudget::default();
+        let mut values = facts(&mut work).unwrap();
+        let mut path = FlowPath::new(&mut work).unwrap();
+        path.bind(current.binder(), 2, &mut work).unwrap();
+        assert!(matches!(values.fact(2).unwrap(), FlowFact::Current));
+        let result = eval_flow(
+            original,
+            header,
+            request_id,
+            phase,
+            path,
+            &mut values,
+            0,
+            &mut work,
+        );
+        if phase != SourceResourcePhase::Handler {
+            let Err(error) = result else {
+                panic!("checked Borrow is handler-only");
+            };
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            continue;
+        }
+        let results = result.unwrap();
+        assert_eq!(
+            results.len(),
+            2,
+            "actual scalar Borrow follows returned and independent boundary outcomes"
+        );
+        let mut returned = 0;
+        let mut boundary = 0;
+        for (value, path) in results {
+            assert!(
+                !path.attempted_teardown && !path.consumed && path.checked_finish_outcome.is_none()
+            );
+            let FlowFact::Constructor(constructor, Some(payload)) = values.fact(value).unwrap()
+            else {
+                panic!("only actual checked Borrow reply alternatives");
+            };
+            assert!(matches!(
+                values.fact(*payload).unwrap(),
+                FlowFact::Independent
+            ));
+            if *constructor == call.returned {
+                returned += 1;
+            } else if *constructor == ConstructorId::new(call.call, 2) {
+                boundary += 1;
+            } else {
+                panic!("unrelated reply cannot become a Borrow outcome");
+            }
+        }
+        assert_eq!((returned, boundary), (1, 1));
+    }
+}

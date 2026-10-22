@@ -1,0 +1,433 @@
+diff --git a/spec/elaboration.md b/spec/elaboration.md
+index 25808fe..7c1ac23 100644
+--- a/spec/elaboration.md
++++ b/spec/elaboration.md
+@@ -283,8 +283,13 @@ nonnull native acquisition. Its private payload and refusal result cannot carry
+ the acquired state. A refusal after a provisional acquisition preserves the
+ cleanup obligation. Finish may report consumption only after the consuming
+ native call; a retained result must return the exact current state after a
+-witnessed pre-call refusal. Original handler clauses cannot request native
+-owner operations or return owned state through `resume`. The supported phase
++witnessed pre-call refusal. Original handler clauses cannot return owned state
++through `resume`. The checked subset admits one opaque direct Current scalar
++Borrow only in its owning resource's direct handler, with exact native/State/H/R
++facts and interpreted membership. Checked acquisition and finish cannot borrow
++that permission. The Borrow reply's boundary-failure branch remains independent
++diagnostic data and supplies no finish request/outcome witness. Other native
++handler requests still require separate phase evidence. The supported phase
+ bodies use ordinary matches, bindings, constructors, tuples and independent
+ scalar primitives, authenticated scalar preflight calls and sealed common byte
+ calls; handler clauses resume an independent payload. A byte call borrows the
+@@ -322,7 +327,11 @@ the original handler's synthetic callback application does not supply a second
+ body or a source callback feature. The original handler has a compiler-private
+ continuation-row parameter in addition to the header and answer formals. Its
+ complete specialization retains the client's residual row, with direct handler
+-requests accounted separately. Partial enclosing normalization preserves this
++requests accounted separately. Each checked native request contributes both its
++original native instance and the exact Host reconstructed from its complete
++actual vector. Direct-demand authentication and substituted row realization
++repeat that relation without trusting a claimed or stored row. Partial enclosing
++normalization preserves this
+ claim; after control equations are solved, strict finalization normalizes all
+ instance Type/Row payloads and substitutions together. It never rewrites the
+ immutable defining template or freshening maps. Unresolved or altered claims
+diff --git a/spec/static-semantics.md b/spec/static-semantics.md
+index 051a71d..227ebea 100644
+--- a/spec/static-semantics.md
++++ b/spec/static-semantics.md
+@@ -1057,6 +1057,17 @@ no codec authority. The resource interprets only its listed exact native
+ instances and keeps `NativeHost<H>` through acquisition, calls and completion;
+ the lexical host removes that exact obligation and never interprets owner calls.
+ 
++A checked opaque owner also admits a scalar Borrow whose source domain is the
++exact State application, with one direct Current operand and no view, Access or
++extra source operand. Its result is canonical `Foreign.CheckedCall<Int>` and its
++complete Type/Row vector and original assumptions remain attached. Only its
++owning resource's direct handler may request that Borrow, with exact interpreted
++membership and matching State/H/R actuals. Checked acquisition, finish and
++ordinary callable contexts supply no Borrow permission. The independent
++BoundaryFailed alternative grants no private finish witness and cannot transport
++Current through the handler's result. Byte/window/dependency and general helper
++transport remain excluded from this static subset.
++
+ The admitted checked finish request is a void teardown whose sole native operand
+ is the exact Current State. It has no scalar/NUL operand conversion or native
+ result decoding. Symbolic checking follows its declared consumed or retained
+diff --git a/src/core/source_resource/checked_borrow_core_tests.rs b/src/core/source_resource/checked_borrow_core_tests.rs
+index 5ab5009..50c4f84 100644
+--- a/src/core/source_resource/checked_borrow_core_tests.rs
++++ b/src/core/source_resource/checked_borrow_core_tests.rs
+@@ -253,3 +253,98 @@ pub(crate) fn mutate_and_authenticate(
+     );
+     error
+ }
++
++/// Component evidence on the genuine admitted request, separate from source
++/// provider/capture guards. Removing the BoundaryFailed alternative fails this
++/// inventory even when earlier source checks would reject hostile branch code.
++pub(crate) fn assert_original_borrow_outcomes(program: &UnvalidatedEffectProgram) {
++    let (index, id) = selected(program);
++    let scope = scope(program, index);
++    scope
++        .authenticate(id, program, &mut TypeWorkBudget::default())
++        .unwrap();
++    let header = scope.header();
++    let original = scope.original().original_handler();
++    let (request_id, request, symbol) = original
++        .nodes
++        .iter()
++        .enumerate()
++        .find_map(|(index, stored)| {
++            let EffectExprKind::Operation(EffectOperation::Request(request)) = &stored.kind else {
++                return None;
++            };
++            let symbol = original.registry.native_symbol(request.operation())?;
++            (symbol.symbol().name() == "Read"
++                && matches!(symbol.owner_role(), Some(PreparedOwnerCall::Borrow { .. })))
++            .then_some((
++                NodeId::new(original.arena, u32::try_from(index).unwrap()),
++                request,
++                symbol,
++            ))
++        })
++        .expect("genuine original handler Read request");
++    assert!(Arc::ptr_eq(symbol.owner().unwrap(), &header.owner));
++    let EffectExprKind::Pure(PureExprKind::Variable(current)) =
++        &node(original, request.operand()).unwrap().kind
++    else {
++        panic!("the direct State-only request uses its actual Current binder");
++    };
++    let call = symbol.call_codec().ids();
++    for phase in [
++        SourceResourcePhase::Handler,
++        SourceResourcePhase::Acquire,
++        SourceResourcePhase::Finish,
++    ] {
++        let mut work = TypeWorkBudget::default();
++        let mut values = facts(&mut work).unwrap();
++        let mut path = FlowPath::new(&mut work).unwrap();
++        path.bind(current.binder(), 2, &mut work).unwrap();
++        assert!(matches!(values.fact(2).unwrap(), FlowFact::Current));
++        let result = eval_flow(
++            original,
++            header,
++            request_id,
++            phase,
++            path,
++            &mut values,
++            0,
++            &mut work,
++        );
++        if phase != SourceResourcePhase::Handler {
++            let Err(error) = result else {
++                panic!("checked Borrow is handler-only");
++            };
++            assert_eq!(error.reason(), ValidationReason::Registry);
++            continue;
++        }
++        let results = result.unwrap();
++        assert_eq!(
++            results.len(),
++            2,
++            "actual scalar Borrow follows returned and independent boundary outcomes"
++        );
++        let mut returned = 0;
++        let mut boundary = 0;
++        for (value, path) in results {
++            assert!(
++                !path.attempted_teardown && !path.consumed && path.checked_finish_outcome.is_none()
++            );
++            let FlowFact::Constructor(constructor, Some(payload)) = values.fact(value).unwrap()
++            else {
++                panic!("only actual checked Borrow reply alternatives");
++            };
++            assert!(matches!(
++                values.fact(*payload).unwrap(),
++                FlowFact::Independent
++            ));
++            if *constructor == call.returned {
++                returned += 1;
++            } else if *constructor == ConstructorId::new(call.call, 2) {
++                boundary += 1;
++            } else {
++                panic!("unrelated reply cannot become a Borrow outcome");
++            }
++        }
++        assert_eq!((returned, boundary), (1, 1));
++    }
++}
+diff --git a/src/elaborate/checked_scalar_borrow_tests.rs b/src/elaborate/checked_scalar_borrow_tests.rs
+index d192dc7..0f0f160 100644
+--- a/src/elaborate/checked_scalar_borrow_tests.rs
++++ b/src/elaborate/checked_scalar_borrow_tests.rs
+@@ -227,7 +227,7 @@ fn callback_result_source(capture_state: bool) -> String {
+         "42"
+     };
+     let handler = format!(
+-        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => {{\n let callback : Unit -> Int = fn(ignored) {{ value }}\n resume (Foreign.CheckedReturned callback)\n }}\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let callback : Unit -> Int = fn(ignored) {{ {boundary_callback} }}\n resume (Foreign.CheckedReturned callback)\n }}\n }}"
++        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => {{\n let callback : Unit -> Int = fn(ignored) {{\n value\n }}\n resume (Foreign.CheckedReturned callback)\n }}\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let callback : Unit -> Int = fn(ignored) {{\n {boundary_callback}\n }}\n resume (Foreign.CheckedReturned callback)\n }}\n }}"
+     );
+     BORROW_SOURCE
+         .replace(
+@@ -257,7 +257,7 @@ fn checked_scalar_borrow_boundary_branch_cannot_transport_current_in_a_callback(
+ }
+ 
+ #[test]
+-fn checked_scalar_borrow_no_resource_context_and_ordinary_simulation_refuse() {
++fn checked_scalar_borrow_no_resource_context_cannot_transport_state() {
+     canonical(BORROW_SOURCE);
+     let source = format!(
+         "{BORROW_SOURCE}\nuncontrolled : State<Int, Bool> -> Foreign.CheckedCall<Int> ! {{Read<Int, Bool>, Foreign.NativeHost<Int>}}\nuncontrolled state = perform Read<Int, Bool>.call state\n"
+@@ -265,12 +265,16 @@ fn checked_scalar_borrow_no_resource_context_and_ordinary_simulation_refuse() {
+     let no_context = check_graph(&graph_with_entry(&source, None))
+         .expect_err("a native Current request outside its owning phase must refuse");
+     assert!(
+-        matches!(
+-            no_context,
+-            TypeError::Internal(ElaborationFailure::ForeignPrivilegeUnavailable)
+-        ),
+-        "exact no-context privilege refusal required: {no_context:?}"
++        matches!(no_context, TypeError::Source(ref error)
++        if error.reason == TypeReason::Argument
++            && format!("{error:?}").contains("controlled native state is unavailable in ordinary callable types or captures")),
++        "actual no-context controlled-State refusal required: {no_context:?}"
+     );
++}
++
++#[test]
++fn checked_scalar_borrow_ordinary_handler_cannot_simulate_native_result() {
++    canonical(BORROW_SOURCE);
+     let simulated = BORROW_SOURCE.replace(
+         "resume (perform Read<H, R>.call state)",
+         "resume (handle (perform Read<H, R>.call state) with Read<H, R> { call ignored => resume (Foreign.CheckedReturned 1) })",
+@@ -312,6 +316,9 @@ fn checked_scalar_borrow_independent_core_checks_read_vectors_membership_and_hos
+         .expect("independent actual scalar Borrow Core under default allowance");
+     let canonical = crate::core::transform::identity_effect_traversal(&core).unwrap();
+     crate::core::source_resource::checked_lifecycle_core_tests::assert_budget_controls(&canonical);
++    crate::core::source_resource::checked_borrow_core_tests::assert_original_borrow_outcomes(
++        &canonical,
++    );
+     use crate::core::source_resource::checked_borrow_core_tests::{
+         Mutation, mutate_and_authenticate,
+     };
+diff --git a/src/foreign/checked_source/checked_borrow_tests.rs b/src/foreign/checked_source/checked_borrow_tests.rs
+index 28b518a..7b5564b 100644
+--- a/src/foreign/checked_source/checked_borrow_tests.rs
++++ b/src/foreign/checked_source/checked_borrow_tests.rs
+@@ -77,6 +77,68 @@ fn resolve(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
+     unreachable!("graph has an entry")
+ }
+ 
++// Genuine source setup precedes measured context/binding work. These ledgers
++// follow the driver's source/rewrite policy, not an enlarged Core/image budget.
++fn checked_modules(graph: &ModuleGraph) -> Vec<CheckedModule> {
++    let (mut checking, bytes) = crate::compiler_work::source_work(graph).unwrap();
++    let limit = checking.limit();
++    checking
++        .finish_sizing(crate::calibration::limit(
++            limit,
++            crate::calibration::DiagnosticOwner::Structural,
++        ))
++        .unwrap();
++    let rewrite = crate::calibration::limit(
++        crate::compiler_work::rewrite_total(bytes).unwrap(),
++        crate::calibration::DiagnosticOwner::Structural,
++    );
++    let mut coverage = crate::pattern::UsefulnessBudget::default();
++    let mut constraints = crate::interface::InterfaceConstraintBudget::default();
++    let mut availability = crate::elaborate::ProviderCodeAvailability::default();
++    let mut checked = Vec::<CheckedModule>::new();
++    for loaded in graph.modules() {
++        let dependencies = loaded
++            .dependencies()
++            .iter()
++            .map(|edge| {
++                DependencyExports::new(
++                    edge,
++                    checked
++                        .iter()
++                        .find(|module| module.module() == edge.target())
++                        .unwrap()
++                        .exports(),
++                )
++                .unwrap()
++            })
++            .collect::<Vec<_>>();
++        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies)
++            .expect("actual builtin and Borrow producer resolve before complete registry setup");
++        let module =
++            crate::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work(
++                resolved,
++                &availability,
++                &mut checking,
++                &mut coverage,
++                &mut constraints,
++                Some(TypeWorkBudget::with_limit(rewrite)),
++            )
++            .expect("actual source/summary checking precedes full-registry rebinding controls");
++        if let Some(code) = module.provider_code() {
++            availability
++                .retain(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        if let Some(code) = module.source_resource_code() {
++            availability
++                .retain_source(module.module(), code, &mut checking)
++                .unwrap();
++        }
++        checked.push(module);
++    }
++    checked
++}
++
+ struct Fixture {
+     registry: Arc<ResolvedRegistry>,
+     original: Arc<CheckedForeignSymbol>,
+@@ -86,13 +148,19 @@ struct Fixture {
+ impl Fixture {
+     fn new() -> Self {
+         let graph = graph(SOURCE);
+-        let resolved = resolve(&graph)
+-            .expect("canonical parsed/resolved checked scalar Borrow before rebinding controls");
+-        let registry = Arc::clone(resolved.registry());
++        let checked = checked_modules(&graph);
++        let registry = Arc::new(
++            ResolvedRegistry::combine_checked(
++                &checked,
++                &mut TypeWorkBudget::default(),
++                &mut crate::interface::InterfaceConstraintBudget::default(),
++            )
++            .expect("genuine completed builtin/producer modules supply the complete registry"),
++        );
+         let effect = registry
+             .effects()
+             .iter()
+-            .find(|effect| effect.id.module() == resolved.module() && effect.spelling == "Read")
++            .find(|effect| effect.id.module() == graph.entry() && effect.spelling == "Read")
+             .unwrap();
+         let original = Arc::clone(
+             registry
+@@ -150,21 +218,14 @@ impl Fixture {
+         let registry = view.as_ref().unwrap_or(self.registry.as_ref());
+         let effect = registry.effect(effect.id).unwrap();
+         let codec = self.original.call_codec();
+-        // The merged root registry is a projection, not the defining builtin
+-        // inventory. Reuse only the immutable codec originals retained by this
+-        // genuine resolved Read, rather than minting an incomplete new proof.
+-        charge(work, 2, codec.source())?;
+-        let context = ForeignBindingContext {
++        let context = ForeignBindingContext::new(
+             registry,
+-            codec: Arc::clone(codec),
+-            owners: &self.owners,
+-            owner_codec: Some(Arc::clone(
+-                self.original
+-                    .owner_codec
+-                    .as_ref()
+-                    .expect("genuine resolved owner Borrow retains its original owner codec"),
+-            )),
+-        };
++            codec.module(),
++            codec.source(),
++            codec.ids(),
++            work,
++        )?
++        .with_owners(&self.owners, work)?;
+         bind_checked_foreign_symbol(
+             self.original.library(),
+             Arc::clone(self.original.prepared()),
+@@ -177,9 +238,7 @@ impl Fixture {
+ }
+ 
+ fn assert_semantic_refusal(result: Result<CheckedForeignSymbol, ForeignAdmissionError>) {
+-    let error = result
+-        .err()
+-        .expect("changed original correspondence must refuse");
++    let error = result.expect_err("changed original correspondence must refuse");
+     assert!(
+         matches!(
+             error.reason(),
+@@ -197,7 +256,7 @@ fn checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work() {
+     let fixture = Fixture::new();
+     let effect = fixture.effect();
+     let mut measured = TypeWorkBudget::default();
+-    let bound = fixture.bind(&effect, &mut measured).unwrap();
++    let bound = fixture.bind(effect, &mut measured).unwrap();
+     assert!(Arc::ptr_eq(bound.prepared(), fixture.original.prepared()));
+     assert!(Arc::ptr_eq(
+         bound.owner().unwrap(),
+@@ -211,7 +270,7 @@ fn checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work() {
+         let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+         short.charge(prefix).unwrap();
+         assert_eq!(
+-            fixture.bind(&effect, &mut short).unwrap_err().reason(),
++            fixture.bind(effect, &mut short).unwrap_err().reason(),
+             ForeignAdmissionReason::WorkExhausted
+         );
+         assert!(
+@@ -224,17 +283,17 @@ fn checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work() {
+         for _ in 0..2 {
+             let mut exact = TypeWorkBudget::with_limit(prefix + required);
+             exact.charge(prefix).unwrap();
+-            let retry = fixture.bind(&effect, &mut exact).unwrap();
++            let retry = fixture.bind(effect, &mut exact).unwrap();
+             assert_eq!(exact.used(), prefix + required);
+             assert!(Arc::ptr_eq(retry.owner().unwrap(), bound.owner().unwrap()));
+             assert_eq!(
+-                fixture.bind(&effect, &mut exact).unwrap_err().reason(),
++                fixture.bind(effect, &mut exact).unwrap_err().reason(),
+                 ForeignAdmissionReason::WorkExhausted
+             );
+         }
+     }
+     fixture
+-        .bind(&effect, &mut TypeWorkBudget::default())
++        .bind(effect, &mut TypeWorkBudget::default())
+         .unwrap();
+ }
+ 
+@@ -243,7 +302,7 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution()
+     let fixture = Fixture::new();
+     let canonical = fixture.effect();
+     fixture
+-        .bind(&canonical, &mut TypeWorkBudget::default())
++        .bind(canonical, &mut TypeWorkBudget::default())
+         .unwrap();
+     let mutations: &[fn(&mut ResolvedEffectDeclaration)] = &[
+         |effect| effect.parameters.swap(0, 1),
+@@ -268,7 +327,7 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution()
+         assert!(result.is_err(), "mutation {index} must refuse");
+         assert_semantic_refusal(result);
+         fixture
+-            .bind(&canonical, &mut TypeWorkBudget::default())
++            .bind(canonical, &mut TypeWorkBudget::default())
+             .unwrap();
+     }
+     // A genuine different source supplies a donor origin, never a trusted fact.
+@@ -286,7 +345,7 @@ fn checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals() {
+     let fixture = Fixture::new();
+     let canonical = fixture.effect();
+     fixture
+-        .bind(&canonical, &mut TypeWorkBudget::default())
++        .bind(canonical, &mut TypeWorkBudget::default())
+         .unwrap();
+     for replacement in [Type::Int, Type::Variable(canonical.parameters[1].id)] {
+         let mut effect: ResolvedEffectDeclaration = canonical.clone();
+@@ -315,7 +374,7 @@ fn checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals() {
+ fn checked_borrow_extra_scalar_operand_prepares_but_does_not_bind() {
+     let fixture = Fixture::new();
+     fixture
+-        .bind(&fixture.effect(), &mut TypeWorkBudget::default())
++        .bind(fixture.effect(), &mut TypeWorkBudget::default())
+         .unwrap();
+     let source = SOURCE.replace(
+         "symbol Read<H, R> : State<H, R> -> Foreign.CheckedCall<Int>",
+@@ -359,7 +418,7 @@ fn checked_borrow_extra_scalar_operand_prepares_but_does_not_bind() {
+ fn checked_borrow_nested_current_domain_prepares_but_does_not_bind() {
+     let fixture = Fixture::new();
+     fixture
+-        .bind(&fixture.effect(), &mut TypeWorkBudget::default())
++        .bind(fixture.effect(), &mut TypeWorkBudget::default())
+         .unwrap();
+     let from = "symbol Read<H, R> : State<H, R> -> Foreign.CheckedCall<Int>";
+     assert_eq!(SOURCE.matches(from).count(), 1);

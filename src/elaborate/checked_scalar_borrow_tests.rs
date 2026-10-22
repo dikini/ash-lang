@@ -227,7 +227,7 @@ fn callback_result_source(capture_state: bool) -> String {
         "42"
     };
     let handler = format!(
-        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => {{\n let callback : Unit -> Int = fn(ignored) {{ value }}\n resume (Foreign.CheckedReturned callback)\n }}\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let callback : Unit -> Int = fn(ignored) {{ {boundary_callback} }}\n resume (Foreign.CheckedReturned callback)\n }}\n }}"
+        "read access => match perform Read<H, R>.call state {{\n Foreign.CheckedReturned(value) => {{\n let callback : Unit -> Int = fn(ignored) {{\n value\n }}\n resume (Foreign.CheckedReturned callback)\n }}\n Foreign.CheckedConversionFailed(error) => resume (Foreign.CheckedConversionFailed error)\n Foreign.BoundaryFailed(reason) => {{\n let callback : Unit -> Int = fn(ignored) {{\n {boundary_callback}\n }}\n resume (Foreign.CheckedReturned callback)\n }}\n }}"
     );
     BORROW_SOURCE
         .replace(
@@ -257,7 +257,7 @@ fn checked_scalar_borrow_boundary_branch_cannot_transport_current_in_a_callback(
 }
 
 #[test]
-fn checked_scalar_borrow_no_resource_context_and_ordinary_simulation_refuse() {
+fn checked_scalar_borrow_no_resource_context_cannot_transport_state() {
     canonical(BORROW_SOURCE);
     let source = format!(
         "{BORROW_SOURCE}\nuncontrolled : State<Int, Bool> -> Foreign.CheckedCall<Int> ! {{Read<Int, Bool>, Foreign.NativeHost<Int>}}\nuncontrolled state = perform Read<Int, Bool>.call state\n"
@@ -265,12 +265,16 @@ fn checked_scalar_borrow_no_resource_context_and_ordinary_simulation_refuse() {
     let no_context = check_graph(&graph_with_entry(&source, None))
         .expect_err("a native Current request outside its owning phase must refuse");
     assert!(
-        matches!(
-            no_context,
-            TypeError::Internal(ElaborationFailure::ForeignPrivilegeUnavailable)
-        ),
-        "exact no-context privilege refusal required: {no_context:?}"
+        matches!(no_context, TypeError::Source(ref error)
+        if error.reason == TypeReason::Argument
+            && format!("{error:?}").contains("controlled native state is unavailable in ordinary callable types or captures")),
+        "actual no-context controlled-State refusal required: {no_context:?}"
     );
+}
+
+#[test]
+fn checked_scalar_borrow_ordinary_handler_cannot_simulate_native_result() {
+    canonical(BORROW_SOURCE);
     let simulated = BORROW_SOURCE.replace(
         "resume (perform Read<H, R>.call state)",
         "resume (handle (perform Read<H, R>.call state) with Read<H, R> { call ignored => resume (Foreign.CheckedReturned 1) })",
@@ -312,6 +316,9 @@ fn checked_scalar_borrow_independent_core_checks_read_vectors_membership_and_hos
         .expect("independent actual scalar Borrow Core under default allowance");
     let canonical = crate::core::transform::identity_effect_traversal(&core).unwrap();
     crate::core::source_resource::checked_lifecycle_core_tests::assert_budget_controls(&canonical);
+    crate::core::source_resource::checked_borrow_core_tests::assert_original_borrow_outcomes(
+        &canonical,
+    );
     use crate::core::source_resource::checked_borrow_core_tests::{
         Mutation, mutate_and_authenticate,
     };

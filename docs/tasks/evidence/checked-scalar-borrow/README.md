@@ -56,3 +56,24 @@ freshly reconstructs its codec against the local projection; reusing existing
 codec Arcs alone does not supply missing registry declarations. Those tests need
 a genuine complete checked registry, without weakening that reconstruction.
 The failure-arm Current-transport negative has no semantic credit yet.
+
+## Repaired context and direct outcome controls
+
+The [eight-command snapshot](repaired-controls/snapshot.json) retains 588 equal
+before/after inputs (`dfdd67d79e5e0329bdbda614697ddaa8ba83db1b710b7fc1e19548465847354c`).
+Connected controls pass 11/13; rebinding passes 3/5; integration 3/3; lifecycle
+37/39 (the same two Borrow failures, with the original 26 controls passing);
+provider 16/16; resource 30/30; image 16/16; Clippy exits zero. Default startup
+work is 318956 and 314948, below 327680. The actual original-request symbolic
+component distinguishes independent Returned and BoundaryFailed paths, unchanged
+finish flags, and acquire/finish refusal. The real consumer, re-export, linked
+Core, transforms and five copied-Read mutations still pass.
+
+Four new controls remain unaccepted: the callback-result positive fails template
+admission (general callback transport is outside this slice); the ordinary
+simulation clause fails parsing; an origin mutation moves to another occurrence
+inside the same authored symbol and is accepted; and the signature mutation
+assumes ForeignOwnerApply where the actual source uses Application. These are
+fixture or assertion boundaries, not evidence for a product relaxation. The
+source overlay is relative to the recorded base and reconstructs the exact
+compiled test/spec inputs. No all-green delivery is claimed.

@@ -77,6 +77,68 @@ fn resolve(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
     unreachable!("graph has an entry")
 }
 
+// Genuine source setup precedes measured context/binding work. These ledgers
+// follow the driver's source/rewrite policy, not an enlarged Core/image budget.
+fn checked_modules(graph: &ModuleGraph) -> Vec<CheckedModule> {
+    let (mut checking, bytes) = crate::compiler_work::source_work(graph).unwrap();
+    let limit = checking.limit();
+    checking
+        .finish_sizing(crate::calibration::limit(
+            limit,
+            crate::calibration::DiagnosticOwner::Structural,
+        ))
+        .unwrap();
+    let rewrite = crate::calibration::limit(
+        crate::compiler_work::rewrite_total(bytes).unwrap(),
+        crate::calibration::DiagnosticOwner::Structural,
+    );
+    let mut coverage = crate::pattern::UsefulnessBudget::default();
+    let mut constraints = crate::interface::InterfaceConstraintBudget::default();
+    let mut availability = crate::elaborate::ProviderCodeAvailability::default();
+    let mut checked = Vec::<CheckedModule>::new();
+    for loaded in graph.modules() {
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies)
+            .expect("actual builtin and Borrow producer resolve before complete registry setup");
+        let module =
+            crate::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work(
+                resolved,
+                &availability,
+                &mut checking,
+                &mut coverage,
+                &mut constraints,
+                Some(TypeWorkBudget::with_limit(rewrite)),
+            )
+            .expect("actual source/summary checking precedes full-registry rebinding controls");
+        if let Some(code) = module.provider_code() {
+            availability
+                .retain(module.module(), code, &mut checking)
+                .unwrap();
+        }
+        if let Some(code) = module.source_resource_code() {
+            availability
+                .retain_source(module.module(), code, &mut checking)
+                .unwrap();
+        }
+        checked.push(module);
+    }
+    checked
+}
+
 struct Fixture {
     registry: Arc<ResolvedRegistry>,
     original: Arc<CheckedForeignSymbol>,
@@ -86,13 +148,19 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let graph = graph(SOURCE);
-        let resolved = resolve(&graph)
-            .expect("canonical parsed/resolved checked scalar Borrow before rebinding controls");
-        let registry = Arc::clone(resolved.registry());
+        let checked = checked_modules(&graph);
+        let registry = Arc::new(
+            ResolvedRegistry::combine_checked(
+                &checked,
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("genuine completed builtin/producer modules supply the complete registry"),
+        );
         let effect = registry
             .effects()
             .iter()
-            .find(|effect| effect.id.module() == resolved.module() && effect.spelling == "Read")
+            .find(|effect| effect.id.module() == graph.entry() && effect.spelling == "Read")
             .unwrap();
         let original = Arc::clone(
             registry
@@ -150,21 +218,14 @@ impl Fixture {
         let registry = view.as_ref().unwrap_or(self.registry.as_ref());
         let effect = registry.effect(effect.id).unwrap();
         let codec = self.original.call_codec();
-        // The merged root registry is a projection, not the defining builtin
-        // inventory. Reuse only the immutable codec originals retained by this
-        // genuine resolved Read, rather than minting an incomplete new proof.
-        charge(work, 2, codec.source())?;
-        let context = ForeignBindingContext {
+        let context = ForeignBindingContext::new(
             registry,
-            codec: Arc::clone(codec),
-            owners: &self.owners,
-            owner_codec: Some(Arc::clone(
-                self.original
-                    .owner_codec
-                    .as_ref()
-                    .expect("genuine resolved owner Borrow retains its original owner codec"),
-            )),
-        };
+            codec.module(),
+            codec.source(),
+            codec.ids(),
+            work,
+        )?
+        .with_owners(&self.owners, work)?;
         bind_checked_foreign_symbol(
             self.original.library(),
             Arc::clone(self.original.prepared()),
@@ -177,9 +238,7 @@ impl Fixture {
 }
 
 fn assert_semantic_refusal(result: Result<CheckedForeignSymbol, ForeignAdmissionError>) {
-    let error = result
-        .err()
-        .expect("changed original correspondence must refuse");
+    let error = result.expect_err("changed original correspondence must refuse");
     assert!(
         matches!(
             error.reason(),
@@ -197,7 +256,7 @@ fn checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work() {
     let fixture = Fixture::new();
     let effect = fixture.effect();
     let mut measured = TypeWorkBudget::default();
-    let bound = fixture.bind(&effect, &mut measured).unwrap();
+    let bound = fixture.bind(effect, &mut measured).unwrap();
     assert!(Arc::ptr_eq(bound.prepared(), fixture.original.prepared()));
     assert!(Arc::ptr_eq(
         bound.owner().unwrap(),
@@ -211,7 +270,7 @@ fn checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work() {
         let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
         short.charge(prefix).unwrap();
         assert_eq!(
-            fixture.bind(&effect, &mut short).unwrap_err().reason(),
+            fixture.bind(effect, &mut short).unwrap_err().reason(),
             ForeignAdmissionReason::WorkExhausted
         );
         assert!(
@@ -224,17 +283,17 @@ fn checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work() {
         for _ in 0..2 {
             let mut exact = TypeWorkBudget::with_limit(prefix + required);
             exact.charge(prefix).unwrap();
-            let retry = fixture.bind(&effect, &mut exact).unwrap();
+            let retry = fixture.bind(effect, &mut exact).unwrap();
             assert_eq!(exact.used(), prefix + required);
             assert!(Arc::ptr_eq(retry.owner().unwrap(), bound.owner().unwrap()));
             assert_eq!(
-                fixture.bind(&effect, &mut exact).unwrap_err().reason(),
+                fixture.bind(effect, &mut exact).unwrap_err().reason(),
                 ForeignAdmissionReason::WorkExhausted
             );
         }
     }
     fixture
-        .bind(&effect, &mut TypeWorkBudget::default())
+        .bind(effect, &mut TypeWorkBudget::default())
         .unwrap();
 }
 
@@ -243,7 +302,7 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution() 
     let fixture = Fixture::new();
     let canonical = fixture.effect();
     fixture
-        .bind(&canonical, &mut TypeWorkBudget::default())
+        .bind(canonical, &mut TypeWorkBudget::default())
         .unwrap();
     let mutations: &[fn(&mut ResolvedEffectDeclaration)] = &[
         |effect| effect.parameters.swap(0, 1),
@@ -268,7 +327,7 @@ fn checked_borrow_binding_rejects_parameter_operation_and_origin_substitution() 
         assert!(result.is_err(), "mutation {index} must refuse");
         assert_semantic_refusal(result);
         fixture
-            .bind(&canonical, &mut TypeWorkBudget::default())
+            .bind(canonical, &mut TypeWorkBudget::default())
             .unwrap();
     }
     // A genuine different source supplies a donor origin, never a trusted fact.
@@ -286,7 +345,7 @@ fn checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals() {
     let fixture = Fixture::new();
     let canonical = fixture.effect();
     fixture
-        .bind(&canonical, &mut TypeWorkBudget::default())
+        .bind(canonical, &mut TypeWorkBudget::default())
         .unwrap();
     for replacement in [Type::Int, Type::Variable(canonical.parameters[1].id)] {
         let mut effect: ResolvedEffectDeclaration = canonical.clone();
@@ -315,7 +374,7 @@ fn checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals() {
 fn checked_borrow_extra_scalar_operand_prepares_but_does_not_bind() {
     let fixture = Fixture::new();
     fixture
-        .bind(&fixture.effect(), &mut TypeWorkBudget::default())
+        .bind(fixture.effect(), &mut TypeWorkBudget::default())
         .unwrap();
     let source = SOURCE.replace(
         "symbol Read<H, R> : State<H, R> -> Foreign.CheckedCall<Int>",
@@ -359,7 +418,7 @@ fn checked_borrow_extra_scalar_operand_prepares_but_does_not_bind() {
 fn checked_borrow_nested_current_domain_prepares_but_does_not_bind() {
     let fixture = Fixture::new();
     fixture
-        .bind(&fixture.effect(), &mut TypeWorkBudget::default())
+        .bind(fixture.effect(), &mut TypeWorkBudget::default())
         .unwrap();
     let from = "symbol Read<H, R> : State<H, R> -> Foreign.CheckedCall<Int>";
     assert_eq!(SOURCE.matches(from).count(), 1);
