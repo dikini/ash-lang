@@ -1,0 +1,160 @@
+{
+  "candidate": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+    "size": 71022184,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+  },
+  "linked_root": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/ash-host-6-0",
+    "size": 71022184,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+  },
+  "entry": 4222496,
+  "program_headers": [
+    {
+      "type": 1,
+      "flags": 4,
+      "offset": 0,
+      "virtual_address": 4194304,
+      "file_bytes": 1520,
+      "memory_bytes": 1520,
+      "alignment": 4096
+    },
+    {
+      "type": 1,
+      "flags": 5,
+      "offset": 4096,
+      "virtual_address": 4198400,
+      "file_bytes": 35804017,
+      "memory_bytes": 35804017,
+      "alignment": 4096
+    },
+    {
+      "type": 1,
+      "flags": 4,
+      "offset": 35811328,
+      "virtual_address": 40005632,
+      "file_bytes": 4457584,
+      "memory_bytes": 4457584,
+      "alignment": 4096
+    },
+    {
+      "type": 1,
+      "flags": 6,
+      "offset": 40269992,
+      "virtual_address": 44468392,
+      "file_bytes": 768704,
+      "memory_bytes": 792384,
+      "alignment": 4096
+    },
+    {
+      "type": 4,
+      "flags": 4,
+      "offset": 736,
+      "virtual_address": 4195040,
+      "file_bytes": 36,
+      "memory_bytes": 36,
+      "alignment": 4
+    },
+    {
+      "type": 4,
+      "flags": 4,
+      "offset": 40268848,
+      "virtual_address": 44463152,
+      "file_bytes": 32,
+      "memory_bytes": 32,
+      "alignment": 8
+    },
+    {
+      "type": 4,
+      "flags": 4,
+      "offset": 40268880,
+      "virtual_address": 44463184,
+      "file_bytes": 32,
+      "memory_bytes": 32,
+      "alignment": 4
+    },
+    {
+      "type": 7,
+      "flags": 4,
+      "offset": 40269992,
+      "virtual_address": 44468392,
+      "file_bytes": 144,
+      "memory_bytes": 248,
+      "alignment": 8
+    },
+    {
+      "type": 1685382483,
+      "flags": 4,
+      "offset": 40268848,
+      "virtual_address": 44463152,
+      "file_bytes": 32,
+      "memory_bytes": 32,
+      "alignment": 8
+    },
+    {
+      "type": 1685382480,
+      "flags": 4,
+      "offset": 36181248,
+      "virtual_address": 40375552,
+      "file_bytes": 776780,
+      "memory_bytes": 776780,
+      "alignment": 4
+    },
+    {
+      "type": 1685382481,
+      "flags": 6,
+      "offset": 0,
+      "virtual_address": 0,
+      "file_bytes": 0,
+      "memory_bytes": 0,
+      "alignment": 16
+    },
+    {
+      "type": 1685382482,
+      "flags": 4,
+      "offset": 40269992,
+      "virtual_address": 44468392,
+      "file_bytes": 759640,
+      "memory_bytes": 759640,
+      "alignment": 1
+    }
+  ],
+  "Cargo_root_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0#0.0.0",
+    "manifest_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+    "target": {
+      "kind": [
+        "bin"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "ash-host-6-0",
+      "src_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "0",
+      "debuginfo": 2,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "features": [],
+    "filenames": [
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/ash-host-6-0"
+    ],
+    "executable": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/ash-host-6-0",
+    "fresh": false
+  },
+  "relink_monitor_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-ymqweo36/receipt.json",
+    "size": 12696,
+    "sha256": "507e23a81da27429c8fe9df7a432c9fc0f390d694dcaf5b465fc89f4a21b900d"
+  }
+}

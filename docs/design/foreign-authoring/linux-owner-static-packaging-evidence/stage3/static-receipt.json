@@ -1,0 +1,34 @@
+{
+  "kind": "owner-existing-profile-whole-static-packaging-only",
+  "contract_retained_commit": "5cb93a9fd03d963377b0a79bc2e18404c54c2c47",
+  "contract_sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd",
+  "historical_generation_contract_sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+  "selected_source_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "stage2_generation_receipt": {
+    "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+    "size": 2809,
+    "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+  },
+  "relink_monitor_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-ymqweo36/receipt.json",
+    "size": 12696,
+    "sha256": "507e23a81da27429c8fe9df7a432c9fc0f390d694dcaf5b465fc89f4a21b900d"
+  },
+  "inspection_monitor_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/build-run-f8k7r2nj/receipt.json",
+    "size": 5639,
+    "sha256": "64d9b1cb792d8130136a0c5bdcbb99c0fce2550ad38698b4723c12d2d5303e6f"
+  },
+  "static_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-manifest.json",
+    "size": 48307,
+    "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+  },
+  "candidate": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+    "size": 71022184,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+  },
+  "image_executed": false,
+  "mode_note": "Candidate copied with0400, hash-verified private file; this is not approved immutable-fd execution. Ownerful architecture/approval/store/context/native assumptions remain pending."
+}

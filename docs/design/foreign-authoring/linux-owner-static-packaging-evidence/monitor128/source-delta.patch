@@ -1,0 +1,31 @@
+--- historical64/build_monitor.py
++++ proposed128/build_monitor.py
+@@ -14,7 +14,7 @@
+ import time
+ 
+ MAX_LOG = 16 * 1024 * 1024
+-MAX_MAP = 64 * 1024 * 1024
++MAX_MAP = 128 * 1024 * 1024
+ MAX_IMAGE = 128 * 1024 * 1024
+ MAX_CONFIG = 256 * 1024
+ MAX_RECORD = 4 * 1024 * 1024
+--- historical64/test_monitor.py
++++ proposed128/test_monitor.py
+@@ -177,7 +177,7 @@
+             self.assertEqual(list(Path(directory).iterdir()), [path])
+ 
+ 
+-    # Reduced caps model 16 MiB logs versus 64 MiB map without large fixtures.
++    # Reduced synthetic caps exercise file-class separation without large fixtures.
+     def class_config(self, path='maps/whole-static.map'):
+         return {'map_relative_path': path, 'self_test_limits': {
+             'deadline_seconds': 2, 'output_bytes': 1024,
+@@ -234,7 +234,7 @@
+                 rc,receipt,_=self.run_case('raise AssertionError("must not run")', config_updates=self.class_config(path))
+                 self.assertEqual((rc,receipt['reason'],receipt['child_pid']), (78,'setup_refusal',None))
+                 self.assertTrue(receipt['cleanup']['all_children_reaped'])
+-        bad=self.class_config(); bad['self_test_limits']['map_bytes']=64*1024*1024+1
++        bad=self.class_config(); bad['self_test_limits']['map_bytes']=128*1024*1024+1
+         rc,receipt,_=self.run_case('raise AssertionError("must not run")',config_updates=bad)
+         self.assertEqual((rc,receipt['child_pid']),(78,None))
+         bad=self.class_config();bad['self_test_limits']['unknown_class']=1

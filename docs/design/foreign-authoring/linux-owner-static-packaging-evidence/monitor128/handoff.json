@@ -1,0 +1,15 @@
+{
+  "root": "/tmp/ash-owner-map128-monitor",
+  "hashes": {
+    "build_monitor.py": "62adc0d5264b0d08835079174a19db49de954b0fa51e97ede216d036e549c914",
+    "test_monitor.py": "d786829c5aa6834334d7630a5d0b64a7276acb2bcc678638876a7f4159504cb0",
+    "schema2.json": "81ab2f3ba7290118ee6bfde748fa8e4fa0652440ce72a26bc79de9411c303933",
+    "source-delta.patch": "2c8ec49cd9e8b965a0353088de378d2a985e31db03c295aa260ceb51c63ef99c",
+    "manifest.json": "4f8b90323e66b30ff72e7b347deeb5b4d4f45db668c7d426f7aac341962b3f4e",
+    "verification-run/verification-receipt.json": "0832e3c18f40f9d0cc656465d4dcf0507a2817d63916bbde0be5197828a8de7d"
+  },
+  "records": 243,
+  "bytes": 214047,
+  "scope": "New proposed map128 apparatus only; historical64 unchanged; no owner outputparent/tuple/build activation",
+  "pending": "Independent apparatus review, retained amendment and separate collector/tuple/root assignment"
+}

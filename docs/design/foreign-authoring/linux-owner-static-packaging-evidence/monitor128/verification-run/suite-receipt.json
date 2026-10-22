@@ -1,0 +1,622 @@
+{
+  "status": "PASS_BENIGN_METHODS",
+  "exit": 0,
+  "methods": 21,
+  "receipt_cases": 36,
+  "elapsed_seconds": 4.7333317669981625,
+  "evidence_directory": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842",
+  "cases": [
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-0",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-0/receipt.json",
+        "size": 1875,
+        "sha256": "5f4cfa4494fb78710f6388c426c03ae71c3b7ff4a9857283c9881a0978c00c21"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-0/config.json",
+        "size": 557,
+        "sha256": "08fd0c9dfba4573f5ead48f4abbdcc3ee5f2beb520e914225c26aa777c56eed8"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-1",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-1/receipt.json",
+        "size": 1876,
+        "sha256": "fc4672a5c6d35b87d1f2ec73b790ec15b062b03df1c28b95715cc3548a42a698"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-1/config.json",
+        "size": 555,
+        "sha256": "16c444ab11acfabe2a9a617cefa2e6201a12ca182ea00dca743d8a84195827f0"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-10",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-10/receipt.json",
+        "size": 1875,
+        "sha256": "957211f4e39be6b039a895014cd37293469adf18c0fd1d8b7fcbbdc908875258"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-10/config.json",
+        "size": 577,
+        "sha256": "7862da0da0014d3465cc334970be4ba09e6a99d49b2cddf1b093d0364e72e080"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-11",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-11/receipt.json",
+        "size": 1876,
+        "sha256": "ab48e44422c190fc02b1bf82cd332b204969b717f6e2f3527a75422de7f7215e"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-11/config.json",
+        "size": 578,
+        "sha256": "9b6b60597bbc47b6463086c9db40e2b87861049c9a307f54da16d0e344420612"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-12",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-12/receipt.json",
+        "size": 1875,
+        "sha256": "95b11d7b15d2ad8f24887f63126e39625eaf103d7fafe881587e689ff83570b0"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-12/config.json",
+        "size": 577,
+        "sha256": "c43c7b0990767359a448974db0a03722ff3e1f6f1b2f5a56d80bec10b6d58f33"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-13",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-13/receipt.json",
+        "size": 1873,
+        "sha256": "aa4b9d558de3678b6b75aa7b604e7751b3ca49342f8e629390db5792f8d573dc"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-13/config.json",
+        "size": 571,
+        "sha256": "9a2731e17ebdf9bc5c73388b89152898d1ec014ee98ce555c9c5e75c781d887b"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-14",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-14/receipt.json",
+        "size": 1876,
+        "sha256": "235f51b373d05f1cd02cbb256b13a59404aaa2fffdccd57e4a057697219ae87d"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-14/config.json",
+        "size": 582,
+        "sha256": "66aae153db30dd25ab3773e78fca33b6cd42222a7d92499fd17fcabc3ff5be80"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-15",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-15/receipt.json",
+        "size": 1895,
+        "sha256": "ff7bdcc261e014b4f81fc962d39feb29e921c56b2b50347006f0f921253b8462"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-15/config.json",
+        "size": 581,
+        "sha256": "bbb4d88ebdd9ac458954b8dcc9010c3f84b00ddb3979b82c37ede7a9498dacab"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-16",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-16/receipt.json",
+        "size": 1877,
+        "sha256": "962347817a4135d487fc640cf0788e1cd49d73dfd63569ca4923cf8bdffbc04b"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-16/config.json",
+        "size": 596,
+        "sha256": "e0462f0a4e1605ee3e0f8fd661756cfa09a24eca3d6b06f4745be3613f891f22"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-2",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-2/receipt.json",
+        "size": 1875,
+        "sha256": "289cae184062d66a8b91378264a6b2b7c35a75ad2c71678d9faae24e3ecf5cb7"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-2/config.json",
+        "size": 557,
+        "sha256": "5659a9f6712f559cd2745d33706b8364aba49c47ec93cd4fbf4b51ac53790498"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-3",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-3/receipt.json",
+        "size": 1876,
+        "sha256": "4fe2c69ef0fcf807b28880c4827ec05f50fa52461bf01a980efb54911722c52a"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-3/config.json",
+        "size": 555,
+        "sha256": "7a24572d7be0119ddfac19fa89aabc90f20ca636009cb3db16723977255363d4"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-4",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-4/receipt.json",
+        "size": 1876,
+        "sha256": "dde43ef2e64b40c7ba1fb4ad231697adec26bc83ec840ea8c5c5cb786688cd61"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-4/config.json",
+        "size": 555,
+        "sha256": "d6bfe3bc50e4f9508c99fcacded23d5bd177f28b34bd31ff05b6e11d14e6f510"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-5",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-5/receipt.json",
+        "size": 1876,
+        "sha256": "126b326862d6480ebd568bacea2dcc129e90aa9c63019ce58e8b15927faab46e"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-5/config.json",
+        "size": 555,
+        "sha256": "18e1d1e383c9207c412535b039c1cac821016a65ebfb781368cd2153b33c6fad"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-6",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-6/receipt.json",
+        "size": 1875,
+        "sha256": "2d964fac0eaef67a41ce36eb5f9fbd577d4b9d9e6015093913e17f36b9a3b079"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-6/config.json",
+        "size": 576,
+        "sha256": "a818302726eb8e8c0d2c9f816cecdaf62b6bb1ec1cb86a4bcd6f608c850939a8"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-7",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-7/receipt.json",
+        "size": 1875,
+        "sha256": "ee94f63d086e196989c0ccde3e3c70fbde9d419fa62718a355c06a5383a39293"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-7/config.json",
+        "size": 574,
+        "sha256": "429b356517d4a1d78abfbe83b501948588219c8d22b3730a3670d83a38d44c81"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-8",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-8/receipt.json",
+        "size": 1875,
+        "sha256": "67a8c433f095046f444bf6ff6b19d61873d3fd2d2e506f155e8ffe41b4ef924d"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-8/config.json",
+        "size": 579,
+        "sha256": "e7b28af1e368f7e61f0527aad19721e1a36f34ee69b03cb59208a49c2f3c5279"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_bad_map_path_or_schema_never_spawns-9",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-9/receipt.json",
+        "size": 1875,
+        "sha256": "5da28a3051af0c21ad8d96c84005240a3eee1f2685681647de536890c65408c2"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_bad_map_path_or_schema_never_spawns-9/config.json",
+        "size": 573,
+        "sha256": "191f82f0660670f8bf6898827baa9412536af236af3ea931d222f4bddcd7ed53"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_direct_sidefile_bound_observes_overshoot-17",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/receipt.json",
+        "size": 3186,
+        "sha256": "1bbf90b7240c3f941381040cb1eb6293bc50013a9afa576d1dde407f62852a25"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_direct_sidefile_bound_observes_overshoot-17/config.json",
+        "size": 580,
+        "sha256": "d34fb2b76d08c1d476b65423f4561ae61da34a593f77f8f692169ee51c25c017"
+      },
+      "reason": "watched_file_limit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_exact_map_above_log_cap_is_allowed-18",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/receipt.json",
+        "size": 3159,
+        "sha256": "7b5a825b2bdd145e88d94475d985beb83f149a5c29b4dc9a401a95ebeb3bb262"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_log_cap_is_allowed-18/config.json",
+        "size": 643,
+        "sha256": "5e471a668ac049c980877b62488abcc691c7dfd9401cc4a31ae140cc412cdbc3"
+      },
+      "reason": "exit",
+      "returncode": 0,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_exact_map_above_map_cap_refuses-19",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/receipt.json",
+        "size": 3230,
+        "sha256": "4b9d833d0c4c8f2880189d70eb8a3cf7718047ef61dd80cc3d7977ade8137603"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_exact_map_above_map_cap_refuses-19/config.json",
+        "size": 672,
+        "sha256": "68265f25c535f881d6ef1ba34c723ce3cf757eabde04db1903805e817e14b32c"
+      },
+      "reason": "watched_file_limit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_late_log_keeps_cap_in_final_post_reap_sample-20",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/receipt.json",
+        "size": 3238,
+        "sha256": "0081a53f69734e6ac1b322f57fafefd1c107e085d6d691529e7c1b47e457bc50"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_log_keeps_cap_in_final_post_reap_sample-20/config.json",
+        "size": 687,
+        "sha256": "1a5b0b76c972a3fce86ae310df807ef077992286f0940f42afa5f594d34ccf20"
+      },
+      "reason": "watched_file_limit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_late_output_after_last_sample_is_refused-21",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_output_after_last_sample_is_refused-21/receipt.json",
+        "size": 2643,
+        "sha256": "c29780fc560555d008f0fa1f3feb9971a3232be60f7217791c1b77880aa0f83f"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_output_after_last_sample_is_refused-21/config.json",
+        "size": 598,
+        "sha256": "e98d172417c7ea6f18c4a0191704c2a1885e01ca12b55cf001b835b432d48f9d"
+      },
+      "reason": "output_limit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_late_sidefile_after_last_sample_is_refused-22",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/receipt.json",
+        "size": 3230,
+        "sha256": "801f180301a7d529263e8adf6e36989e257d03a1030f28cea5c635c8f94d076e"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_late_sidefile_after_last_sample_is_refused-22/config.json",
+        "size": 624,
+        "sha256": "ffbdff69273b4304fbdf013ef76491d1de3d8122ed5a5ac61eebf682bb8d54bf"
+      },
+      "reason": "watched_file_limit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_nonmap_log_keeps_lower_cap-23",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/receipt.json",
+        "size": 3197,
+        "sha256": "9bda2aa807df4dcac5c0c590e37b561d67eb29842fb9b5b18b287c0ed853f536"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_nonmap_log_keeps_lower_cap-23/config.json",
+        "size": 644,
+        "sha256": "de57bd5c5760f899b2e3ecc18246aff9286b629f64862806d7b1d13fbc4992a4"
+      },
+      "reason": "watched_file_limit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_normal_and_nonzero_exit-24",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-24/receipt.json",
+        "size": 2531,
+        "sha256": "feea6360b565d20d96a24a59d03211a8a90f289a1bc3575c81708dc2187a6a6a"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-24/config.json",
+        "size": 524,
+        "sha256": "26e52d3a4ca6962de765dc9acafb900b6bd1cb8cab282ef07858cdb7361ed8a1"
+      },
+      "reason": "exit",
+      "returncode": 0,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_normal_and_nonzero_exit-25",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-25/receipt.json",
+        "size": 2532,
+        "sha256": "a39cc798a1fe93fb12171ec073f88c6b2fae23f7b8c0d5c3f2b5fb8861576f45"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_normal_and_nonzero_exit-25/config.json",
+        "size": 524,
+        "sha256": "24c5958eae1695ec71dcbdbe526441ef915d92fa40b07df83c6c24ef4406e64a"
+      },
+      "reason": "exit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_other_map_does_not_inherit_exact_path_cap-26",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/receipt.json",
+        "size": 3196,
+        "sha256": "cc29b0c0ebfb196b4474a57e28710052f688c24e71723a74c0622bf3160bc045"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_other_map_does_not_inherit_exact_path_cap-26/config.json",
+        "size": 644,
+        "sha256": "daf0abbc58aaf91dfad36466f363910c0fc0b2122fcfa3198799b3eb2e3c63e3"
+      },
+      "reason": "watched_file_limit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_output_bound-27",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_output_bound-27/receipt.json",
+        "size": 2576,
+        "sha256": "8b6ae75fb8e64fe138b0c1b33d2e80423cf12e06da289100b3977c2bd80f1fe7"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_output_bound-27/config.json",
+        "size": 529,
+        "sha256": "beb2bb5b2a90e46021221f1e0cd71a7472befcece7ee50c51d50406de694ead3"
+      },
+      "reason": "output_limit",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_owned_escaped_descendant_is_refused_and_reaped-28",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_owned_escaped_descendant_is_refused_and_reaped-28/receipt.json",
+        "size": 2703,
+        "sha256": "d79818fa859a9a32e80b0b489376e2a93425ec413421b22548633a824afeaf28"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_owned_escaped_descendant_is_refused_and_reaped-28/config.json",
+        "size": 551,
+        "sha256": "80b117e91ffc28545dbd1302c72bd5205b2e5355a3bb23f63690c1a77abb09e1"
+      },
+      "reason": "unsupported_group_escape",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_postspawn_setup_failure_reaps-29",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_postspawn_setup_failure_reaps-29/receipt.json",
+        "size": 2544,
+        "sha256": "8e44c4aa0ce61f7deb7f506b231f239fa41bd6d6fc9bec7693a4dafb8cccf2da"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_postspawn_setup_failure_reaps-29/config.json",
+        "size": 502,
+        "sha256": "dfb16068543d85474d86b0c62ccb083c86ba2f2a0046d7ffa3efaa7656b3e3fa"
+      },
+      "reason": "monitor_error",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_setup_refusal_starts_no_child-30",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_setup_refusal_starts_no_child-30/receipt.json",
+        "size": 1994,
+        "sha256": "cad2df21ee64ac942b432f59dc7e099b4b5c7a5d472cb7d287d7ed2834c3eef8"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_setup_refusal_starts_no_child-30/config.json",
+        "size": 523,
+        "sha256": "14337423f2d53d9503afa5d8744f745c4e80c85c55c01fe9a0faa7377d3953b4"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_successful_leader_cannot_leave_descendants-31",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_successful_leader_cannot_leave_descendants-31/receipt.json",
+        "size": 2661,
+        "sha256": "99a151a357ab7fbd4680e2320e590b9ecfc22a5f9c44ee6b079e8e48a28f56d0"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_successful_leader_cannot_leave_descendants-31/config.json",
+        "size": 551,
+        "sha256": "54ad83333cb196326944494dd9f9566f36aceae2524fc86e3ff4aae405ca1ebe"
+      },
+      "reason": "leader_exit_with_descendants",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_timeout_reaps_descendant-32",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_timeout_reaps_descendant-32/receipt.json",
+        "size": 2616,
+        "sha256": "1f8f60338755e26c9c6600cb940d9102d63e09cb01fe5ae176e80ece9b0f1f26"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_timeout_reaps_descendant-32/config.json",
+        "size": 524,
+        "sha256": "1ee2d9afcdf99fd794f683560ddc4ff6fb2b4a2fc71e0a06a4014d48a85cadf2"
+      },
+      "reason": "deadline",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_unrelated_owned_control_group_is_not_signalled-33",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unrelated_owned_control_group_is_not_signalled-33/receipt.json",
+        "size": 2510,
+        "sha256": "af09d4d2c4b71776991aa4fc9d8182a865c11fbf302d77c2bbae11c2c1a46be4"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unrelated_owned_control_group_is_not_signalled-33/config.json",
+        "size": 504,
+        "sha256": "8c7acc618af2b1f2358b003f91401eb3e624c0eef443850dec130ae3d745f2c3"
+      },
+      "reason": "deadline",
+      "returncode": 1,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_unsupported_subreaper_refuses_before_spawn-34",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unsupported_subreaper_refuses_before_spawn-34/receipt.json",
+        "size": 2308,
+        "sha256": "276751398d3a569a1dbef512aeb2e16f92ef30827f30333e7e903569cf8b311e"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_unsupported_subreaper_refuses_before_spawn-34/config.json",
+        "size": 517,
+        "sha256": "691d8667fe2f1ed20caae3695a5b16af4f304db2fb674d8e22cc181934992114"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    },
+    {
+      "case": "test_wrong_tool_pin_refuses_before_spawn-35",
+      "receipt": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_wrong_tool_pin_refuses_before_spawn-35/receipt.json",
+        "size": 2305,
+        "sha256": "367aa0ead9f018a000c5e74d180251fc46ae8f0d593e8e1649027e0d6ff1cd37"
+      },
+      "config": {
+        "path": "/tmp/ash-owner-map128-monitor/safe-test-evidence-xo_3z842/test_wrong_tool_pin_refuses_before_spawn-35/config.json",
+        "size": 517,
+        "sha256": "ed24d679b1bc41d80769862ceddea8e75d8ea4b419e6792ac98d8b636c1c1fa0"
+      },
+      "reason": "setup_refusal",
+      "returncode": 78,
+      "all_reaped": true,
+      "fixture_disposed": true
+    }
+  ]
+}

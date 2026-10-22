@@ -1,0 +1,59 @@
+{
+  "source_and_interpreter": [
+    {
+      "path": "/tmp/ash-owner-map128-monitor/build_monitor.py",
+      "size": 20746,
+      "sha256": "62adc0d5264b0d08835079174a19db49de954b0fa51e97ede216d036e549c914"
+    },
+    {
+      "path": "/tmp/ash-owner-map128-monitor/test_monitor.py",
+      "size": 17598,
+      "sha256": "d786829c5aa6834334d7630a5d0b64a7276acb2bcc678638876a7f4159504cb0"
+    },
+    {
+      "path": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    },
+    {
+      "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+      "size": 18877,
+      "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60"
+    },
+    {
+      "path": "/tmp/ash-owner-build-monitor/test_monitor.py",
+      "size": 12688,
+      "sha256": "49f9440a5ad421a071d8f0e53c42d3ac09413b58bc2e9436366b3527bbb5763d"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/test_monitor.py",
+      "size": 17592,
+      "sha256": "2516606e251c73640c96895ef063933566aa68dbde3ea8f1426e8fffb0e1e4b0"
+    }
+  ],
+  "historical": [
+    {
+      "manifest": {
+        "path": "/tmp/ash-owner-build-monitor/manifest-repaired.json",
+        "size": 106679,
+        "sha256": "b8fa966fbcedabf7143dcdb280a04df364090e8bae4c59a236d3885cc36c3de2"
+      },
+      "all_records_equal": true,
+      "record_count": 502
+    },
+    {
+      "manifest": {
+        "path": "/tmp/ash-owner-map-class-monitor/review-manifest.json",
+        "size": 101211,
+        "sha256": "637d3f361af2cd383ef6faef29e624ab6824b1e1f9827cbb9f1750b02cd05ad7"
+      },
+      "all_records_equal": true,
+      "record_count": 468
+    }
+  ]
+}

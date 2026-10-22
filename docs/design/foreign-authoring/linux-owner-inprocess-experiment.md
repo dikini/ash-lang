@@ -294,10 +294,10 @@ experimental; retain no prototype loader/runtime on the product path.
 The initial issue #58 delivery retained the owner/resource contract and an
 informative Linux-experiment link, followed by PR100's build-monitor preparation
 and source-category clarification. PR102 retained Stage1 compiler and Stage2 ordinary-generation evidence and the
-first two Stage3 map-limit refusals. The current delivery retains the third and
+first two Stage3 map-limit refusals. PR103 retained the third and
 fourth 64 MiB refusals, bounded postmortem/complete producer-metadata study,
-explicitly derived prefix containers and prospective 128 MiB map-only/output-
-placement amendment. It changes no F2 whole checkbox,
+explicitly derived prefix containers and the 128 MiB map-only/output-
+placement amendment. That delivery changed no F2 whole checkbox,
 architecture scope or execution permission. Reviewer checks original record
 preservation, authority links, exact input correspondence, finite class-specific
 bounds, separate command assignment, contrary outcomes and disposal. A later
@@ -316,3 +316,8 @@ checked bytes/windows, whole F2/M1 and Main remain separate gates.
 The [trusted-build preparation record](linux-owner-inprocess-probe/README.md)
 retains the monitor, safe controls and selected-source correspondence. It is
 informative preparation and does not assign a build or approve startup.
+
+The [successful fifth packaging record](linux-owner-static-packaging-evidence/README.md)
+retains the later complete-map/static-ELF observation and small original
+receipts. It records no candidate execution, ABI/native-closure completion,
+ownerful architecture selection or whole-F2 acceptance.

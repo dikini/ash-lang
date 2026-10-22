@@ -1,0 +1,48 @@
+{
+  "argv": [
+    "/usr/bin/x86_64-linux-gnu-readelf",
+    "-W",
+    "-h",
+    "-l",
+    "-d",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host"
+  ],
+  "executable_pin": {
+    "size": 818312,
+    "sha256": "c857339616bbbfa5eba32733e22365048903fbaf6ed2126b897dd138bcb741fc"
+  },
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128",
+  "output_parent": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128",
+  "watch_root": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "input_files": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/verify_inputs.py",
+      "size": 4726,
+      "sha256": "0acefa6762571928b12d5e9a48f32b6d732755424da6ada203b10d8bbdfb929d"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/prepare_candidate.py",
+      "size": 5779,
+      "sha256": "7d43928376bc5cf86b73a3bcbf6fc0f99288c4cf86d9b0d0dba5731b40904d2e"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/finalize_static.py",
+      "size": 8011,
+      "sha256": "2c464d38c851150dbe7c99fd1edaa986533093212ccb9c5e68ee8db287cfa412"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+      "size": 20440,
+      "sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd"
+    }
+  ],
+  "artifact_files": [
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host"
+  ],
+  "map_relative_path": "whole-static.map"
+}
