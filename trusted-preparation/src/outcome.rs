@@ -146,6 +146,30 @@ impl FrameReader {
 mod tests {
     use super::*;
     #[test]
+    fn mandatory_closings_and_terminal_survive_optional_frame_exhaustion() {
+        let dir = crate::test_directory("report-reservation"); let path = dir.join("frames");
+        let file = std::fs::File::create(&path).unwrap(); let mut writer = ReportWriter::new(file);
+        assert_eq!(writer.reserve_closings(MAX_FRAMES),Err(Refusal::Resource));
+        writer.reserve_closings(1).unwrap();
+        assert_eq!(writer.reserve_closings(1),Err(Refusal::Association));
+        for _ in 0..MAX_FRAMES-2 { writer.write(OutcomeFrameKind::Trace,b"").unwrap(); }
+        assert_eq!(writer.write(OutcomeFrameKind::Result,b""),Err(Refusal::Resource));
+        writer.write(OutcomeFrameKind::ScopeClosing,&[0;32]).unwrap();
+        writer.finish_closings().unwrap(); writer.write(OutcomeFrameKind::Terminal,b"").unwrap();
+        assert_eq!(writer.write(OutcomeFrameKind::Terminal,b""),Err(Refusal::Input));
+        drop(writer); std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn failed_output_poison_cannot_publish_another_fact_or_terminal() {
+        let dir = crate::test_directory("report-poison"); let path = dir.join("data"); std::fs::write(&path,b"unchanged").unwrap();
+        let mut writer = ReportWriter::new(File::open(&path).unwrap()); writer.reserve_closings(1).unwrap();
+        assert_eq!(writer.write(OutcomeFrameKind::ScopeClosing,b"facts"),Err(Refusal::Input));
+        assert_eq!(writer.write(OutcomeFrameKind::ScopeClosing,b"facts"),Err(Refusal::Input));
+        assert_eq!(writer.finish_closings(),Err(Refusal::Association));
+        assert_eq!(writer.write(OutcomeFrameKind::Terminal,b""),Err(Refusal::Input));
+        assert_eq!(std::fs::read(&path).unwrap(),b"unchanged"); drop(writer);std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn framed_channels_preserve_order_cuts_and_explicit_terminal() {
         let first = header(0, OutcomeFrameKind::UnpublishedGuard, 3).unwrap();
         let mut raw = first.to_vec(); raw.extend_from_slice(b"raw");
