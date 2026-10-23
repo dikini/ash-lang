@@ -334,7 +334,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Ok(false);
         }
         let mut actuals = None;
-        let intrinsic = loop {
+        let (function, module) = loop {
             self.type_work.charge(1).map_err(|()| type_resource())?;
             let kind = self.builder.compiler_node_kind(function)?;
             match F::pure(kind) {
@@ -349,16 +349,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     ));
                     function = application.function();
                 }
-                Some(PureExprKind::Value(crate::core::PureValue::Intrinsic(value))) => break *value,
+                Some(PureExprKind::Variable(variable)) => {
+                    let function = variable.binder();
+                    let Some(module) = function.module() else { return Ok(false); };
+                    break (function, module);
+                }
+                Some(PureExprKind::Value(crate::core::PureValue::Intrinsic(value))) => {
+                    let Intrinsic::ForeignQuarantine { function } = value.operation() else {
+                        return Ok(false);
+                    };
+                    break (function, value.module());
+                }
                 _ => return Ok(false),
             }
         };
-        let Intrinsic::ForeignQuarantine { function } = intrinsic.operation() else {
-            return Ok(false);
-        };
         self.type_work.charge(1).map_err(|()| type_resource())?;
         let Some(fact) = self.registry.scalar_preflight(function) else { return Ok(false); };
-        if !fact.module().is_builtin_foreign() || fact.module() != intrinsic.module()
+        if !fact.module().is_builtin_foreign() || fact.module() != module
             || fact.function() != function || fact.role() != Role::CheckedQuarantine {
             return Ok(false);
         }

@@ -13574,10 +13574,15 @@ mod checked_violation_image_tests {
         // Change only one canonical quarantine TypeApplication's H actual.
         // Preserve its State actual, callable original, operands and node type.
         let mut wrong_host = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let quarantine = wrong_host.scalar_preflights.iter()
+            .find(|record| record.role == Role::CheckedQuarantine).unwrap().function;
         let selected = wrong_host.nodes.iter().position(|node| {
             matches!(node.tag, NodeTag::TypeApplication { function, .. }
                 if matches!(wrong_host.nodes[function as usize].tag,
-                    NodeTag::ScalarPreflight { role: Role::CheckedQuarantine, .. }))
+                    NodeTag::ScalarPreflight { function: binder, role: Role::CheckedQuarantine, .. }
+                        if binder == quarantine)
+                    || matches!(wrong_host.nodes[function as usize].tag,
+                        NodeTag::Variable(binder) if binder == quarantine))
         }).expect("direct original quarantine application");
         let NodeTag::TypeApplication { arguments, .. } = wrong_host.nodes[selected].tag else { unreachable!() };
         let mut actuals = arguments.get(&wrong_host.type_children).unwrap().to_vec();
