@@ -522,7 +522,11 @@ mod tests {
         assert!(manifest.contains("src/lib.rs"));
         assert!(!manifest.contains("foreign-adapter"));
         assert!(manifest.contains("ash-trusted-preparation"));
-        let leaf = fs::read_to_string(artifact.project.join("leaf/src/lib.rs")).unwrap();
+        let leaf_path = super::super::checked_root_project::leaf_source_path(
+            std::str::from_utf8(&data.leaf).unwrap(), &mut setup,
+        ).unwrap();
+        let leaf = fs::read_to_string(artifact.project.join("leaf").join(leaf_path)).unwrap();
+        assert_eq!(leaf.as_bytes(), data.leaf);
         assert!(leaf.contains("pub struct Owner"));
         assert!(!leaf.contains("impl Drop"));
         // Build a fresh coherent native observation for the donor rather than

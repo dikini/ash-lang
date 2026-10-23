@@ -1,6 +1,7 @@
 //! Fixed generated-package construction for the artifact-local binary root.
 //! Files/commands here are build DATA, never installed-context authority.
 use crate::types::TypeWorkBudget;
+use sha2::{Digest, Sha256};
 use std::{path::{Path, PathBuf}, process::Command};
 use super::checked_root_identity::Failure;
 
@@ -36,9 +37,16 @@ pub(super) struct BuildData {
     pub leaf: Vec<u8>,
     pub shim: Vec<u8>,
 }
-fn leaf_manifest(work: &mut TypeWorkBudget) -> Result<String, Failure> {
+pub(super) fn leaf_source_path(leaf: &str, work: &mut TypeWorkBudget) -> Result<String, Failure> {
+    // Cargo fingerprints the source target path. Bind that path to complete
+    // emitted bytes so a different generated project cannot reuse old leaf code.
+    pay(work, leaf.len().checked_add(128).ok_or(Failure::Resource)?)?;
+    Ok(format!("src/leaf-{:x}.rs", Sha256::digest(leaf.as_bytes())))
+}
+fn leaf_manifest(leaf: &str, work: &mut TypeWorkBudget) -> Result<String, Failure> {
+    let source = leaf_source_path(leaf, work)?;
     pay(work,1024)?;
-    Ok(format!("[package]\nname = {LEAF_PACKAGE:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lints.rust]\nunsafe_op_in_unsafe_fn = \"deny\"\n\n[lints.clippy]\nundocumented_unsafe_blocks = \"deny\"\n"))
+    Ok(format!("[package]\nname = {LEAF_PACKAGE:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = {source:?}\n\n[lints.rust]\nunsafe_op_in_unsafe_fn = \"deny\"\n\n[lints.clippy]\nundocumented_unsafe_blocks = \"deny\"\n"))
 }
 fn validate_lock(settled: &[u8], work: &mut TypeWorkBudget) -> Result<(), Failure> {
     if settled.len() > 1024 * 1024 { return Err(Failure::Resource); }
@@ -79,7 +87,7 @@ impl BuildData {
         // alternate paths, arbitrary code or caller fingerprint is admitted.
         let canonical_config = serde_json::to_vec(&config).map_err(|_| Failure::Resource)?;
         let expected_manifest = manifest_for(&config.canonical_source_root, work)?;
-        let expected_leaf_manifest = leaf_manifest(work)?;
+        let expected_leaf_manifest = leaf_manifest(expected_leaf, work)?;
         pay(work, canonical_config.len().checked_add(self.manifest.len()).and_then(|n| n.checked_add(self.leaf_manifest.len())).and_then(|n| n.checked_add(self.leaf.len())).and_then(|n| n.checked_add(self.shim.len())).ok_or(Failure::Resource)?)?;
         if canonical_config != self.build_configuration || expected_manifest.as_bytes() != self.manifest
             || expected_leaf_manifest.as_bytes() != self.leaf_manifest || expected_leaf.as_bytes() != self.leaf || expected_shim.as_bytes() != self.shim { return Err(Failure::Association); }
@@ -153,7 +161,8 @@ impl Project {
         let environment = super::checked_root_environment::Environment::discover(&root, work)?;
         let canonical = PathBuf::from(env!("ASH_RUNTIME_CANONICAL_SOURCE_ROOT"));
         let manifest = manifest_for(&canonical, work)?;
-        let leaf_manifest = leaf_manifest(work)?;
+        let leaf_manifest = leaf_manifest(leaf, work)?;
+        let leaf_source = format!("leaf/{}", leaf_source_path(leaf, work)?);
         let config_bound = environment.configurations.iter().try_fold(1024usize, |n, c| n.checked_add(c.path.as_os_str().len())?.checked_add(c.bytes.len()))
             .and_then(|n| n.checked_add(canonical.as_os_str().len()))
             .and_then(|n| n.checked_add(root.as_os_str().len()))
@@ -179,7 +188,7 @@ impl Project {
         for (path, bytes) in [
             ("Cargo.toml", manifest.as_bytes()), ("Cargo.lock", ORIGINAL_LOCK),
             ("rust-toolchain.toml", TOOLCHAIN), ("leaf/Cargo.toml", leaf_manifest.as_bytes()),
-            ("leaf/src/lib.rs", leaf.as_bytes()), ("root-shim.rs", shim.as_bytes()),
+            (leaf_source.as_str(), leaf.as_bytes()), ("root-shim.rs", shim.as_bytes()),
             ("build.rs", BUILD_SCRIPT.as_bytes()), ("lock_policy.rs", LOCK_POLICY), ("root-config.json", config.as_slice()),
         ] {
             pay(work,root.as_os_str().len().checked_add(path.len()).and_then(|n|n.checked_mul(2)).and_then(|n|n.checked_add(64)).ok_or(Failure::Resource)?)?;
@@ -193,6 +202,7 @@ impl Project {
         use std::{io::Read, os::unix::fs::{MetadataExt, OpenOptionsExt}};
         self.verify_environment(work)?;
         pay(work,self.root.as_os_str().len())?;
+        let leaf_source = format!("leaf/{}", leaf_source_path(expected_leaf, work)?);
         let mut read = |name: &str, limit: usize| -> Result<Vec<u8>, Failure> {
             pay(work,self.root.as_os_str().len().checked_add(name.len()).and_then(|n|n.checked_mul(2)).and_then(|n|n.checked_add(64)).ok_or(Failure::Resource)?)?;
             let mut file = std::fs::OpenOptions::new().read(true).custom_flags(0x20000|0x80000|0x800).open(self.root.join(name)).map_err(|_| Failure::Resource)?;
@@ -210,7 +220,7 @@ impl Project {
         let data = BuildData { version: 1, project_root: self.root.clone(),
             manifest: read("Cargo.toml",65536)?, build_configuration: read("root-config.json",16384)?,
             settled_lock: read("Cargo.lock",1024*1024)?, leaf_manifest: read("leaf/Cargo.toml",65536)?,
-            leaf: read("leaf/src/lib.rs",32*1024*1024)?, shim: read("root-shim.rs",32*1024*1024)?,
+            leaf: read(&leaf_source,32*1024*1024)?, shim: read("root-shim.rs",32*1024*1024)?,
         };
         let fixed = [read("build.rs",32*1024*1024)?, read("lock_policy.rs",1024*1024)?, read("rust-toolchain.toml",65536)?];
         pay(work, fixed.iter().try_fold(0usize, |n, b| n.checked_add(b.len())).ok_or(Failure::Resource)?)?;
@@ -263,11 +273,26 @@ pub(super) fn fixture_data(leaf: &str, shim: &str, work: &mut TypeWorkBudget) ->
     // Test construction is separate from the request's actual shared meter.
     BuildData {version:1,project_root:project,manifest:manifest_for(&canonical,work).unwrap().into_bytes(),
         build_configuration:serde_json::to_vec(&config).unwrap(),settled_lock:super::checked_root_lock_policy::fixture(ORIGINAL_LOCK),
-        leaf_manifest:leaf_manifest(work).unwrap().into_bytes(),leaf:leaf.as_bytes().to_vec(),shim:shim.as_bytes().to_vec()}
+        leaf_manifest:leaf_manifest(leaf,work).unwrap().into_bytes(),leaf:leaf.as_bytes().to_vec(),shim:shim.as_bytes().to_vec()}
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn leaf_source_target_is_content_bound_paid_and_closed() {
+        let mut work = TypeWorkBudget::default();
+        let source = leaf_source_path("leaf DATA", &mut work).unwrap();
+        let cost = work.used();
+        assert_eq!(source, "src/leaf-7347cc39832becab5381cc6e26d2d1a23109a90f9ad16b2566e93cd64edfc358.rs");
+        assert_ne!(source, leaf_source_path("leaf DATB", &mut TypeWorkBudget::default()).unwrap());
+        assert_eq!(leaf_source_path("leaf DATA", &mut TypeWorkBudget::with_limit(cost - 1)), Err(Failure::Resource));
+        let mut exact = TypeWorkBudget::with_limit(cost);
+        assert_eq!(leaf_source_path("leaf DATA", &mut exact), Ok(source.clone()));
+        assert_eq!(exact.used(), cost);
+        assert_eq!(leaf_source_path("leaf DATA", &mut exact), Err(Failure::Resource));
+        let manifest = leaf_manifest("leaf DATA", &mut TypeWorkBudget::default()).unwrap();
+        assert!(manifest.contains(&format!("path = {source:?}")));
+    }
     #[test]
     fn generated_command_path_inspection_is_prepaid_and_bounded() {
         let path=Path::new("/tmp/owned-root-target");
@@ -294,6 +319,12 @@ mod tests {
         std::fs::write(project.root().join("Cargo.lock"),super::super::checked_root_lock_policy::fixture(ORIGINAL_LOCK)).unwrap();
         let canonical=project.snapshot("leaf DATA","shim DATA",&mut work).unwrap();
         assert_eq!(canonical.leaf,b"leaf DATA");
+        let source = project.root().join("leaf").join(leaf_source_path("leaf DATA", &mut work).unwrap());
+        assert_eq!(std::fs::read(&source).unwrap(), b"leaf DATA");
+        assert!(!project.root().join("leaf/src/lib.rs").exists());
+        std::fs::write(&source, b"leaf DATB").unwrap();
+        assert!(matches!(project.snapshot("leaf DATA", "shim DATA", &mut work), Err(Failure::Association)));
+        std::fs::write(&source, b"leaf DATA").unwrap();
         assert_eq!(std::str::from_utf8(&canonical.manifest).unwrap().matches("[workspace]").count(),1);
         assert!(!std::str::from_utf8(&canonical.leaf_manifest).unwrap().contains("[workspace]"));
         for name in ["build.rs","lock_policy.rs","rust-toolchain.toml"] {
