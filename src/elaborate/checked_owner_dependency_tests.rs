@@ -432,6 +432,7 @@ fn checked_owner_dependency_retained_access_borrow_requires_exact_window() {
         .unwrap(),
         "existing executable matcher remains Type-only"
     );
+    crate::core::source_window::assert_erased_row_window_refuses(&row_core, &row_provenance);
     let row_request = "perform QueryChild<{| Before}, W, H, C, S, {| After}>";
     assert_eq!(row_source.matches(row_request).count(), 1);
     source_refuses(&row_source.replace(

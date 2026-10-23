@@ -166,17 +166,20 @@ pub(crate) fn matches_static_view_type(
     ty: &Type,
     work: &mut TypeWorkBudget,
 ) -> Result<bool, ()> {
-    let Type::ForeignOwnerApply(nominal, actuals) = ty else {
+    work.charge(family.parameters().len())?;
+    let row_family = family
+        .parameters()
+        .iter()
+        .any(|formal| formal.kind == crate::types::Kind::EffectRow);
+    if !row_family {
         return matches_view_type(family, arguments, ty, work);
-    };
-    work.charge(arguments.len())?;
-    if family.prepared().checked_contract().is_none()
-        || !arguments
-            .iter()
-            .any(|argument| matches!(argument, KindedArgument::RowArg(_)))
-    {
+    }
+    if family.prepared().checked_contract().is_none() {
         return Ok(false);
     }
+    let Type::ForeignOwnerApply(nominal, actuals) = ty else {
+        return Ok(false);
+    };
     if *nominal != family.nominal()
         || actuals.len() != arguments.len()
         || arguments.len() != family.parameters().len()
@@ -198,4 +201,97 @@ pub(crate) fn matches_static_view_type(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+pub(crate) fn assert_erased_row_window_refuses(
+    core: &super::ValidatedEffectProgram,
+    provenance: &[(crate::module::ModuleId, Arc<crate::source::SourceFile>)],
+) {
+    let sources = provenance
+        .iter()
+        .map(|(_, source)| source.as_ref())
+        .collect::<Vec<_>>();
+    let modules = provenance
+        .iter()
+        .map(|(module, source)| (*module, source.id()))
+        .collect::<Vec<_>>();
+    super::validate_effect_modules(
+        super::transform::identity_effect_traversal(core).unwrap(),
+        &sources,
+        &modules,
+    )
+    .expect("canonical full-kind Access Core first");
+    let mut program = super::transform::identity_effect_traversal(core).unwrap();
+    let windows = program
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, node)| {
+            matches!(
+                &node.kind,
+                super::EffectExprKind::Operation(super::EffectOperation::SourceCopyWindow(_))
+            )
+            .then_some(i)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(windows.len(), 1);
+    let index = windows[0];
+    let super::EffectExprKind::Operation(super::EffectOperation::SourceCopyWindow(window)) =
+        &program.nodes[index].kind
+    else {
+        unreachable!()
+    };
+    let mut work = TypeWorkBudget::default();
+    let mut erased =
+        crate::types::clone_kinded_arguments_with_budget(window.arguments().iter(), &mut work)
+            .unwrap();
+    let mut changed = 0;
+    for argument in &mut erased {
+        if matches!(argument, KindedArgument::RowArg(_)) {
+            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                argument,
+                KindedArgument::TypeArg(Type::Unit),
+            ));
+            changed += 1;
+        }
+    }
+    assert_eq!(changed, 2);
+    let mut spine = Type::Nominal(window.family().nominal());
+    for argument in &erased {
+        let KindedArgument::TypeArg(ty) = argument else {
+            unreachable!()
+        };
+        spine = Type::Application(
+            Box::new(spine),
+            Box::new(crate::types::clone_type_with_budget(ty, &mut work).unwrap()),
+        );
+    }
+    let spine = crate::types::IterativeTypeOwner::new(spine);
+    assert!(
+        matches_view_type(window.family(), &erased, &spine, &mut work).unwrap(),
+        "coherent Type-only encoding supplies the old matcher's premise"
+    );
+    assert!(
+        !matches_static_view_type(window.family(), &erased, &spine, &mut work).unwrap(),
+        "the authenticated full-kind family cannot fall back to that encoding"
+    );
+    let forged = SourceCopyWindowNode::new(
+        Arc::clone(window.family()),
+        erased,
+        window.identity(),
+        window.interpretations().to_vec().into_boxed_slice(),
+        window.state(),
+        window.body(),
+    );
+    program.nodes[index].kind = super::EffectExprKind::Operation(
+        super::EffectOperation::SourceCopyWindow(Box::new(forged)),
+    );
+    match super::validate_effect_modules(program, &sources, &modules) {
+        Err(error) => assert_eq!(error.reason(), super::ValidationReason::Registry),
+        Ok(_) => panic!("erased original Access kind vector must refuse independent Core"),
+    }
+    eprintln!(
+        "checked Access Row tags: coherent erased descriptor and Type-only spine refuse static helper; independent Core Registry"
+    );
 }

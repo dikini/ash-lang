@@ -499,3 +499,12 @@ work failures; later image hostiles, startups, final specification wording,
 affected regressions, Clippy and current-head review remain pending. The
 consuming-row implementation has semantic parity evidence but no demonstrated
 required-image budget fit. No broader F3, runtime or F-core criterion is closed.
+
+
+The [member reconstruction refinement](evidence/checked-owner-dependencies/member-refinement/README.md)
+retains one compile-only test repair and the next genuine seven-focused-control
+plus eight-of-ten dependency result. Formal-kind-driven static Access matching
+and its erased-descriptor Core refusal now pass. Both required full-Row images
+still fail at their distinct work boundaries; startups and final gates remain
+unrun. The tested source is preserved before rebase onto the retained F6
+producer checkpoint; no result transfers automatically to that newer tree.

@@ -1092,44 +1092,49 @@ impl EffectRow {
                 }
             }
         }
-        let replacement =
-            clone_effect_row_with_budget_and_failure(replacement, budget, &mut storage_error)?;
         let (known, tail) = self.into_parts();
-        let (replacement_known, replacement_tail) = replacement.into_parts();
         fn append<B: TypeWorkMeter>(
             mut owned: Vec<EffectInstance>,
-            extra: Box<[EffectInstance]>,
+            extra: &[EffectInstance],
             site: RowReservationSite,
             budget: &mut B,
             storage_error: &mut impl FnMut(&mut B) -> B::Error,
         ) -> Result<Vec<EffectInstance>, B::Error> {
             if !extra.is_empty() {
-                // Reservation can relocate the original prefix; extension moves
-                // every added member. Neither operation rebuilds its arguments.
+                // Reservation can relocate the original prefix. Existing members
+                // keep their arguments; only the borrowed suffix is rebuilt.
                 let count = owned
                     .len()
                     .checked_add(extra.len())
                     .ok_or_else(|| storage_error(budget))?;
                 budget.charge(count)?;
                 reserve_row(&mut owned, extra.len(), site).map_err(|_| storage_error(budget))?;
-                owned.extend(extra.into_vec());
+                let mut clone = clone_type_with_budget::<B>;
+                for instance in extra {
+                    owned.push(rebuild_effect_instance_with_budget_and_failure(
+                        instance,
+                        &mut clone,
+                        budget,
+                        storage_error,
+                    )?);
+                }
             }
             Ok(owned)
         }
         let known = append(
             known.into_vec(),
-            replacement_known,
+            &replacement.known,
             RowReservationSite::RebuildMembers,
             budget,
             &mut storage_error,
         )?;
-        let tail = if let Some((variable, replacement_lacks)) = replacement_tail {
+        let tail = if let Some(replacement_tail) = &replacement.tail {
             let (_, original_lacks) = tail.expect("matched reconstructed tail");
             Some((
-                variable,
+                replacement_tail.variable,
                 append(
                     original_lacks.into_vec(),
-                    replacement_lacks,
+                    &replacement_tail.lacks,
                     RowReservationSite::RebuildLacks,
                     budget,
                     &mut storage_error,
@@ -1243,6 +1248,47 @@ where
     rebuild_effect_row_with_budget_and_failure(known, tail, lacks, map, budget, allocation_error)
 }
 
+fn rebuild_effect_instance_with_budget_and_failure<E, B: TypeWorkMeter>(
+    instance: &EffectInstance,
+    map: &mut impl FnMut(&Type, &mut B) -> Result<Type, E>,
+    budget: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
+) -> Result<EffectInstance, E>
+where
+    E: From<B::Error>,
+{
+    let mut arguments = Vec::new();
+    for argument in &instance.arguments {
+        let argument = IterativeArgumentOwner::new(map_kinded_argument_types_with_budget(
+            argument,
+            map,
+            budget,
+            storage_error,
+        )?);
+        budget.charge(1).map_err(E::from)?;
+        reserve_row(&mut arguments, 1, RowReservationSite::RebuildArguments)
+            .map_err(|_| E::from(storage_error(budget)))?;
+        arguments.push(argument);
+    }
+    let mut retained = Vec::new();
+    budget.charge(arguments.len()).map_err(E::from)?;
+    reserve_row(
+        &mut retained,
+        arguments.len(),
+        RowReservationSite::RebuildRetained,
+    )
+    .map_err(|_| E::from(storage_error(budget)))?;
+    retained.extend(
+        arguments
+            .into_iter()
+            .map(IterativeArgumentOwner::into_inner),
+    );
+    Ok(EffectInstance::new_kinded(
+        instance.effect,
+        retained.into_boxed_slice(),
+    ))
+}
+
 fn rebuild_effect_row_with_budget_and_failure<'a, E, B: TypeWorkMeter>(
     known: impl IntoIterator<Item = &'a EffectInstance>,
     tail: Option<EffectRowVariable>,
@@ -1254,50 +1300,14 @@ fn rebuild_effect_row_with_budget_and_failure<'a, E, B: TypeWorkMeter>(
 where
     E: From<B::Error>,
 {
-    fn rebuild_instance<E, B: TypeWorkMeter>(
-        instance: &EffectInstance,
-        map: &mut impl FnMut(&Type, &mut B) -> Result<Type, E>,
-        budget: &mut B,
-        storage_error: &mut impl FnMut(&mut B) -> B::Error,
-    ) -> Result<EffectInstance, E>
-    where
-        E: From<B::Error>,
-    {
-        let mut arguments = Vec::new();
-        for argument in &instance.arguments {
-            let argument = IterativeArgumentOwner::new(map_kinded_argument_types_with_budget(
-                argument,
-                map,
-                budget,
-                storage_error,
-            )?);
-            budget.charge(1).map_err(E::from)?;
-            reserve_row(&mut arguments, 1, RowReservationSite::RebuildArguments)
-                .map_err(|_| E::from(storage_error(budget)))?;
-            arguments.push(argument);
-        }
-        let mut retained = Vec::new();
-        budget.charge(arguments.len()).map_err(E::from)?;
-        reserve_row(
-            &mut retained,
-            arguments.len(),
-            RowReservationSite::RebuildRetained,
-        )
-        .map_err(|_| E::from(storage_error(budget)))?;
-        retained.extend(
-            arguments
-                .into_iter()
-                .map(IterativeArgumentOwner::into_inner),
-        );
-        Ok(EffectInstance::new_kinded(
-            instance.effect,
-            retained.into_boxed_slice(),
-        ))
-    }
-
     let mut rebuilt_known = Vec::new();
     for instance in known {
-        let instance = rebuild_instance(instance, &mut map, budget, &mut storage_error)?;
+        let instance = rebuild_effect_instance_with_budget_and_failure(
+            instance,
+            &mut map,
+            budget,
+            &mut storage_error,
+        )?;
         budget.charge(1).map_err(E::from)?;
         reserve_row(&mut rebuilt_known, 1, RowReservationSite::RebuildMembers)
             .map_err(|_| E::from(storage_error(budget)))?;
@@ -1306,7 +1316,12 @@ where
     let rebuilt_tail = if let Some(variable) = tail {
         let mut rebuilt_lacks = Vec::new();
         for instance in lacks {
-            let instance = rebuild_instance(instance, &mut map, budget, &mut storage_error)?;
+            let instance = rebuild_effect_instance_with_budget_and_failure(
+                instance,
+                &mut map,
+                budget,
+                &mut storage_error,
+            )?;
             budget.charge(1).map_err(E::from)?;
             reserve_row(&mut rebuilt_lacks, 1, RowReservationSite::RebuildLacks)
                 .map_err(|_| E::from(storage_error(budget)))?;
