@@ -1413,6 +1413,25 @@ pub(crate) fn with_violation_boundary_for_test(
 #[test]
 fn checked_violation_request_and_null_observation_identity_are_exact() {
     use crate::core::source_resource::SourceResourcePhase as Phase;
+    let (program, _) = crate::elaborate::checked_owner_violation_program();
+    with_program_context(&program, |program, acquire, _finish| {
+        let mut work = TypeWorkBudget::default();
+        let mut call = None;
+        acquire._scope.visit_byte_calls(|candidate, _| {
+            if candidate.apply.is_some() && candidate.acquisition.is_some() { call = Some(candidate); }
+            Ok(())
+        }, &mut work).unwrap();
+        let executable = crate::eval::ExecutableProgram::Effect(program.shared());
+        let receipt = SourceOwnerViolationRequest::admit(&executable, acquire._scope_node,
+            Phase::Acquire, call.unwrap(), &mut work).unwrap();
+        let (mut ready, _storage) = authority_guard(&acquire, 111, &mut work);
+        ready.prepare_checked_boundary(&acquire, 111, Some(limits()), &mut work).unwrap();
+        let boundary = ready.checked_boundary(&mut work).unwrap().unwrap();
+        assert!(boundary.deny(&receipt, 111, &mut work).is_err(), "reserved slot is not an observed acquisition");
+        ready.begin_checked_acquire().unwrap();
+        assert!(boundary.deny(&receipt, 111, &mut work).is_err(), "entry without return is not an admitted observation");
+        assert_eq!(boundary.snapshot().observations, 0);
+    });
     for (reject, present) in [(true, false), (true, true), (false, true)] {
         with_violation_boundary_for_test(reject, present, |mut fixture| {
             let executable = crate::eval::ExecutableProgram::Effect(fixture.program.shared());
@@ -1449,6 +1468,9 @@ fn checked_violation_request_and_null_observation_identity_are_exact() {
             assert_eq!(unresolved, before.unresolved);
             assert_eq!(status, None, "cause is not a native status");
             let after = fixture.boundary.snapshot();
+            let repeated = fixture.boundary.deny(&receipt, 111, &mut work).unwrap();
+            assert_eq!(repeated, (native, unresolved, status), "conservative denial is idempotent");
+            assert_eq!(fixture.boundary.snapshot(), after, "repeat adds no native/K/history event");
             assert_eq!(after.native, before.native);
             assert_eq!(after.k, before.k);
             assert_eq!(after.observations, before.observations);

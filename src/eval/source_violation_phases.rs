@@ -14,7 +14,6 @@ use crate::{
     foreign::{
         scalar_preflight::ForeignScalarPreflightRole as Role,
         source_bindings::{SourceOwnerViolationRequest, owner_admission_failure},
-        source_runtime::NativeOwnerViewKind,
     },
     module::{ForeignCheckedNominalRole as Nominal, ModuleId},
     types::{ConstructorId, IterativeTypeOwner, NominalTypeId, Type, TypeWorkBudget},
@@ -343,10 +342,9 @@ impl Machine<'_> {
                     .owner
                     .as_ref()
                     .ok_or(RuntimeFailure::ForeignBinding)?;
-                owner
-                    .pay_group_checks(1, &mut self.instantiation_work)
-                    .map_err(|error| owner_admission_failure(error, &self.instantiation_work))?;
-                if !owner.ordinary_live() {
+                if !std::sync::Arc::ptr_eq(owner.owner(), &scope.header().owner)
+                    || !owner.physically_live()
+                {
                     return Err(RuntimeFailure::ForeignBinding);
                 }
                 owner
@@ -355,13 +353,8 @@ impl Machine<'_> {
                     .ok_or(RuntimeFailure::ForeignBinding)?
             } else {
                 let bindings = self.source_bindings.ok_or(RuntimeFailure::ForeignBinding)?;
-                let dependency = bindings.borrowed_owner(
-                    key.0 as usize,
-                    &state,
-                    NativeOwnerViewKind::State,
-                    None,
-                    &mut self.instantiation_work,
-                )?;
+                let dependency =
+                    bindings.denial_owner(key.0 as usize, &state, &mut self.instantiation_work)?;
                 let retained = if let Some(owner) = boundary.owner.as_ref() {
                     super::charge_effect_work(
                         &mut self.instantiation_work,
@@ -403,13 +396,13 @@ impl Machine<'_> {
         };
         boundary.blocked = true;
         let native = match native {
-            crate::foreign::checked_control::Native::NoOwner => {
+            crate::foreign::source_runtime::CheckedNativeFact::NoOwner => {
                 crate::eval::ResourceNativeFact::NoOwner
             }
-            crate::foreign::checked_control::Native::Owned => {
+            crate::foreign::source_runtime::CheckedNativeFact::Owned => {
                 crate::eval::ResourceNativeFact::Owned
             }
-            crate::foreign::checked_control::Native::Consumed => {
+            crate::foreign::source_runtime::CheckedNativeFact::Consumed => {
                 crate::eval::ResourceNativeFact::Consumed
             }
         };
@@ -534,12 +527,26 @@ mod tests {
                         )
                         .unwrap()
                 };
+                let repeated_callable = callable.clone();
+                let repeated_caller = caller.clone();
+                let repeated_value =
+                    super::super::copy_generic_cell_value(&value, &mut machine.instantiation_work)
+                        .unwrap();
                 machine
                     .return_source_violation_call(
                         fixture.call.apply.unwrap(),
                         callable,
                         caller,
                         value,
+                    )
+                    .unwrap();
+                machine.control = None;
+                machine
+                    .return_source_violation_call(
+                        fixture.call.apply.unwrap(),
+                        repeated_callable,
+                        repeated_caller,
+                        repeated_value,
                     )
                     .unwrap();
                 let after = checked.snapshot();
@@ -602,7 +609,7 @@ mod tests {
                     assert!(machine.step_source_owner().unwrap());
                     assert_eq!(
                         checked.snapshot().k,
-                        crate::foreign::checked_control::K::Discharged
+                        crate::foreign::source_runtime::CheckedLocalCompletion::Discharged
                     );
                     assert_eq!(checked.snapshot().native, before.native);
                     assert_eq!(checked.snapshot().observations, before.observations);

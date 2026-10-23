@@ -141,6 +141,12 @@ impl SourceNativeBindings {
             .view(activation, ty, kind, completion, work)
             .map_err(|error| owner_admission_failure(error, work))
     }
+    pub(crate) fn denial_owner(
+        &self, activation: usize, ty: &crate::types::Type, work: &mut TypeWorkBudget,
+    ) -> Result<super::source_runtime::NativeOwnerDependency, RuntimeFailure> {
+        self.owner_storage.denial_dependency(activation, ty, work)
+            .map_err(|error| owner_admission_failure(error, work))
+    }
     pub(crate) fn close_source_owners(&self) -> Result<(), RuntimeFailure> {
         self.owner_storage
             .close()

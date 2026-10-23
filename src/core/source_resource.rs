@@ -2442,7 +2442,7 @@ fn eval_flow<'a>(
                     | FlowFact::ViewCallable(_, Some(_)) => None,
                     _ => return Err(invalid()),
                 };
-                for (argument, path) in eval_flow(
+                for (argument, mut path) in eval_flow(
                     program,
                     header,
                     application.argument(),

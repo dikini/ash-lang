@@ -56,8 +56,7 @@ impl NativeOwnerDependency {
         &self, work: &mut TypeWorkBudget,
     ) -> Result<NativeOwnerBoundary, NativeOwnerAdmissionError> {
         let slots = self.storage.slots.borrow();
-        if slots[self.slot].checked_group_root.is_some() { pay(work, 2)?; }
-        if slots[self.slot].checked.is_none() || NativeOwnerStorage::denied(&slots, self.slot) {
+        if slots[self.slot].checked.is_none() {
             return Err(NativeOwnerAdmissionError::Authority);
         }
         pay(work, 1)?;
@@ -587,6 +586,30 @@ impl NativeOwnerStorage {
         slots.iter().all(|slot| !slot.physically_live())
     }
 
+    /// Exact typed State lookup only for a direct conservative-denial call.
+    /// The evaluator still proves original Current/Enclosing membership. This
+    /// receipt exposes no address after denial and grants no ordinary access.
+    pub(crate) fn denial_dependency(
+        self: &Rc<Self>, activation: usize, ty: &Type, work: &mut TypeWorkBudget,
+    ) -> Result<NativeOwnerDependency, NativeOwnerAdmissionError> {
+        let slots = self.slots.borrow();
+        pay(work, slots.len())?;
+        let mut selected = None;
+        for (index, slot) in slots.iter().enumerate() {
+            let Some(authority) = &slot.authority else { continue; };
+            if authority.activation != activation || !slot.physically_live() { continue; }
+            if !crate::types::same_type_with_budget(&authority.state, ty, work)
+                .map_err(|()| NativeOwnerAdmissionError::Work)? { continue; }
+            pay(work, 2)?;
+            NativeOwnerStorage::validated_group_root(&slots, index)?
+                .ok_or(NativeOwnerAdmissionError::Authority)?;
+            if selected.replace(index).is_some() { return Err(NativeOwnerAdmissionError::Authority); }
+        }
+        let slot = selected.ok_or(NativeOwnerAdmissionError::Authority)?;
+        pay(work, 1)?;
+        Ok(NativeOwnerDependency { storage: Rc::clone(self), slot })
+    }
+
     pub(crate) fn view(
         self: &Rc<Self>,
         activation: usize,
@@ -981,7 +1004,7 @@ impl NativeOwnerBoundary {
         let checked = slot.checked.as_ref().ok_or(NativeOwnerAdmissionError::Authority)?;
         if receipt.reject {
             checked.authorize_rejection(receipt, activation, work).map_err(control_error)?;
-        } else if !slot.physically_live() || NativeOwnerStorage::denied(&slots, self.slot) {
+        } else if !slot.physically_live() {
             return Err(NativeOwnerAdmissionError::Authority);
         }
         // No fallible operation follows this store. Synchronizing this owner's
@@ -1885,6 +1908,17 @@ mod tests {
         assert!(!parent.ordinary_live() && !first.ordinary_live());
         assert!(!sibling.ordinary_live() && !descendant.ordinary_live());
         assert!(independent.ordinary_live(), "same host/storage does not merge independent roots");
+        let parent_state = crate::types::IterativeTypeOwner::new({
+            let slots = storage.slots.borrow();
+            crate::types::clone_type_with_budget(&slots[parent.slot].authority.as_ref().unwrap().state, &mut work).unwrap()
+        });
+        for _ in 0..2 {
+            let denial = storage.denial_dependency(1, &parent_state, &mut work).unwrap();
+            assert_eq!(denial.slot, parent.slot);
+            assert!(denial.address().is_none(), "denial lookup grants no ordinary/raw access");
+            assert!(storage.view(1, &parent_state, super::NativeOwnerViewKind::State, None, &mut work).is_err());
+        }
+        drop(parent_state);
         drop(first);
         drop(descendant);
         drop(sibling);

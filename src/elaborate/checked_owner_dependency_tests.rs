@@ -500,7 +500,7 @@ fn checked_owner_dependency_body_free_facade_requires_exact_hidden_child() {
 #[test]
 fn checked_quarantine_requires_declared_enclosing_state_and_exact_host() {
     let before = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => Refused ()";
-    let after = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n                let denied = Foreign.checked_quarantine<H, ParentState<H, C>> (dependency, Foreign.UnexpectedNull)\n                Refused ()\n            }";
+    let after = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n                let denied = Foreign.checked_quarantine<H, ParentState<H, C>> (dependency, Foreign.UnexpectedNull)\n                let repeated = Foreign.checked_quarantine<H, ParentState<H, C>> (dependency, Foreign.UnexpectedNull)\n                Refused ()\n            }";
     // Only the child acquire has the exact declared Enclosing dependency in
     // scope. Parent remains the unchanged independent original owner.
     let start = DEPENDENT.find("resource Child<").unwrap();

@@ -43,7 +43,6 @@ impl CheckedForeignScalarPreflight {
                 if matches!(call.as_ref(), Type::Nominal(found) if *found == self.call_codec.ids().call)
                     && matches!(result.as_ref(), Type::Unit))
             || computation.effects().tail().is_some()
-            || !computation.effects().lacks().is_empty()
             || !matches!(computation.effects().known(), [instance]
                 if instance.effect() == EffectId::new(self.module(), crate::module::FOREIGN_NATIVE_HOST_LOCAL)
                     && matches!(instance.arguments(), [KindedArgument::TypeArg(Type::Variable(found))] if *found == host))
