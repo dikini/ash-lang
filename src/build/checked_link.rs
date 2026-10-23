@@ -882,7 +882,7 @@ fn validate_bfd(
         || obs.command[1] != search
         || obs.command[2..2 + n] != obs.expanded
         || obs.command[2 + n] != "-v"
-        || obs.command[3 + n] != "-Wl,--no-print-map-discarded,-Map=/dev/stdout"
+        || obs.command[3 + n] != "-Wl,--no-print-map-discarded,-Map=-"
     {
         return Err(ReceiptFailure::Association);
     }
@@ -1761,6 +1761,8 @@ for b in [b'"unterminated',br'/escaped\ name.o',b'"/space name.o"']:
  else: raise AssertionError('accepted unknown response')
 real=subprocess.Popen; children=[]
 def spawn(*args,**kw):
+ assert args[0][-1]=='-Wl,--no-print-map-discarded,-Map=-'
+ assert sum('Map=' in a for a in args[0])==1
  p=real(['/usr/bin/sleep','30'],**kw);children.append(p);return p
 subprocess.Popen=spawn
 class Broken:

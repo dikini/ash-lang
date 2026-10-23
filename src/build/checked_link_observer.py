@@ -190,7 +190,7 @@ def script_members(data):
     return members
 
 def run(args):
-    command = ['/usr/bin/cc', '-B'+str(HERE/'selected-bfd'), *args, '-v', '-Wl,--no-print-map-discarded,-Map=/dev/stdout']
+    command = ['/usr/bin/cc', '-B'+str(HERE/'selected-bfd'), *args, '-v', '-Wl,--no-print-map-discarded,-Map=-']
     def terminated(signum, frame):
         raise RuntimeError('Input: terminated')
     previous = {s:signal.signal(s,terminated) for s in [signal.SIGTERM,signal.SIGINT,signal.SIGHUP]}
@@ -280,6 +280,8 @@ def main():
     output_data=json.dumps({'output':output},sort_keys=True,separators=(',',':')).encode()
     pay(len(output_data));(HERE/'output.json').write_bytes(output_data)
     map_bytes,stderr,group = run(args)
+    # Preserve bounded data even when marker/framing checks refuse it.
+    pay(len(map_bytes));(HERE/'link.map').write_bytes(map_bytes)
     marker_bytes=read(proxy_dir/'invocation.json',CFG['record_bytes'])
     marker=json.loads(marker_bytes,object_pairs_hook=unique_object)
     if set(marker)!={'version','arguments','output','tool','proxy','configuration','process_group','attempted_fd_exec','work_used'} or marker['version']!=1 or marker['attempted_fd_exec'] is not True or marker['output']!=output or marker['tool']!=tools[1] or marker['proxy']!=proxy or marker['configuration']!=tool_config or marker['process_group']!=group or type(marker['work_used']) is not int or not 0<marker['work_used']<=reserved:
@@ -322,17 +324,17 @@ def main():
     if sum(p['bytes'] for p in list(observed.values())+list(responses.values()))>CFG['total_bytes']: raise RuntimeError('Resource: total')
     if len(observed)+len(responses)>CFG['paths']: raise RuntimeError('Resource: paths')
     result = {'version':1,'arguments':raw,'expanded':args,'searches':searches,
-              'command':['/usr/bin/cc','-B'+str(proxy_dir),*args,'-v','-Wl,--no-print-map-discarded,-Map=/dev/stdout'],
+              'command':['/usr/bin/cc','-B'+str(proxy_dir),*args,'-v','-Wl,--no-print-map-discarded,-Map=-'],
               'prefixes':prefixes,'bfd':marker,'bfd_marker':pin(proxy_dir/'invocation.json'),'bfd_marker_text':marker_bytes.decode('utf-8'),'cc_exit_code':0,
               'responses':list(responses.values()),'response_texts':[{'path':p,'text':text} for p,text in texts.items()],'inputs':list(observed.values()),'loads':loads,'resolved_loads':resolved_loads,'scripts':scripts,
               'tools':tools,'output':pin(output),'map':{'bytes':len(map_bytes),'sha256':hashlib.sha256(map_bytes).hexdigest()},
               'stderr':{'bytes':len(stderr),'sha256':hashlib.sha256(stderr).hexdigest()},
               'work_used':0,'child_reaped':True,'owned_group_empty':True}
-    pay(CFG['record_bytes']+len(map_bytes))
+    pay(CFG['record_bytes'])
     result['work_used']=CFG['work']-remaining
     data = json.dumps(result,sort_keys=True,separators=(',',':')).encode()
     if len(data)>CFG['record_bytes']: raise RuntimeError('Resource: record')
-    (HERE/'link.map').write_bytes(map_bytes);(HERE/'record.json').write_bytes(data)
+    (HERE/'record.json').write_bytes(data)
 
 if __name__ == '__main__':
     try:
