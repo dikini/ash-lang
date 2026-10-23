@@ -1816,9 +1816,7 @@ impl Decoder<'_> {
         for record in records {
             let ty = self.ty(record.ty)?;
             let origin = self.origin(record.origin)?;
-            let effects = self
-                .structural(record.effects.ok_or(ImageFailure::InvalidRecord)?)?
-                .row()?;
+            let effects = self.row(record.effects.ok_or(ImageFailure::InvalidRecord)?)?;
             let node = self.effect_node(
                 &mut builder,
                 registry,

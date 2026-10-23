@@ -905,3 +905,13 @@ of scope. Existing ordinary dependency behavior remains a regression gate.
    evidence, request independent current-head review, and deliver one product PR.
    No preparation-only PR or runtime/native activation is authorized here. PM
    schedules the connected F-core full gate; developer runs it when due.
+
+Current partial evidence is retained in the
+[decoder-local Row checkpoint](../evidence/checked-owner-dependencies/row-representation/README.md).
+Six focused representation controls pass, while the required Row and Access
+canonical images remain work failures under unchanged defaults. Localize their
+current actual paths before another cost repair; preceding-artifact traces do
+not establish the new caller or deficit. Keep complete original associations,
+fresh independent admission and the existing runtime dependency refusal. Final
+static specification, matrix/bounds/startup refresh, affected checks and current
+PR review remain required; PM schedules the subsequent connected F-core gate.

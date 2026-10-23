@@ -508,3 +508,15 @@ and its erased-descriptor Core refusal now pass. Both required full-Row images
 still fail at their distinct work boundaries; startups and final gates remain
 unrun. The tested source is preserved before rebase onto the retained F6
 producer checkpoint; no result transfers automatically to that newer tree.
+
+The [decoder-local Row representation checkpoint](evidence/checked-owner-dependencies/row-representation/README.md)
+records fresh rebased failures, two bounded actual failure-path observations and
+six passing structural-data controls after a wire-lacks fixture correction.
+Repeated Row data now reuses only decoder-local immutable representation with
+paid fresh clones; no registry, header, forest or Core proof is shared. The base
+private image completes at 261284, but the required full-Row image still returns
+Validation(Resource), and the separately observed Access image returns direct
+Resource. Their current failure paths remain unlocalized after the change.
+Both canonical images, subsequent image bounds/hostiles, startups, final spec,
+regressions, Clippy and current-head review remain delivery gates. All whole-F3
+criteria stay open; this checkpoint does not authorize native activation.
