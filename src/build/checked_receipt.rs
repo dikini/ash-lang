@@ -813,6 +813,21 @@ impl ReceiptSeed {
         });
         Ok(())
     }
+    /// The artifact-root lock is already settled and its full BuildData is the
+    /// configuration field. Reobserve all three actual files without replacing
+    /// that closed binding with the legacy seven-pin lock-settling fold.
+    pub(super) fn verify_settled_configuration(
+        &mut self,
+        paths: &[std::path::PathBuf; 3],
+    ) -> Result<(), ReceiptFailure> {
+        let before = self.configuration.ok_or(ReceiptFailure::Association)?;
+        self.observe_configuration(paths)?;
+        let after = self.configuration.ok_or(ReceiptFailure::Association)?;
+        self.configuration = Some(before);
+        pay(&mut self.work, 40 * 3)?;
+        if before != after { return Err(ReceiptFailure::Association); }
+        Ok(())
+    }
     pub(super) fn bind_native_build(
         &mut self,
         bytes: &[u8],

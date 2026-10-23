@@ -5,6 +5,7 @@ use std::{env, error::Error, fs, path::PathBuf, process::Command};
 use sha2::{Digest, Sha256};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    println!("cargo:rustc-check-cfg=cfg(ash_checked_owner_root, values(\"v1\"))");
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("missing manifest root")?);
     let canonical_root = root.to_str().filter(|path| !path.chars().any(char::is_control))
         .ok_or("unsupported canonical source path")?;
@@ -23,6 +24,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         root.join("Cargo.lock"),
         root.join("rust-toolchain.toml"),
         root.join("trusted-preparation/Cargo.toml"),
+        root.join("locales/en-US.ftl"),
+        root.join("locales/bg.ftl"),
     ];
     let mut pending = vec![root.join("src"), root.join("trusted-preparation/src")];
     while let Some(directory) = pending.pop() {

@@ -1,0 +1,59 @@
+//! Artifact-only root entry. Compilation is distinct from startup admission.
+#![forbid(unsafe_code)]
+
+mod transport {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/root-shim.rs"));
+}
+
+const IMAGE: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/program-image.bin"
+));
+const FACTS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/expected-facts.bin"
+));
+const POLICY: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/checked-policy.bin"
+));
+#[used]
+static CODE_IDENTITY: [u8; 32] = crate::build::runtime_fingerprint();
+
+pub(super) fn main() -> std::process::ExitCode {
+    // Keep the actual compile-time payloads in this image. Neither their bytes
+    // nor the artifact cfg grant protected context or selected-call permission.
+    std::hint::black_box((IMAGE, FACTS, POLICY));
+    std::hint::black_box(&CODE_IDENTITY);
+    // Actual safe transport entry addresses keep their native relocations in
+    // the linked image without invoking an operation. This makes a missing
+    // selected C definition a linker failure, even while startup stays closed.
+    // These are private function addresses, not an admission table or handles.
+    std::hint::black_box((
+        transport::OwnerCell::vacant as fn() -> transport::OwnerCell,
+        transport::OwnerCell::acquire
+            as fn(&mut transport::OwnerCell, usize, usize) -> transport::AcquireObservation,
+        transport::OwnerCell::query
+            as fn(
+                &transport::OwnerCell,
+                usize,
+            ) -> Result<
+                Option<checked_owner_leaf::ViewDescriptor>,
+                checked_owner_leaf::Refusal,
+            >,
+        transport::OwnerCell::length
+            as fn(&transport::OwnerCell, usize) -> Result<usize, checked_owner_leaf::Refusal>,
+        transport::OwnerCell::copy
+            as fn(
+                &transport::OwnerCell,
+                &checked_owner_leaf::ViewDescriptor,
+                usize,
+                &mut [u8],
+            ) -> Result<(), checked_owner_leaf::Refusal>,
+        transport::OwnerCell::free as fn(transport::OwnerCell) -> transport::FreeObservation,
+    ));
+    // The protected bootstrap/evaluator handoff is deliberately still closed.
+    // In particular there is no fallback through the legacy provider entry.
+    eprintln!("checked owner startup refused: protected applicability admission is required");
+    std::process::ExitCode::FAILURE
+}

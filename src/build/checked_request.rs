@@ -270,7 +270,7 @@ fn image_error(e: super::image::ImageFailure) -> ReceiptFailure {
         _ => ReceiptFailure::Association,
     }
 }
-fn native_image_error(error: super::image::NativeImageFailure) -> ReceiptFailure {
+pub(super) fn native_image_error(error: super::image::NativeImageFailure) -> ReceiptFailure {
     match error {
         super::image::NativeImageFailure::Image(error) => image_error(error),
         super::image::NativeImageFailure::Bridge(error) if error.is_resource() => {
@@ -279,7 +279,7 @@ fn native_image_error(error: super::image::NativeImageFailure) -> ReceiptFailure
         _ => ReceiptFailure::Association,
     }
 }
-fn emission_error(error: super::emit::EmissionFailure) -> ReceiptFailure {
+pub(super) fn emission_error(error: super::emit::EmissionFailure) -> ReceiptFailure {
     match error {
         super::emit::EmissionFailure::Image(error) => image_error(error),
         super::emit::EmissionFailure::Resource => ReceiptFailure::Resource,

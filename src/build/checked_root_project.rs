@@ -110,6 +110,18 @@ fn quoted(path: &Path, work: &mut TypeWorkBudget) -> Result<String, Failure> {
     pay(work, text.len().checked_mul(8).ok_or(Failure::Resource)?)?;
     serde_json::to_string(text).map_err(|_| Failure::Association)
 }
+fn argument_path(path: &Path, work: &mut TypeWorkBudget) -> Result<(), Failure> {
+    let bytes=path.as_os_str().len();
+    if bytes>4096 { return Err(Failure::Resource); }
+    // UTF-8/control/component inspection, formatting and command argument
+    // storage are funded before the path is inspected or copied.
+    pay(work,bytes.checked_mul(6).and_then(|n|n.checked_add(64)).ok_or(Failure::Resource)?)?;
+    if !path.is_absolute() || path.to_str().is_none_or(|text|text.chars().any(char::is_control))
+        || path.components().any(|p|matches!(p,std::path::Component::ParentDir|std::path::Component::CurDir)) {
+        return Err(Failure::Unsupported);
+    }
+    Ok(())
+}
 pub(super) fn manifest_for(canonical: &Path, work: &mut TypeWorkBudget) -> Result<String, Failure> {
     pay(work, canonical.as_os_str().len().checked_mul(2).and_then(|n|n.checked_add(64)).ok_or(Failure::Resource)?)?;
     let source = quoted(&canonical.join("src/lib.rs"), work)?;
@@ -158,15 +170,21 @@ impl Project {
         if config.len() > config_bound || config.len() > 16 * 1024 { return Err(Failure::Resource); }
         let total = manifest.len().checked_add(leaf_manifest.len()).and_then(|n| n.checked_add(leaf.len())).and_then(|n| n.checked_add(shim.len())).and_then(|n| n.checked_add(TOOLCHAIN.len())).and_then(|n| n.checked_add(ORIGINAL_LOCK.len())).and_then(|n| n.checked_add(BUILD_SCRIPT.len())).and_then(|n| n.checked_add(config.len())).and_then(|n| n.checked_add(LOCK_POLICY.len())).ok_or(Failure::Resource)?;
         pay(work, total)?;
+        pay(work,root.as_os_str().len().checked_add(64).ok_or(Failure::Resource)?)?;
         std::fs::create_dir(&root).map_err(|_| Failure::Resource)?;
-        std::fs::create_dir(root.join("leaf")).map_err(|_| Failure::Resource)?;
-        std::fs::create_dir(root.join("leaf/src")).map_err(|_| Failure::Resource)?;
+        for name in ["leaf","leaf/src"] {
+            pay(work,root.as_os_str().len().checked_add(name.len()).and_then(|n|n.checked_mul(2)).and_then(|n|n.checked_add(64)).ok_or(Failure::Resource)?)?;
+            std::fs::create_dir(root.join(name)).map_err(|_| Failure::Resource)?;
+        }
         for (path, bytes) in [
             ("Cargo.toml", manifest.as_bytes()), ("Cargo.lock", ORIGINAL_LOCK),
             ("rust-toolchain.toml", TOOLCHAIN), ("leaf/Cargo.toml", leaf_manifest.as_bytes()),
             ("leaf/src/lib.rs", leaf.as_bytes()), ("root-shim.rs", shim.as_bytes()),
             ("build.rs", BUILD_SCRIPT.as_bytes()), ("lock_policy.rs", LOCK_POLICY), ("root-config.json", config.as_slice()),
-        ] { std::fs::write(root.join(path), bytes).map_err(|_| Failure::Resource)?; }
+        ] {
+            pay(work,root.as_os_str().len().checked_add(path.len()).and_then(|n|n.checked_mul(2)).and_then(|n|n.checked_add(64)).ok_or(Failure::Resource)?)?;
+            std::fs::write(root.join(path), bytes).map_err(|_| Failure::Resource)?;
+        }
         Ok(Self { root, canonical, manifest, environment })
     }
     /// Capture only already-created transaction files after Cargo has settled
@@ -176,7 +194,7 @@ impl Project {
         self.verify_environment(work)?;
         pay(work,self.root.as_os_str().len())?;
         let mut read = |name: &str, limit: usize| -> Result<Vec<u8>, Failure> {
-            pay(work, name.len()+32)?;
+            pay(work,self.root.as_os_str().len().checked_add(name.len()).and_then(|n|n.checked_mul(2)).and_then(|n|n.checked_add(64)).ok_or(Failure::Resource)?)?;
             let mut file = std::fs::OpenOptions::new().read(true).custom_flags(0x20000|0x80000|0x800).open(self.root.join(name)).map_err(|_| Failure::Resource)?;
             let before = file.metadata().map_err(|_| Failure::Resource)?;
             let size = usize::try_from(before.len()).map_err(|_| Failure::Resource)?;
@@ -194,9 +212,15 @@ impl Project {
             settled_lock: read("Cargo.lock",1024*1024)?, leaf_manifest: read("leaf/Cargo.toml",65536)?,
             leaf: read("leaf/src/lib.rs",32*1024*1024)?, shim: read("root-shim.rs",32*1024*1024)?,
         };
+        let fixed = [read("build.rs",32*1024*1024)?, read("lock_policy.rs",1024*1024)?, read("rust-toolchain.toml",65536)?];
+        pay(work, fixed.iter().try_fold(0usize, |n, b| n.checked_add(b.len())).ok_or(Failure::Resource)?)?;
+        if fixed[0] != BUILD_SCRIPT.as_bytes() || fixed[1] != LOCK_POLICY || fixed[2] != TOOLCHAIN {
+            return Err(Failure::Association);
+        }
         data.reconstruct(expected_leaf,expected_shim,work)?;
         Ok(data)
     }
+    pub(super) fn root(&self) -> &Path { &self.root }
     pub(super) fn verify_environment(&self, work: &mut TypeWorkBudget) -> Result<(), Failure> {
         self.environment.verify(&self.root, work)
     }
@@ -211,12 +235,21 @@ impl Project {
     /// Fixed actual command policy corresponding to the identity recipe. This
     /// accepts only the product's owned linker observer, not arbitrary flags.
     pub(super) fn compile_command(&self, target: &Path, linker: &Path, work: &mut TypeWorkBudget) -> Result<Command, Failure> {
+        argument_path(target,work)?;
+        argument_path(linker,work)?;
         let mut command = self.cargo("rustc", work)?;
         command.args(["--locked", "--jobs", "1", "--target", super::host::NATIVE_TARGET, "--bin", PACKAGE]);
         command.arg("--target-dir").arg(target).arg("--");
         command.arg("--cfg").arg("ash_checked_owner_root=\"v1\"");
         command.arg("-C").arg(format!("linker={}", linker.display()));
         command.args(["-C", "link-arg=-fuse-ld=bfd", "-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "link-arg=-no-pie", "-C", "strip=debuginfo"]);
+        Ok(command)
+    }
+    pub(super) fn clean_command(&self, target: &Path, work: &mut TypeWorkBudget) -> Result<Command, Failure> {
+        argument_path(target,work)?;
+        let mut command = self.cargo("clean", work)?;
+        command.args(["--locked", "--package", PACKAGE, "--target", super::host::NATIVE_TARGET, "--profile", "dev"]);
+        command.arg("--target-dir").arg(target);
         Ok(command)
     }
 }
@@ -235,6 +268,46 @@ pub(super) fn fixture_data(leaf: &str, shim: &str, work: &mut TypeWorkBudget) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn generated_command_path_inspection_is_prepaid_and_bounded() {
+        let path=Path::new("/tmp/owned-root-target");
+        let mut measured=TypeWorkBudget::default();
+        argument_path(path,&mut measured).unwrap();
+        let cost=measured.used();
+        assert_eq!(argument_path(path,&mut TypeWorkBudget::with_limit(cost-1)),Err(Failure::Resource));
+        let mut exact=TypeWorkBudget::with_limit(cost);
+        assert_eq!(argument_path(path,&mut exact),Ok(()));
+        assert_eq!(exact.used(),cost);
+        assert_eq!(argument_path(path,&mut exact),Err(Failure::Resource));
+        for path in ["relative-target","/tmp/../target","/tmp/target\n"] {
+            assert_eq!(argument_path(Path::new(path),&mut TypeWorkBudget::default()),Err(Failure::Unsupported));
+        }
+    }
+    #[test]
+    fn actual_project_snapshot_refuses_changed_fixed_compiler_inputs() {
+        let nonce=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let parent=std::env::temp_dir().join(format!("ash-root-fixed-inputs-{}-{nonce}",std::process::id()));
+        std::fs::create_dir(&parent).unwrap();
+        let mut work=TypeWorkBudget::with_limit(super::super::checked_request::RequestLimits::default().work);
+        let project=Project::create(parent.join("root"),"leaf DATA","shim DATA",&mut work).unwrap();
+        // This unit checks same-open fixed-file validation, not Cargo output.
+        std::fs::write(project.root().join("Cargo.lock"),super::super::checked_root_lock_policy::fixture(ORIGINAL_LOCK)).unwrap();
+        let canonical=project.snapshot("leaf DATA","shim DATA",&mut work).unwrap();
+        assert_eq!(canonical.leaf,b"leaf DATA");
+        for name in ["build.rs","lock_policy.rs","rust-toolchain.toml"] {
+            let path=project.root().join(name);
+            let before=std::fs::read(&path).unwrap();
+            let mut changed=before.clone();changed[0]^=1;std::fs::write(&path,changed).unwrap();
+            assert!(matches!(project.snapshot("leaf DATA","shim DATA",&mut work),Err(Failure::Association)));
+            std::fs::write(path,before).unwrap();
+        }
+        assert!(project.snapshot("leaf DATA","shim DATA",&mut work).is_ok());
+        let clean=project.clean_command(Path::new("/tmp/owned-target"),&mut work).unwrap();
+        let args:Vec<_>=clean.get_args().collect();
+        assert_eq!(args[0],"clean");
+        assert!(args.windows(2).any(|v|v==["--package","ash-checked-owner-root"]));
+        std::fs::remove_dir_all(parent).unwrap();
+    }
     #[test]
     fn closed_root_reconstruction_binds_code_config_graph_and_shared_work() {
         // Clearly untrusted code DATA here; the actual request test supplies

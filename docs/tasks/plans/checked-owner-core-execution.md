@@ -338,6 +338,15 @@ project, native, protected positive or full F-core claim transfers.
    iterations. Complexity 3; stop on any
    ABI, nominal DATA boundary, identity or incomplete-closure mismatch. Protected
    positive execution remains unrun.
+   Active first gate: compile the canonical `src/lib.rs` as the generated bin,
+   include its private shim and three payloads, settle the actual closed lock,
+   observe BFD and independently match the final ELF/receipt/request. Retain
+   actual native relocations through private typed function pointers and require
+   a coherent missing-release definition to fail at the linker. Candidate
+   execution is excluded; actual evaluator adapters remain the immediate next
+   connection after compile/link diagnosis, not a claim supplied by the entry's
+   startup refusal. This tranche starts at retained PR118 `2121d126` and reuses
+   the same owned runner/cache.
 3. Implement the reviewed one-shot trusted child, same-FD execution and
    authenticated one-way report endpoints, with real context/store/refusal
    controls and independent syscall/FD review. Benefit: connects approved image

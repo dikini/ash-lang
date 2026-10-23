@@ -321,6 +321,24 @@ source needs critical review before generated/native verification. Root owns
 format cleanup/check at the F-core integration freeze before `cargo xtask verify`,
 the fresh final artifact and per-image approval. Whole F3/F4/F6 remains open.
 
+### Actual generated root/leaf compilation (active)
+
+PR118's bounded settlement and closed root-request DATA delivery is retained as
+`2121d126` after [current-head review](https://github.com/dikini/ash-lang/pull/118#pullrequestreview-5632653984)
+and [retention verification](https://github.com/dikini/ash-lang/pull/118#issuecomment-6371734150).
+The guarded #60/#62 partial records preserve all whole-scope criteria unchecked.
+
+The next source tranche adds a canonical artifact-only binary entry, the private
+opaque shim and exact embedded image/facts/policy, and an owned generated Cargo
+transaction. Its first discriminator is actual lock settling, canonical root
+and leaf compilation, static linking, same-build ELF/receipt/request association
+and root artifact cleanup. A fresh missing-release-definition closure must
+reach the actual linker after canonical success; typed private shim function
+pointers retain the required native relocations without invoking them. The
+entry preserves startup refusal and has no legacy callback fallback. This work
+is not yet tested; template compilation does not establish evaluator adapter
+integration, protected admission or any native behavior.
+
 ## Acceptance for this bounded delivery
 
 - [ ] The real producer, body-free direct/facade consumer, link and independent

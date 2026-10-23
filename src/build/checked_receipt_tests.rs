@@ -2,6 +2,31 @@
 //! or candidate is executed; final-file observations use ordinary text fixtures.
 use super::*;
 
+#[test]
+fn settled_configuration_reobserves_all_files_without_replacing_build_data_pin() {
+    with_seed(|mut seed| {
+        let nonce=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!("ash-root-config-observation-{}-{nonce}",std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let paths=[dir.join("Cargo.toml"),dir.join("rust-toolchain.toml"),dir.join("Cargo.lock")];
+        for (i,path) in paths.iter().enumerate() {std::fs::write(path,format!("actual config {i}")).unwrap();}
+        assert_eq!(seed.verify_settled_configuration(&paths),Err(ReceiptFailure::Association));
+        seed.observe_configuration(&paths).unwrap();
+        let pin=seed.receipt().pin(ReceiptField::BuildConfiguration);
+        seed.verify_settled_configuration(&paths).unwrap();
+        assert_eq!(seed.receipt().pin(ReceiptField::BuildConfiguration),pin);
+        for path in &paths {
+            let original=std::fs::read(path).unwrap();let mut donor=original.clone();donor[0]^=1;
+            std::fs::write(path,donor).unwrap();
+            assert_eq!(seed.verify_settled_configuration(&paths),Err(ReceiptFailure::Association));
+            std::fs::write(path,original).unwrap();
+            seed.verify_settled_configuration(&paths).unwrap();
+            assert_eq!(seed.receipt().pin(ReceiptField::BuildConfiguration),pin);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
 fn limits() -> ProducerReceiptLimits {
     ProducerReceiptLimits {
         artifact_bytes: 2_000_000,

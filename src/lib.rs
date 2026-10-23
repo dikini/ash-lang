@@ -46,3 +46,13 @@ mod sqlite_output_order;
 pub mod surface;
 mod syntax_resource;
 pub mod types;
+
+// The generated whole-image package compiles this canonical crate root. Its
+// private transport never becomes a public library authority constructor.
+#[cfg(ash_checked_owner_root = "v1")]
+mod checked_owner_root;
+
+#[cfg(ash_checked_owner_root = "v1")]
+fn main() -> std::process::ExitCode {
+    checked_owner_root::main()
+}
