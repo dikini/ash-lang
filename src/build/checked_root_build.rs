@@ -455,7 +455,59 @@ mod tests {
             })
         );
         assert_eq!(&elf[..4], b"\x7fELF");
+        // Canonical linked admission precedes both donor controls. These are
+        // untrusted DATA rewrites over this same real build, not new approvals.
         let record: serde_json::Value = serde_json::from_slice(&request).unwrap();
+        let request_limits = super::super::checked_request::RequestLimits::default();
+        let configuration_field = super::super::checked_receipt::ReceiptField::BuildConfiguration;
+        let mut wrong_final = receipt.pin(configuration_field).unwrap();
+        wrong_final.sha256[0] ^= 1;
+        let replaced = receipt.substituted_configuration_data_for_test(wrong_final)
+            .encode(&mut TypeWorkBudget::with_limit(receipt_limits.work), receipt_limits).unwrap();
+        let mut donor = record.clone();
+        donor["parts"][0]["bytes"] = serde_json::json!(replaced);
+        assert!(matches!(super::super::checked_request::ApplicabilityRequest::decode(
+            &serde_json::to_vec(&donor).unwrap(), request_limits,
+        ), Err(ReceiptFailure::Association)));
+
+        let mut setup = TypeWorkBudget::with_limit(receipt_limits.work);
+        let native_bytes: Vec<u8> = serde_json::from_value(record["parts"][5]["bytes"].clone()).unwrap();
+        let link_bytes: Vec<u8> = serde_json::from_value(record["parts"][6]["bytes"].clone()).unwrap();
+        let mut native_data: serde_json::Value = serde_json::from_slice(&native_bytes).unwrap();
+        let digest = native_data["configuration_before_binding"]["sha256"][0].as_u64().unwrap();
+        native_data["configuration_before_binding"]["sha256"][0] = serde_json::json!(digest ^ 1);
+        // Restore the actual native schema's canonical field order.
+        let native_data: super::super::checked_native_build::Record = serde_json::from_value(native_data).unwrap();
+        let native_bytes = serde_json::to_vec(&native_data).unwrap();
+        let (wrong_original, observed_native) = super::super::checked_native_build::binding(
+            &native_bytes, limits, &mut setup,
+        ).unwrap();
+        let native_bound = super::super::checked_native_build::configuration_binding(
+            wrong_original, observed_native, &mut setup,
+        ).unwrap();
+        let mut link_data: serde_json::Value = serde_json::from_slice(&link_bytes).unwrap();
+        link_data["configuration_before_binding"] = serde_json::json!({
+            "bytes": native_bound.bytes, "sha256": native_bound.sha256,
+        });
+        let link_bytes = serde_json::to_vec(&link_data).unwrap();
+        let observed_link = super::super::checked_receipt::pin(&link_bytes, &mut setup).unwrap();
+        let final_bound = super::super::checked_link::configuration_binding(native_bound, observed_link, &mut setup).unwrap();
+        let donor_receipt = receipt.substituted_configuration_data_for_test(final_bound);
+        // Both existing chain proofs pass: only the independent raw BuildData
+        // join distinguishes this fully rebound wrong-original configuration.
+        let prior = donor_receipt.before_root_link(&link_bytes, limits.link, &mut setup).unwrap();
+        super::super::checked_native_build::matches(&native_bytes, &prior, limits, &mut setup).unwrap();
+        let raw_receipt = donor_receipt.encode(&mut setup, receipt_limits).unwrap();
+        let original_build_data = record["root_build"].clone();
+        let mut donor = record.clone();
+        donor["parts"][0]["bytes"] = serde_json::json!(raw_receipt);
+        donor["parts"][5]["bytes"] = serde_json::json!(native_bytes);
+        donor["parts"][6]["bytes"] = serde_json::json!(link_bytes);
+        assert_eq!(donor["root_build"], original_build_data);
+        assert!(matches!(super::super::checked_request::ApplicabilityRequest::decode(
+            &serde_json::to_vec(&donor).unwrap(), request_limits,
+        ), Err(ReceiptFailure::Association)));
+
         let data: super::super::checked_root_project::BuildData =
             serde_json::from_value(record["root_build"].clone()).unwrap();
         let identity = data
