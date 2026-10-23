@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{
     ffi::CString,
     fs::File,
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
     path::{Component, Path},
 };
@@ -66,6 +66,7 @@ struct Approval {
     context_version: u32,
     premise_version: u32,
     launch_version: u32,
+    launcher: Option<Pin>,
 }
 struct InstalledContext {
     config: Config,
@@ -94,7 +95,7 @@ impl PreparedImage {
 /// Default uninstalled builds refuse MissingDeployment. No provisioning or exec.
 pub fn prepare(request_bytes: &[u8], candidate: &Path) -> Result<PreparedImage, Refusal> {
     let mut budget = Budget::new(BOOT_WORK);
-    let installed = bootstrap(&mut budget)?;
+    let installed = bootstrap(&mut budget, false)?;
     let config = &installed.config;
     let request = ApplicabilityRequest::decode(
         request_bytes,
@@ -148,13 +149,150 @@ pub fn prepare(request_bytes: &[u8], candidate: &Path) -> Result<PreparedImage, 
         _context_pin: installed.context_pin,
     })
 }
+/// Privately verified actual running image and inherited report endpoint.
+/// This non-Clone value carries no dependency-Ash Core/types into its consumer.
+/// Its constructor is the fixed live verifier, never serialized request DATA.
+pub struct VerifiedRunning {
+    request: Vec<u8>,
+    request_pin: ArtifactPin,
+    image_pin: ArtifactPin,
+    embedded: [(u64, [u8; 32]); 4],
+    report: crate::outcome::ReportWriter,
+}
+impl VerifiedRunning {
+    /// Exact bounded request framing for independent root-local restoration.
+    pub fn request_bytes(&self) -> &[u8] { &self.request }
+    /// Primitive data correspondence; not a caller-created applicability token.
+    pub fn request_pin(&self) -> (u64, [u8; 32]) { (self.request_pin.bytes, self.request_pin.sha256) }
+    /// Primitive image/facts/policy/runtime pins, in that fixed order. The root
+    /// must independently hash its embedded bytes and restore its own originals.
+    pub fn embedded_pins(&self) -> [(u64, [u8; 32]); 4] { self.embedded }
+    /// Reserve fixed closing and terminal wire capacity before evaluator entry.
+    /// This is output budgeting only; it grants no source/native permission.
+    pub fn reserve_outcome_closings(&mut self, count: usize) -> Result<(), Refusal> {
+        self.report.reserve_closings(count)
+    }
+    /// Finish the mandatory closing prefix and release unused closing capacity.
+    /// Terminal capacity remains protected from optional result/Trace output.
+    pub fn finish_outcome_closings(&mut self) -> Result<(), Refusal> { self.report.finish_closings() }
+    /// Write one fixed, bounded v2 observation frame to the independently bound
+    /// nonblocking parent endpoint. IO failure poisons the stream; this method
+    /// never retries a native action or fabricates consumption from process state.
+    pub fn write_outcome_frame(&mut self, kind: crate::OutcomeFrameKind, payload: &[u8]) -> Result<(), Refusal> {
+        self.report.write(kind, payload)
+    }
+    /// Final running executable correspondence, with no nominal Ash type cast.
+    pub fn image_pin(&self) -> (u64, [u8; 32]) { (self.image_pin.bytes, self.image_pin.sha256) }
+}
+/// Verify the current executable and fixed v2 ingress against real protected
+/// approval. No argument selects a path, context, success bit or store. Ordinary
+/// unconfigured builds refuse before touching incoming descriptors.
+pub fn verify_running() -> Result<VerifiedRunning, Refusal> {
+    let mut budget = Budget::new(BOOT_WORK);
+    let installed = bootstrap(&mut budget, true)?;
+    let c = &installed.config;
+    let parent = crate::running::ParentPipe::inspect(&mut budget)?;
+    check_proc_context(c, parent.parent(), &mut budget)?;
+    let (request_flags, request_descriptor) = linux::role_flags(4)?;
+    if request_flags & !0x8000 != 0 || request_descriptor != 0 { return Err(Refusal::Context); }
+    let mut source = linux::duplicate_role(4)?;
+    let mut request_work = Budget::new(c.request_work);
+    let bytes = read_sealed_request(&mut source, c.request_bytes, &mut request_work)?;
+    let request = ApplicabilityRequest::decode(&bytes, RequestLimits {
+        bytes: c.request_bytes, work: request_work.remaining,
+    }).map_err(|error| match error {
+        ash::build::ReceiptFailure::Resource => Refusal::Resource,
+        _ => Refusal::Malformed,
+    })?;
+    request.check_complete().map_err(|_| Refusal::Incomplete)?;
+    if request.context_pin() != Some(ArtifactPin { bytes: installed.config_metadata.len(), sha256: installed.context_pin }) {
+        return Err(Refusal::Association);
+    }
+    budget.pay(65)?;
+    let name = CString::new(hex(&request.request_pin().sha256)).map_err(|_| Refusal::Malformed)?;
+    let mut approval = linux::open_child(&installed.store, &name, false)?;
+    let approval_before = protected_metadata(&approval, false)?;
+    let raw = bounded_read(&mut approval, BOOT_BYTES, &mut budget)?;
+    budget.pay(raw.len().checked_mul(4).ok_or(Refusal::Resource)?)?;
+    let parsed: Approval = serde_json::from_slice(&raw).map_err(|_| Refusal::Malformed)?;
+    validate_approval(&parsed, &request, c, &installed.context_pin)?;
+    same_metadata(&approval_before, &io(approval.metadata())?)?;
+    let current = linux::calling_thread_proc()?;
+    let image_pin = request.final_image_pin().ok_or(Refusal::Incomplete)?;
+    let limits = PreparationLimits { image_bytes: c.image_bytes, work: c.image_work, program_headers: c.program_headers };
+    let mut image_work = Budget::new(c.image_work);
+    let running = SealedData::observe_existing(linux::proc_magic(&current, c"exe", false)?, image_pin, limits, &mut image_work)?;
+    // Separate post-build protected record: including the launcher digest in
+    // the baked config would create launcher->config->launcher self-reference.
+    let mut descriptor = linux::open_child(&installed.store, c"checked-launcher-v2.json", false)?;
+    let descriptor_before = protected_metadata(&descriptor, false)?;
+    let descriptor_bytes = bounded_read(&mut descriptor, BOOT_BYTES, &mut budget)?;
+    budget.pay(descriptor_bytes.len().checked_mul(4).ok_or(Refusal::Resource)?)?;
+    let descriptor_data: LauncherDescriptor = serde_json::from_slice(&descriptor_bytes).map_err(|_| Refusal::Malformed)?;
+    if descriptor_data.version != 2 || descriptor_data.context_sha256 != hex(&installed.context_pin)
+        || descriptor_data.target != "x86_64-unknown-linux-gnu"
+        || descriptor_data.image.bytes == 0 || descriptor_data.image.bytes > c.image_bytes as u64
+        || !valid_hash(&descriptor_data.image.sha256) {
+        return Err(Refusal::Association);
+    }
+    let launcher = &descriptor_data.image;
+    if parsed.launcher.as_ref().is_none_or(|p| p.bytes != launcher.bytes || p.sha256 != launcher.sha256) {
+        return Err(Refusal::Association);
+    }
+    budget.pay(64)?;
+    let mut digest = [0; 32];
+    for (pair, out) in launcher.sha256.as_bytes().chunks_exact(2).zip(&mut digest) {
+        let digit = |b: u8| if b.is_ascii_digit() { b - b'0' } else { b - b'a' + 10 };
+        *out = digit(pair[0]) * 16 + digit(pair[1]);
+    }
+    let launcher = SealedData::observe_existing(linux::proc_magic(parent.parent(), c"exe", false)?,
+        ArtifactPin { bytes: launcher.bytes, sha256: digest }, limits, &mut image_work)?;
+    // Reopen only the fixed kernel exe links, matching the already inspected
+    // immutable objects. No proc textual target or pathname is accepted.
+    running.same_object(&linux::proc_magic(&current, c"exe", false)?)?;
+    launcher.same_object(&linux::proc_magic(parent.parent(), c"exe", false)?)?;
+    check_context(c, &mut budget)?;
+    check_proc_context(c, parent.parent(), &mut budget)?;
+    parent.recheck(&mut budget)?;
+    same_metadata(&installed.config_metadata, &io(installed.config_file.metadata())?)?;
+    same_metadata(&descriptor_before, &io(descriptor.metadata())?)?;
+    linux::close_role(4)?;
+    linux::close_role(3)?;
+    // All config/store/approval/proc/pidfd/executable handles close on return.
+    // Only immutable DATA and the owned nonblocking report writer survive.
+    Ok(VerifiedRunning { request: bytes, request_pin: request.request_pin(), image_pin,
+        embedded: request.embedded_pins().map(|p| (p.bytes, p.sha256)), report: crate::outcome::ReportWriter::new(parent.into_writer()) })
+}
+
+fn read_sealed_request(source: &mut File, cap: usize, work: &mut Budget) -> Result<Vec<u8>, Refusal> {
+    let before = io(source.metadata())?;
+    if !before.is_file() || before.len() > cap as u64 || linux::seals(source)? != 15 {
+        return Err(Refusal::Association);
+    }
+    // Fund owned request storage before allocation; bounded_read separately
+    // charges actual bounded read requests. Never accept only an inherited
+    // open-file-description suffix as the sealed request object's identity.
+    work.pay(usize::try_from(before.len()).map_err(|_| Refusal::Resource)?)?;
+    io(source.seek(SeekFrom::Start(0)))?;
+    let bytes = bounded_read(source, cap, work)?;
+    if bytes.len() as u64 != before.len() { return Err(Refusal::Association); }
+    same_metadata(&before, &io(source.metadata())?)?;
+    if linux::seals(source)? != 15 { return Err(Refusal::Association); }
+    Ok(bytes)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LauncherDescriptor { version: u32, target: String, context_sha256: String, image: Pin }
 fn validate_approval(
     a: &Approval,
     r: &ApplicabilityRequest,
     c: &Config,
     context: &[u8; 32],
 ) -> Result<(), Refusal> {
-    if a.version != 1
+    if a.version != c.version
+        || (c.version == 1 && a.launcher.is_some())
+        || (c.version == 2 && a.launcher.as_ref().is_none_or(|p| p.bytes == 0 || !valid_hash(&p.sha256)))
         || a.context_version != c.context_version
         || a.premise_version != c.premise_version
         || a.launch_version != c.launch_version
@@ -163,7 +301,7 @@ fn validate_approval(
     }
     if a.target != "x86_64-unknown-linux-gnu"
         || a.mode != "checked-inprocess-static"
-        || a.role != "checked-preparation"
+        || a.role != if c.version == 1 { "checked-preparation" } else { "checked-running" }
         || a.context_sha256 != hex(context)
         || !a.request.matches(r.request_pin())
         || !a.receipt.matches(r.receipt_pin())
@@ -176,9 +314,10 @@ fn validate_approval(
     }
     Ok(())
 }
-fn bootstrap(budget: &mut Budget) -> Result<InstalledContext, Refusal> {
-    let path = option_env!("ASH_PROTECTED_CONFIG_PATH").ok_or(Refusal::MissingDeployment)?;
-    let expected = option_env!("ASH_PROTECTED_CONFIG_SHA256").ok_or(Refusal::MissingDeployment)?;
+fn bootstrap(budget: &mut Budget, running: bool) -> Result<InstalledContext, Refusal> {
+    let association = crate::bootstrap_association::INSTALLED.as_ref().ok_or(Refusal::MissingDeployment)?;
+    let path = association.path;
+    let expected = association.sha256;
     if !valid_hash(expected) {
         return Err(Refusal::MissingDeployment);
     }
@@ -188,7 +327,8 @@ fn bootstrap(budget: &mut Budget) -> Result<InstalledContext, Refusal> {
     }
     budget.pay(256 * 8192 + 8192)?;
     linux::standard_fds()?;
-    linux::inherited_fds()?;
+    if running { linux::inherited_fds_for(&[0, 1, 2, 3, 4])?; }
+    else { linux::inherited_fds()?; }
     let mut file = walk(Path::new(path), false, budget)?;
     let metadata = protected_metadata(&file, false)?;
     let bytes = bounded_read(&mut file, BOOT_BYTES, budget)?;
@@ -200,6 +340,7 @@ fn bootstrap(budget: &mut Budget) -> Result<InstalledContext, Refusal> {
     budget.pay(bytes.len().checked_mul(4).ok_or(Refusal::Resource)?)?;
     let config: Config = serde_json::from_slice(&bytes).map_err(|_| Refusal::Malformed)?;
     validate_config(&config)?;
+    if running != (config.version == 2) { return Err(Refusal::Context); }
     check_context(&config, budget)?;
     let store = walk(Path::new(&config.store), true, budget)?;
     let store_meta = protected_metadata(&store, true)?;
@@ -218,10 +359,13 @@ fn bootstrap(budget: &mut Budget) -> Result<InstalledContext, Refusal> {
     })
 }
 fn validate_config(c: &Config) -> Result<(), Refusal> {
-    if c.version != 1 || c.context_version != 1 || c.premise_version != 1 || c.launch_version != 1 {
-        return Err(Refusal::Malformed);
-    }
-    if c.stdio != "null-read-null-write-v1" {
+    let version = match (c.version, c.context_version, c.premise_version, c.launch_version) {
+        (1, 1, 1, 1) => 1,
+        (2, 2, 1, 2) => 2,
+        _ => return Err(Refusal::Malformed),
+    };
+    if (version == 1 && c.stdio != "null-read-null-write-v1")
+        || (version == 2 && c.stdio != "null-report-request-v2") {
         return Err(Refusal::Context);
     }
     if c.uid == 0
@@ -254,7 +398,10 @@ fn check_context(c: &Config, budget: &mut Budget) -> Result<(), Refusal> {
         return Err(Refusal::Context);
     }
     let proc = linux::calling_thread_proc()?;
-    let namespace = linux::proc_child(&proc, c"ns", true)?;
+    check_proc_context(c, &proc, budget)
+}
+fn check_proc_context(c: &Config, proc: &File, budget: &mut Budget) -> Result<(), Refusal> {
+    let namespace = linux::proc_child(proc, c"ns", true)?;
     for (name, identity) in [(c"user", &c.user_namespace), (c"mnt", &c.mount_namespace)] {
         budget.pay(1)?;
         let file = linux::namespace(&namespace, name)?;
@@ -267,14 +414,14 @@ fn check_context(c: &Config, budget: &mut Budget) -> Result<(), Refusal> {
         (c"uid_map", &c.uid_map_sha256),
         (c"mountinfo", &c.mountinfo_sha256),
     ] {
-        let mut file = linux::proc_child(&proc, name, false)?;
+        let mut file = linux::proc_child(proc, name, false)?;
         let b = bounded_read(&mut file, BOOT_BYTES, budget)?;
         budget.pay(b.len())?;
         if hex(&Sha256::digest(&b)) != *expected {
             return Err(Refusal::Context);
         }
     }
-    let mut status = linux::proc_child(&proc, c"status", false)?;
+    let mut status = linux::proc_child(proc, c"status", false)?;
     let raw = bounded_read(&mut status, BOOT_BYTES, budget)?;
     let text = std::str::from_utf8(&raw).map_err(|_| Refusal::Malformed)?;
     check_status(text, c, budget)
@@ -445,12 +592,32 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn sealed_request_reads_whole_object_not_an_inherited_suffix() {
+        use std::io::Write;
+        let raw = b"unbound prefix:{\"version\":2}";
+        let mut source = linux::memfd().unwrap();
+        source.write_all(raw).unwrap();
+        linux::seal(&source).unwrap();
+        source.seek(SeekFrom::Start(15)).unwrap();
+        let mut meter = Budget::new(4096);
+        assert_eq!(read_sealed_request(&mut source, 128, &mut meter).unwrap(), raw);
+        let cost = 4096 - meter.remaining;
+        for _ in 0..2 {
+            let mut exact = Budget::new(cost);
+            assert_eq!(read_sealed_request(&mut source, 128, &mut exact).unwrap(), raw);
+            assert_eq!(exact.remaining, 0);
+        }
+        assert_eq!(read_sealed_request(&mut source, 128, &mut Budget::new(cost - 1)), Err(Refusal::Resource));
+        assert_eq!(read_sealed_request(&mut source, raw.len() - 1, &mut Budget::new(4096)), Err(Refusal::Association));
+    }
+    #[test]
     fn absent_fixed_deployment_and_same_uid_store_refuse_without_authority() {
-        if option_env!("ASH_PROTECTED_CONFIG_PATH").is_none() {
+        if crate::bootstrap_association::INSTALLED.is_none() {
             assert_eq!(
                 prepare(b"untrusted", Path::new("/never-opened")).unwrap_err(),
                 Refusal::MissingDeployment
             );
+            assert!(matches!(verify_running(), Err(Refusal::MissingDeployment)));
         }
         let directory = crate::test_directory("untrusted-store");
         let path = directory.join("claims");
@@ -468,7 +635,7 @@ mod tests {
     }
     #[test]
     fn status_fsids_capabilities_and_versions_are_exact_data_checks() {
-        let c:Config=serde_json::from_value(serde_json::json!({"version":1,"uid":1234,"gid":1234,"groups":[1234],"user_namespace":{"device":1,"inode":2},"mount_namespace":{"device":1,"inode":3},"uid_map_sha256":"00".repeat(32),"mountinfo_sha256":"00".repeat(32),"store":"/fixed/store","store_identity":{"device":1,"inode":4},"stdio":"null-read-null-write-v1","context_version":1,"premise_version":1,"launch_version":1,"request_bytes":4096,"request_work":4096,"image_bytes":4096,"image_work":16384,"program_headers":4})).unwrap();
+        let mut c:Config=serde_json::from_value(serde_json::json!({"version":1,"uid":1234,"gid":1234,"groups":[1234],"user_namespace":{"device":1,"inode":2},"mount_namespace":{"device":1,"inode":3},"uid_map_sha256":"00".repeat(32),"mountinfo_sha256":"00".repeat(32),"store":"/fixed/store","store_identity":{"device":1,"inode":4},"stdio":"null-read-null-write-v1","context_version":1,"premise_version":1,"launch_version":1,"request_bytes":4096,"request_work":4096,"image_bytes":4096,"image_work":16384,"program_headers":4})).unwrap();
         validate_config(&c).unwrap();
         let text = "Uid:\t1234 1234 1234 1234\nGid:\t1234 1234 1234 1234\nGroups:\t1234\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapAmb:\t0000000000000000\nThreads:\t1\nTracerPid:\t0\n";
         check_status(text, &c, &mut Budget::new(4096)).unwrap();
@@ -486,6 +653,16 @@ mod tests {
             check_status(text, &c, &mut Budget::new(1)),
             Err(Refusal::Resource)
         );
+        c.version = 2;
+        c.context_version = 2;
+        c.launch_version = 2;
+        c.stdio = "null-report-request-v2".into();
+        validate_config(&c).unwrap();
+        c.stdio = "null-read-null-write-v1".into();
+        assert_eq!(validate_config(&c), Err(Refusal::Context));
+        c.stdio = "null-report-request-v2".into();
+        c.launch_version = 1;
+        assert_eq!(validate_config(&c), Err(Refusal::Malformed));
         let mut unknown = serde_json::to_value(serde_json::json!({"version":2})).unwrap();
         // Unknown/incomplete config is refused by the real strict parser, not
         // hidden behind MissingDeployment in these data-level controls.
@@ -579,6 +756,7 @@ mod artifact_data_tests {
             context_version: 1,
             premise_version: 1,
             launch_version: 1,
+            launcher: None,
         };
         assert_eq!(
             validate_approval(&approval_data(), &request, &config, &context),
@@ -632,7 +810,7 @@ mod artifact_data_tests {
         );
         // This absent-install refusal is not a protected positive or deep
         // approval negative. The current request also has incomplete closure.
-        if option_env!("ASH_PROTECTED_CONFIG_PATH").is_none() {
+        if crate::bootstrap_association::INSTALLED.is_none() {
             assert_eq!(
                 prepare(&bytes, &image_path).unwrap_err(),
                 Refusal::MissingDeployment

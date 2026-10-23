@@ -52,8 +52,17 @@ pub(super) fn main() -> std::process::ExitCode {
             ) -> Result<(), checked_owner_leaf::Refusal>,
         transport::OwnerCell::free as fn(transport::OwnerCell) -> transport::FreeObservation,
     ));
-    // The protected bootstrap/evaluator handoff is deliberately still closed.
-    // In particular there is no fallback through the legacy provider entry.
-    eprintln!("checked owner startup refused: protected applicability admission is required");
-    std::process::ExitCode::FAILURE
+    // The verifier constructs no caller token: it inspects this running object,
+    // the protected approval/current context and fixed authenticated FD roles.
+    // The ordinary unconfigured build still refuses MissingDeployment here.
+    let result = ash_trusted_preparation::verify_running()
+        .map_err(|_| ())
+        .and_then(|verified| crate::build::checked_root_admission::RootProgram::restore(
+            verified, IMAGE, FACTS, POLICY, &transport::CHECKED_ROLES).map_err(|_| ()))
+        .and_then(|program| program.run().map_err(|_| ()));
+    if result.is_ok() { std::process::ExitCode::SUCCESS }
+    else {
+        eprintln!("checked owner startup or execution refused");
+        std::process::ExitCode::FAILURE
+    }
 }

@@ -126,14 +126,19 @@ fn context_data(bytes: &[u8], work: &mut TypeWorkBudget) -> Result<(), ReceiptFa
             && s.bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     };
-    if c.version != 1 || c.context_version != 1 || c.premise_version != 1 || c.launch_version != 1 {
-        return Err(ReceiptFailure::Version);
+    let version = match (c.version, c.context_version, c.premise_version, c.launch_version) {
+        (1, 1, 1, 1) => 1,
+        (2, 2, 1, 2) => 2,
+        _ => return Err(ReceiptFailure::Version),
+    };
+    if (version == 1 && c.stdio != "null-read-null-write-v1")
+        || (version == 2 && c.stdio != "null-report-request-v2") {
+        return Err(ReceiptFailure::Association);
     }
     if c.uid == 0
         || c.gid == 0
         || c.groups.len() > 128
         || c.groups.windows(2).any(|p| p[0] >= p[1])
-        || c.stdio != "null-read-null-write-v1"
         || !hash(&c.uid_map_sha256)
         || !hash(&c.mountinfo_sha256)
         || !std::path::Path::new(&c.store).is_absolute()
@@ -217,6 +222,7 @@ pub struct ApplicabilityRequest {
     missing: Vec<ReceiptField>,
     proposed: bool,
     context: Option<ArtifactPin>,
+    embedded: [ArtifactPin; 4],
 }
 impl ApplicabilityRequest {
     pub fn decode(bytes: &[u8], limits: RequestLimits) -> Result<Self, ReceiptFailure> {
@@ -237,6 +243,10 @@ impl ApplicabilityRequest {
     pub fn context_pin(&self) -> Option<ArtifactPin> {
         self.context
     }
+    /// Passive pins of program image, expected facts, policy and runtime code
+    /// identity, in that order. Protected consumers may compare primitive DATA
+    /// across crate instances; these pins never grant evaluator admission.
+    pub fn embedded_pins(&self) -> [ArtifactPin; 4] { self.embedded }
     pub fn linked(&self) -> bool {
         self.linked
     }
@@ -529,6 +539,12 @@ fn decode_with_work(
     {
         return Err(ReceiptFailure::Association);
     }
+    pay(work, 4 * 42)?;
+    let embedded = [ReceiptField::ProgramImage, ReceiptField::ExpectedFacts,
+        ReceiptField::Policy, ReceiptField::RuntimeFingerprint].map(|field|
+            receipt.pin(field).ok_or(ReceiptFailure::Association));
+    let [program, facts, policy, runtime] = embedded;
+    let embedded = [program?, facts?, policy?, runtime?];
     Ok(ApplicabilityRequest {
         request: pin(bytes, work)?,
         receipt: pin(receipt_bytes, work)?,
@@ -538,6 +554,7 @@ fn decode_with_work(
         missing,
         proposed,
         context: receipt.pin(ReceiptField::Context),
+        embedded,
     })
 }
 fn encode_kind(

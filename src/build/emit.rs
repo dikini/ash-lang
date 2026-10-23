@@ -718,7 +718,7 @@ pub(super) fn checked_root_host(
         super::checked_leaf::LeafFailure::Resource => EmissionFailure::Resource,
         _ => EmissionFailure::Image(ImageFailure::InvalidRecord),
     })?;
-    let rust_source = super::checked_leaf::render_root_shim(work).map_err(|error| match error {
+    let rust_source = super::checked_leaf::render_admitted_root_shim(build, &leaf, work).map_err(|error| match error {
         super::checked_leaf::LeafFailure::Resource => EmissionFailure::Resource,
         _ => EmissionFailure::Image(ImageFailure::InvalidRecord),
     })?;

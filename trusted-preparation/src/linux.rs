@@ -95,6 +95,9 @@ pub(crate) fn credentials() -> Result<([u32; 3], [u32; 3]), Refusal> {
     Ok(([r, e, s], [gr, ge, gs]))
 }
 pub(crate) fn inherited_fds() -> Result<(), Refusal> {
+    inherited_fds_for(&[0, 1, 2])
+}
+pub(crate) fn inherited_fds_for(allowed: &[i32]) -> Result<(), Refusal> {
     let directory = io(File::open("/proc/thread-self/fd"))?;
     filesystem(&directory, 0x9fa0)?;
     let mut buffer = [0u8; 8192];
@@ -135,7 +138,7 @@ pub(crate) fn inherited_fds() -> Result<(), Refusal> {
             let name = std::str::from_utf8(&raw[..end]).map_err(|_| Refusal::Malformed)?;
             if name != "." && name != ".." {
                 let fd: i32 = name.parse().map_err(|_| Refusal::Malformed)?;
-                if fd > 2 && fd != directory.as_raw_fd() {
+                if !allowed.contains(&fd) && fd != directory.as_raw_fd() {
                     return Err(Refusal::Context);
                 }
             }
@@ -205,6 +208,55 @@ pub(crate) fn standard_fds() -> Result<(), Refusal> {
     }
     Ok(())
 }
+/// Duplicate a fixed inherited DATA role without taking ownership of its slot.
+pub(crate) fn duplicate_role(fd: i32) -> Result<File, Refusal> {
+    // SAFETY: F_DUPFD_CLOEXEC returns a fresh descriptor; no pointer argument.
+    owned(unsafe { fcntl(fd, 1030, 5) })
+}
+pub(crate) fn close_role(fd: i32) -> Result<(), Refusal> {
+    // SAFETY: SYS_close=3; only the verified fixed ingress roles are passed.
+    // Linux releases the descriptor even on EINTR: never retry a reused number.
+    if unsafe { syscall(3, fd) } != 0 { return Err(Refusal::Input); }
+    Ok(())
+}
+pub(crate) fn role_flags(fd: i32) -> Result<(i32, i32), Refusal> {
+    // SAFETY: F_GETFL/F_GETFD only inspect this descriptor; no pointer argument.
+    let status = unsafe { fcntl(fd, 3) };
+    // SAFETY: Same integer-only descriptor query as above.
+    let descriptor = unsafe { fcntl(fd, 1) };
+    if status < 0 || descriptor < 0 { return Err(Refusal::Input); }
+    Ok((status, descriptor))
+}
+pub(crate) fn parent_pid() -> Result<i32, Refusal> {
+    // SAFETY: SYS_getppid=110 on the cfg-limited Linux x86-64 ABI; no arguments.
+    let pid = unsafe { syscall(110) };
+    let pid = i32::try_from(pid).map_err(|_| Refusal::Context)?;
+    if pid <= 1 { return Err(Refusal::Context); }
+    Ok(pid)
+}
+pub(crate) fn pidfd(pid: i32) -> Result<File, Refusal> {
+    // SAFETY: SYS_pidfd_open=434 on this ABI, fixed flags0, no pointer arguments.
+    let fd = unsafe { syscall(434, pid, 0u32) };
+    owned(i32::try_from(fd).map_err(|_| Refusal::Input)?)
+}
+pub(crate) fn require_live(pidfd: &File) -> Result<(), Refusal> {
+    #[repr(C)]
+    struct PollFd { fd: i32, events: i16, revents: i16 }
+    let mut descriptor = PollFd { fd: pidfd.as_raw_fd(), events: 1, revents: 0 };
+    // SAFETY: SYS_poll=7, valid writable one-element Linux pollfd and timeout0.
+    let result = unsafe { syscall(7, &mut descriptor as *mut PollFd, 1usize, 0i32) };
+    if result < 0 { return Err(Refusal::Input); }
+    if result != 0 || descriptor.revents != 0 { return Err(Refusal::Context); }
+    Ok(())
+}
+/// Follow only a caller-selected fixed kernel magic link below verified procfs.
+pub(crate) fn proc_magic(dir: &File, name: &std::ffi::CStr, path_only: bool) -> Result<File, Refusal> {
+    // SAFETY: The only callers supply fixed exe or fd/3 under pinned procfs.
+    // O_PATH is mandatory for the peer pipe, so this never opens a pipe reader.
+    let flags = 0x80000 | if path_only { 0x200000 } else { 0x800 };
+    owned(unsafe { openat(dir.as_raw_fd(), name.as_ptr(), flags) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

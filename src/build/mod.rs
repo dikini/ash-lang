@@ -10,6 +10,10 @@ mod bridge;
 mod checked_admission;
 mod checked_link;
 mod checked_leaf;
+#[cfg(ash_checked_owner_root = "v1")]
+pub(crate) mod checked_root_admission;
+#[cfg(ash_checked_owner_root = "v1")]
+mod checked_root_outcome;
 mod checked_root_identity;
 mod checked_root_environment;
 mod checked_root_project;

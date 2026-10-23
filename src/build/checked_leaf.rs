@@ -31,6 +31,37 @@ pub(super) fn render_root_shim(work: &mut TypeWorkBudget) -> Result<String, Leaf
     Ok(source)
 }
 
+/// Passive role coordinates emitted from the same authenticated projection as
+/// the four native names. Root-local restoration must independently admit all
+/// original types/ABIs and scope relationships before using these DATA fields.
+pub(super) fn render_admitted_root_shim(
+    image: &NativeBuildImage,
+    leaf: &LeafEmission,
+    work: &mut TypeWorkBudget,
+) -> Result<String, LeafFailure> {
+    use std::fmt::Write;
+    let [library] = image.libraries.as_slice() else { return Err(LeafFailure::Association); };
+    let mut source = render_root_shim(work)?;
+    // Exactly32 u32 decimal fields (at most10 digits each), punctuation and
+    // fixed declaration:1024 bytes bounds all output; prepay formatting/storage.
+    pay(work, 2048 + 32)?;
+    source.try_reserve_exact(1024).map_err(|_| LeafFailure::Resource)?;
+    let start = source.len();
+    source.push_str("\n// image-library, library-module, library-ordinal, image-symbol, symbol-index, operation-module, effect, local\n");
+    source.push_str("pub(crate) const CHECKED_ROLES: [[u32; 8]; 4] = [\n");
+    for index in leaf.members {
+        let member = image.bridges.get(index).ok_or(LeafFailure::Association)?;
+        if !library.members.contains(&index) { return Err(LeafFailure::Association); }
+        writeln!(&mut source, "[{}, {}, {}, {}, {}, {}, {}, {}],", library.image_library,
+            library.module, library.ordinal, member.image_symbol, member.symbol_index,
+            member.operation_module, member.operation_effect, member.operation_local)
+            .map_err(|_| LeafFailure::Resource)?;
+    }
+    source.push_str("];\n");
+    if source.len() - start > 1024 { return Err(LeafFailure::Resource); }
+    Ok(source)
+}
+
 const MARKERS: [&str; 4] = [
     "__ACQUIRE_NAME__",
     "__QUERY_NAME__",
@@ -216,6 +247,24 @@ mod tests {
             &mut super::super::gas::preparation(&sources, program.node_count()).unwrap(),
         )
         .unwrap()
+    }
+    #[test]
+    fn root_role_data_binds_original_coordinates_and_paid_rendering() {
+        let mut image = fixture();
+        let leaf = render(&image, &mut TypeWorkBudget::default()).unwrap();
+        let mut work = TypeWorkBudget::default();
+        let source = render_admitted_root_shim(&image, &leaf, &mut work).unwrap();
+        assert!(source.contains("const CHECKED_ROLES: [[u32; 8]; 4]"));
+        let cost = work.used();
+        assert!(render_admitted_root_shim(&image, &leaf, &mut TypeWorkBudget::with_limit(cost - 1)).is_err());
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(cost);
+            assert_eq!(render_admitted_root_shim(&image, &leaf, &mut exact).unwrap(), source);
+            assert_eq!(exact.used(), cost);
+        }
+        let index = leaf.members[0];
+        image.bridges[index].operation_local ^= 1;
+        assert_ne!(render_admitted_root_shim(&image, &leaf, &mut TypeWorkBudget::default()).unwrap(), source);
     }
     #[test]
     fn checked_leaf_uses_exact_four_original_abis_and_refuses_independent_donors() {
