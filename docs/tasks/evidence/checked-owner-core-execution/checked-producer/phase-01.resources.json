@@ -1,0 +1,219 @@
+[
+  {
+    "unix": 1792731857.572356,
+    "available_memory_bytes": 12903739392,
+    "project_free_bytes": 205312712704,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 0,
+    "processes": []
+  },
+  {
+    "unix": 1792731857.5806127,
+    "available_memory_bytes": 12903010304,
+    "project_free_bytes": 205311873024,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 884736,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 884736
+      }
+    ]
+  },
+  {
+    "unix": 1792731862.581541,
+    "available_memory_bytes": 11586158592,
+    "project_free_bytes": 207189553152,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 1324855296,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 34729984
+      },
+      {
+        "pid": 84,
+        "comm": "rustc",
+        "pgid": 60,
+        "rss_bytes": 1290125312
+      }
+    ]
+  },
+  {
+    "unix": 1792731867.5824459,
+    "available_memory_bytes": 11131645952,
+    "project_free_bytes": 206858153984,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 2063155200,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 34729984
+      },
+      {
+        "pid": 84,
+        "comm": "rustc",
+        "pgid": 60,
+        "rss_bytes": 2028425216
+      }
+    ]
+  },
+  {
+    "unix": 1792731872.5834403,
+    "available_memory_bytes": 13071454208,
+    "project_free_bytes": 205319815168,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 227860480,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 34729984
+      },
+      {
+        "pid": 347,
+        "comm": "rustc",
+        "pgid": 60,
+        "rss_bytes": 193130496
+      }
+    ]
+  },
+  {
+    "unix": 1792731877.5844297,
+    "available_memory_bytes": 11369029632,
+    "project_free_bytes": 206295240704,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 1950478336,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 34729984
+      },
+      {
+        "pid": 435,
+        "comm": "rustc",
+        "pgid": 60,
+        "rss_bytes": 1915748352
+      }
+    ]
+  },
+  {
+    "unix": 1792731882.585318,
+    "available_memory_bytes": 10961395712,
+    "project_free_bytes": 206078578688,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 2505273344,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 34729984
+      },
+      {
+        "pid": 435,
+        "comm": "rustc",
+        "pgid": 60,
+        "rss_bytes": 2470543360
+      }
+    ]
+  },
+  {
+    "unix": 1792731887.5863435,
+    "available_memory_bytes": 10993459200,
+    "project_free_bytes": 205794697216,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 3016392704,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 34729984
+      },
+      {
+        "pid": 435,
+        "comm": "rustc",
+        "pgid": 60,
+        "rss_bytes": 2981662720
+      }
+    ]
+  },
+  {
+    "unix": 1792731892.5910163,
+    "available_memory_bytes": 10229395456,
+    "project_free_bytes": 205599236096,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 2967474176,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 34729984
+      },
+      {
+        "pid": 435,
+        "comm": "rustc",
+        "pgid": 60,
+        "rss_bytes": 2932744192
+      }
+    ]
+  },
+  {
+    "unix": 1792731897.592517,
+    "available_memory_bytes": 11229597696,
+    "project_free_bytes": 205397479424,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 3774345216,
+    "processes": [
+      {
+        "pid": 60,
+        "comm": "cargo",
+        "pgid": 60,
+        "rss_bytes": 34729984
+      },
+      {
+        "pid": 435,
+        "comm": "rustc",
+        "pgid": 60,
+        "rss_bytes": 857600000
+      },
+      {
+        "pid": 697,
+        "comm": "cc",
+        "pgid": 60,
+        "rss_bytes": 3035136
+      },
+      {
+        "pid": 698,
+        "comm": "collect2",
+        "pgid": 60,
+        "rss_bytes": 2084864
+      },
+      {
+        "pid": 699,
+        "comm": "rust-lld",
+        "pgid": 60,
+        "rss_bytes": 2876895232
+      }
+    ]
+  },
+  {
+    "unix": 1792731899.9500449,
+    "available_memory_bytes": 12324524032,
+    "project_free_bytes": 205309145088,
+    "tmp_free_bytes": 12356182016,
+    "owned_group_rss_sum_bytes": 0,
+    "processes": []
+  }
+]

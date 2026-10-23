@@ -230,8 +230,9 @@ and keep connected acceptance open; do not declare the task complete.
 
 AD-0016 retention is recorded above. Root implementation/native assignments,
 selected helper ABI/source/static image correspondence and the minimal required
-F3 closure remain prerequisites. The existing startup Resource defect is not erased by a new
-feature gate. Unrelated closure breadth, general C-to-S dependencies, multi-
+F3 closure remain prerequisites. PR101 retained its default startup regression
+repairs at `c51089c8`; any later Resource refusal still requires its own causal
+repair and cannot be bypassed by a new feature gate. Unrelated closure breadth, general C-to-S dependencies, multi-
 library integration, NUL/write cases, SQLite and F7 remain separate required
 program work. Native truth/no-loading/source correspondence stays a reviewed
 trust premise, never established by one successful output. Concrete semantic

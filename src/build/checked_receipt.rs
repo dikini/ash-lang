@@ -61,10 +61,18 @@ pub enum ReceiptField {
     Context,
 }
 
+/// Producer role is descriptive wire data, not permission to run an artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProducerRole {
+    ExistingNative,
+    CheckedPreparation,
+}
+
 /// Independently decoded producer data. All current records describe the
 /// existing native build profile, not the strict checked whole-static profile.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProducerReceipt {
+    role: ProducerRole,
     limits: ProducerReceiptLimits,
     fields: [Option<ArtifactPin>; FIELDS],
 }
@@ -72,7 +80,7 @@ pub struct ProducerReceipt {
 fn pay(work: &mut TypeWorkBudget, amount: usize) -> Result<(), ReceiptFailure> {
     work.charge(amount).map_err(|()| ReceiptFailure::Resource)
 }
-fn pin(bytes: &[u8], work: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
+pub(super) fn pin(bytes: &[u8], work: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
     pay(work, bytes.len())?;
     Ok(ArtifactPin {
         bytes: u64::try_from(bytes.len()).map_err(|_| ReceiptFailure::Resource)?,
@@ -81,6 +89,9 @@ fn pin(bytes: &[u8], work: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFa
 }
 
 impl ProducerReceipt {
+    pub fn role(&self) -> ProducerRole {
+        self.role
+    }
     pub fn declared_limits(&self) -> ProducerReceiptLimits {
         self.limits
     }
@@ -146,9 +157,11 @@ impl ProducerReceipt {
         }
         // role=existing-native, mode=existing-profile. Neither asserts static
         // closure or reinterprets ordinary shared-library builds as checked.
-        if cursor.take(2)? != [0, 0] {
-            return Err(ReceiptFailure::Association);
-        }
+        let role = match cursor.take(2)? {
+            [0, 0] => ProducerRole::ExistingNative,
+            [1, 0] => ProducerRole::CheckedPreparation,
+            _ => return Err(ReceiptFailure::Association),
+        };
         let target_len = cursor.u32()? as usize;
         if cursor.take(target_len)? != super::host::NATIVE_TARGET.as_bytes() {
             return Err(ReceiptFailure::Association);
@@ -225,12 +238,19 @@ impl ProducerReceipt {
         if fields[..6].iter().any(Option::is_none) {
             return Err(ReceiptFailure::Association);
         }
+        if role == ProducerRole::CheckedPreparation
+            && (fields[ReceiptField::CheckedContracts as usize].is_none()
+                || fields[ReceiptField::Policy as usize].is_none())
+        {
+            return Err(ReceiptFailure::Association);
+        }
         Ok(Self {
+            role,
             fields,
             limits: declared,
         })
     }
-    fn encode(
+    pub(super) fn encode(
         &self,
         work: &mut TypeWorkBudget,
         limits: ProducerReceiptLimits,
@@ -251,7 +271,13 @@ impl ProducerReceipt {
             .map_err(|_| ReceiptFailure::Resource)?;
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&1_u32.to_le_bytes());
-        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&[
+            match self.role {
+                ProducerRole::ExistingNative => 0,
+                ProducerRole::CheckedPreparation => 1,
+            },
+            0,
+        ]);
         bytes.extend_from_slice(&(target.len() as u32).to_le_bytes());
         bytes.extend_from_slice(target);
         bytes.extend_from_slice(&(FIELDS as u32).to_le_bytes());
@@ -299,6 +325,32 @@ impl ProducerReceipt {
         }
         Ok(())
     }
+    /// Checks independent policy bytes against this receipt's exact image/facts
+    /// pins. Both sides remain producer claims; successful matching is not approval.
+    pub fn matches_checked_policy(
+        &self,
+        bytes: &[u8],
+        limits: ProducerReceiptLimits,
+    ) -> Result<(), ReceiptFailure> {
+        let mut work = TypeWorkBudget::with_limit(limits.work);
+        if self.role != ProducerRole::CheckedPreparation || bytes.len() > limits.artifact_bytes {
+            return Err(ReceiptFailure::Association);
+        }
+        let observed = pin(bytes, &mut work)?;
+        if self.pin(ReceiptField::Policy) != Some(observed) {
+            return Err(ReceiptFailure::Association);
+        }
+        super::checked_producer::decode_policy(
+            bytes,
+            self.pin(ReceiptField::ProgramImage)
+                .ok_or(ReceiptFailure::Association)?,
+            self.pin(ReceiptField::ExpectedFacts)
+                .ok_or(ReceiptFailure::Association)?,
+            &mut work,
+        )?;
+        Ok(())
+    }
+
     /// Existing-profile producer records lack checked required closure. Matching
     /// claim hashes cannot fill absent originals, headers, tools or premises.
     pub fn check_checked_applicability(&self) -> Result<(), ReceiptFailure> {
@@ -359,6 +411,54 @@ impl ReceiptSeed {
         configuration: &[u8],
         limits: ProducerReceiptLimits,
     ) -> Result<Self, ReceiptFailure> {
+        Self::from_emission_kind(
+            build,
+            program,
+            provenance,
+            emission,
+            configuration,
+            limits,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_checked_emission(
+        build: &super::image::NativeBuildImage,
+        program: &crate::core::ValidatedEffectProgram,
+        provenance: &[(
+            crate::module::ModuleId,
+            std::sync::Arc<crate::source::SourceFile>,
+        )],
+        emission: &super::emit::NativeHostEmission,
+        configuration: &[u8],
+        limits: ProducerReceiptLimits,
+        policy: crate::foreign::source_runtime::CheckedOwnerLimits,
+    ) -> Result<Self, ReceiptFailure> {
+        Self::from_emission_kind(
+            build,
+            program,
+            provenance,
+            emission,
+            configuration,
+            limits,
+            Some(policy),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_emission_kind(
+        build: &super::image::NativeBuildImage,
+        program: &crate::core::ValidatedEffectProgram,
+        provenance: &[(
+            crate::module::ModuleId,
+            std::sync::Arc<crate::source::SourceFile>,
+        )],
+        emission: &super::emit::NativeHostEmission,
+        configuration: &[u8],
+        limits: ProducerReceiptLimits,
+        policy: Option<crate::foreign::source_runtime::CheckedOwnerLimits>,
+    ) -> Result<Self, ReceiptFailure> {
         let mut work = TypeWorkBudget::with_limit(limits.work);
         let (image, facts) = emission.payloads.bytes();
         let applicability = super::checked_admission::Applicability {
@@ -376,7 +476,12 @@ impl ReceiptSeed {
                 metadata: limits.receipt_bytes,
             },
         };
-        super::checked_admission::PassivePlan::admit(
+        let admit = if policy.is_some() {
+            super::checked_admission::PassivePlan::admit_checked_preparation
+        } else {
+            super::checked_admission::PassivePlan::admit
+        };
+        admit(
             build,
             program,
             provenance,
@@ -476,7 +581,55 @@ impl ReceiptSeed {
             }
         }
         fields[ReceiptField::OriginalMappings as usize] = Some(pin(&mappings, &mut work)?);
-        let receipt = ProducerReceipt { fields, limits };
+        let role = if let Some(policy) = policy {
+            let actual = emission
+                .payloads
+                .checked_policy()
+                .ok_or(ReceiptFailure::Association)?;
+            let expected = super::checked_producer::policy_bytes(
+                program,
+                fields[ReceiptField::ProgramImage as usize].ok_or(ReceiptFailure::Association)?,
+                fields[ReceiptField::ExpectedFacts as usize].ok_or(ReceiptFailure::Association)?,
+                policy,
+                &mut work,
+            )?;
+            pay(&mut work, actual.len())?;
+            if actual != expected {
+                return Err(ReceiptFailure::Association);
+            }
+            fields[ReceiptField::Policy as usize] = Some(pin(actual, &mut work)?);
+            // Bind the complete encoded checked originals/Type/Row/source/copy
+            // mappings, not a reduced semantic registry or an accepted digest.
+            let count = image
+                .len()
+                .checked_add(facts.len())
+                .and_then(|n| n.checked_add(16))
+                .ok_or(ReceiptFailure::Resource)?;
+            if count > limits.artifact_bytes {
+                return Err(ReceiptFailure::Resource);
+            }
+            pay(&mut work, count)?;
+            let mut sha = Sha256::new();
+            sha.update((image.len() as u64).to_le_bytes());
+            sha.update(image);
+            sha.update((facts.len() as u64).to_le_bytes());
+            sha.update(facts);
+            fields[ReceiptField::CheckedContracts as usize] = Some(ArtifactPin {
+                bytes: count as u64,
+                sha256: sha.finalize().into(),
+            });
+            ProducerRole::CheckedPreparation
+        } else {
+            if emission.payloads.checked_policy().is_some() {
+                return Err(ReceiptFailure::Association);
+            }
+            ProducerRole::ExistingNative
+        };
+        let receipt = ProducerReceipt {
+            role,
+            fields,
+            limits,
+        };
         // Admit storage/wire bounds now, before any native tool can run.
         let _ = receipt.encode(&mut work, limits)?;
         Ok(Self {
@@ -555,6 +708,17 @@ impl ReceiptSeed {
                 return Err(ReceiptFailure::Association);
             }
         }
+        if self.receipt.role == ProducerRole::CheckedPreparation {
+            let path = paths[1]
+                .parent()
+                .ok_or(ReceiptFailure::Input)?
+                .join("checked-policy.bin");
+            let observed = observe_file(&path, self.limits.artifact_bytes, &mut self.work)?;
+            pay(&mut self.work, 40)?;
+            if Some(observed) != self.receipt.pin(ReceiptField::Policy) {
+                return Err(ReceiptFailure::Association);
+            }
+        }
         Ok(())
     }
     pub(super) fn observe_configuration(
@@ -610,11 +774,12 @@ impl ReceiptSeed {
         {
             return Err(ReceiptFailure::Association);
         }
-        self.receipt.fields[ReceiptField::FinalElf as usize] = Some(observe_elf(
-            file,
-            self.limits.artifact_bytes,
-            &mut self.work,
-        )?);
+        self.receipt.fields[ReceiptField::FinalElf as usize] =
+            Some(if self.receipt.role == ProducerRole::CheckedPreparation {
+                observe_object(file, self.limits.artifact_bytes, &mut self.work, true, true)?
+            } else {
+                observe_elf(file, self.limits.artifact_bytes, &mut self.work)?
+            });
         self.receipt.encode(&mut self.work, self.limits)
     }
 }
@@ -627,7 +792,7 @@ fn observe_file(
     cap: usize,
     work: &mut TypeWorkBudget,
 ) -> Result<ArtifactPin, ReceiptFailure> {
-    observe_object(path, cap, work, false)
+    observe_object(path, cap, work, false, false)
 }
 #[cfg(unix)]
 fn observe_elf(
@@ -635,7 +800,7 @@ fn observe_elf(
     cap: usize,
     work: &mut TypeWorkBudget,
 ) -> Result<ArtifactPin, ReceiptFailure> {
-    observe_object(path, cap, work, true)
+    observe_object(path, cap, work, true, false)
 }
 #[cfg(not(unix))]
 fn observe_file(_: &Path, _: usize, _: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
@@ -645,12 +810,24 @@ fn observe_file(_: &Path, _: usize, _: &mut TypeWorkBudget) -> Result<ArtifactPi
 fn observe_elf(_: &Path, _: usize, _: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
     Err(ReceiptFailure::Input)
 }
+#[cfg(not(unix))]
+fn observe_object(
+    _: &Path,
+    _: usize,
+    _: &mut TypeWorkBudget,
+    _: bool,
+    _: bool,
+) -> Result<ArtifactPin, ReceiptFailure> {
+    Err(ReceiptFailure::Input)
+}
+
 #[cfg(unix)]
 fn observe_object(
     path: &Path,
     cap: usize,
     work: &mut TypeWorkBudget,
     elf: bool,
+    strict: bool,
 ) -> Result<ArtifactPin, ReceiptFailure> {
     use std::os::unix::fs::MetadataExt;
     pay(work, 3)?;
@@ -683,6 +860,13 @@ fn observe_object(
     let mut buffer = [0_u8; 8192];
     let mut header = [0_u8; 64];
     let mut header_len = 0;
+    let mut prefix = Vec::new();
+    if strict {
+        pay(work, 4096)?;
+        prefix
+            .try_reserve_exact(4096)
+            .map_err(|_| ReceiptFailure::Resource)?;
+    }
     loop {
         // Charge the bounded attempted read before I/O; no refunds on failure.
         let allowed = cap
@@ -701,9 +885,14 @@ fn observe_object(
         if total > cap {
             return Err(ReceiptFailure::Resource);
         }
-        let prefix = read.min(header.len() - header_len);
-        header[header_len..header_len + prefix].copy_from_slice(&buffer[..prefix]);
-        header_len += prefix;
+        let header_part = read.min(header.len() - header_len);
+        header[header_len..header_len + header_part].copy_from_slice(&buffer[..header_part]);
+        header_len += header_part;
+        if strict {
+            let extra = read.min(4096 - prefix.len());
+            pay(work, extra)?;
+            prefix.extend_from_slice(&buffer[..extra]);
+        }
         sha.update(&buffer[..read]);
     }
     pay(work, 1)?;
@@ -727,10 +916,83 @@ fn observe_object(
             return Err(ReceiptFailure::Input);
         }
     }
+    if strict {
+        inspect_static_elf(&prefix, total, work)?;
+    }
     Ok(ArtifactPin {
         bytes: total as u64,
         sha256: sha.finalize().into(),
     })
+}
+
+/// Passive same-open-object ELF framing, not loading/ABI/native conformance proof.
+fn inspect_static_elf(
+    prefix: &[u8],
+    total: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ReceiptFailure> {
+    pay(work, 64)?;
+    if prefix.len() < 64 || u16::from_le_bytes([prefix[16], prefix[17]]) != 2 {
+        return Err(ReceiptFailure::Input);
+    }
+    let u64at = |offset: usize| -> Result<u64, ReceiptFailure> {
+        Ok(u64::from_le_bytes(
+            prefix
+                .get(offset..offset + 8)
+                .ok_or(ReceiptFailure::Input)?
+                .try_into()
+                .map_err(|_| ReceiptFailure::Input)?,
+        ))
+    };
+    let offset = usize::try_from(u64at(32)?).map_err(|_| ReceiptFailure::Resource)?;
+    let size = u16::from_le_bytes([prefix[54], prefix[55]]) as usize;
+    let count = u16::from_le_bytes([prefix[56], prefix[57]]) as usize;
+    if offset < 64 || size != 56 || count == 0 || count > 64 {
+        return Err(ReceiptFailure::Input);
+    }
+    let end = count
+        .checked_mul(size)
+        .and_then(|n| n.checked_add(offset))
+        .ok_or(ReceiptFailure::Resource)?;
+    let table = prefix.get(offset..end).ok_or(ReceiptFailure::Input)?;
+    let entry = u64at(24)?;
+    let mut loads = 0usize;
+    let mut executable_entry = false;
+    for row in table.chunks_exact(56) {
+        pay(work, 56)?;
+        let kind = u32::from_le_bytes(row[..4].try_into().map_err(|_| ReceiptFailure::Input)?);
+        if matches!(kind, 2 | 3) {
+            return Err(ReceiptFailure::Input);
+        }
+        if kind == 1 {
+            loads += 1;
+            let word = |at: usize| -> Result<u64, ReceiptFailure> {
+                Ok(u64::from_le_bytes(
+                    row[at..at + 8]
+                        .try_into()
+                        .map_err(|_| ReceiptFailure::Input)?,
+                ))
+            };
+            let start = word(16)?;
+            let memory = word(40)?;
+            let files = word(32)?;
+            if files > memory
+                || word(8)?
+                    .checked_add(files)
+                    .is_none_or(|end| end > total as u64)
+            {
+                return Err(ReceiptFailure::Input);
+            }
+            let end = start.checked_add(memory).ok_or(ReceiptFailure::Input)?;
+            if row[4] & 1 != 0 && start <= entry && entry < end {
+                executable_entry = true;
+            }
+        }
+    }
+    if loads == 0 || !executable_entry {
+        return Err(ReceiptFailure::Input);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -13034,12 +13034,40 @@ pub(crate) fn encode_effect_for_build(
     target: &str,
     work: &mut TypeWorkBudget,
 ) -> Result<NativeBuildImage, NativeImageFailure> {
+    encode_native_preparation(program, provenance, target, work, NativePreparation::Legacy)
+}
+
+#[derive(Clone, Copy)]
+enum NativePreparation { Legacy, Checked }
+
+/// Private producer-only route. It grants neither native binding nor startup.
+/// All ordinary serializer, original-source and bridge admission remains shared.
+pub(crate) fn encode_checked_preparation(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(ModuleId, Arc<SourceFile>)],
+    target: &str,
+    work: &mut TypeWorkBudget,
+) -> Result<NativeBuildImage, NativeImageFailure> {
+    super::checked_producer::observation_minimum(program, work).map_err(|error| match error {
+        super::checked_receipt::ReceiptFailure::Resource => ImageFailure::Resource,
+        _ => ImageFailure::Unsupported(Unsupported::EffectOperation),
+    })?;
+    encode_native_preparation(program, provenance, target, work, NativePreparation::Checked)
+}
+
+fn encode_native_preparation(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(ModuleId, Arc<SourceFile>)],
+    target: &str,
+    work: &mut TypeWorkBudget,
+    preparation: NativePreparation,
+) -> Result<NativeBuildImage, NativeImageFailure> {
     let mut identities = Vec::new();
     let mut original_variables = Vec::new();
     charge(work, program.node_count())?;
     // A static host binder grants no executable image permission, even for
     // an empty interpretation vector. Refuse before encoding registry or body.
-    if program.nodes().iter().any(|node| {
+    if matches!(preparation, NativePreparation::Legacy) && program.nodes().iter().any(|node| {
         matches!(&node.kind,
             crate::core::EffectExprKind::Operation(crate::core::EffectOperation::NativeInterpret(boundary))
                 if boundary.host().is_some())
