@@ -71,7 +71,7 @@ in 13 phases (212.469 command seconds). All 5,154-file maps were equal; tools
 matched and owned process groups were empty after reaping. The [source manifest](final-units/manifest.json)
 and [repair delta](final-units/repair.patch) pin that mechanical change. The fresh [final artifact gate](final-static/receipt.json)
 then passed on the same
-code statements plus the [reviewer-requested role-comment correction](final-static/post-unit-comment.patch).
+code statements plus the [reviewer-requested role-comment correction](final-static/post-unit-comment.patch.gz).
 That comment-only post-unit difference is explicit; the artifact gate binds its
 current runtime fingerprint and full source map. The earlier ELF is not
 transferred to this source. There are **31 distinct passing tests**, comprising
@@ -133,3 +133,9 @@ Final source differs from the early checkpoint only by the reviewed mechanical
 census let-chain and descriptive receipt-role comment. The actual final artifact
 gate binds both changes; pre-comment unit/Clippy transfer is qualified above.
 This is a product draft, not a separate preparation or evidence-only delivery.
+
+The final evidence whitespace repair stores that original comment delta as a
+lossless deterministic gzip container. The earlier clean-check statement covered
+only the working diff and missed the retained patch whitespace in the full PR
+range; the final check explicitly covers the complete base-to-head diff. No
+product source or tested artifact changed.

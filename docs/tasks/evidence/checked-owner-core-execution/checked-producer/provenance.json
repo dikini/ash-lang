@@ -1318,16 +1318,16 @@
     }
   },
   {
-    "path": "final-static/post-unit-comment.patch",
-    "representation": "exact original",
+    "path": "final-static/post-unit-comment.patch.gz",
+    "representation": "deterministic gzip of exact original",
     "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-static-link-role-comment-preparation/post-unit-comment.patch",
     "decoded": {
       "bytes": 723,
       "sha256": "ee6ba1e35ca3ae047e28940c54565ba592bb2bc4bef448e9614e4bbec1299ec0"
     },
     "stored": {
-      "bytes": 723,
-      "sha256": "ee6ba1e35ca3ae047e28940c54565ba592bb2bc4bef448e9614e4bbec1299ec0"
+      "bytes": 398,
+      "sha256": "df4f81fa419c0bc553385a35d740444e3c17b05d385ecfd569045deebb9f9312"
     }
   },
   {
