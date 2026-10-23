@@ -294,6 +294,67 @@ impl TargetResolvedForeignBridge {
     pub(crate) fn native_type_projection(&self) -> &[usize] {
         self.symbol.symbol().native_type_projection()
     }
+    /// C prototype assertion from this same authenticated target plan. Only
+    /// ordinary C identifiers are supported by the bounded helper transaction.
+    pub(super) fn c_header_assertion(
+        &self,
+        index: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<String, super::checked_receipt::ReceiptFailure> {
+        use super::checked_receipt::ReceiptFailure;
+        let name = self.symbol.symbol().native_name();
+        work.charge(
+            name.len()
+                .checked_add(self.operands.len())
+                .ok_or(ReceiptFailure::Resource)?,
+        )
+        .map_err(|()| ReceiptFailure::Resource)?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| b.is_ascii_alphabetic() || b == b'_' || (i > 0 && b.is_ascii_digit()))
+        {
+            return Err(ReceiptFailure::Association);
+        }
+        fn scalar(value: TargetScalar) -> &'static str {
+            match value {
+                TargetScalar::I8 => "int8_t",
+                TargetScalar::U8 => "uint8_t",
+                TargetScalar::I32 => "int32_t",
+                TargetScalar::U32 => "uint32_t",
+                TargetScalar::I64 => "int64_t",
+                TargetScalar::U64 => "uint64_t",
+                TargetScalar::USize64 => "size_t",
+            }
+        }
+        let result = match self.result {
+            TargetResult::Void => "void",
+            TargetResult::Scalar(s) => scalar(s),
+            TargetResult::OwnerAddress | TargetResult::ViewAddress => "void *",
+        };
+        let mut args = String::new();
+        for (i, operand) in self.operands.iter().enumerate() {
+            if i > 0 {
+                args.push_str(", ");
+            }
+            args.push_str(match operand {
+                TargetOperand::Scalar(s) => scalar(*s),
+                TargetOperand::Address => "void *",
+                _ => return Err(ReceiptFailure::Association),
+            });
+        }
+        if self.operands.is_empty() {
+            args.push_str("void");
+        }
+        let result = format!(
+            "_Static_assert(__builtin_types_compatible_p(__typeof__(&{name}), {result} (*)({args})), \"bridge {index} prototype\");\n"
+        );
+        work.charge(result.len())
+            .map_err(|()| ReceiptFailure::Resource)?;
+        Ok(result)
+    }
+
     pub(crate) fn rust_function_name(&self) -> &str {
         &self.rust_function_name
     }

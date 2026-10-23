@@ -92,6 +92,7 @@ pub struct PreparedProgramBuild {
     preparation_work: usize,
     compilation_work: CompilationWork,
     checked_preparation: bool,
+    native_build: Option<super::checked_native_build::NativeBuild>,
 }
 
 impl PreparedProgramBuild {
@@ -417,6 +418,7 @@ pub fn prepare_program(
         preparation_work: work.used(),
         compilation_work: *program.compilation_work(),
         checked_preparation: false,
+        native_build: None,
     })
 }
 
@@ -435,8 +437,42 @@ pub(super) fn prepare_checked_program(
         crate::module::ModuleId,
         std::sync::Arc<crate::source::SourceFile>,
     )],
+    configuration: BuildConfiguration,
+    policy: crate::foreign::source_runtime::CheckedOwnerLimits,
+) -> Result<PreparedProgramBuild, BuildFailure> {
+    prepare_checked_common(program, provenance, configuration, policy, None)
+}
+
+/// Same-build helper compilation is an internal producer observation only.
+#[allow(
+    dead_code,
+    reason = "private checked producer; public activation remains refused"
+)]
+pub(super) fn prepare_checked_native_program(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(
+        crate::module::ModuleId,
+        std::sync::Arc<crate::source::SourceFile>,
+    )],
+    configuration: BuildConfiguration,
+    policy: crate::foreign::source_runtime::CheckedOwnerLimits,
+    native: super::checked_native_build::Request<'_>,
+) -> Result<PreparedProgramBuild, BuildFailure> {
+    if !configuration.native_inputs.is_empty() {
+        return Err(BuildFailure(Failure::UnsupportedProgram));
+    }
+    prepare_checked_common(program, provenance, configuration, policy, Some(native))
+}
+
+pub(super) fn prepare_checked_common(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(
+        crate::module::ModuleId,
+        std::sync::Arc<crate::source::SourceFile>,
+    )],
     mut configuration: BuildConfiguration,
     policy: crate::foreign::source_runtime::CheckedOwnerLimits,
+    native: Option<super::checked_native_build::Request<'_>>,
 ) -> Result<PreparedProgramBuild, BuildFailure> {
     if configuration.target != NATIVE_TARGET
         || !cfg!(all(
@@ -474,6 +510,17 @@ pub(super) fn prepare_checked_program(
                     image::NativeImageFailure::Bridge(error) => Failure::Bridge(error),
                 })
             })?;
+    let native_build = native
+        .map(|request| super::checked_native_build::NativeBuild::build(&build, request))
+        .transpose()
+        .map_err(|error| BuildFailure(Failure::Receipt(error)))?;
+    if let Some(native) = &native_build {
+        configuration
+            .native_inputs
+            .push(NativeLinkInput::StaticArchive(
+                native.archive().to_path_buf(),
+            ));
+    }
     let emission = emit::checked_native_host(
         &build,
         program,
@@ -502,6 +549,7 @@ pub(super) fn prepare_checked_program(
         preparation_work: work.used(),
         compilation_work: CompilationWork::default(),
         checked_preparation: true,
+        native_build,
     })
 }
 
@@ -703,6 +751,11 @@ pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram
             command.arg("-C").arg(argument);
         }
     }
+    if let Some(native) = &mut prepared.native_build {
+        native
+            .verify()
+            .map_err(|error| BuildFailure(Failure::Receipt(error)))?;
+    }
     let status = command
         .env("CARGO_BUILD_JOBS", "1")
         .env_remove("CARGO_BUILD_TARGET")
@@ -730,6 +783,16 @@ pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram
                     .verify_emitted_files(&emission_paths)
                     .and_then(|()| seed.verify_native_inputs(&prepared.configuration.native_inputs))
                     .and_then(|()| seed.verify_configuration(&configuration_paths))
+                    .and_then(|()| {
+                        if let Some(native) = &mut prepared.native_build {
+                            let bytes = native.finish(seed.receipt())?;
+                            seed.bind_native_build(&bytes, native.limits())?;
+                            native.validate_receipt(&bytes, seed.receipt())?;
+                            fs::write(project.join("native-provenance.json"), &bytes)
+                                .map_err(|_| super::checked_receipt::ReceiptFailure::Input)?;
+                        }
+                        Ok(())
+                    })
                     .and_then(|()| seed.finalize(linked));
                 match observed {
                     Ok(bytes) => {

@@ -1,0 +1,436 @@
+[
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/batch-results.json",
+    "path": "batch-results.json",
+    "bytes": 2788,
+    "sha256": "59471a1408b0f86fd0e058e13b2ba8d754d5dc11288321dc9283b76da002e2db",
+    "retained_as": [
+      "interrupted/batch-results.json"
+    ]
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/cache-after.json",
+    "path": "cache-after.json",
+    "bytes": 200,
+    "sha256": "74ec8b85461977bb0ffba1fc713db767f1078f298cd6b02d13216e3f087978dd",
+    "retained_as": []
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/cache-before.json",
+    "path": "cache-before.json",
+    "bytes": 200,
+    "sha256": "0e627f6c47797f33f78a419d299969089e594843c55ea5bcbb2d5d8d51652ceb",
+    "retained_as": []
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/phase-01.before.json",
+    "path": "phase-01.before.json",
+    "bytes": 852223,
+    "sha256": "966e20f6ba1e34baab6ba9cc65c0bf95c5d667d8e806ad5824b790f5dfbad626",
+    "retained_as": []
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/phase-01.inputs.json",
+    "path": "phase-01.inputs.json",
+    "bytes": 1725326,
+    "sha256": "1cc664dce72d908d700313eaf749e9c603bcfabbc613e0dbe772bf7add1cc12c",
+    "retained_as": []
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/phase-01.log",
+    "path": "phase-01.log",
+    "bytes": 45713,
+    "sha256": "3693efcf7a5e281e5a6fa92b71237e5acfd3b6bd442664f8e3d00349cc84c4b7",
+    "retained_as": [
+      "interrupted/phase-01.log.gz"
+    ]
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/phase-01.process.json",
+    "path": "phase-01.process.json",
+    "bytes": 393,
+    "sha256": "387301ab9eac417a80a6a6889dd0fb78131e5bab8250d8ffc0c180df587aac23",
+    "retained_as": []
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/phase-01.receipt.json",
+    "path": "phase-01.receipt.json",
+    "bytes": 2618,
+    "sha256": "7fd45f3baff35c2d1ae9b964c2fd1b1dfd07d83bebf3f0a7a49c4c9955366eb4",
+    "retained_as": [
+      "interrupted/phase-01.receipt.json"
+    ]
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/phase-01.resources.json",
+    "path": "phase-01.resources.json",
+    "bytes": 7987,
+    "sha256": "6b777ce42be31a70f6c7382c73f186eff71cddb13732ee4f83c852f00df34f5b",
+    "retained_as": []
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/runner-process.json",
+    "path": "runner-process.json",
+    "bytes": 968,
+    "sha256": "0239ef15bb702f4afdd8a4ea64039fb62a5ff23e34a0113aa97942ff4dd54728",
+    "retained_as": []
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/scheduling-interruption.json",
+    "path": "scheduling-interruption.json",
+    "bytes": 268,
+    "sha256": "362af84ed848e17029ed36b9bc8f8a3b98146df773c5ef484eccdef3928c2da0",
+    "retained_as": [
+      "interrupted/scheduling-interruption.json"
+    ]
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/tools-after.json",
+    "path": "tools-after.json",
+    "bytes": 1123,
+    "sha256": "32382b2522e9a58f4c4a2aa1c27344a3e40b3593e60de8c09ff138e5f22f9adb",
+    "retained_as": [
+      "interrupted/tools-after.json"
+    ]
+  },
+  {
+    "execution": "interrupted",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-first/tools-before.json",
+    "path": "tools-before.json",
+    "bytes": 1123,
+    "sha256": "32382b2522e9a58f4c4a2aa1c27344a3e40b3593e60de8c09ff138e5f22f9adb",
+    "retained_as": [
+      "interrupted/tools-before.json"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/batch-results.json",
+    "path": "batch-results.json",
+    "bytes": 16480,
+    "sha256": "6aa00e20f4f83e37af2e615b9d7d3b61cc396484f20217c8976637aceda206b6",
+    "retained_as": [
+      "ordinary/batch-results.json"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/cache-after.json",
+    "path": "cache-after.json",
+    "bytes": 200,
+    "sha256": "d014daf51ae8c97e5c6b12ea29acb358a62b4385cae954943e44e3c9421efc5d",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/cache-before.json",
+    "path": "cache-before.json",
+    "bytes": 200,
+    "sha256": "1c15aa231fcda1b9410067135c64a03a1c258daa67a79993e183f76d533e3cd9",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-01.before.json",
+    "path": "phase-01.before.json",
+    "bytes": 852223,
+    "sha256": "be72c48e9784d3aeffe1fd0b922c001105136485d4bf305f3f14c8beb0085024",
+    "retained_as": [
+      "tested-input-map.json.gz"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-01.inputs.json",
+    "path": "phase-01.inputs.json",
+    "bytes": 1725326,
+    "sha256": "549979de8a6163d547eeb6871aa522441d7b326aab076b937c7eaf420764f729",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-01.log",
+    "path": "phase-01.log",
+    "bytes": 49302,
+    "sha256": "220043c6ae9bc2c249d1ad69123b5fdccb242d0d47bc210a010bf031d0e73e4b",
+    "retained_as": [
+      "ordinary/phase-01.log.gz"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-01.process.json",
+    "path": "phase-01.process.json",
+    "bytes": 393,
+    "sha256": "fcd87d32649dee396fcd60f5291899ff9eaf35d589876f6afb138f83f011b5b6",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-01.receipt.json",
+    "path": "phase-01.receipt.json",
+    "bytes": 5172,
+    "sha256": "3d11c94528be91989f36b8895c876ff4385e7bd5e52cf36c8dd4ee29bd69dcba",
+    "retained_as": [
+      "ordinary/phase-01.receipt.json"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-01.resources.json",
+    "path": "phase-01.resources.json",
+    "bytes": 25973,
+    "sha256": "39cfa2df70ab2bdeb0881cd46086c3dcf350dc04297332ec48064728c3e1588c",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-02.before.json",
+    "path": "phase-02.before.json",
+    "bytes": 852223,
+    "sha256": "be72c48e9784d3aeffe1fd0b922c001105136485d4bf305f3f14c8beb0085024",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-02.inputs.json",
+    "path": "phase-02.inputs.json",
+    "bytes": 1725326,
+    "sha256": "549979de8a6163d547eeb6871aa522441d7b326aab076b937c7eaf420764f729",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-02.log",
+    "path": "phase-02.log",
+    "bytes": 49113,
+    "sha256": "3bf3a6922a84fc864fac48408c5a2c8ee170f1a4ab66ec6717de954deba8206c",
+    "retained_as": [
+      "ordinary/phase-02.log.gz"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-02.process.json",
+    "path": "phase-02.process.json",
+    "bytes": 419,
+    "sha256": "e6ef5905cad18902ae56f79da8e223c665fde7e919d0cffeef7cea040c0013af",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-02.receipt.json",
+    "path": "phase-02.receipt.json",
+    "bytes": 5190,
+    "sha256": "f6377a3192830e401d7279a15821a935df0b5f98de7c88f4b039d831d3ae25d2",
+    "retained_as": [
+      "ordinary/phase-02.receipt.json"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-02.resources.json",
+    "path": "phase-02.resources.json",
+    "bytes": 769,
+    "sha256": "81ae77e23f806fa652f0ad21c929b72ea7d727c6e7b8606cc44b79d11e5e7c13",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-03.before.json",
+    "path": "phase-03.before.json",
+    "bytes": 852223,
+    "sha256": "be72c48e9784d3aeffe1fd0b922c001105136485d4bf305f3f14c8beb0085024",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-03.inputs.json",
+    "path": "phase-03.inputs.json",
+    "bytes": 1725326,
+    "sha256": "549979de8a6163d547eeb6871aa522441d7b326aab076b937c7eaf420764f729",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-03.log",
+    "path": "phase-03.log",
+    "bytes": 49094,
+    "sha256": "8277bad5d76660264adc5797ca2288eade916c7fc760890b60834f7d24e6a61f",
+    "retained_as": [
+      "ordinary/phase-03.log.gz"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-03.process.json",
+    "path": "phase-03.process.json",
+    "bytes": 401,
+    "sha256": "ee0c1e6222a65c358d4a641140f2feb9d022081f04965980d309e966ab348612",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-03.receipt.json",
+    "path": "phase-03.receipt.json",
+    "bytes": 5170,
+    "sha256": "f23bc714b059fe916a19f132cebe1c1aa9c10bbbf11e7de69ded539f9f924e69",
+    "retained_as": [
+      "ordinary/phase-03.receipt.json"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/phase-03.resources.json",
+    "path": "phase-03.resources.json",
+    "bytes": 767,
+    "sha256": "30c742eb1d990294d46bbecf41d677fd2958938f3bbbedfb47f4d3c8b298019e",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/runner-process.json",
+    "path": "runner-process.json",
+    "bytes": 1007,
+    "sha256": "675c4839a3c7452c7d98c3dae84770fa31db5d217529df35d13dac30983ed477",
+    "retained_as": []
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/tools-after.json",
+    "path": "tools-after.json",
+    "bytes": 1960,
+    "sha256": "eda58ce2d409b23292c934175f1b22c0813066bf9e90b892fb4008bb155e26ac",
+    "retained_as": [
+      "ordinary/tools-after.json"
+    ]
+  },
+  {
+    "execution": "ordinary",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-abi-context-repair/tools-before.json",
+    "path": "tools-before.json",
+    "bytes": 1960,
+    "sha256": "eda58ce2d409b23292c934175f1b22c0813066bf9e90b892fb4008bb155e26ac",
+    "retained_as": [
+      "ordinary/tools-before.json"
+    ]
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/batch-results.json",
+    "path": "batch-results.json",
+    "bytes": 5518,
+    "sha256": "ee4db20bad983c04e695e6351b23bf776ea96ed8261c658b9568ff858aa99076",
+    "retained_as": [
+      "helper/batch-results.json"
+    ]
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/cache-after.json",
+    "path": "cache-after.json",
+    "bytes": 200,
+    "sha256": "3d690f3af7460b900180d4bafb6e5989495903cf9f3cf4c0da67b05ae946e68d",
+    "retained_as": []
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/cache-before.json",
+    "path": "cache-before.json",
+    "bytes": 200,
+    "sha256": "9605d22c1cbeecc48510f261e82dbb13b4a6c7de515c60657d349e9464b5ba1c",
+    "retained_as": []
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/phase-01.before.json",
+    "path": "phase-01.before.json",
+    "bytes": 852223,
+    "sha256": "be72c48e9784d3aeffe1fd0b922c001105136485d4bf305f3f14c8beb0085024",
+    "retained_as": []
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/phase-01.inputs.json",
+    "path": "phase-01.inputs.json",
+    "bytes": 1725326,
+    "sha256": "549979de8a6163d547eeb6871aa522441d7b326aab076b937c7eaf420764f729",
+    "retained_as": []
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/phase-01.log",
+    "path": "phase-01.log",
+    "bytes": 49107,
+    "sha256": "44369bfcfb80406b17345b3d40d94a1032eee40b847e67fbdcdb96bcdc16fa5a",
+    "retained_as": [
+      "helper/phase-01.log.gz"
+    ]
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/phase-01.process.json",
+    "path": "phase-01.process.json",
+    "bytes": 428,
+    "sha256": "eb5938102200010f2376e63d5c9f08da6ae1dad884eeb4850c548cbd6ac84f0f",
+    "retained_as": []
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/phase-01.receipt.json",
+    "path": "phase-01.receipt.json",
+    "bytes": 5198,
+    "sha256": "133c4ee670e2920b96e88d22e5d5dd3548141034d9b2e7637cfea6d77f35373f",
+    "retained_as": [
+      "helper/phase-01.receipt.json"
+    ]
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/phase-01.resources.json",
+    "path": "phase-01.resources.json",
+    "bytes": 3059,
+    "sha256": "65f7cfe56c4d0b29214ffc2d50ed7531cd5585a9196892b63fdd6f5912ab57be",
+    "retained_as": []
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/runner-process.json",
+    "path": "runner-process.json",
+    "bytes": 992,
+    "sha256": "1e4713eb224cf23f0c44138d5bc74aa0a8046e892e8bfdfc36720128018773a6",
+    "retained_as": []
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/tools-after.json",
+    "path": "tools-after.json",
+    "bytes": 2291,
+    "sha256": "c73076f91328da256e1de84120ad64dddd2ac2929398c606be4dcf85311b4ebc",
+    "retained_as": [
+      "helper/tools-after.json"
+    ]
+  },
+  {
+    "execution": "helper",
+    "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-native-provenance-actual-helper/tools-before.json",
+    "path": "tools-before.json",
+    "bytes": 2291,
+    "sha256": "c73076f91328da256e1de84120ad64dddd2ac2929398c606be4dcf85311b4ebc",
+    "retained_as": [
+      "helper/tools-before.json"
+    ]
+  }
+]

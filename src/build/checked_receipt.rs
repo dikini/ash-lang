@@ -766,6 +766,23 @@ impl ReceiptSeed {
         });
         Ok(())
     }
+    pub(super) fn bind_native_build(
+        &mut self,
+        bytes: &[u8],
+        limits: super::checked_native_build::Limits,
+    ) -> Result<(), ReceiptFailure> {
+        let (before, observed) =
+            super::checked_native_build::binding(bytes, limits, &mut self.work)?;
+        if self.receipt.role != ProducerRole::CheckedPreparation
+            || self.receipt.pin(ReceiptField::BuildConfiguration) != Some(before)
+        {
+            return Err(ReceiptFailure::Association);
+        }
+        self.receipt.fields[ReceiptField::BuildConfiguration as usize] = Some(
+            super::checked_native_build::configuration_binding(before, observed, &mut self.work)?,
+        );
+        Ok(())
+    }
     pub(super) fn finalize(mut self, file: &Path) -> Result<Vec<u8>, ReceiptFailure> {
         if self.configuration.is_none()
             || self
