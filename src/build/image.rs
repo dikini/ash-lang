@@ -13571,6 +13571,32 @@ mod checked_violation_image_tests {
             crate::core::validate_effect_modules(transformed, &sources, &modules).unwrap();
         }
         use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+        // Change only one canonical quarantine TypeApplication's H actual.
+        // Preserve its State actual, callable original, operands and node type.
+        let mut wrong_host = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let selected = wrong_host.nodes.iter().position(|node| {
+            matches!(node.tag, NodeTag::TypeApplication { function, .. }
+                if matches!(wrong_host.nodes[function as usize].tag,
+                    NodeTag::ScalarPreflight { role: Role::CheckedQuarantine, .. }))
+        }).expect("direct original quarantine application");
+        let NodeTag::TypeApplication { arguments, .. } = wrong_host.nodes[selected].tag else { unreachable!() };
+        let mut actuals = arguments.get(&wrong_host.type_children).unwrap().to_vec();
+        assert_eq!(actuals.len(), 2);
+        let unit = wrong_host.types.iter().position(|record| record.tag == TypeTag::Unit).unwrap() as u32;
+        assert_ne!(actuals[0], unit);
+        actuals[0] = unit;
+        let start = wrong_host.type_children.len();
+        wrong_host.type_children.extend_from_slice(&actuals);
+        let NodeTag::TypeApplication { arguments, .. } = &mut wrong_host.nodes[selected].tag else { unreachable!() };
+        *arguments = Slice { start: start.try_into().unwrap(), len: 2 };
+        let mut host_work = crate::build::gas::startup(bytes.len(), facts.len()).unwrap();
+        let error = match wrong_host.restore_effect(&mut host_work) {
+            Err(error) => error, Ok(_) => panic!("quarantine host actual donor accepted")
+        };
+        assert!(!matches!(&error, ImageFailure::Resource)
+            && !matches!(&error, ImageFailure::Validation(error) if error.reason() == crate::core::ValidationReason::Resource)
+            && !matches!(&error, ImageFailure::CoreAdmission(crate::core::BuildError::TypeWorkExceeded)),
+            "host actual donor must fail semantically: {error:?}");
         for (original, donor) in [(Role::CheckedQuarantine, Role::CheckedRejectAcquisition),
             (Role::CheckedRejectAcquisition, Role::CheckedQuarantine)] {
             let mut changed = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
