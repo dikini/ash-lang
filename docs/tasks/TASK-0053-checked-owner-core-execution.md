@@ -111,7 +111,7 @@ all eleven connected controls, 55 affected unit tests and Clippy passed on one
 frozen source map. Three separately authorized existing legacy native regressions
 also passed, covering static/shared destruction captures and byte mutation refusal.
 Independent audits and the [published-head review](https://github.com/dikini/ash-lang/pull/111#pullrequestreview-5623795424) verified both batches. The [retention receipt](https://github.com/dikini/ash-lang/pull/111#issuecomment-6357224049) and [partial acceptance confirmation](https://github.com/dikini/ash-lang/issues/62#issuecomment-6357300062) close that bounded delivery record. The genuine initialized-eight-byte source/Core preparation uses explicitly
-injected native returns and copy completion. The C helper remains unbuilt and unexecuted;
+injected native returns and copy completion. That runtime delivery did not build or execute the C helper;
 the private evaluator phase additionally copies initialized Rust test storage
 through the actual checked-copy code. That is injected-phase evidence, not C
 initialization, native freeing, authored Trace or deployed execution evidence. Existing public build, binding, initializer and report
@@ -137,8 +137,15 @@ image, facts, generated Rust, original mapping and capacity data from that same
 transaction. Native, header, runtime, tool, premise and context closure remain
 explicitly unavailable. Completion of this slice requires the genuine static
 GNU compile/link-only artifact, strict same-open-object ELF observation and
-independent substitution/refusal controls. No generated output startup or
-protected deployment is assigned by this preparation path.
+independent substitution/refusal controls. The first genuine static compile/link-only artifact passed on the early
+`0fe030db` producer source. Its structural readback and receipt remain earlier
+input evidence. After one mechanical Clippy repair, Clippy and 30 affected units passed.
+The final static artifact refresh also passed on those same code statements
+plus one descriptive receipt-role comment correction: 31 distinct tests and
+Clippy, with source qualifications retained in the evidence.
+The helper has been compiled/linked only, with no calls to its functions.
+No generated output startup or protected deployment is assigned by this
+preparation path.
 
 ## Acceptance for this bounded delivery
 

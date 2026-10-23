@@ -68,8 +68,9 @@ pub enum ProducerRole {
     CheckedPreparation,
 }
 
-/// Independently decoded producer data. All current records describe the
-/// existing native build profile, not the strict checked whole-static profile.
+/// Independently decoded producer data. ExistingNative observes ordinary builds;
+/// CheckedPreparation describes a private static preparation role. Neither
+/// supplies protected approval or checked execution authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProducerReceipt {
     role: ProducerRole,

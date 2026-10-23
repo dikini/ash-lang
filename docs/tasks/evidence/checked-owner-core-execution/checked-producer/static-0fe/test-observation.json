@@ -1,0 +1,30 @@
+{
+  "ar": "\"/usr/bin/ar\" \"crs\" \"/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/libchecked-owner.a\" \"/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/owner.o\"",
+  "cc": "\"/usr/bin/cc\" \"-std=c11\" \"-Wall\" \"-Wextra\" \"-Werror\" \"-c\" \"/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/owner.c\" \"-o\" \"/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/owner.o\"",
+  "output": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/program",
+  "pins": {
+    "ExpectedFacts": {
+      "bytes": 18415,
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/.ash-build/ash-host-79-0/src/expected-facts.bin",
+      "sha256": "633fd8fa705e80fa546ce1a902a527c3f75d62c7019bc39758f44c91fb18e821"
+    },
+    "FinalElf": {
+      "bytes": 73930248,
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/program",
+      "sha256": "ba3f0429fa91fa53feaa7f42a218a2d3cb55d08f2038d7044b474025da7ad88d"
+    },
+    "GeneratedRust": {
+      "bytes": 9237,
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/.ash-build/ash-host-79-0/src/main.rs",
+      "sha256": "46c827a17c742df7168420770d820410dc8339b9e5244ce7446563d704152afb"
+    },
+    "ProgramImage": {
+      "bytes": 28795,
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/.ash-build/ash-host-79-0/src/program-image.bin",
+      "sha256": "ad975d87b8ad523783627e41c9a4fd2779be4ece63a92ac4e682cc05c0927d12"
+    }
+  },
+  "purpose": "compile/link-only; output never executed",
+  "receipt": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/.ash-build/ash-host-79-0/producer-receipt.bin",
+  "source_phase_measurements": "absent, not fabricated public-driver history"
+}

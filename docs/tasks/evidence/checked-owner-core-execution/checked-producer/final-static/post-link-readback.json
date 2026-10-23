@@ -1,0 +1,400 @@
+{
+  "purpose": "independent passive post-link bytes/structure/data association; no startup/immutable execution/native closure authority",
+  "pins": {
+    ".ash-build/ash-host-730-0/Cargo.lock": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/Cargo.lock",
+      "bytes": 10123,
+      "sha256": "fef39d8c233d3752e29361eaea6e2fbd1f7d4ca7c4eb5309ad1f5086b365f6f7",
+      "identity": [
+        66309,
+        49562117,
+        33204,
+        10123,
+        1792734012938035059,
+        1792734012938035059
+      ]
+    },
+    ".ash-build/ash-host-730-0/Cargo.toml": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/Cargo.toml",
+      "bytes": 265,
+      "sha256": "bfe2695b87cca5ed8bda2ad833753373d312f8d76116cc9f12485311911b26be",
+      "identity": [
+        66309,
+        49562115,
+        33204,
+        265,
+        1792734012832033233,
+        1792734012832033233
+      ]
+    },
+    ".ash-build/ash-host-730-0/native-build.log": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/native-build.log",
+      "bytes": 4851,
+      "sha256": "276d45f1d853e4241a8de798ac6bdbd62dd3c69d0b77a959f3c0259dce43b515",
+      "identity": [
+        66309,
+        49562118,
+        33204,
+        4851,
+        1792734053648261921,
+        1792734053648261921
+      ]
+    },
+    ".ash-build/ash-host-730-0/producer-receipt.bin": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/producer-receipt.bin",
+      "bytes": 750,
+      "sha256": "6f6a133620a906c04207f29a9c6ba4af31aac47e0f2783e74e487c6862e2e0d8",
+      "identity": [
+        66309,
+        49562119,
+        33204,
+        750,
+        1792734056287786631,
+        1792734056287786631
+      ]
+    },
+    ".ash-build/ash-host-730-0/rust-toolchain.toml": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/rust-toolchain.toml",
+      "bytes": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "identity": [
+        66309,
+        49562116,
+        33204,
+        103,
+        1792734012832033233,
+        1792734012832033233
+      ]
+    },
+    ".ash-build/ash-host-730-0/src/checked-policy.bin": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/src/checked-policy.bin",
+      "bytes": 156,
+      "sha256": "aeeb21950675de62576f66901c0ef847935d7551446156a53379f6d207f1a0fb",
+      "identity": [
+        66309,
+        49562114,
+        33204,
+        156,
+        1792734012832033233,
+        1792734012832033233
+      ]
+    },
+    ".ash-build/ash-host-730-0/src/expected-facts.bin": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/src/expected-facts.bin",
+      "bytes": 18417,
+      "sha256": "836de699b78e7c65a9a649b1cb6f8ac20d409e5d2a450642e608c96157f909b2",
+      "identity": [
+        66309,
+        49562113,
+        33204,
+        18417,
+        1792734012832033233,
+        1792734012832033233
+      ]
+    },
+    ".ash-build/ash-host-730-0/src/main.rs": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/src/main.rs",
+      "bytes": 9237,
+      "sha256": "38d7e9b43d7a6b72f998ce915bb390a1a5e224d0a0dcff4db7077a79428f5471",
+      "identity": [
+        66309,
+        49562111,
+        33204,
+        9237,
+        1792734012832033233,
+        1792734012832033233
+      ]
+    },
+    ".ash-build/ash-host-730-0/src/program-image.bin": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/src/program-image.bin",
+      "bytes": 28797,
+      "sha256": "133c750fe20bbe937dfb199880219bf15757a69663aac744285bbfba6cea1cda",
+      "identity": [
+        66309,
+        49562112,
+        33204,
+        28797,
+        1792734012832033233,
+        1792734012832033233
+      ]
+    },
+    "libchecked-owner.a": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/libchecked-owner.a",
+      "bytes": 2376,
+      "sha256": "cabb99a5425249be410690a5bbde7249f89b9f20aea16755a323ee7a667670af",
+      "identity": [
+        66309,
+        49562107,
+        33204,
+        2376,
+        1792734012283298419,
+        1792734012283298419
+      ]
+    },
+    "observation.json": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/observation.json",
+      "bytes": 2349,
+      "sha256": "fe78a2ac5aafe9b71de5de09492334fc90c2b4ed93465285e655834874e478e8",
+      "identity": [
+        66309,
+        49562125,
+        33204,
+        2349,
+        1792734058738829410,
+        1792734058738829410
+      ]
+    },
+    "owner.c": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/owner.c",
+      "bytes": 851,
+      "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac",
+      "identity": [
+        66309,
+        49561513,
+        33204,
+        851,
+        1792734011758014739,
+        1792734011758014739
+      ]
+    },
+    "owner.h": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/owner.h",
+      "bytes": 333,
+      "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3",
+      "identity": [
+        66309,
+        49562103,
+        33204,
+        333,
+        1792734011758014739,
+        1792734011758014739
+      ]
+    },
+    "owner.o": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/owner.o",
+      "bytes": 2128,
+      "sha256": "1bffbacc9a7f28db9b10bab96e27fda28532217d7fde750b7b2ee388d0b7f68e",
+      "identity": [
+        66309,
+        49562104,
+        33204,
+        2128,
+        1792734011853072485,
+        1792734011853072485
+      ]
+    },
+    "program": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/program",
+      "bytes": 73930272,
+      "sha256": "a07adf4361cf101282d512b21b2052c1ae71a37871c33eccf5a0cc8a17a798bf",
+      "identity": [
+        66309,
+        49562149,
+        33277,
+        73930272,
+        1792734053481737691,
+        1792734056287786631
+      ]
+    }
+  },
+  "elf": {
+    "class": 64,
+    "endian": "little",
+    "machine": 62,
+    "type": 2,
+    "entry": 4222496,
+    "program_headers": [
+      {
+        "type": 1,
+        "flags": 4,
+        "offset": 0,
+        "vaddr": 4194304,
+        "filesz": 1520,
+        "memsz": 1520,
+        "align": 4096
+      },
+      {
+        "type": 1,
+        "flags": 5,
+        "offset": 4096,
+        "vaddr": 4198400,
+        "filesz": 37131685,
+        "memsz": 37131685,
+        "align": 4096
+      },
+      {
+        "type": 1,
+        "flags": 4,
+        "offset": 37138432,
+        "vaddr": 41332736,
+        "filesz": 4698024,
+        "memsz": 4698024,
+        "align": 4096
+      },
+      {
+        "type": 1,
+        "flags": 6,
+        "offset": 41837544,
+        "vaddr": 46031848,
+        "filesz": 835488,
+        "memsz": 859168,
+        "align": 4096
+      },
+      {
+        "type": 4,
+        "flags": 4,
+        "offset": 736,
+        "vaddr": 4195040,
+        "filesz": 36,
+        "memsz": 36,
+        "align": 4
+      },
+      {
+        "type": 4,
+        "flags": 4,
+        "offset": 41836392,
+        "vaddr": 46030696,
+        "filesz": 32,
+        "memsz": 32,
+        "align": 8
+      },
+      {
+        "type": 4,
+        "flags": 4,
+        "offset": 41836424,
+        "vaddr": 46030728,
+        "filesz": 32,
+        "memsz": 32,
+        "align": 4
+      },
+      {
+        "type": 7,
+        "flags": 4,
+        "offset": 41837544,
+        "vaddr": 46031848,
+        "filesz": 144,
+        "memsz": 248,
+        "align": 8
+      },
+      {
+        "type": 1685382483,
+        "flags": 4,
+        "offset": 41836392,
+        "vaddr": 46030696,
+        "filesz": 32,
+        "memsz": 32,
+        "align": 8
+      },
+      {
+        "type": 1685382480,
+        "flags": 4,
+        "offset": 37535296,
+        "vaddr": 41729600,
+        "filesz": 815084,
+        "memsz": 815084,
+        "align": 4
+      },
+      {
+        "type": 1685382481,
+        "flags": 6,
+        "offset": 0,
+        "vaddr": 0,
+        "filesz": 0,
+        "memsz": 0,
+        "align": 16
+      },
+      {
+        "type": 1685382482,
+        "flags": 4,
+        "offset": 41837544,
+        "vaddr": 46031848,
+        "filesz": 826392,
+        "memsz": 826392,
+        "align": 1
+      }
+    ],
+    "no_interpreter_or_dynamic_segment": true
+  },
+  "receipt": {
+    "pin": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-730-1792734011758332101/.ash-build/ash-host-730-0/producer-receipt.bin",
+      "bytes": 750,
+      "sha256": "6f6a133620a906c04207f29a9c6ba4af31aac47e0f2783e74e487c6862e2e0d8",
+      "identity": [
+        66309,
+        49562119,
+        33204,
+        750,
+        1792734056287786631,
+        1792734056287786631
+      ]
+    },
+    "role": "CheckedPreparation",
+    "mode": 0,
+    "declared_limits": [
+      134217728,
+      4096,
+      16,
+      536870912
+    ],
+    "fields": {
+      "ProgramImage": {
+        "bytes": 28797,
+        "sha256": "133c750fe20bbe937dfb199880219bf15757a69663aac744285bbfba6cea1cda"
+      },
+      "ExpectedFacts": {
+        "bytes": 18417,
+        "sha256": "836de699b78e7c65a9a649b1cb6f8ac20d409e5d2a450642e608c96157f909b2"
+      },
+      "GeneratedRust": {
+        "bytes": 9237,
+        "sha256": "38d7e9b43d7a6b72f998ce915bb390a1a5e224d0a0dcff4db7077a79428f5471"
+      },
+      "OriginalMappings": {
+        "bytes": 240,
+        "sha256": "76e21c5bb949a0f256f1d95143791371ae6a855a4c469a86ba79624b8fcf9af4"
+      },
+      "RuntimeFingerprint": {
+        "bytes": 32,
+        "sha256": "24906f1622d0d99c1c428813e5b43e8b6bcbfaec87258b5471deb0f6c66abf1f"
+      },
+      "BuildConfiguration": {
+        "bytes": 280,
+        "sha256": "4e0ef1fc397864bffa629f26dab71c0541768a8ca11789f3ef299f5a66556d1d"
+      },
+      "DeclaredNativeInputs": {
+        "bytes": 185,
+        "sha256": "3f4aa395a5ed882c4e1ee12008a7b07e2554dfc7f1e2e30a267becea1ad4067b"
+      },
+      "FinalElf": {
+        "bytes": 73930272,
+        "sha256": "a07adf4361cf101282d512b21b2052c1ae71a37871c33eccf5a0cc8a17a798bf"
+      },
+      "CheckedContracts": {
+        "bytes": 47230,
+        "sha256": "9d6159221bee57ef1f17422dda44d177038433d5bca379386d4d5d30df581d6b"
+      },
+      "RuntimeClosure": null,
+      "NativeClosure": null,
+      "HeaderClosure": null,
+      "ToolClosure": null,
+      "Policy": {
+        "bytes": 156,
+        "sha256": "aeeb21950675de62576f66901c0ef847935d7551446156a53379f6d207f1a0fb"
+      },
+      "Premises": null,
+      "Context": null
+    }
+  },
+  "capacity_data": {
+    "scope_ordinal": 0,
+    "static_minimum": 5,
+    "groups": 1,
+    "owners": 1,
+    "pending": 1,
+    "observations": 5,
+    "history": 6,
+    "continuations": 1
+  },
+  "qualification": "C source/header exact fixture bytes and archive/object observed; header/tool/native/runtime transitive closure remains Missing; BFD loading warnings are retained, not disproved."
+}
