@@ -8938,6 +8938,22 @@ impl Drop for ArgumentOwner {
     }
 }
 
+// A whole destination allocation remains guarded until its final typed owner
+// is ready. No intermediate vector is needed to protect a partial conversion.
+struct ArgumentBuffer(Vec<crate::types::KindedArgument>);
+impl ArgumentBuffer {
+    fn into_vec(mut self) -> Vec<crate::types::KindedArgument> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for ArgumentBuffer {
+    fn drop(&mut self) {
+        for argument in self.0.drain(..) {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
+    }
+}
+
 enum StructuralOwner {
     Type(IterativeTypeOwner),
     Row(crate::types::EffectRow),
@@ -9257,26 +9273,19 @@ impl Decoder<'_> {
                                 .checked_sub(count)
                                 .ok_or(ImageFailure::InvalidRecord)?;
                             charge(self.work, count)?;
-                            let mut arguments = Vec::new();
-                            arguments
-                                .try_reserve_exact(count)
-                                .map_err(|_| ImageFailure::Resource)?;
-                            // Convert into guards first: an invalid later child
-                            // cannot recursively drop a previously extracted Type.
-                            for child in results.drain(start..) {
-                                arguments.push(child.argument()?);
-                            }
-                            let mut owned = Vec::new();
-                            charge(self.work, count)?;
+                            let mut owned = ArgumentBuffer(Vec::new());
                             owned
+                                .0
                                 .try_reserve_exact(count)
                                 .map_err(|_| ImageFailure::Resource)?;
-                            for argument in arguments {
-                                owned.push(argument.into_inner());
+                            // The final allocation guards all extracted arguments,
+                            // including when a later child has the wrong shape.
+                            for child in results.drain(start..) {
+                                owned.0.push(child.argument()?.into_inner());
                             }
                             StructuralOwner::Instance(crate::types::EffectInstance::new_kinded(
                                 id,
-                                owned.into_boxed_slice(),
+                                owned.into_vec().into_boxed_slice(),
                             ))
                         }
                         TypeTag::Row { known, .. } | TypeTag::SourcePendingRow { known, .. } => {
@@ -9340,23 +9349,16 @@ impl Decoder<'_> {
                                         .len()
                                         .checked_sub(count)
                                         .ok_or(ImageFailure::InvalidRecord)?;
-                                    let mut guarded = Vec::new();
+                                    let mut owned = ArgumentBuffer(Vec::new());
                                     charge(self.work, count)?;
-                                    guarded
+                                    owned
+                                        .0
                                         .try_reserve_exact(count)
                                         .map_err(|_| ImageFailure::Resource)?;
                                     for child in results.drain(start..) {
-                                        guarded.push(child.argument()?);
+                                        owned.0.push(child.argument()?.into_inner());
                                     }
-                                    let mut owned = Vec::new();
-                                    charge(self.work, count)?;
-                                    owned
-                                        .try_reserve_exact(count)
-                                        .map_err(|_| ImageFailure::Resource)?;
-                                    for child in guarded {
-                                        owned.push(child.into_inner());
-                                    }
-                                    Type::ResourceApply(id, owned.into_boxed_slice())
+                                    Type::ResourceApply(id, owned.into_vec().into_boxed_slice())
                                 }
                                 TypeTag::ForeignOwner(id) => {
                                     let id = self.nominal(id)?;
@@ -9364,23 +9366,16 @@ impl Decoder<'_> {
                                         .len()
                                         .checked_sub(count)
                                         .ok_or(ImageFailure::InvalidRecord)?;
-                                    let mut guarded = Vec::new();
+                                    let mut owned = ArgumentBuffer(Vec::new());
                                     charge(self.work, count)?;
-                                    guarded
+                                    owned
+                                        .0
                                         .try_reserve_exact(count)
                                         .map_err(|_| ImageFailure::Resource)?;
                                     for child in results.drain(start..) {
-                                        guarded.push(child.argument()?);
+                                        owned.0.push(child.argument()?.into_inner());
                                     }
-                                    let mut owned = Vec::new();
-                                    charge(self.work, count)?;
-                                    owned
-                                        .try_reserve_exact(count)
-                                        .map_err(|_| ImageFailure::Resource)?;
-                                    for child in guarded {
-                                        owned.push(child.into_inner());
-                                    }
-                                    Type::ForeignOwnerApply(id, owned.into_boxed_slice())
+                                    Type::ForeignOwnerApply(id, owned.into_vec().into_boxed_slice())
                                 }
                                 TypeTag::Int => Type::Int,
                                 TypeTag::Bool => Type::Bool,
@@ -9422,23 +9417,16 @@ impl Decoder<'_> {
                                         .len()
                                         .checked_sub(count)
                                         .ok_or(ImageFailure::InvalidRecord)?;
-                                    let mut guarded = Vec::new();
+                                    let mut owned = TypeBuffer(Vec::new());
                                     charge(self.work, count)?;
-                                    guarded
+                                    owned
+                                        .0
                                         .try_reserve_exact(count)
                                         .map_err(|_| ImageFailure::Resource)?;
                                     for child in results.drain(start..) {
-                                        guarded.push(child.ty()?);
+                                        owned.0.push(child.ty()?.into_inner());
                                     }
-                                    let mut owned = Vec::new();
-                                    charge(self.work, count)?;
-                                    owned
-                                        .try_reserve_exact(count)
-                                        .map_err(|_| ImageFailure::Resource)?;
-                                    for ty in guarded {
-                                        owned.push(ty.into_inner());
-                                    }
-                                    Type::Tuple(owned.into_boxed_slice())
+                                    Type::Tuple(owned.into_vec().into_boxed_slice())
                                 }
                                 TypeTag::Forall { parameters } => {
                                     let body =
@@ -12987,8 +12975,8 @@ impl Decoder<'_> {
         };
         // Pure feature builders infer their row; compare the recorded row using
         // the same allowance rather than silently accepting an altered image.
-        let actual = builder.clone_node_effects_with_budget(node, self.work)?;
-        if !crate::types::same_effect_rows_with_budget(&actual, &effects, self.work)
+        if !builder
+            .node_effects_match_with_budget(node, &effects, self.work)?
             .map_err(|()| ImageFailure::Resource)?
         {
             return Err(ImageFailure::InvalidRecord);
@@ -13530,3 +13518,7 @@ pub(crate) fn checked_owner_dependency_image_controls(
 #[cfg(test)]
 #[path = "decoded_row_tests.rs"]
 mod decoded_row_tests;
+
+#[cfg(test)]
+#[path = "structural_destination_tests.rs"]
+mod structural_destination_tests;

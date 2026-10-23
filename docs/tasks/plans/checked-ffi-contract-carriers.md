@@ -952,3 +952,14 @@ discarded allocation and transfer. Require full-kind/raw output parity, malforme
 later-child iterative cleanup on a small stack, exact/short/prefix/spent/fresh
 controls, then both original canonical images independently. No acceptance
 cache, inferred saving, cap change or easier fixture is authorized.
+
+The [decoder construction checkpoint](../evidence/checked-owner-dependencies/decoder-construction/README.md)
+preserves the production source before temporary measurement hooks. Twenty-one
+focused controls pass; both required default images remain work failures, with
+no later image/startup or Clippy credit. Fresh builder row comparisons retain
+all admission and error categories while avoiding a discarded owned clone.
+Generated image identities were not recorded, so process variation remains
+unresolved. A separate ignored, fixed-image demand experiment is being prepared
+with local allowance 1048576; product/internal defaults stay unchanged and its
+results cannot establish default fit. Remove its hooks before final delivery.
+Whole F3, PR110 and F-core remain open.

@@ -238,8 +238,6 @@ fn canonical_owned_members_preserve_work_storage_and_deep_refusals() {
     assert_eq!(run(deep(), &mut TypeWorkBudget::with_limit(64)), Err(()));
     let input = deep();
     let pointer = input.as_ptr();
-    assert_eq!(
-        run(input, &mut TypeWorkBudget::default()).unwrap().as_ptr(),
-        pointer
-    );
+    let result = run(input, &mut TypeWorkBudget::default()).unwrap();
+    assert_eq!(result.as_ptr(), pointer);
 }
