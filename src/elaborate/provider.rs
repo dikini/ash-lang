@@ -323,7 +323,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .and_then(|context| context.windows.last())
         {
             let matches_view = |ty: &Type, work: &mut TypeWorkBudget| {
-                crate::core::source_window::matches_view_type(
+                crate::core::source_window::matches_static_view_type(
                     &window.family,
                     &window.arguments.0,
                     ty,

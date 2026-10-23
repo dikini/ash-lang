@@ -1614,7 +1614,15 @@ struct Decoder<'a> {
     // append-only coordinate context. Prefix-bounded expectation reads never
     // consult or populate this table. No kind/registry/Core proof is cached.
     decoded_types: HashMap<(u32, usize, usize), DecodedType>,
+    // Canonical Row data shares the same cold-domain and coordinate rules.
+    // Each caller receives a fresh full-kinded clone, never an admission proof.
+    decoded_rows: HashMap<(u32, usize, usize), DecodedRow>,
     work: &'a mut TypeWorkBudget,
+}
+
+struct DecodedRow {
+    value: crate::types::EffectRow,
+    depth: usize,
 }
 
 struct DecodedType {
@@ -2939,6 +2947,7 @@ impl PureImage {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Owned(Vec::new()),
             modules: CoordinateStorage::Owned(Vec::new()),
@@ -3196,6 +3205,30 @@ impl Decoder<'_> {
         self.decoded_types
             .insert(key, DecodedType { value: ty, depth });
         Ok(copied)
+    }
+
+    // Pure decoded representation only. Prefix-bounded facts and pending-row
+    // domains always reconstruct cold, just as they do for decoded Type values.
+    fn row(&mut self, root: u32) -> Result<crate::types::EffectRow, ImageFailure> {
+        if self.expected_fact_prefixes.is_some() || !self.source_pending_rows.is_empty() {
+            return self.structural(root)?.row();
+        }
+        let key = (root, self.sources.len(), self.modules.len());
+        charge(self.work, 1)?;
+        if let Some(row) = self.decoded_rows.get(&key) {
+            return crate::types::clone_effect_row_with_budget(&row.value, self.work)
+                .map_err(|()| ImageFailure::Resource);
+        }
+        let (value, depth) = self.structural_with_depth(root)?;
+        let value = value.row()?;
+        charge(self.work, 1)?;
+        self.decoded_rows
+            .try_reserve(1)
+            .map_err(|_| ImageFailure::Resource)?;
+        let caller = crate::types::clone_effect_row_with_budget(&value, self.work)
+            .map_err(|()| ImageFailure::Resource)?;
+        self.decoded_rows.insert(key, DecodedRow { value, depth });
+        Ok(caller)
     }
 
     fn binder<F: crate::core::dialect::CoreOperationFamily>(
@@ -4193,6 +4226,7 @@ mod tests {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(&[]),
             modules: CoordinateStorage::Borrowed(&[]),
@@ -4685,6 +4719,7 @@ mod tests {
                 source_declaration_catalogs: HashMap::new(),
                 source_pending_rows: std::collections::HashSet::new(),
                 decoded_types: HashMap::new(),
+                decoded_rows: HashMap::new(),
                 expected_fact_prefixes: None,
                 sources: CoordinateStorage::Borrowed(&[]),
                 modules: CoordinateStorage::Borrowed(modules),
@@ -6703,6 +6738,7 @@ main () = {
             modules: CoordinateStorage::Owned(Vec::new()),
             source_declaration_catalogs: HashMap::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             source_pending_rows: std::collections::HashSet::from([id]),
             work: &mut work,
         };
@@ -6768,6 +6804,7 @@ main () = {
                 source_declaration_catalogs: HashMap::new(),
                 source_pending_rows: std::collections::HashSet::new(),
                 decoded_types: HashMap::new(),
+                decoded_rows: HashMap::new(),
                 expected_fact_prefixes: prefix.then(|| NativeFactPrefixes::seal(image).unwrap()),
                 sources: CoordinateStorage::Borrowed(&[]),
                 modules: CoordinateStorage::Borrowed(&[]),
@@ -6823,6 +6860,7 @@ main () = {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(&[]),
             modules: CoordinateStorage::Borrowed(&[]),
@@ -6840,6 +6878,7 @@ main () = {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(&[]),
             modules: CoordinateStorage::Borrowed(&[]),
@@ -6875,6 +6914,7 @@ main () = {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(&[]),
             modules: CoordinateStorage::Borrowed(&[]),
@@ -7112,6 +7152,7 @@ main () = {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: Some(prefix),
             sources: CoordinateStorage::Borrowed(&[]),
             modules: CoordinateStorage::Borrowed(&[]),
@@ -7221,6 +7262,7 @@ main () = {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Borrowed(std::slice::from_ref(&source)),
             modules: CoordinateStorage::Borrowed(&modules),
@@ -8896,6 +8938,22 @@ impl Drop for ArgumentOwner {
     }
 }
 
+// A whole destination allocation remains guarded until its final typed owner
+// is ready. No intermediate vector is needed to protect a partial conversion.
+struct ArgumentBuffer(Vec<crate::types::KindedArgument>);
+impl ArgumentBuffer {
+    fn into_vec(mut self) -> Vec<crate::types::KindedArgument> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for ArgumentBuffer {
+    fn drop(&mut self) {
+        for argument in self.0.drain(..) {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
+    }
+}
+
 enum StructuralOwner {
     Type(IterativeTypeOwner),
     Row(crate::types::EffectRow),
@@ -9106,6 +9164,28 @@ impl Decoder<'_> {
                         }
                     }
                     let record = *get(self.fact_table(&self.image.types, |p| p.types)?, slot)?;
+                    if self.expected_fact_prefixes.is_none()
+                        && self.source_pending_rows.is_empty()
+                        && matches!(record.tag, TypeTag::Row { .. })
+                    {
+                        charge(self.work, 1)?;
+                        if let Some(row) =
+                            self.decoded_rows
+                                .get(&(slot, self.sources.len(), self.modules.len()))
+                        {
+                            let complete_depth =
+                                depth.checked_add(row.depth).ok_or(ImageFailure::Resource)?;
+                            if complete_depth > crate::core::CORE_PAYLOAD_DEPTH_LIMIT {
+                                return Err(ImageFailure::Resource);
+                            }
+                            maximum_depth = maximum_depth.max(complete_depth);
+                            let value =
+                                crate::types::clone_effect_row_with_budget(&row.value, self.work)
+                                    .map_err(|()| ImageFailure::Resource)?;
+                            push(&mut results, StructuralOwner::Row(value), self.work)?;
+                            continue;
+                        }
+                    }
                     if !self.image.effect_dialect
                         && !matches!(
                             record.tag,
@@ -9193,26 +9273,19 @@ impl Decoder<'_> {
                                 .checked_sub(count)
                                 .ok_or(ImageFailure::InvalidRecord)?;
                             charge(self.work, count)?;
-                            let mut arguments = Vec::new();
-                            arguments
-                                .try_reserve_exact(count)
-                                .map_err(|_| ImageFailure::Resource)?;
-                            // Convert into guards first: an invalid later child
-                            // cannot recursively drop a previously extracted Type.
-                            for child in results.drain(start..) {
-                                arguments.push(child.argument()?);
-                            }
-                            let mut owned = Vec::new();
-                            charge(self.work, count)?;
+                            let mut owned = ArgumentBuffer(Vec::new());
                             owned
+                                .0
                                 .try_reserve_exact(count)
                                 .map_err(|_| ImageFailure::Resource)?;
-                            for argument in arguments {
-                                owned.push(argument.into_inner());
+                            // The final allocation guards all extracted arguments,
+                            // including when a later child has the wrong shape.
+                            for child in results.drain(start..) {
+                                owned.0.push(child.argument()?.into_inner());
                             }
                             StructuralOwner::Instance(crate::types::EffectInstance::new_kinded(
                                 id,
-                                owned.into_boxed_slice(),
+                                owned.into_vec().into_boxed_slice(),
                             ))
                         }
                         TypeTag::Row { known, .. } | TypeTag::SourcePendingRow { known, .. } => {
@@ -9276,23 +9349,16 @@ impl Decoder<'_> {
                                         .len()
                                         .checked_sub(count)
                                         .ok_or(ImageFailure::InvalidRecord)?;
-                                    let mut guarded = Vec::new();
+                                    let mut owned = ArgumentBuffer(Vec::new());
                                     charge(self.work, count)?;
-                                    guarded
+                                    owned
+                                        .0
                                         .try_reserve_exact(count)
                                         .map_err(|_| ImageFailure::Resource)?;
                                     for child in results.drain(start..) {
-                                        guarded.push(child.argument()?);
+                                        owned.0.push(child.argument()?.into_inner());
                                     }
-                                    let mut owned = Vec::new();
-                                    charge(self.work, count)?;
-                                    owned
-                                        .try_reserve_exact(count)
-                                        .map_err(|_| ImageFailure::Resource)?;
-                                    for child in guarded {
-                                        owned.push(child.into_inner());
-                                    }
-                                    Type::ResourceApply(id, owned.into_boxed_slice())
+                                    Type::ResourceApply(id, owned.into_vec().into_boxed_slice())
                                 }
                                 TypeTag::ForeignOwner(id) => {
                                     let id = self.nominal(id)?;
@@ -9300,23 +9366,16 @@ impl Decoder<'_> {
                                         .len()
                                         .checked_sub(count)
                                         .ok_or(ImageFailure::InvalidRecord)?;
-                                    let mut guarded = Vec::new();
+                                    let mut owned = ArgumentBuffer(Vec::new());
                                     charge(self.work, count)?;
-                                    guarded
+                                    owned
+                                        .0
                                         .try_reserve_exact(count)
                                         .map_err(|_| ImageFailure::Resource)?;
                                     for child in results.drain(start..) {
-                                        guarded.push(child.argument()?);
+                                        owned.0.push(child.argument()?.into_inner());
                                     }
-                                    let mut owned = Vec::new();
-                                    charge(self.work, count)?;
-                                    owned
-                                        .try_reserve_exact(count)
-                                        .map_err(|_| ImageFailure::Resource)?;
-                                    for child in guarded {
-                                        owned.push(child.into_inner());
-                                    }
-                                    Type::ForeignOwnerApply(id, owned.into_boxed_slice())
+                                    Type::ForeignOwnerApply(id, owned.into_vec().into_boxed_slice())
                                 }
                                 TypeTag::Int => Type::Int,
                                 TypeTag::Bool => Type::Bool,
@@ -9358,23 +9417,16 @@ impl Decoder<'_> {
                                         .len()
                                         .checked_sub(count)
                                         .ok_or(ImageFailure::InvalidRecord)?;
-                                    let mut guarded = Vec::new();
+                                    let mut owned = TypeBuffer(Vec::new());
                                     charge(self.work, count)?;
-                                    guarded
+                                    owned
+                                        .0
                                         .try_reserve_exact(count)
                                         .map_err(|_| ImageFailure::Resource)?;
                                     for child in results.drain(start..) {
-                                        guarded.push(child.ty()?);
+                                        owned.0.push(child.ty()?.into_inner());
                                     }
-                                    let mut owned = Vec::new();
-                                    charge(self.work, count)?;
-                                    owned
-                                        .try_reserve_exact(count)
-                                        .map_err(|_| ImageFailure::Resource)?;
-                                    for ty in guarded {
-                                        owned.push(ty.into_inner());
-                                    }
-                                    Type::Tuple(owned.into_boxed_slice())
+                                    Type::Tuple(owned.into_vec().into_boxed_slice())
                                 }
                                 TypeTag::Forall { parameters } => {
                                     let body =
@@ -12320,6 +12372,7 @@ impl PureImage {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: None,
             sources: CoordinateStorage::Owned(Vec::new()),
             modules: CoordinateStorage::Owned(Vec::new()),
@@ -12394,6 +12447,7 @@ impl PureImage {
             source_pending_rows,
             source_declaration_catalogs,
             decoded_types,
+            decoded_rows,
             work,
         } = decoder;
         let source_arena = sources.into_owned()?;
@@ -12421,6 +12475,7 @@ impl PureImage {
             source_pending_rows,
             source_declaration_catalogs,
             decoded_types,
+            decoded_rows,
             work,
         };
         let templates =
@@ -12448,9 +12503,7 @@ impl PureImage {
             charge(decoder.work, 1)?;
             let ty = decoder.ty(record.ty)?;
             let origin = decoder.origin(record.origin)?;
-            let effects = decoder
-                .structural(record.effects.ok_or(ImageFailure::InvalidRecord)?)?
-                .row()?;
+            let effects = decoder.row(record.effects.ok_or(ImageFailure::InvalidRecord)?)?;
             let node = decoder.effect_node(
                 &mut builder,
                 &registry,
@@ -12922,8 +12975,8 @@ impl Decoder<'_> {
         };
         // Pure feature builders infer their row; compare the recorded row using
         // the same allowance rather than silently accepting an altered image.
-        let actual = builder.clone_node_effects_with_budget(node, self.work)?;
-        if !crate::types::same_effect_rows_with_budget(&actual, &effects, self.work)
+        if !builder
+            .node_effects_match_with_budget(node, &effects, self.work)?
             .map_err(|()| ImageFailure::Resource)?
         {
             return Err(ImageFailure::InvalidRecord);
@@ -13131,6 +13184,7 @@ impl ExpectedNativeFacts<'_> {
             source_declaration_catalogs: HashMap::new(),
             source_pending_rows: std::collections::HashSet::new(),
             decoded_types: HashMap::new(),
+            decoded_rows: HashMap::new(),
             expected_fact_prefixes: Some(self.prefixes),
             sources: CoordinateStorage::Borrowed(&restored.sources),
             modules: CoordinateStorage::Borrowed(&restored.modules),
@@ -13452,3 +13506,20 @@ pub(crate) fn checked_zero_assumption_scalar_image_controls(
 ) {
     checked_prepared_image::zero_assumption_scalar_controls(program, provenance)
 }
+
+#[cfg(test)]
+pub(crate) fn checked_owner_dependency_image_controls(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(ModuleId, Arc<SourceFile>)],
+    standalone: super::CheckedDependencyStandalone,
+) {
+    source_resource_image::checked_owner_dependency_image_controls(program, provenance, standalone);
+}
+
+#[cfg(test)]
+#[path = "decoded_row_tests.rs"]
+mod decoded_row_tests;
+
+#[cfg(test)]
+#[path = "structural_destination_tests.rs"]
+mod structural_destination_tests;

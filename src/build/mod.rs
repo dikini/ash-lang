@@ -528,3 +528,14 @@ pub(crate) use image::checked_window_static_image_controls;
 
 #[cfg(test)]
 pub(crate) use image::checked_zero_assumption_scalar_image_controls;
+
+#[cfg(test)]
+pub(crate) use image::checked_owner_dependency_image_controls;
+
+/// An explicit test premise, never executable admission or a work allowance.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum CheckedDependencyStandalone {
+    Fits,
+    Resource,
+}

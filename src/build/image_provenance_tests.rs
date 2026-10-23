@@ -60,6 +60,7 @@ fn restore(
         source_pending_rows: std::collections::HashSet::new(),
         source_declaration_catalogs: HashMap::new(),
         decoded_types: HashMap::new(),
+        decoded_rows: HashMap::new(),
         work,
     };
     decoder

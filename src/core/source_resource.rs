@@ -166,6 +166,27 @@ impl SourceResourceReportCodec {
     }
 }
 
+// Complete original contract admission owns the pointer ABI/source typing.
+// This narrower checked-finish refinement excludes fallible conversions and
+// duplicate Current operands; eval_flow separately proves each live Enclosing
+// value belongs to this header's exact declared dependency vector.
+fn checked_finish_pointer_operands(
+    symbol: &CheckedForeignSymbol,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ValidationError> {
+    use crate::foreign::source_contract::PreparedOperandSource;
+    let mut current = false;
+    for operand in symbol.symbol().operands() {
+        charge(work, 1)?;
+        match operand.source() {
+            PreparedOperandSource::Current(_) if !current => current = true,
+            PreparedOperandSource::Enclosing(_) => {}
+            _ => return Ok(false),
+        }
+    }
+    Ok(current)
+}
+
 /// A completed header phase, retaining original immutable source authority.
 /// Only lifecycle and final-scope validation can supply execution permission.
 #[derive(Debug)]
@@ -414,17 +435,26 @@ fn dependency_state_identity(
                 invalid()
             }
         };
+        charge(work, registry.source_owner_candidate_count())?;
+        let owner = registry
+            .source_owner_candidates()
+            .find(|(_, _, id, _)| id == nominal);
+        let Some((prepared, index, _, _)) = owner else {
+            // Complete Access kind tags never turn a view into native State.
+            let parameters = crate::foreign::source_owner::row_foreign_parameters(
+                *nominal, registry, span, work,
+            )
+            .map_err(map)?;
+            crate::foreign::source_owner::state_arguments(ty, *nominal, parameters, span, work)
+                .map_err(map)?;
+            return Ok(None);
+        };
         let parameters =
             crate::foreign::source_owner::row_owner_parameters(*nominal, registry, span, work)
                 .map_err(map)?;
         let arguments =
             crate::foreign::source_owner::state_arguments(ty, *nominal, parameters, span, work)
                 .map_err(map)?;
-        charge(work, registry.source_owner_candidate_count())?;
-        let (prepared, index, _, _) = registry
-            .source_owner_candidates()
-            .find(|(_, _, id, _)| id == nominal)
-            .ok_or_else(invalid)?;
         let Some(crate::foreign::source_owner::StateArgument::Type(Type::Variable(identity))) =
             arguments.get(prepared.owners()[index].owned_parameter())
         else {
@@ -830,7 +860,8 @@ impl CheckedSourceResourceHeader {
             return Err(invalid());
         }
         if checked
-            && (!owner.owner().retained_parameters().is_empty()
+            && ((!owner.owner().retained_parameters().is_empty()
+                && owner.owner().representation() != PreparedAddressRepresentation::Opaque)
                 || !matches!(
                     (owner.owner().representation(), acquire.owner_role()),
                     (
@@ -855,7 +886,7 @@ impl CheckedSourceResourceHeader {
                     teardown.symbol().result(),
                     crate::foreign::source_contract::PreparedAbiResult::Void
                 )
-                || teardown.symbol().operands().len() != 1)
+                || !checked_finish_pointer_operands(&teardown, work)?)
         {
             return Err(invalid());
         }
@@ -3060,11 +3091,13 @@ fn eval_flow<'a>(
                         header.codec.report,
                         SourceResourceReportCodec::CheckedScope { .. }
                     ) {
-                        // This signature has only authenticated Current and a void
-                        // result. It has no fallible scalar/result conversion.
+                        // The signature has one authenticated Current, optional
+                        // declared Enclosing pointers, and a void result. Every
+                        // Enclosing operand was checked above against the exact
+                        // dependency lineage; no scalar/result conversion occurs.
                         // Source arms remain typed/exhaustive; impossible generic
                         // codec alternatives supply no path or finish witness.
-                        if expected.symbol().operands().len() != 1
+                        if !checked_finish_pointer_operands(expected, work)?
                             || !matches!(
                                 expected.symbol().result(),
                                 crate::foreign::source_contract::PreparedAbiResult::Void
@@ -5307,7 +5340,7 @@ impl SourceResourceScopeNode {
             )?;
             for (source, target) in &copy.nodes {
                 let expected = originals.get(source).ok_or_else(invalid)?;
-                let mut expected = super::provider::specialization::specialize_source_projection(
+                let mut expected = super::provider::specialization::specialize_source_projection_borrowing_origins(
                     expected,
                     &mappings,
                     &fresh_lookup,
@@ -8814,3 +8847,6 @@ pub(crate) mod checked_byte_window_core_tests;
 #[cfg(test)]
 #[path = "source_resource/coordinate_reuse_tests.rs"]
 pub(crate) mod coordinate_reuse_tests;
+
+#[cfg(test)]
+pub(crate) mod checked_dependency_tests;

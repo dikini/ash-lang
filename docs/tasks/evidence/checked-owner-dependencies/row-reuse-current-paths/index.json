@@ -1,0 +1,132 @@
+{
+  "base": "b3ba6a4bb4c108b905c078ac5cd90cdc13a2510d",
+  "records": [
+    {
+      "path": "probe.py",
+      "sha256": "2f68036f75b4c199257552d2f9ce2557c6e095cd66b9340c99bf815d366211cc",
+      "size": 6760,
+      "encoding": "gzip",
+      "blob": "blobs/2f68036f75b4c199257552d2f9ce2557c6e095cd66b9340c99bf815d366211cc.gz"
+    },
+    {
+      "path": "proposal.json",
+      "sha256": "90687a4a4733f2b3224478b55d3f0e722b4cf9dfe95fe08c1cddec2aa9894564",
+      "size": 1035601,
+      "encoding": "json-map-template",
+      "blob": "blobs/f271442a85507a90159b30abb8430610df4d3c874cabdf32b28a7e7992d239f0.gz"
+    },
+    {
+      "path": "run.py",
+      "sha256": "72b4fe19c48618542a4ec59d971e8bb8dc82bed47caf079326e1fa468190cfe1",
+      "size": 4464,
+      "encoding": "gzip",
+      "blob": "blobs/72b4fe19c48618542a4ec59d971e8bb8dc82bed47caf079326e1fa468190cfe1.gz"
+    },
+    {
+      "path": "manifest.json",
+      "sha256": "39037ba774bbda887f978d154afb0bda2aa1328914cb0a390afac95d1e7efc74",
+      "size": 783,
+      "encoding": "json-map-template",
+      "blob": "blobs/39037ba774bbda887f978d154afb0bda2aa1328914cb0a390afac95d1e7efc74.gz"
+    },
+    {
+      "path": "row-host/before.json",
+      "sha256": "053b0d88439154385a51ee67e993a88d0224c22d12ad5e5f0bd345d350a9833e",
+      "size": 1019483,
+      "encoding": "json-map-template",
+      "blob": "blobs/8306afbae80c1099bef85601bcafe2b5f9365958fbcf149e5103094ec2464e30.gz"
+    },
+    {
+      "path": "row-host/after.json",
+      "sha256": "ccb71636c6aec1ffc827cc51e8a1bbd421c8fc86b61cdc7c9c605e8ef373aeef",
+      "size": 1016332,
+      "encoding": "json-map-template",
+      "blob": "blobs/1d2be3cc0514ccfffb8b5c6f815580c6470558f6f7d9dc6d631d9eaea5d04b23.gz"
+    },
+    {
+      "path": "row-host/process.json",
+      "sha256": "43590a50b98e50defa132155184107b2decffbcbdbf16c434dfa3c2ff9a508b0",
+      "size": 880,
+      "encoding": "json-map-template",
+      "blob": "blobs/43590a50b98e50defa132155184107b2decffbcbdbf16c434dfa3c2ff9a508b0.gz"
+    },
+    {
+      "path": "row-host/receipt.json",
+      "sha256": "6b02e2387abdfae239f870a203cdae959971a18fe736464ed292623198d5ffc7",
+      "size": 1160,
+      "encoding": "json-map-template",
+      "blob": "blobs/6b02e2387abdfae239f870a203cdae959971a18fe736464ed292623198d5ffc7.gz"
+    },
+    {
+      "path": "row-host/rows.json",
+      "sha256": "c0bf3af903f16ac66d2d931107ccdb344d51a684e42b549f4411adbeb895dd9e",
+      "size": 9865,
+      "encoding": "json-map-template",
+      "blob": "blobs/c0bf3af903f16ac66d2d931107ccdb344d51a684e42b549f4411adbeb895dd9e.gz"
+    },
+    {
+      "path": "row-host/raw.log",
+      "sha256": "1f7a90f45694da7622c9377450de9578f510e21582dbcd047798791438f49aaa",
+      "size": 9395,
+      "encoding": "gzip",
+      "blob": "blobs/1f7a90f45694da7622c9377450de9578f510e21582dbcd047798791438f49aaa.gz"
+    },
+    {
+      "path": "access-host/before.json",
+      "sha256": "3379b343c372eb74d77c27cbba579f293bb5ea47a7e615b79b9d2bf4e3165141",
+      "size": 1019492,
+      "encoding": "json-map-template",
+      "blob": "blobs/da16f5b34102ca0452077e11f51933f4e265ed830cf5b7cce5fd1a9c9a69e440.gz"
+    },
+    {
+      "path": "access-host/after.json",
+      "sha256": "598ace921bfb84673ad6abcdc08348224dfe64455bd69cc444cea4d1aa3370dc",
+      "size": 1016331,
+      "encoding": "json-map-template",
+      "blob": "blobs/1d6d97a280a50b90485f5983866da9bb51183c23b1a95aec3ff83560e4a36a93.gz"
+    },
+    {
+      "path": "access-host/process.json",
+      "sha256": "b4d88be7659b8a5cc65b04d655c0614e1381fece898e8b9e3c1ea8cfa9a6c49e",
+      "size": 884,
+      "encoding": "json-map-template",
+      "blob": "blobs/b4d88be7659b8a5cc65b04d655c0614e1381fece898e8b9e3c1ea8cfa9a6c49e.gz"
+    },
+    {
+      "path": "access-host/receipt.json",
+      "sha256": "f9735edb5d24ac7ab8e1e798c306d78a208d42332cce88f98a528483b7513130",
+      "size": 1168,
+      "encoding": "json-map-template",
+      "blob": "blobs/f9735edb5d24ac7ab8e1e798c306d78a208d42332cce88f98a528483b7513130.gz"
+    },
+    {
+      "path": "access-host/rows.json",
+      "sha256": "d1e2c563af9dba084ed5ac6c5310b169a61463376bf96f5743905f1ba3130841",
+      "size": 8803,
+      "encoding": "json-map-template",
+      "blob": "blobs/d1e2c563af9dba084ed5ac6c5310b169a61463376bf96f5743905f1ba3130841.gz"
+    },
+    {
+      "path": "access-host/raw.log",
+      "sha256": "7bbae2626a2ae45a6cea74d944cb92cca0aed23e4b6b229efe32ceb02eddb978",
+      "size": 8428,
+      "encoding": "gzip",
+      "blob": "blobs/7bbae2626a2ae45a6cea74d944cb92cca0aed23e4b6b229efe32ceb02eddb978.gz"
+    }
+  ],
+  "maps": {
+    "d989b09165f71e2ed8ae4ddef7535919f247075c431f7575e9b640c0d41be1da": {
+      "sha256": "d989b09165f71e2ed8ae4ddef7535919f247075c431f7575e9b640c0d41be1da",
+      "entries": 5535,
+      "size": 920819,
+      "blob": "blobs/d989b09165f71e2ed8ae4ddef7535919f247075c431f7575e9b640c0d41be1da.gz"
+    },
+    "486dd15946b0a061c2332ac224ef7a97e459495408dfcf6ed71c576635f55450": {
+      "sha256": "486dd15946b0a061c2332ac224ef7a97e459495408dfcf6ed71c576635f55450",
+      "entries": 611,
+      "size": 69644,
+      "blob": "blobs/486dd15946b0a061c2332ac224ef7a97e459495408dfcf6ed71c576635f55450.gz"
+    }
+  },
+  "scope": "Current1ff artifact read-only29-row two-case observation, debugger0 vs inferior101; no deficit/savings/duplicate-work inference. Rust/config/fixtures equal tested02, full/runtime maps include qualified post-test prose/evidence."
+}

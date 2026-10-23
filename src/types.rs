@@ -1050,6 +1050,103 @@ impl EffectRow {
         )
     }
 
+    /// Consumes a freshly reconstructed row. Only the borrowed replacement
+    /// needs cloning; all original members stay owned through canonicalization.
+    fn substitute_owned_tail_for_reconstruction<B: TypeWorkMeter>(
+        self,
+        target: EffectRowVariable,
+        replacement: &Self,
+        budget: &mut B,
+        mut storage_error: impl FnMut(&mut B) -> B::Error,
+    ) -> Result<Result<Self, EffectRowError>, B::Error> {
+        budget.charge(1)?;
+        let Some(tail) = &self.tail else {
+            return Ok(Ok(self));
+        };
+        if tail.variable != target {
+            return Ok(Ok(self));
+        }
+        let identity = replacement.known.is_empty()
+            && replacement
+                .tail
+                .as_ref()
+                .is_some_and(|tail| tail.variable == target);
+        if !identity {
+            if replacement
+                .tail
+                .as_ref()
+                .is_some_and(|tail| tail.variable == target)
+            {
+                return Ok(Err(EffectRowError::Infinite));
+            }
+            for member in &replacement.known {
+                if find_instance_index_with_budget_and_failure(
+                    &tail.lacks,
+                    member,
+                    budget,
+                    &mut storage_error,
+                )?
+                .is_some()
+                {
+                    return Ok(Err(EffectRowError::Missing));
+                }
+            }
+        }
+        let (known, tail) = self.into_parts();
+        fn append<B: TypeWorkMeter>(
+            mut owned: Vec<EffectInstance>,
+            extra: &[EffectInstance],
+            site: RowReservationSite,
+            budget: &mut B,
+            storage_error: &mut impl FnMut(&mut B) -> B::Error,
+        ) -> Result<Vec<EffectInstance>, B::Error> {
+            if !extra.is_empty() {
+                // Reservation can relocate the original prefix. Existing members
+                // keep their arguments; only the borrowed suffix is rebuilt.
+                let count = owned
+                    .len()
+                    .checked_add(extra.len())
+                    .ok_or_else(|| storage_error(budget))?;
+                budget.charge(count)?;
+                reserve_row(&mut owned, extra.len(), site).map_err(|_| storage_error(budget))?;
+                let mut clone = clone_type_with_budget::<B>;
+                for instance in extra {
+                    owned.push(rebuild_effect_instance_with_budget_and_failure(
+                        instance,
+                        &mut clone,
+                        budget,
+                        storage_error,
+                    )?);
+                }
+            }
+            Ok(owned)
+        }
+        let known = append(
+            known.into_vec(),
+            &replacement.known,
+            RowReservationSite::RebuildMembers,
+            budget,
+            &mut storage_error,
+        )?;
+        let tail = if let Some(replacement_tail) = &replacement.tail {
+            let (_, original_lacks) = tail.expect("matched reconstructed tail");
+            Some((
+                replacement_tail.variable,
+                append(
+                    original_lacks.into_vec(),
+                    &replacement_tail.lacks,
+                    RowReservationSite::RebuildLacks,
+                    budget,
+                    &mut storage_error,
+                )?,
+            ))
+        } else {
+            None
+        };
+        effect_row_from_owned_parts_with_budget_and_failure(known, tail, budget, storage_error)
+            .map(Ok)
+    }
+
     pub(crate) fn substitute_tail_once_with_budget<B: TypeWorkMeter>(
         &self,
         target: EffectRowVariable,
@@ -1151,6 +1248,47 @@ where
     rebuild_effect_row_with_budget_and_failure(known, tail, lacks, map, budget, allocation_error)
 }
 
+fn rebuild_effect_instance_with_budget_and_failure<E, B: TypeWorkMeter>(
+    instance: &EffectInstance,
+    map: &mut impl FnMut(&Type, &mut B) -> Result<Type, E>,
+    budget: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
+) -> Result<EffectInstance, E>
+where
+    E: From<B::Error>,
+{
+    let mut arguments = Vec::new();
+    for argument in &instance.arguments {
+        let argument = IterativeArgumentOwner::new(map_kinded_argument_types_with_budget(
+            argument,
+            map,
+            budget,
+            storage_error,
+        )?);
+        budget.charge(1).map_err(E::from)?;
+        reserve_row(&mut arguments, 1, RowReservationSite::RebuildArguments)
+            .map_err(|_| E::from(storage_error(budget)))?;
+        arguments.push(argument);
+    }
+    let mut retained = Vec::new();
+    budget.charge(arguments.len()).map_err(E::from)?;
+    reserve_row(
+        &mut retained,
+        arguments.len(),
+        RowReservationSite::RebuildRetained,
+    )
+    .map_err(|_| E::from(storage_error(budget)))?;
+    retained.extend(
+        arguments
+            .into_iter()
+            .map(IterativeArgumentOwner::into_inner),
+    );
+    Ok(EffectInstance::new_kinded(
+        instance.effect,
+        retained.into_boxed_slice(),
+    ))
+}
+
 fn rebuild_effect_row_with_budget_and_failure<'a, E, B: TypeWorkMeter>(
     known: impl IntoIterator<Item = &'a EffectInstance>,
     tail: Option<EffectRowVariable>,
@@ -1162,50 +1300,14 @@ fn rebuild_effect_row_with_budget_and_failure<'a, E, B: TypeWorkMeter>(
 where
     E: From<B::Error>,
 {
-    fn rebuild_instance<E, B: TypeWorkMeter>(
-        instance: &EffectInstance,
-        map: &mut impl FnMut(&Type, &mut B) -> Result<Type, E>,
-        budget: &mut B,
-        storage_error: &mut impl FnMut(&mut B) -> B::Error,
-    ) -> Result<EffectInstance, E>
-    where
-        E: From<B::Error>,
-    {
-        let mut arguments = Vec::new();
-        for argument in &instance.arguments {
-            let argument = IterativeArgumentOwner::new(map_kinded_argument_types_with_budget(
-                argument,
-                map,
-                budget,
-                storage_error,
-            )?);
-            budget.charge(1).map_err(E::from)?;
-            reserve_row(&mut arguments, 1, RowReservationSite::RebuildArguments)
-                .map_err(|_| E::from(storage_error(budget)))?;
-            arguments.push(argument);
-        }
-        let mut retained = Vec::new();
-        budget.charge(arguments.len()).map_err(E::from)?;
-        reserve_row(
-            &mut retained,
-            arguments.len(),
-            RowReservationSite::RebuildRetained,
-        )
-        .map_err(|_| E::from(storage_error(budget)))?;
-        retained.extend(
-            arguments
-                .into_iter()
-                .map(IterativeArgumentOwner::into_inner),
-        );
-        Ok(EffectInstance::new_kinded(
-            instance.effect,
-            retained.into_boxed_slice(),
-        ))
-    }
-
     let mut rebuilt_known = Vec::new();
     for instance in known {
-        let instance = rebuild_instance(instance, &mut map, budget, &mut storage_error)?;
+        let instance = rebuild_effect_instance_with_budget_and_failure(
+            instance,
+            &mut map,
+            budget,
+            &mut storage_error,
+        )?;
         budget.charge(1).map_err(E::from)?;
         reserve_row(&mut rebuilt_known, 1, RowReservationSite::RebuildMembers)
             .map_err(|_| E::from(storage_error(budget)))?;
@@ -1214,7 +1316,12 @@ where
     let rebuilt_tail = if let Some(variable) = tail {
         let mut rebuilt_lacks = Vec::new();
         for instance in lacks {
-            let instance = rebuild_instance(instance, &mut map, budget, &mut storage_error)?;
+            let instance = rebuild_effect_instance_with_budget_and_failure(
+                instance,
+                &mut map,
+                budget,
+                &mut storage_error,
+            )?;
             budget.charge(1).map_err(E::from)?;
             reserve_row(&mut rebuilt_lacks, 1, RowReservationSite::RebuildLacks)
                 .map_err(|_| E::from(storage_error(budget)))?;
@@ -1270,6 +1377,24 @@ fn canonical_instances_with_budget<B: TypeWorkMeter>(
     budget: &mut B,
     storage_error: &mut impl FnMut(&mut B) -> B::Error,
 ) -> Result<Vec<EffectInstance>, B::Error> {
+    // Prove that the existing insertion loop would append every input member.
+    // Use its exact comparison orientation and prior-member order; no ordering
+    // law is needed to return this allocation. A failed check leaves all input
+    // members untouched for the complete normalization below.
+    let mut append_only = true;
+    'incoming: for (index, instance) in instances.iter().enumerate().skip(1) {
+        for previous in &instances[..index] {
+            if compare_effect_instances_with_charge(previous, instance, budget, storage_error)?
+                != Ordering::Less
+            {
+                append_only = false;
+                break 'incoming;
+            }
+        }
+    }
+    if append_only {
+        return Ok(instances);
+    }
     let mut canonical = Vec::new();
     for instance in instances {
         let mut position = 0;
@@ -1928,7 +2053,7 @@ pub enum Type {
     Application(Box<Type>, Box<Type>),
     /// One saturated row-bearing resource owner application.
     ResourceApply(ResourceDefinitionId, Box<[KindedArgument]>),
-    /// One saturated row-bearing source foreign State application.
+    /// One saturated row-bearing source foreign State or checked Access application.
     ForeignOwnerApply(NominalTypeId, Box<[KindedArgument]>),
     /// A rank-1 type scheme binding variables in its monotype body.
     Forall(Box<[(TypeVariableId, Kind)]>, Box<Type>),
@@ -4117,33 +4242,12 @@ fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
                     |_| allocation_error(),
                 )?;
                 let effects = if let Some((target, replacement)) = shape.replacement {
-                    let substituted = if replacement.known.is_empty()
-                        && replacement
-                            .tail
-                            .as_ref()
-                            .is_some_and(|tail| tail.variable == target)
-                    {
-                        rebuild_effect_row_with_budget_and_failure(
-                            effects.known.iter(),
-                            Some(target),
-                            effects
-                                .tail
-                                .iter()
-                                .flat_map(|tail| tail.lacks.iter())
-                                .chain(replacement.tail.iter().flat_map(|tail| tail.lacks.iter())),
-                            |argument, budget| clone_type_with_budget(argument, budget),
-                            charge,
-                            |_| allocation_error(),
-                        )
-                        .map(Ok)?
-                    } else {
-                        effects.substitute_tail_once_with_budget_and_failure(
-                            target,
-                            replacement,
-                            charge,
-                            |_| allocation_error(),
-                        )?
-                    };
+                    let substituted = effects.substitute_owned_tail_for_reconstruction(
+                        target,
+                        replacement,
+                        charge,
+                        |_| allocation_error(),
+                    )?;
                     match substituted {
                         Ok(effects) => effects,
                         Err(error) => return Ok(Err(error)),
@@ -4654,6 +4758,9 @@ impl Drop for Kind {
         }
     }
 }
+
+#[cfg(test)]
+mod canonical_owned_tests;
 
 #[cfg(test)]
 mod row_comparator_tests;
@@ -7261,6 +7368,164 @@ mod lexical_row_context_tests {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod owned_tail_reconstruction_tests {
+    use super::*;
+    use crate::module::ModuleId;
+
+    fn member(local: u32) -> EffectInstance {
+        EffectInstance::new_kinded(
+            EffectId::new(ModuleId::new(0), local),
+            Box::new([
+                KindedArgument::TypeArg(Type::Tuple(Box::new([Type::Int, Type::Bool]))),
+                KindedArgument::RowArg(EffectRow::singleton(EffectInstance::new(
+                    EffectId::new(ModuleId::new(0), 9),
+                    Box::new([Type::String]),
+                ))),
+            ]),
+        )
+    }
+    fn source() -> EffectRow {
+        EffectRow::with_tail(
+            Box::new([member(0)]),
+            EffectRowVariable::rigid(TypeVariableId::new(0)),
+            Box::new([member(1)]),
+        )
+    }
+    fn old_template(
+        row: &EffectRow,
+        replacement: &EffectRow,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Result<EffectRow, EffectRowError>, ()> {
+        let target = EffectRowVariable::rigid(TypeVariableId::new(0));
+        if replacement.known.is_empty()
+            && replacement
+                .tail
+                .as_ref()
+                .is_some_and(|tail| tail.variable == target)
+        {
+            rebuild_effect_row_with_budget(
+                row.known.iter(),
+                Some(target),
+                row.tail
+                    .iter()
+                    .flat_map(|tail| tail.lacks.iter())
+                    .chain(replacement.tail.iter().flat_map(|tail| tail.lacks.iter())),
+                clone_type_with_budget,
+                work,
+            )
+            .map(Ok)
+        } else {
+            row.substitute_tail_once_with_budget(target, replacement, work)
+        }
+    }
+    fn run(
+        replacement: &EffectRow,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Result<EffectRow, EffectRowError>, ()> {
+        source().substitute_owned_tail_for_reconstruction(
+            EffectRowVariable::rigid(TypeVariableId::new(0)),
+            replacement,
+            work,
+            allocation_error,
+        )
+    }
+    #[test]
+    fn owned_tail_reconstruction_matches_full_kinded_rows_and_failures() {
+        let target = EffectRowVariable::rigid(TypeVariableId::new(0));
+        let other = EffectRowVariable::rigid(TypeVariableId::new(1));
+        let replacements = [
+            EffectRow::closed(Box::new([member(2), member(3)])),
+            EffectRow::with_tail(Box::new([member(2)]), other, Box::new([member(3)])),
+            EffectRow::open(target, Box::new([member(1), member(3)])),
+            EffectRow::singleton(member(1)),
+            EffectRow::with_tail(Box::new([member(2)]), target, Box::new([])),
+            EffectRow::singleton(member(0)),
+        ];
+        for replacement in &replacements {
+            let before = replacement.clone();
+            let expected =
+                old_template(&source(), replacement, &mut TypeWorkBudget::default()).unwrap();
+            assert_eq!(
+                run(replacement, &mut TypeWorkBudget::default()).unwrap(),
+                expected
+            );
+            assert_eq!(*replacement, before);
+            let actual = substitute_row_for_template_with(
+                &source(),
+                &HashMap::new(),
+                &HashMap::from([(TypeVariableId::new(0), replacement.clone())]),
+                &HashMap::new(),
+                &TemplateIdentityRenaming {
+                    variables: &HashMap::new(),
+                    nominals: &HashMap::new(),
+                },
+                |_: usize| Ok::<_, ()>(()),
+                || (),
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
+        assert_eq!(
+            run(&replacements[3], &mut TypeWorkBudget::default()),
+            Ok(Err(EffectRowError::Missing))
+        );
+        assert_eq!(
+            run(&replacements[4], &mut TypeWorkBudget::default()),
+            Ok(Err(EffectRowError::Infinite))
+        );
+        assert_eq!(
+            run(&replacements[5], &mut TypeWorkBudget::default()),
+            Ok(Err(EffectRowError::Missing))
+        );
+        let mut old = TypeWorkBudget::default();
+        old_template(&source(), &replacements[0], &mut old)
+            .unwrap()
+            .unwrap();
+        let mut owned = TypeWorkBudget::default();
+        run(&replacements[0], &mut owned).unwrap().unwrap();
+        assert!(owned.used() < old.used());
+    }
+    #[test]
+    fn owned_tail_reconstruction_pays_exact_prefix_short_spent_and_storage() {
+        let replacement = EffectRow::closed(Box::new([member(2), member(3)]));
+        let mut measured = TypeWorkBudget::default();
+        let expected = run(&replacement, &mut measured).unwrap().unwrap();
+        let cost = measured.used();
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(run(&replacement, &mut short), Err(()));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert_eq!(run(&replacement, &mut exact), Ok(Ok(expected.clone())));
+                assert_eq!(exact.used(), prefix + cost);
+                assert_eq!(run(&replacement, &mut exact), Err(()));
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        // This already-canonical result reuses its owned member allocation.
+        // CanonicalMembers refusal is exercised on an actual fallback in
+        // canonical_owned_tests instead.
+        {
+            let input = source();
+            let _fault = row_reservation_fault::fail(RowReservationSite::RebuildMembers, 0);
+            let mut work = TypeWorkBudget::default();
+            assert_eq!(
+                input.substitute_owned_tail_for_reconstruction(
+                    EffectRowVariable::rigid(TypeVariableId::new(0)),
+                    &replacement,
+                    &mut work,
+                    allocation_error,
+                ),
+                Err(())
+            );
+            assert!(work.used() > 0);
         }
     }
 }

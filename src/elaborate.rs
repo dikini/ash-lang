@@ -25511,7 +25511,7 @@ fn candidate_kind_environment<'a>(
                 crate::types::TypeStructureNode::Type(Type::ForeignOwnerApply(identity, _))
                     if !environments.contains_nominal(*identity) =>
                 {
-                    let parameters = crate::foreign::source_owner::row_owner_parameters(
+                    let parameters = crate::foreign::source_owner::row_foreign_parameters(
                         *identity, registry, span, budget,
                     )
                     .map_err(|error| {
@@ -26317,7 +26317,7 @@ fn validate_and_charge_public_monotype(
                     | CanonicalNominalKind::Frozen { origin, .. }
                     | CanonicalNominalKind::RowBearingResource { origin, .. } => origin,
                 };
-                let parameters = crate::foreign::source_owner::row_owner_parameters(
+                let parameters = crate::foreign::source_owner::row_foreign_parameters(
                     *nominal, registry, span, budget,
                 )
                 .map_err(|error| {

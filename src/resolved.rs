@@ -11576,6 +11576,16 @@ impl ExportSummary {
                         type_work,
                     )
                 }
+                Some(crate::foreign::source_access::CheckedForeignNominal::Access(access))
+                    if access.prepared().checked_contract().is_some() =>
+                {
+                    environments.insert_source_access_nominal(
+                        access,
+                        &nominal.parameters,
+                        nominal.origin.primary_span(),
+                        type_work,
+                    )
+                }
                 _ => environments.insert_nominal(
                     nominal.id,
                     &nominal.parameters,
@@ -11682,6 +11692,16 @@ impl ExportSummary {
                 Some(crate::foreign::source_access::CheckedForeignNominal::Owner(owner)) => {
                     environments.insert_source_owner_nominal(
                         owner,
+                        &nominal.parameters,
+                        nominal.origin.primary_span(),
+                        type_work,
+                    )
+                }
+                Some(crate::foreign::source_access::CheckedForeignNominal::Access(access))
+                    if access.prepared().checked_contract().is_some() =>
+                {
+                    environments.insert_source_access_nominal(
+                        access,
                         &nominal.parameters,
                         nominal.origin.primary_span(),
                         type_work,

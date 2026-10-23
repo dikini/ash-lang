@@ -4877,6 +4877,32 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .map_err(|()| BuildError::TypeWorkExceeded)
     }
 
+    /// Compares a constructed row without allocating a throwaway owned copy.
+    /// The outer result preserves node/guard failures; comparison work has its
+    /// own inner failure so private reconstruction retains its error boundary.
+    pub(crate) fn node_effects_match_with_budget(
+        &self,
+        node: NodeId,
+        expected: &EffectRow,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Result<bool, ()>, BuildError> {
+        budget
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if self.arena != Some(node.arena()) {
+            return Err(BuildError::InvalidNodeId);
+        }
+        let expression = self
+            .nodes
+            .get(node.index()?)
+            .ok_or(BuildError::InvalidNodeId)?;
+        Ok(crate::types::same_effect_rows_with_budget(
+            F::effect_row(&expression.effects),
+            expected,
+            budget,
+        ))
+    }
+
     pub(super) fn infer_pure_effects_at(&mut self, index: usize) -> Result<EffectRow, BuildError> {
         let kind = F::pure(&self.nodes.get(index).ok_or(BuildError::InvalidNodeId)?.kind)
             .ok_or(BuildError::InvalidPayload)?;
@@ -8656,3 +8682,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "borrowed_node_row_tests.rs"]
+mod borrowed_node_row_tests;

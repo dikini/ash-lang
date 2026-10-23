@@ -1129,6 +1129,47 @@ impl RuntimeBoundary {
 }
 
 #[cfg(test)]
+pub(crate) fn assert_dependent_header_refused_before_entry(
+    parent: &CheckedSourceResourceHeader,
+    child: &CheckedSourceResourceHeader,
+) {
+    assert!(parent.dependencies.is_empty());
+    assert!(!child.dependencies.is_empty());
+    let mut work = TypeWorkBudget::default();
+    let mut ledger = Ledger::reserve(2, 2, 2, &mut work).unwrap();
+    let parent_group = ledger.group(&mut work).unwrap();
+    ledger.owner(parent_group, parent, &mut work).unwrap();
+    let child_group = ledger.group(&mut work).unwrap();
+    let before = (
+        ledger.records.len(),
+        ledger.history.len(),
+        ledger.observed_calls,
+        ledger.in_flight,
+    );
+    assert!(matches!(
+        ledger.owner(child_group, child, &mut work),
+        Err(Failure::Unsupported)
+    ));
+    assert_eq!(
+        (
+            ledger.records.len(),
+            ledger.history.len(),
+            ledger.observed_calls,
+            ledger.in_flight
+        ),
+        before
+    );
+    assert!(!ledger.groups[child_group.index].owner_bound);
+    assert_eq!(ledger.records.len(), 1);
+    assert_eq!(ledger.records[0].native, Native::NoOwner);
+    assert_eq!(ledger.records[0].k, K::Absent);
+    assert!(ledger.records[0].pending.is_none());
+    assert!(ledger.history.is_empty());
+    assert_eq!(ledger.observed_calls, 0);
+    assert_eq!(ledger.in_flight, 0);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

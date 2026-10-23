@@ -1816,9 +1816,7 @@ impl Decoder<'_> {
         for record in records {
             let ty = self.ty(record.ty)?;
             let origin = self.origin(record.origin)?;
-            let effects = self
-                .structural(record.effects.ok_or(ImageFailure::InvalidRecord)?)?
-                .row()?;
+            let effects = self.row(record.effects.ok_or(ImageFailure::InvalidRecord)?)?;
             let node = self.effect_node(
                 &mut builder,
                 registry,
@@ -2543,6 +2541,13 @@ pub(super) fn checked_window_static_image_controls(
     old[PRIVATE_MAGIC.len() - 1] = 0x12;
     assert!(PureImage::decode_bytes(&old, &mut TypeWorkBudget::default()).is_err(), "old wire version must not reinterpret the new header layout");
 }
+
+
+#[cfg(test)]
+#[path = "checked_owner_dependency_image_tests.rs"]
+mod checked_owner_dependency_image_tests;
+#[cfg(test)]
+pub(super) use checked_owner_dependency_image_tests::controls as checked_owner_dependency_image_controls;
 
 #[cfg(test)]
 mod tests {

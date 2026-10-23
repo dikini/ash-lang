@@ -100,7 +100,10 @@ separate preparation delivery.
 1. Freeze the minimal real source/helper and first discriminating reds. Establish
    prepare/bind/source/summary/body-free/Core positives first, then show actual
    checked image refusal and public startup refusal. Reuse normal driver
-   source_work/rewrite funding and fresh default image/Core budgets. Retained PR101's
+   source_work/rewrite funding and fresh phase-owned image/Core budgets. Larger
+   dependency images use AD-0013's existing cumulative startup meter for their
+   decode/fact/restoration segment; standalone helper limits and their exhaustion
+   remain unchanged. This is data reconstruction, not executable admission. Retained PR101's
    static controls do not turn the passive fourteen-role image fixture
    into checked_scope/window evidence. New startup failures remain
    separate; if the minimal fixture exhausts, localize actual work and repair

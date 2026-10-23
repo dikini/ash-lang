@@ -870,3 +870,121 @@ global limits. [Original and final evidence](../evidence/effect-row-comparator/R
 retains the genuine baseline red and both failed fixed attempts. Proceed to the
 separate unsigned delivery checkpoint and independent review; preserve PR110
 until this comparator correction is retained. Whole F3/F-core remains pending.
+
+### Declared enclosing checked-owner dependency checkpoint
+
+PR #101 is retained at `c51089c8b6de76384361283f671d1f2dbf3ad58e`, with
+independent actual-head/retained-result review and partial #59 acceptance readback
+confirmed by PM. Its final selected 473 units, compile/link-only receipt control
+and Clippy pass; the three unchanged startup probes fit 327680. This transfers
+only that static byte/window subset, not whole F3 or checked execution permission.
+
+The next checkpoint extends the existing declared enclosing-owner relation to
+checked opaque owners under accepted CP-0024. Reuse the original retained owner
+parameter, complete ordered Type/Row applications, original source/symbol/Host
+facts, header dependency vector and symbolic Enclosing lineage. Private data may
+retain the ordinary parent access handle but not its native State. Group/runtime
+activation, general helper transport and new dependency representations are out
+of scope. Existing ordinary dependency behavior remains a regression gate.
+
+1. Freeze a genuine two-owner checked source and body-free consumer expected
+   positive, with exact C distinct from S and H. Observe its first actual refusal
+   before widening production admission; setup or Resource failure is not evidence
+   of the dependency boundary. Keep the dependency-free canonical source first.
+2. Extend only the evidenced static binding/header/flow restrictions, preserving
+   full original owner/application/liveness facts and fresh independent checking.
+   Checked void finish may use only authenticated Current and declared Enclosing
+   pointer operands; scalar conversions, arbitrary States and helper permission
+   are not implied. Any gap in CP-0024 disposition semantics returns to design.
+3. Require source/summary, opaque body-free import/re-export, linked independent
+   Core and identity/fold, then actual private static-image reconstruction. Add
+   canonical-first wrong C/S/H, swapped full arguments/Rows, missing or donated
+   dependencies, State-in-private-data, stale copied forests and finish-witness
+   negatives, with exact/prefix/short/spent/fresh work controls.
+4. Run root-scoped focused/affected checks on frozen inputs, preserve genuine red
+   evidence, request independent current-head review, and deliver one product PR.
+   No preparation-only PR or runtime/native activation is authorized here. PM
+   schedules the connected F-core full gate; developer runs it when due.
+
+Current partial evidence is retained in the
+[decoder-local Row checkpoint](../evidence/checked-owner-dependencies/row-representation/README.md).
+Six focused representation controls pass, while the required Row and Access
+canonical images remain work failures under unchanged defaults. Localize their
+current actual paths before another cost repair; preceding-artifact traces do
+not establish the new caller or deficit. Keep complete original associations,
+fresh independent admission and the existing runtime dependency refusal. Final
+static specification, matrix/bounds/startup refresh, affected checks and current
+PR review remain required; PM schedules the subsequent connected F-core gate.
+
+The [fresh two-case observation](../evidence/checked-owner-dependencies/row-reuse-current-paths/README.md)
+now locates the tested failure paths without measuring their total deficit.
+Any further structural-data reuse needs demonstrated repetition and exact
+context/depth ownership. Rebase onto the actual retained producer tip before
+next verification or product repair, preserving all current partial evidence.
+
+The [fresh signature ownership controls](../evidence/checked-owner-dependencies/signature-borrow/README.md)
+pass on the retained producer base, but both required canonical images remain
+work failures. Preserve their distinct outcomes and localize applicable repeated
+construction before extending Decoder representation reuse. No acceptance
+result, pending-row context or earlier failure path may be reused as proof.
+
+After retained comparator correction PR #116 (`577b0c87`) and verified #114
+acceptance, resume PR110 on that exact retaining tip while preserving its
+published `f0e316c5` branch. Reconstruct the owned-Vec fast path from current code:
+compare each incoming member against every prior original member in the old
+insertion order. Return the original allocation only after every comparison is
+Less; on the first other result retain the entire input and run the unchanged
+insertion/dedup fallback. Pay attempted prechecks and fallback work independently.
+Fresh tests must use the repaired function laws and raw constructors, not the
+withdrawn comparator-cycle expectations. Require full-kind/reference parity,
+actual pointer/capacity reuse, genuine fallback allocation refusal and paid
+exact/short/prefix/spent/fresh controls. The subsequent fixed-default performance attempts and both original
+Row/Access failures remain historical evidence; no saving or default-fit result
+transfers from those sources. The project lead now supersedes that larger-image
+327680-fit premise with AD-0013's existing cumulative startup owner: `22 * (image
+bytes + expected-fact bytes)`, with one meter across canonical decode,
+expected-fact admission and independent restoration. Preserve explicit standalone
+exhaustion for these larger fixtures and standalone success for the smaller base,
+then verify complete-segment exact/short/prefix/spent/two-fresh behavior and all
+semantic hostiles. Keep the three earlier fitting default regressions unchanged.
+This Rust-only reconstruction segment does not cover later executable binding,
+evaluation, native activation or protected deployment. No product budget changes.
+
+The [canonical allocation evidence](../evidence/checked-owner-dependencies/canonical-allocation/README.md)
+keeps 15 focused passes and two independently observed image failures separate
+from the next source. After reconciliation onto producer `9e57263b`, replace the
+decoder guarded-transit/final-vector pair with one guarded final vector in
+Instance, Resource, ForeignOwner and Tuple reconstruction. Preserve identity,
+count, child shape/order, traversal/depth and all retained work; remove only the
+discarded allocation and transfer. Require full-kind/raw output parity, malformed
+later-child iterative cleanup on a small stack, exact/short/prefix/spent/fresh
+controls, then both original canonical images independently. No acceptance
+cache, inferred saving, cap change or easier fixture is authorized.
+
+The [decoder construction checkpoint](../evidence/checked-owner-dependencies/decoder-construction/README.md)
+preserves the production source before temporary measurement hooks. Twenty-one
+focused controls pass; both required default images remain work failures, with
+no later image/startup or Clippy credit. Fresh builder row comparisons retain
+all admission and error categories while avoiding a discarded owned clone.
+Generated image identities were not recorded, so process variation remains
+unresolved. A separate ignored, fixed-image demand experiment is being prepared
+with local allowance 1048576; product/internal defaults stay unchanged and its
+results cannot establish default fit. Remove its hooks before final delivery.
+Whole F3, PR110 and F-core remain open.
+
+Local owner-policy gate 35541 passes all seven exact controls under the corrected
+AD-0013 premise. Full Row reconstruction is 415967/1282820; Access is
+541983/1585254, with explicit standalone Resource-family refusals preserved.
+The earlier three 327680 startup regressions remain unchanged and pass at
+316950/309651/310302. The zero-participation registry index and temporary
+diagnostic hooks are removed; only the minimal borrowed replacement maps remain.
+[Evidence and limitations](../evidence/checked-owner-dependencies/startup-owner-policy/README.md)
+retain the compile-only storage-bound attempt and separation of evidence from
+build-cache accounting. Final local session 83676 passes targeted Clippy and 40 distinct affected
+regressions with independent actual audit `3dada60a`. Its fresh Row/Access segment
+costs are 415977/1282908 and 541993/1585342; these are separate captured inputs,
+not invariant costs or an isolated optimization delta. The delivered static
+specification is updated for opaque retained dependencies and complete checked
+Access/window correspondence, preserving runtime exclusions. Prepare the
+reviewed unsigned PR110 checkpoint; no further performance experiment is
+selected. Whole F3 and later binding/native/F-core remain open.
