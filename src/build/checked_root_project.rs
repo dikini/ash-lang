@@ -38,7 +38,7 @@ pub(super) struct BuildData {
 }
 fn leaf_manifest(work: &mut TypeWorkBudget) -> Result<String, Failure> {
     pay(work,1024)?;
-    Ok(format!("[package]\nname = {LEAF_PACKAGE:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n\n[lints.rust]\nunsafe_op_in_unsafe_fn = \"deny\"\n\n[lints.clippy]\nundocumented_unsafe_blocks = \"deny\"\n"))
+    Ok(format!("[package]\nname = {LEAF_PACKAGE:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lints.rust]\nunsafe_op_in_unsafe_fn = \"deny\"\n\n[lints.clippy]\nundocumented_unsafe_blocks = \"deny\"\n"))
 }
 fn validate_lock(settled: &[u8], work: &mut TypeWorkBudget) -> Result<(), Failure> {
     if settled.len() > 1024 * 1024 { return Err(Failure::Resource); }
@@ -294,6 +294,8 @@ mod tests {
         std::fs::write(project.root().join("Cargo.lock"),super::super::checked_root_lock_policy::fixture(ORIGINAL_LOCK)).unwrap();
         let canonical=project.snapshot("leaf DATA","shim DATA",&mut work).unwrap();
         assert_eq!(canonical.leaf,b"leaf DATA");
+        assert_eq!(std::str::from_utf8(&canonical.manifest).unwrap().matches("[workspace]").count(),1);
+        assert!(!std::str::from_utf8(&canonical.leaf_manifest).unwrap().contains("[workspace]"));
         for name in ["build.rs","lock_policy.rs","rust-toolchain.toml"] {
             let path=project.root().join(name);
             let before=std::fs::read(&path).unwrap();
