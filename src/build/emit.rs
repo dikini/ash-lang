@@ -133,6 +133,68 @@ fn emit_encoded_host(
 mod tests {
     use super::*;
 
+    #[test]
+    fn portable_bridge_identifier_uses_complete_coordinates_and_paid_fresh_work() {
+        let values = [
+            NativeBridgeName {
+                module: 0,
+                effect: 0,
+                operation: 0,
+            },
+            NativeBridgeName {
+                module: 1,
+                effect: 0,
+                operation: 0,
+            },
+            NativeBridgeName {
+                module: 0,
+                effect: 1,
+                operation: 0,
+            },
+            NativeBridgeName {
+                module: 0,
+                effect: 0,
+                operation: 1,
+            },
+            NativeBridgeName {
+                module: 1,
+                effect: 23,
+                operation: 4,
+            },
+            NativeBridgeName {
+                module: 12,
+                effect: 3,
+                operation: 4,
+            },
+            NativeBridgeName {
+                module: u32::MAX,
+                effect: u32::MAX,
+                operation: u32::MAX,
+            },
+        ];
+        let mut names = std::collections::HashSet::new();
+        for value in values {
+            let mut measured = TypeWorkBudget::default();
+            let length = value.admitted_length(&mut measured).unwrap();
+            let name = value.to_string();
+            assert_eq!(length, name.len());
+            assert!(names.insert(name));
+            let used = measured.used();
+            assert!(
+                value
+                    .admitted_length(&mut TypeWorkBudget::with_limit(used - 1))
+                    .is_err()
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(used);
+                assert_eq!(value.admitted_length(&mut exact).unwrap(), length);
+                assert!(value.admitted_length(&mut exact).is_err());
+            }
+        }
+        assert!(names.contains("__ash_native_m0_e0_o0"));
+        assert!(names.contains("__ash_native_m4294967295_e4294967295_o4294967295"));
+    }
+
     // Prior materialization path is a test-only byte/cost oracle. Production
     // always renders the same typed plans directly into the complete host.
     fn materialized_native_host(
@@ -155,8 +217,10 @@ mod tests {
             .try_reserve_exact(build.bridges.len())
             .map_err(|_| EmissionFailure::Resource)?;
         for bridge in &build.bridges {
+            let name = NativeBridgeName::from_member(bridge);
+            let name_bytes = name.admitted_length(work)?;
             wrappers.push(
-                super::super::bridge::emit_rust_bridge(&bridge.plan, work)
+                super::super::bridge::emit_rust_bridge_named(&bridge.plan, &name, name_bytes, work)
                     .map_err(EmissionFailure::Bridge)?,
             );
         }
@@ -239,9 +303,13 @@ main () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {
         let mut wrappers = TypeWorkBudget::with_limit(construction.limit());
         let mut wrapper_bytes = 0usize;
         for bridge in &image.bridges {
-            wrapper_bytes += super::super::bridge::emit_rust_bridge(&bridge.plan, &mut wrappers)
-                .unwrap()
-                .len();
+            let name = NativeBridgeName::from_member(bridge);
+            let name_bytes = name.admitted_length(&mut wrappers).unwrap();
+            wrapper_bytes += super::super::bridge::emit_rust_bridge_named(
+                &bridge.plan, &name, name_bytes, &mut wrappers,
+            )
+            .unwrap()
+            .len();
         }
         // These independent component ledgers measure required work only. Each
         // uses the adopted input-derived total; the cumulative call below
@@ -455,6 +523,47 @@ const CHECKED_PRODUCER_MAIN: &str = concat!(
     "    }\n}\n",
 );
 
+// Display-only names use the same full portable operation tuple as provider
+// coordinates. They create no source identity or native binding authority.
+#[derive(Clone, Copy)]
+struct NativeBridgeName {
+    module: u32,
+    effect: u32,
+    operation: u32,
+}
+impl NativeBridgeName {
+    fn from_member(member: &super::image::NativeBridgeEmission) -> Self {
+        Self {
+            module: member.operation_module,
+            effect: member.operation_effect,
+            operation: member.operation_local,
+        }
+    }
+    fn admitted_length(self, work: &mut TypeWorkBudget) -> Result<usize, EmissionFailure> {
+        let mut bytes = "__ash_native_m_e_o".len();
+        for mut value in [self.module, self.effect, self.operation] {
+            loop {
+                work.charge(1).map_err(|()| EmissionFailure::Resource)?;
+                bytes += 1;
+                if value < 10 {
+                    break;
+                }
+                value /= 10;
+            }
+        }
+        Ok(bytes)
+    }
+}
+impl fmt::Display for NativeBridgeName {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            output,
+            "__ash_native_m{}_e{}_o{}",
+            self.module, self.effect, self.operation
+        )
+    }
+}
+
 fn render_coordinates(
     output: &mut impl fmt::Write,
     library: &super::image::NativeLibraryEmission,
@@ -483,13 +592,13 @@ fn render_native_suffix(
     for (library_index, library) in build.libraries.iter().enumerate() {
         for &member_index in &library.members {
             let member = &build.bridges[member_index];
-            let name = member.plan.rust_function_name();
+            let name = NativeBridgeName::from_member(member);
             // The ONLY unsafe text is the existing typed extern wrapper module.
             // Providers merely pair their own fixed literals with that wrapper.
             if let Some(wrappers) = wrappers {
                 output.write_str(&wrappers[member_index])?;
             } else {
-                super::bridge::render_bridge(output, &member.plan)?;
+                super::bridge::render_bridge_named(output, &member.plan, &name)?;
             }
             let constructor = match member.plan.call() {
                 super::bridge::TargetBridgeCall::Scalar => "__private_native_bridge",
@@ -539,7 +648,7 @@ fn render_native_suffix(
             writeln!(
                 output,
                 ", provider: {}__provide }},",
-                member.plan.rust_function_name()
+                NativeBridgeName::from_member(member)
             )?;
         }
         output.write_str("];\n")?;
@@ -600,7 +709,8 @@ fn native_host_kind(
     work.charge(build.bridges.len())
         .map_err(|()| EmissionFailure::Resource)?;
     for bridge in &build.bridges {
-        super::bridge::admit_render_inspection(&bridge.plan, work)
+        let name_bytes = NativeBridgeName::from_member(bridge).admitted_length(work)?;
+        super::bridge::admit_render_inspection_named(&bridge.plan, name_bytes, work)
             .map_err(EmissionFailure::Bridge)?;
     }
     let checked_policy = checked

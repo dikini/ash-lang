@@ -355,6 +355,7 @@ impl TargetResolvedForeignBridge {
         Ok(result)
     }
 
+    #[cfg(test)]
     pub(crate) fn rust_function_name(&self) -> &str {
         &self.rust_function_name
     }
@@ -788,12 +789,12 @@ fn operation_name(
     Ok(output)
 }
 
-pub(super) fn render_bridge(
+pub(super) fn render_bridge_named(
     output: &mut impl Write,
     plan: &TargetResolvedForeignBridge,
+    name: &impl fmt::Display,
 ) -> fmt::Result {
     if plan.call == TargetBridgeCall::OwnerAcquire && plan.byte_owner() {
-        let name = &plan.rust_function_name;
         write!(
             output,
             "pub fn {name}__read(address: *mut core::ffi::c_void, index: usize) -> u8 {{\n    // SAFETY: The original live guard admits index below its initialized byte extent.\n    unsafe {{ address.cast::<u8>().add(index).read() }}\n}}\npub fn {name}__write(address: *mut core::ffi::c_void, index: usize, byte: u8) {{\n    // SAFETY: The original unique guard admits index below its writable initialized extent.\n    unsafe {{ address.cast::<u8>().add(index).write(byte) }};\n}}\n"
@@ -805,7 +806,7 @@ pub(super) fn render_bridge(
             output.write_char(escaped)?;
         }
     }
-    write!(output, "\"]\n    fn {}__ffi(", plan.rust_function_name)?;
+    write!(output, "\"]\n    fn {}__ffi(", name)?;
     for (index, scalar) in plan.operands.iter().enumerate() {
         if index > 0 {
             output.write_str(", ")?;
@@ -824,28 +825,28 @@ pub(super) fn render_bridge(
         TargetBridgeCall::WindowView => write!(
             output,
             ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}]) -> Result<ash::foreign::source_runtime::NativeViewReturned, {ERROR}> {{\n    let [",
-            plan.rust_function_name
+            name
         )?,
         TargetBridgeCall::OwnerBorrow => write!(
             output,
             ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}]) -> Result<{REPLY}, {ERROR}> {{\n    let [",
-            plan.rust_function_name
+            name
         )?,
         TargetBridgeCall::Scalar => write!(
             output,
             ";\n}}\npub fn {}(arguments: &[{VALUE}]) -> Result<{REPLY}, {ERROR}> {{\n    let [",
-            plan.rust_function_name
+            name
         )?,
         TargetBridgeCall::OwnerAcquire | TargetBridgeCall::OwnerOutputAcquire => write!(
             output,
             ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}], readiness: {OWNER_READY}) -> Result<{OWNER_RETURNED}, {ERROR}> {{\n    let [",
-            plan.rust_function_name
+            name
         )?,
         TargetBridgeCall::OwnerTeardown => {
             write!(
                 output,
                 ";\n}}\npub fn {}(arguments: &[{OWNER_OPERAND}])",
-                plan.rust_function_name
+                name
             )?;
             if matches!(plan.result, TargetResult::Scalar(_)) {
                 write!(output, " -> {REPLY}")?;
@@ -898,7 +899,7 @@ pub(super) fn render_bridge(
     write!(
         output,
         "    // SAFETY: Exact preflight supplies these ABI values and live guarded addresses.\n    // Linking assumes the authored synchronous native contract.\n    let value = unsafe {{ {}__ffi(",
-        plan.rust_function_name
+        name
     )?;
     for index in 0..plan.operands.len() {
         if index > 0 {
@@ -935,7 +936,7 @@ pub(super) fn render_bridge(
             scalar.value_variant()
         ),
         TargetResult::ViewAddress => write!(output,
-            "    Ok(ash::foreign::source_runtime::NativeViewReturned::new(value, {}__read))\n}}\nfn {}__read(address: *mut core::ffi::c_void, index: usize) -> u8 {{\n    // SAFETY: the exact live window admits the native initialized extent before reading.\n    unsafe {{ *address.cast::<u8>().add(index) }}\n}}\n", plan.rust_function_name, plan.rust_function_name),
+            "    Ok(ash::foreign::source_runtime::NativeViewReturned::new(value, {}__read))\n}}\nfn {}__read(address: *mut core::ffi::c_void, index: usize) -> u8 {{\n    // SAFETY: the exact live window admits the native initialized extent before reading.\n    unsafe {{ *address.cast::<u8>().add(index) }}\n}}\n", name, name),
         TargetResult::OwnerAddress => output.write_str(
             "    // Arm pre-admitted destruction before any Ash reporting step.\n    Ok(readiness.returned(value))\n}\n",
         ),
@@ -943,8 +944,9 @@ pub(super) fn render_bridge(
 }
 
 /// Pays inspection of a fixed typed plan before either host rendering pass.
-pub(super) fn admit_render_inspection(
+pub(super) fn admit_render_inspection_named(
     plan: &TargetResolvedForeignBridge,
+    name_bytes: usize,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ForeignBridgeFailure> {
     // Pay before the counting pass inspects native bytes and formats indices.
@@ -955,7 +957,7 @@ pub(super) fn admit_render_inspection(
         .len()
         .checked_mul(2)
         .and_then(|count| plan.operands.len().checked_mul(64)?.checked_add(count))
-        .and_then(|count| count.checked_add(plan.rust_function_name.len().checked_mul(8)?))
+        .and_then(|count| count.checked_add(name_bytes.checked_mul(8)?))
         .ok_or_else(|| fail(ForeignBridgeReason::Resource, plan.span))?;
     charge(work, inspection, plan.span)
 }
@@ -966,6 +968,21 @@ pub(crate) fn emit_rust_bridge(
     plan: &TargetResolvedForeignBridge,
     work: &mut TypeWorkBudget,
 ) -> Result<String, ForeignBridgeFailure> {
+    emit_rust_bridge_named(
+        plan,
+        &plan.rust_function_name,
+        plan.rust_function_name.len(),
+        work,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn emit_rust_bridge_named(
+    plan: &TargetResolvedForeignBridge,
+    name: &impl fmt::Display,
+    name_bytes: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<String, ForeignBridgeFailure> {
     struct Length(usize);
     impl Write for Length {
         fn write_str(&mut self, text: &str) -> fmt::Result {
@@ -973,9 +990,10 @@ pub(crate) fn emit_rust_bridge(
             Ok(())
         }
     }
-    admit_render_inspection(plan, work)?;
+    admit_render_inspection_named(plan, name_bytes, work)?;
     let mut length = Length(0);
-    render_bridge(&mut length, plan).map_err(|_| fail(ForeignBridgeReason::Resource, plan.span))?;
+    render_bridge_named(&mut length, plan, name)
+        .map_err(|_| fail(ForeignBridgeReason::Resource, plan.span))?;
     charge(
         work,
         length
@@ -988,7 +1006,8 @@ pub(crate) fn emit_rust_bridge(
     output
         .try_reserve_exact(length.0)
         .map_err(|_| fail(ForeignBridgeReason::Resource, plan.span))?;
-    render_bridge(&mut output, plan).map_err(|_| fail(ForeignBridgeReason::Resource, plan.span))?;
+    render_bridge_named(&mut output, plan, name)
+        .map_err(|_| fail(ForeignBridgeReason::Resource, plan.span))?;
     debug_assert_eq!(output.len(), length.0);
     Ok(output)
 }

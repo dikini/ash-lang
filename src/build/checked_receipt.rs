@@ -96,6 +96,16 @@ impl ProducerReceipt {
         data.fields[ReceiptField::BuildConfiguration as usize] = Some(pin);
         data
     }
+    #[cfg(test)]
+    pub(super) fn substituted_pin_data_for_test(
+        &self,
+        field: ReceiptField,
+        pin: ArtifactPin,
+    ) -> Self {
+        let mut data = self.clone();
+        data.fields[field as usize] = Some(pin);
+        data
+    }
     // Independently match the final observation chain before comparing its
     // earlier native sidecar. This cloned data grants no applicability/authority.
     pub(super) fn before_root_link(
@@ -159,7 +169,7 @@ impl ProducerReceipt {
         }
         Self::decode_with_work(&bytes, limits, &mut work)
     }
-    fn decode_with_work(
+    pub(super) fn decode_with_work(
         bytes: &[u8],
         limits: ProducerReceiptLimits,
         work: &mut TypeWorkBudget,

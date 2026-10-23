@@ -193,8 +193,31 @@ Public execution remains closed.
    [product record](../evidence/checked-owner-core-execution/root-link-provenance/README.md)
    preserves earlier refusals and old-a2 evidence separately. Eleven retired
    inputs, nine nested warnings, the explicit private 2 GiB profile and no
-   output execution remain qualified. Final published-head review/retention
-   are pending; all six complete closure fields remain Missing.
+   output execution remain qualified. PR115 is retained at `9e57263b` (review/retention links in the task);
+   all six complete closure fields remain Missing. The next authorized product
+   component is bounded complete applicability-request data with exact AD16
+   proposed premises, fixed protected-consumer verification and no-exec sealed
+   preparation. Actual administrator-established deployment and per-image
+   approval remain separate; source authoring grants no activation. The current
+   request implementation independently restores and re-encodes complete
+   originals, image, facts, policy and Rust. Observed canonical failures led to
+   lossless arena/view records, portable unordered row/metadata ordering and
+   display-only portable wrapper identifiers, preserving all exact comparisons.
+   The current source candidate passes session 4120: both packages' Clippy and
+   42 distinct tests (18 focused, 22 existing affected, genuine linked request
+   data, actual same-open sealed ELF data). The three default startup controls
+   retain work 327680. Full request re-admission and typed rebound donors pass;
+   four seals precede final hash/ELF inspection. The
+   [candidate record](../evidence/checked-owner-core-execution/protected-preparation/README.md)
+   qualifies historical failures, the private 2 GiB observation profile, nine
+   native warning lines and absent protected positive/output execution. This
+   candidate is unretained; all six complete fields remain Missing/proposed.
+   An extra read-only workspace formatter check returns 1; no formatter/full
+   gate is claimed. Root owns formatting cleanup/check at the next F-core freeze
+   before the full gate, final native artifact and approval.
+   Next implementation transfers real approval/launcher applicability into the
+   actual owner acquire/copy/finish/Trace path after retention and review;
+   administrator deployment and execution remain separately gated.
    These observations
    do not discharge complete closure or protected deployment. Freeze bounded deterministic receipt/plan and policy versions binding the full checked
    required closure, original operation/bridge/payload/facts mappings, native/
