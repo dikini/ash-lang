@@ -1,7 +1,7 @@
 //! Artifact-only root entry. Compilation is distinct from startup admission.
 #![forbid(unsafe_code)]
 
-mod transport {
+pub(crate) mod transport {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/root-shim.rs"));
 }
 

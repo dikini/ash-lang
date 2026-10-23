@@ -2,6 +2,30 @@
 // CP24 policy and pre-funded observation remain in the evaluator; this module
 // neither authenticates a context nor admits a source operation.
 use checked_owner_leaf as leaf;
+pub(crate) use leaf::{ViewDescriptor, Refusal};
+
+pub(crate) struct PreparedAcquire<'cell> {
+    destination: &'cell mut OwnerCell,
+    native: leaf::PreparedAcquire,
+}
+pub(crate) enum AcquirePreparationFailure {
+    DestinationOccupied,
+    Leaf(Refusal),
+}
+pub(crate) struct AcquireReturned {
+    nonnull: bool,
+}
+impl AcquireReturned {
+    pub(crate) fn nonnull(&self) -> bool { self.nonnull }
+}
+impl PreparedAcquire<'_> {
+    pub(crate) fn invoke(self) -> AcquireReturned {
+        let Self { destination, native } = self;
+        destination.owner = leaf::invoke_acquire(native); // FIRST root action after native return.
+        AcquireReturned { nonnull: destination.owner.is_some() }
+    }
+}
+
 
 pub(crate) struct OwnerCell {
     owner: Option<leaf::Owner>,
@@ -15,20 +39,27 @@ pub(crate) enum FreeObservation {
     NoOwner,
     Returned(leaf::ReleaseReturned),
 }
+impl std::fmt::Debug for OwnerCell {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("OwnerCell").field("occupied", &self.owner.is_some()).finish_non_exhaustive()
+    }
+}
 impl OwnerCell {
+    pub(crate) fn is_occupied(&self) -> bool { self.owner.is_some() }
+    pub(crate) fn prepare_acquire(&mut self, capacity: usize, initialized: usize) -> Result<PreparedAcquire<'_>, AcquirePreparationFailure> {
+        if self.owner.is_some() { return Err(AcquirePreparationFailure::DestinationOccupied); }
+        let native = leaf::prepare_acquire(capacity, initialized).map_err(AcquirePreparationFailure::Leaf)?;
+        Ok(PreparedAcquire { destination: self, native })
+    }
+
     /// Construct before native entry and reserve its enclosing storage then.
     pub(crate) fn vacant() -> Self { Self { owner: None } }
     /// The caller must already own the pending-call and mandatory report slots.
     pub(crate) fn acquire(&mut self, capacity: usize, initialized: usize) -> AcquireObservation {
-        // Vacancy and the exclusive destination borrow precede C. Assignment
-        // cannot replace/drop an existing owner or acquire a later borrow.
-        if self.owner.is_some() { return AcquireObservation::DestinationOccupied; }
-        match leaf::acquire(capacity, initialized) {
-            leaf::AcquireReply::NotEntered(reason) => AcquireObservation::NotEntered(reason),
-            leaf::AcquireReply::Returned(returned) => {
-                self.owner = returned; // FIRST root action on the returned owner.
-                AcquireObservation::Returned { nonnull: self.owner.is_some() }
-            }
+        match self.prepare_acquire(capacity, initialized) {
+            Ok(prepared) => AcquireObservation::Returned { nonnull: prepared.invoke().nonnull() },
+            Err(AcquirePreparationFailure::DestinationOccupied) => AcquireObservation::DestinationOccupied,
+            Err(AcquirePreparationFailure::Leaf(reason)) => AcquireObservation::NotEntered(reason),
         }
     }
     pub(crate) fn query(&self, key: usize) -> Result<Option<leaf::ViewDescriptor>, leaf::Refusal> {
