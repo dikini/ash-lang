@@ -13563,8 +13563,9 @@ mod checked_violation_image_tests {
         let decoded = PureImage::decode_bytes(&bytes, &mut startup).unwrap();
         let _facts = decoded.admit_expected_native_facts(&facts, &mut startup).unwrap();
         let restored = decoded.restore_effect(&mut startup).unwrap();
-        let sources = provenance.iter().map(|(_, source)| source.id()).collect::<Vec<_>>();
-        let modules = provenance.iter().map(|(module, source)| (*module, source.id())).collect::<Vec<_>>();
+        let sources = restored.sources.iter().collect::<Vec<_>>();
+        let modules = restored.modules.iter().zip(restored.sources.iter())
+            .map(|(module, source)| (*module, source.id())).collect::<Vec<_>>();
         for transformed in [crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
             crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap()] {
             crate::core::validate_effect_modules(transformed, &sources, &modules).unwrap();

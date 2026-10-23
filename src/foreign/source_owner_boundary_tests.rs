@@ -1386,7 +1386,9 @@ pub(crate) fn with_violation_boundary_for_test(
     with_program_context(&program, |program, acquire, finish| {
         let mut work = TypeWorkBudget::default();
         let mut selected = None;
-        acquire._scope.visit_byte_calls(|call, _| {
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &program.node(acquire._scope_node).unwrap().kind else { unreachable!(); };
+        scope.visit_byte_calls(|call, _| {
             let role = program.registry().scalar_preflight(call.function).unwrap().role();
             if role == if reject { super::super::scalar_preflight::ForeignScalarPreflightRole::CheckedRejectAcquisition }
                 else { super::super::scalar_preflight::ForeignScalarPreflightRole::CheckedQuarantine }
@@ -1417,7 +1419,9 @@ fn checked_violation_request_and_null_observation_identity_are_exact() {
     with_program_context(&program, |program, acquire, _finish| {
         let mut work = TypeWorkBudget::default();
         let mut call = None;
-        acquire._scope.visit_byte_calls(|candidate, _| {
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &program.node(acquire._scope_node).unwrap().kind else { unreachable!(); };
+        scope.visit_byte_calls(|candidate, _| {
             if candidate.apply.is_some() && candidate.acquisition.is_some() { call = Some(candidate); }
             Ok(())
         }, &mut work).unwrap();
