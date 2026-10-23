@@ -13511,8 +13511,9 @@ pub(crate) fn checked_zero_assumption_scalar_image_controls(
 pub(crate) fn checked_owner_dependency_image_controls(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(ModuleId, Arc<SourceFile>)],
+    standalone: super::CheckedDependencyStandalone,
 ) {
-    source_resource_image::checked_owner_dependency_image_controls(program, provenance);
+    source_resource_image::checked_owner_dependency_image_controls(program, provenance, standalone);
 }
 
 #[cfg(test)]

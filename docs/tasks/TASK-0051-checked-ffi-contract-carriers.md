@@ -65,9 +65,18 @@ source on that retained correction. A narrow candidate checks every prior member
 in the existing insertion order before reusing an owned canonical Vec. Failed
 checks retain the complete input for the unchanged paid fallback. This removes
 second-vector construction only; comparison work, full-kind identities and fresh
-admission remain required. Both genuine default-budget dependency image cases
-and final regressions are still pending on the new combined source. No whole-F3
-criterion or connected F-core gate is accepted by this candidate.
+admission remain required. The project lead has superseded the later performance
+premise that both larger dependency images must restore within the standalone
+327680 helper default. [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+already assigns native startup one cumulative `22 * (image bytes + expected-fact
+bytes)` meter. The two original selectors now require independent canonical
+reconstruction under that existing owner policy, alongside separately recorded
+standalone exhaustion. Decode, expected-fact admission and restoration share one
+meter; exact/one-short/prefix/spent/fresh checks cover that complete segment.
+Historical default-budget failures remain failures, and the three prior fitting
+327680 regressions remain unchanged. Final binding, evaluation, native/protected
+execution and whole-F3/F-core acceptance remain separate and pending. This is a
+task/test-premise correction, not a product limit or authority change.
 
 Issue [#114](https://github.com/dikini/ash-lang/issues/114) tracks a separate
 current-specification correctness defect discovered during PR110 review. Mixed
@@ -453,7 +462,6 @@ native-interpreter fixture inventory failure in the affected batch. At that chec
 reviewed fixture-only complete-declaration repair and omission control were
 uncompiled. The final combined verification below supersedes those pending gates.
 
-
 The [final combined byte/window verification](evidence/checked-byte-windows/candidates/final-combined-verification/README.md)
 passes 473 distinct selected unit tests, two additional exact two-owner startup
 repeats, the compile/link-only producer-receipt integration, and Clippy with
@@ -481,7 +489,6 @@ checkpoint in the existing task-owned plan. It begins with a genuine checked
 parent/child source expected-positive discriminator; no new test/build success,
 production dependency admission or runtime permission is claimed yet.
 
-
 The [initial declared dependency checkpoint](evidence/checked-owner-dependencies/initial-connected/README.md)
 records a genuine checked dependent-library InvalidLibrary red after the existing
 canonical control, then a repaired opaque parent/child source/body-free/link/Core
@@ -500,7 +507,6 @@ correction remains uncompiled. This is pending repair, not a partial-budget waiv
 or completed dependency delivery. The source-only correction and all old failures
 remain qualified separately; no native activation or F3/F-core completion follows.
 
-
 The [carrier and reconstruction checkpoint](evidence/checked-owner-dependencies/carrier-and-reconstruction/README.md)
 records the rejected conditional-row hypothesis and the current checked Access
 full-kinded carrier progress. The latest frozen batch passes seven focused
@@ -511,7 +517,6 @@ work failures; later image hostiles, startups, final specification wording,
 affected regressions, Clippy and current-head review remain pending. The
 consuming-row implementation has semantic parity evidence but no demonstrated
 required-image budget fit. No broader F3, runtime or F-core criterion is closed.
-
 
 The [member reconstruction refinement](evidence/checked-owner-dependencies/member-refinement/README.md)
 retains one compile-only test repair and the next genuine seven-focused-control
@@ -582,3 +587,19 @@ preserved. No old-codec work total or caller transfers. Current failure demand,
 remaining image controls and final delivery gates are still open; review a
 current-input causal observation before another repair. Whole-F3 closure does
 not add a prerequisite to eligible dependency-free F4 preparation.
+
+Current local reconstruction evidence (session 35541): both original dependency
+selectors, the borrowed replacement and exact phantom boundary controls, and all
+three unchanged older startup regressions pass. Full Row uses 415967 of 1282820
+units (67.57% remaining); Access uses 541983 of 1585254 (65.81% remaining) across
+canonical decode, expected-fact admission and independent restoration on one
+meter. Larger standalone refusals remain explicit. See the
+[startup-owner record](evidence/checked-owner-dependencies/startup-owner-policy/README.md)
+for exact scope, historical failures, diagnostic disposal and cache-bound abort.
+Final local session 83676 passes targeted Ash Clippy with warnings denied and
+40 distinct affected regressions, independently audited as `3dada60a`. Its fresh
+full Row segment uses 415977/1282908 (67.58% remaining); Access uses
+541993/1585342 (65.81% remaining). Matching static-specification wording records
+the delivered dependency/Access subset while checked execution remains excluded.
+The new prose/evidence is post-test documentation; exact-head delivery review and
+retention remain pending. This is not later binding/native or whole-F3 acceptance.

@@ -13727,7 +13727,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     return Err(invalid(ValidationCause::TypeApplicationRows));
                 }
                 self.charge_type_work(parameters.len())?;
-                let mut replacements = TypeReplacementMap::new();
+                let mut replacements = HashMap::new();
                 let mut row_replacements = HashMap::new();
                 replacements
                     .try_reserve(application.arguments().len())
@@ -13756,13 +13756,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         if !self.same_kind_charged(kind, &argument_kind)? {
                             return Err(invalid(ValidationCause::TypeArgumentKind));
                         }
-                        replacements
-                            .insert_replacing(*parameter, self.clone_type_charged(argument)?);
+                        self.charge_type_work(1)?;
+                        replacements.insert(*parameter, argument);
                     }
                 }
-                let instantiated = substitute_type_and_row_variables_with(
+                let instantiated = crate::types::substitute_type_and_row_variables_borrowed_with(
                     body,
-                    replacements.as_map(),
+                    &replacements,
                     &row_replacements,
                     |cells| self.charge_type_work(cells),
                     || ValidationError::new(ValidationReason::Resource, None),
@@ -13942,7 +13942,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             return Ok(Some(ValidationCause::ConversionMissingArguments));
         }
 
-        let mut replacements = TypeReplacementMap::new();
+        let mut replacements = HashMap::new();
         self.charge_type_work(parameters.len())?;
         #[cfg(test)]
         self.newtype_conversion_parameter_work
@@ -13963,7 +13963,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
                 return Ok(Some(ValidationCause::ConversionArgumentKind));
             }
-            replacements.insert_replacing(parameter.id, self.clone_type_charged(argument)?);
+            self.charge_type_work(1)?;
+            replacements.insert(parameter.id, argument);
         }
 
         let lexical_representation = owner
@@ -13972,9 +13973,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .then(|| self.scoped_lexical_representation(owner.id, conversion.child()))
             .transpose()?;
         let representation = lexical_representation.as_deref().unwrap_or(representation);
-        let expected = IterativeTypeOwner::new(substitute_type_variables_with(
+        let expected = IterativeTypeOwner::new(crate::types::substitute_type_variables_borrowed_with(
             representation,
-            replacements.as_map(),
+            &replacements,
             |cells| self.charge_type_work(cells),
             || ValidationError::new(ValidationReason::Resource, None),
         )?);
@@ -35132,7 +35133,7 @@ mod tests {
         let application_validator = Validator::new(&program, &[&file]);
         application_validator
             .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 7)
-            .expect("test setup leaves synthesis, comparison, clone, index, substitution queue, result, and result comparison work");
+            .expect("test setup leaves synthesis, comparison, borrowed retention, index, substitution queue, result, and result comparison work");
         application_validator
             .validate_computation(
                 application,
@@ -35145,7 +35146,7 @@ mod tests {
                 &HashMap::new(),
                 false,
             )
-            .expect("one argument validation, clone, replacement entry, and result fit exactly");
+            .expect("one argument validation, borrowed retention, replacement entry, and result fit exactly");
         assert_eq!(
             application_validator
                 .charge_type_work(1)
@@ -35156,15 +35157,14 @@ mod tests {
     }
 
     #[test]
-    fn phantom_type_application_charges_argument_clones_at_the_exact_boundary() {
+    fn phantom_type_application_charges_borrowed_arguments_at_the_exact_boundary() {
         const WIDTH: usize = 64;
         const ARGUMENT_CELLS: usize = WIDTH + 1;
         // Synthesis visits each Type cell and compares each tuple child to
-        // Kind::Type, then validation revisits the argument for its retained
-        // substitution clone. The final four units are expected-Kind
-        // comparison, replacement storage, the structural substitution queue,
-        // and substituted-result comparison.
-        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 3 + 4;
+        // Kind::Type. A paid borrowed map slot replaces the old N-cell clone:
+        // (3N + 4) - N + 1 = 2N + 5. Kind checks, map storage, the owned
+        // substitution queue and substituted-result comparison remain paid.
+        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 2 + 5;
         let file = source();
         let origin = origin(&file);
         let arena = super::super::dialect::ArenaId::new(106);
@@ -35234,7 +35234,7 @@ mod tests {
                 &HashMap::new(),
                 false,
             )
-            .expect("the exact argument-validation and clone allowance fits");
+            .expect("the exact argument-validation and borrowed-retention allowance fits");
         assert_eq!(
             exact_validator
                 .charge_type_work(1)
@@ -35256,7 +35256,7 @@ mod tests {
                 &HashMap::new(),
                 false,
             )
-            .expect_err("argument clones must not cross the validation budget");
+            .expect_err("argument validation and borrowed retention must not cross the budget");
         assert_eq!(error.reason(), ValidationReason::Resource);
     }
 
@@ -36640,9 +36640,9 @@ mod tests {
             .name("type-application-validation-owner".into())
             .stack_size(256 * 1024)
             .spawn(|| {
-                // Synthesis, retained argument admission, substitution, and
-                // final comparison visit 11D + 6 units. D=32,000 remains a
-                // deep small-stack success inside the module-wide ledger.
+                // Synthesis, borrowed argument retention, owned substitution
+                // and final comparison remain iterative. D=32,000 is a deep
+                // small-stack success inside the module-wide ledger.
                 const DEPTH: usize = 32_000;
                 let file = source();
                 let node_origin = origin(&file);

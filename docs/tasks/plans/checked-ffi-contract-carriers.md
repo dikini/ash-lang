@@ -938,9 +938,17 @@ insertion/dedup fallback. Pay attempted prechecks and fallback work independentl
 Fresh tests must use the repaired function laws and raw constructors, not the
 withdrawn comparator-cycle expectations. Require full-kind/reference parity,
 actual pointer/capacity reuse, genuine fallback allocation refusal and paid
-exact/short/prefix/spent/fresh controls. Then run both original Row and Access
-image cases independently under their unchanged default allowance. No predicted
-net saving or default-fit result transfers from the previous source.
+exact/short/prefix/spent/fresh controls. The subsequent fixed-default performance attempts and both original
+Row/Access failures remain historical evidence; no saving or default-fit result
+transfers from those sources. The project lead now supersedes that larger-image
+327680-fit premise with AD-0013's existing cumulative startup owner: `22 * (image
+bytes + expected-fact bytes)`, with one meter across canonical decode,
+expected-fact admission and independent restoration. Preserve explicit standalone
+exhaustion for these larger fixtures and standalone success for the smaller base,
+then verify complete-segment exact/short/prefix/spent/two-fresh behavior and all
+semantic hostiles. Keep the three earlier fitting default regressions unchanged.
+This Rust-only reconstruction segment does not cover later executable binding,
+evaluation, native activation or protected deployment. No product budget changes.
 
 The [canonical allocation evidence](../evidence/checked-owner-dependencies/canonical-allocation/README.md)
 keeps 15 focused passes and two independently observed image failures separate
@@ -963,3 +971,20 @@ unresolved. A separate ignored, fixed-image demand experiment is being prepared
 with local allowance 1048576; product/internal defaults stay unchanged and its
 results cannot establish default fit. Remove its hooks before final delivery.
 Whole F3, PR110 and F-core remain open.
+
+Local owner-policy gate 35541 passes all seven exact controls under the corrected
+AD-0013 premise. Full Row reconstruction is 415967/1282820; Access is
+541983/1585254, with explicit standalone Resource-family refusals preserved.
+The earlier three 327680 startup regressions remain unchanged and pass at
+316950/309651/310302. The zero-participation registry index and temporary
+diagnostic hooks are removed; only the minimal borrowed replacement maps remain.
+[Evidence and limitations](../evidence/checked-owner-dependencies/startup-owner-policy/README.md)
+retain the compile-only storage-bound attempt and separation of evidence from
+build-cache accounting. Final local session 83676 passes targeted Clippy and 40 distinct affected
+regressions with independent actual audit `3dada60a`. Its fresh Row/Access segment
+costs are 415977/1282908 and 541993/1585342; these are separate captured inputs,
+not invariant costs or an isolated optimization delta. The delivered static
+specification is updated for opaque retained dependencies and complete checked
+Access/window correspondence, preserving runtime exclusions. Prepare the
+reviewed unsigned PR110 checkpoint; no further performance experiment is
+selected. Whole F3 and later binding/native/F-core remain open.

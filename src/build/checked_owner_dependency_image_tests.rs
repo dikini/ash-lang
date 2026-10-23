@@ -56,6 +56,7 @@ fn retain_encoded_inputs(bytes: &[u8], expectations: &[u8]) {
 pub(crate) fn controls(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(super::super::ModuleId, Arc<super::super::SourceFile>)],
+    standalone: crate::build::CheckedDependencyStandalone,
 ) {
     assert!(matches!(
         encode_effect_for_build(
@@ -107,17 +108,54 @@ pub(crate) fn controls(
     canonical
         .compare_native_expectations(&expectations, &mut TypeWorkBudget::default())
         .unwrap();
-    let mut measured = TypeWorkBudget::default();
-    let restored = canonical
-        .restore_effect(&mut measured)
-        .expect("actual dependent checked private image restores independently");
+    let mut standalone_work = TypeWorkBudget::default();
+    let standalone_result = canonical.restore_effect(&mut standalone_work);
+    match (standalone, standalone_result) {
+        (crate::build::CheckedDependencyStandalone::Fits, Ok(restored)) => drop(restored),
+        (crate::build::CheckedDependencyStandalone::Resource, Err(error)) => {
+            assert!(
+                matches!(&error, ImageFailure::Resource)
+                    || matches!(&error, ImageFailure::Validation(error) if error.reason() == crate::core::ValidationReason::Resource)
+                    || matches!(
+                        &error,
+                        ImageFailure::CoreAdmission(crate::core::BuildError::TypeWorkExceeded)
+                    ),
+                "standalone refusal must be exhausted work, not a semantic error: {error:?}"
+            );
+            println!(
+                "checked dependency standalone refusal used={} limit={} actual={error:?}",
+                standalone_work.used(),
+                standalone_work.limit()
+            );
+        }
+        (_, Err(error)) => {
+            panic!("smaller baseline must fit unchanged standalone default: {error:?}")
+        }
+        (_, Ok(restored)) => {
+            drop(restored);
+            panic!("larger standalone exhaustion premise changed; review the observed result");
+        }
+    }
+    let startup = || super::super::super::gas::startup(bytes.len(), expectations.len()).unwrap();
+    // This is the actual startup reconstruction segment: one meter covers
+    // canonical decoding, expected-fact admission and independent restoration.
+    // Executable library/member binding and activation remain outside this test.
+    let restore = |work: &mut TypeWorkBudget| {
+        let image = PureImage::decode_bytes(&bytes, work)?;
+        let _facts = image.admit_expected_native_facts(&expectations, work)?;
+        image.restore_effect(work)
+    };
+    let mut measured = startup();
+    let allowance = measured.limit();
+    let restored = restore(&mut measured)
+        .expect("actual dependent checked reconstruction segment fits existing startup policy");
     assert!(restored.program.nodes().iter().any(|n| matches!(&n.kind, crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(s)) if !s.header().dependencies.is_empty())));
     let cost = measured.used();
     drop(restored);
     for prefix in [0, 7] {
         let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
         short.charge(prefix).unwrap();
-        match canonical.restore_effect(&mut short) {
+        match restore(&mut short) {
             Err(ImageFailure::Resource) => {}
             Err(ImageFailure::Validation(e))
                 if e.reason() == crate::core::ValidationReason::Resource => {}
@@ -126,9 +164,9 @@ pub(crate) fn controls(
         for _ in 0..2 {
             let mut exact = TypeWorkBudget::with_limit(prefix + cost);
             exact.charge(prefix).unwrap();
-            canonical.restore_effect(&mut exact).unwrap();
+            restore(&mut exact).unwrap();
             assert_eq!(exact.used(), prefix + cost);
-            match canonical.restore_effect(&mut exact) {
+            match restore(&mut exact) {
                 Err(ImageFailure::Resource) => {}
                 Err(ImageFailure::Validation(e))
                     if e.reason() == crate::core::ValidationReason::Resource => {}
@@ -137,7 +175,15 @@ pub(crate) fn controls(
         }
     }
     for mutation in 0..3 {
-        let mut hostile = decode();
+        let mut hostile_work = startup();
+        let mut hostile = PureImage::decode_bytes(&bytes, &mut hostile_work).unwrap();
+        // The mutation is deliberately inside the restored-image seam, after
+        // the same original fact-admission stage as the production caller.
+        {
+            let _facts = hostile
+                .admit_expected_native_facts(&expectations, &mut hostile_work)
+                .unwrap();
+        }
         match mutation {
             0 => hostile.prepared_owners[owner].retains.len = 0,
             1 => {
@@ -161,7 +207,7 @@ pub(crate) fn controls(
             }
             _ => unreachable!(),
         }
-        let error = match hostile.restore_effect(&mut TypeWorkBudget::default()) {
+        let error = match hostile.restore_effect(&mut hostile_work) {
             Ok(_) => panic!("dependency wire substitution must refuse"),
             Err(e) => e,
         };
@@ -177,6 +223,8 @@ pub(crate) fn controls(
         }
     }
     println!(
-        "checked dependency private image work={cost}; exact/prefix/short/spent/two fresh, erased/substituted retained parameter and wrong Host refuse"
+        "checked dependency reconstruction-segment work={cost} allowance={allowance} remaining={} remaining_percent={:.2}; exact/prefix/short/spent/two fresh, erased/substituted retained parameter and wrong Host refuse; no executable binding/native entry",
+        allowance - cost,
+        100.0 * (allowance - cost) as f64 / allowance as f64
     );
 }

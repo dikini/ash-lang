@@ -246,6 +246,14 @@ and private images preserve the full vector and original nominal identity.
 Native ABI projection selects only Type arguments at their original full-vector
 indices; it supplies no replacement State identity or Row permission.
 
+Static checked dependent-owner elaboration retains the original retained-formal
+positions and exact parent provider selections alongside the complete current
+Type/Row instance. Acquire, handler and finish copies remain related to their
+immutable original forests; final Core and private-image reconstruction check
+those relations independently. A checked Access uses its own original declaration
+and exact lexical window, not Owner/State authority inferred from its carrier.
+These static carriers do not enable checked evaluator or native execution.
+
 Lifecycle forests may call ordinary pure module-global helpers on independent
 payloads. Same-module and imported helper schemes retain complete ordered Type/Row
 parameters and each call's ordinary inferred instance. Original template checking

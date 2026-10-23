@@ -21,6 +21,14 @@ artifact admission. This is product implementation toward
 evidence-publication checkpoint. Whole F3 need not close first; the complete
 required closure of this supported program must pass before activation.
 
+F3's larger dependency-image controls now distinguish the standalone helper
+327680 refusal from the existing AD-0013 cumulative startup policy. Their planned
+Rust-only segment shares one `22 * (image bytes + expected-fact bytes)` meter
+across decode, expected-fact admission and independent source/template/Core
+restoration. This corrects a task/test premise without changing any limit or
+providing executable binding, evaluator entry or native/protected evidence.
+The three earlier fitting default startup regressions remain unchanged.
+
 CP-0024 supplies the accepted transition obligations. AD-0016 selects mechanisms
 and trusted applicability, not executable approval or implementation permission.
 Source-only C/Ash/test authorship and passive platform-neutral control/admission

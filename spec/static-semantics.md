@@ -993,8 +993,9 @@ main () = true + 1
 
 Foreign declarations are passive. The explicit static checked foreign profile
 admits `foreign checked library` declarations with owner-free scalar or void
-calls, dependency-free opaque owner acquisition and void teardown bindings,
-and the static checked source lifecycle described below. Default source resolution,
+calls, opaque owner acquisition and void teardown with declared retained
+dependencies, dependency-free initialized-byte owners, and the static checked
+source lifecycle described below. Default source resolution,
 program building and running refuse this checked closure before legacy foreign
 ABI preparation. Erasing the marker is not an available source operation;
 static checked binding grants no native execution or executable image permission. Assumption declarations and `host`/`assumes` metadata cannot be
@@ -1046,10 +1047,13 @@ identity, nullable acquisition and consumed/retained void teardown relations.
 Passive binding creates no source owner. Legacy binding and source resources
 using `scope` or `acquired_only` still refuse checked contracts.
 
-The explicit static profile admits a dependency-free opaque or initialized-byte
-State<H,R> without retained dependencies in a source resource with `owned R`,
-`host H` and `codec checked_scope`. The exact original Type formal H differs from R and
-occupies the State owner's original host position. Acquisition retains the
+The explicit static profile admits opaque State families with declared retained
+dependencies, and initialized-byte State families without retained dependencies,
+in a source resource with `owned R`, `host H` and `codec checked_scope`. The
+resource and original owner retain their complete ordered Type/EffectRow vectors,
+including formals absent from a callable's value type. The exact original Type
+formal H differs from R and occupies the State owner's original host position;
+the owned formal need not occupy the first position. Acquisition retains the
 structural Acquired(State,D)/Refused(I) relation. Completion uses canonical
 `Foreign.CheckedFinish<State,E>` and the report uses canonical
 `Foreign.CheckedScope<Answer,I,E>` in that order. Same-shaped user types supply
@@ -1065,13 +1069,24 @@ owning resource's direct handler may request that Borrow, with exact interpreted
 membership and matching State/H/R actuals. Checked acquisition, finish and
 ordinary callable contexts supply no Borrow permission. The independent
 BoundaryFailed alternative grants no private finish witness and cannot transport
-Current through the handler's result. Declared owner dependencies and general
-helper transport remain excluded. Initialized-byte and window primitives have
-the separate static requirements below.
+Current through the handler's result. General helper transport remains excluded.
+Initialized-byte and window primitives have the separate static requirements
+below.
 
-The admitted checked finish request is a void teardown whose sole native operand
-is the exact Current State. It has no scalar/NUL operand conversion or native
-result decoding. Symbolic checking follows its declared consumed or retained
+A retained dependency names an original Type formal of the opaque owner, distinct
+from its own host and owned formals. Its actual identity must select an exact
+preceding owner activation. Acquisition and finish may obtain that enclosing
+State only through the original parent's direct provider at the matching complete
+Type/Row and host instance. An ordinary resource access handle may remain in
+private data; native State and view values may not. Missing retained membership,
+a same-shaped donor, a changed host or a stale enclosing identity supplies no
+dependency authority. Body-free summaries, linking, copied specializations and
+independent Core/private-image admission reconstruct the original declaration,
+retained positions, current forest and complete argument correspondence.
+
+The admitted checked finish request is a void teardown with the exact Current
+State and, for an opaque dependent owner, its declared Enclosing State operands.
+It has no scalar/NUL operand conversion or native result decoding. Symbolic checking follows its declared consumed or retained
 outcome and its authenticated boundary-failure alternative; generic source arms
 remain typed and exhaustive. A fallible additional operand cannot borrow this
 refinement. Every returning finish branch must account for one exact request
@@ -1087,8 +1102,9 @@ transport. Required independent source effects and the post-request continuation
 remain; native outcome classification grants no discard permission. Report E
 retains the dependencies of the latest private data, including handler updates.
 This is static correspondence: checked evaluator/native execution, executable
-checked builds, K realization and declared owner dependencies remain outside
-this subset and refuse explicitly.
+checked builds and K realization remain outside this subset and refuse explicitly.
+Static dependent-owner admission does not authorize an executable activation or
+native call.
 
 Each symbol has one outer pure source arrow and a complete ordered parameter
 vector containing only `Type` and `EffectRow` parameters. Omitted kinds are
@@ -1259,8 +1275,14 @@ the body and requires an authenticated live, pending or completing owner in a
 permitted direct provider phase. Its sealed interpretation admits only that
 original family's access-compatible members at the exact ordered Type/Row
 actuals. The outer resource interpretation remains exact and nonquantified.
-The current executable view-family application profile is Type-only; retained
-Row tags are not silently projected away or admitted by matching shape.
+The current executable view-family application profile is Type-only. The static
+checked profile additionally admits row-bearing Access applications from their
+exact original checked declaration, preserving the complete ordered Type/Row
+vector and the original window position. Original owner, host, parent and window
+identities must agree at each use, including known members, lacks constraints and
+row tails. Type-only projection, a State family, a same-shaped donor or a stale
+window supplies no Access authority. This static correspondence grants no checked
+window execution or permission to escape its lexical window.
 
 Each view records its producing operation, exact owner/window and scalar keys.
 An extent query requires that view and those same keys; known unequal keys
