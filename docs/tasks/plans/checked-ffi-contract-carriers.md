@@ -988,3 +988,51 @@ specification is updated for opaque retained dependencies and complete checked
 Access/window correspondence, preserving runtime exclusions. Prepare the
 reviewed unsigned PR110 checkpoint; no further performance experiment is
 selected. Whole F3 and later binding/native/F-core remain open.
+
+## Next bounded slice: dependent-owner facade closure
+
+PR110 is retained as `334935b8d868c73b07dd3e7ddfe0fc48cba68ef9`, exactly matching
+reviewed tree `65a0421463665531129d83c1a9877685bee3a0de`. Its partial issue #59
+acceptance is independently read back and PM-confirmed; all four whole-F3
+criteria remain open. Continue on `codex/checked-owner-wrapper-closure` in the
+existing author worktree, from that retained tip.
+
+The next original criterion is body-free checked wrapper correspondence across
+a facade/alias while original retained-parent, Host and full Type/Row metadata
+stay hidden but authenticated. The existing wrapper suite uses owner-free Abs;
+PR110's dependency graph imports the producer directly. Neither establishes the
+combined dependent row-bearing facade boundary. First check the retained source
+for an equivalent integrated control, then add only the smallest missing pair.
+
+Reuse the actual row-bearing parent/child fixture and its existing transformation,
+including nonempty Before/After rows and the non-first Child owned formal. A
+fixed producer → pub-import/rename facade → consumer path must retain the same
+completed publication and exact Child/parent originals, with no private names
+exported or source bodies reinferred. The canonical body-free consumer must
+check. Then remove only the required Child header from the completed facade
+summary, preserving the publication and native originals, and require the
+specific semantic dependency-summary/correspondence refusal. A Resource error,
+setup panic or generic failure is not that witness.
+
+Use existing publication and module/source checking APIs and their normal funding.
+Test-only fixture/mutation helpers grant no runtime authority. Do not touch
+runtime/root/leaf or build/image code, introduce a receipt/cache or change work
+limits. Repair product behavior only if this canonical-first pair demonstrates
+a real missing obligation under the current static specification and CP-0024;
+return a semantic gap to governing design rather than relaxing checks. Stop
+expansion if existing evidence already establishes the exact combined case.
+
+The first completion condition is the paired source/summary result with focused
+bounded-work and affected wrapper controls, followed by independent exact-head
+review and an individual milestone PR. Further donor, closure or transformed
+control cases need an identified original criterion gap. Runtime F4/F6 execution
+and the connected F-core checkpoint keep their separate owners and prerequisites.
+
+The first local run, 85830 on retained PR110, passed the canonical body-free
+consumer and rejected sole Child erasure with `InternalState`. Its assertion
+incorrectly expected the earlier `DependencySummaryInvalid` context; actual
+refusal comes later from imported `ResourceApply` family reconstruction, at the
+facade import span with the existing missing-resource label. The fresh intact
+retry was unreached. Preserve that failed receipt and independent audit
+`9b845a1e`; correct only the test premise, then refresh the exact control on
+retained PR118 `2121d126c746300992e1cefccec87d24ec1414f4`.

@@ -33,7 +33,7 @@ fn graph(consumer: Option<&str>) -> ModuleGraph {
     graph_for_source(SOURCE, consumer)
 }
 
-fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, ResolveModuleError> {
+pub(super) fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, ResolveModuleError> {
     let mut checked = Vec::<CheckedModule>::new();
     let mut availability = crate::elaborate::ProviderCodeAvailability::default();
     let (mut checking, bytes) = crate::compiler_work::source_work(graph).unwrap();
