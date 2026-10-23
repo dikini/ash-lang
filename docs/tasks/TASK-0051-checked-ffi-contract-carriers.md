@@ -570,3 +570,15 @@ unresolved. A separate ignored, fixed-image demand experiment is being prepared
 with local allowance 1048576; product/internal defaults stay unchanged and its
 results cannot establish default fit. Remove its hooks before final delivery.
 Whole F3, PR110 and F-core remain open.
+
+The [current v14 refresh](evidence/checked-owner-dependencies/v14-refresh/README.md)
+rebases the draft onto retained producer `4e995067`. A necessary empty Decoder
+Row-cache test initializer and optional bounded original-wire capture are
+retained. Both required selectors were observed independently at default 327680:
+full Row returns Validation(Resource), Access CoreAdmission(TypeWorkExceeded).
+Base-image controls complete at 247604. Actual current wires/expectations and
+the original invalid Row controller receipt plus separate qualification are
+preserved. No old-codec work total or caller transfers. Current failure demand,
+remaining image controls and final delivery gates are still open; review a
+current-input causal observation before another repair. Whole-F3 closure does
+not add a prerequisite to eligible dependency-free F4 preparation.

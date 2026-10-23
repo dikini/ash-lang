@@ -2,6 +2,57 @@
 use super::super::{NativeImageFailure, PureImage, encode_effect_for_build, encode_program};
 use super::*;
 
+fn retain_encoded_inputs(bytes: &[u8], expectations: &[u8]) {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let Some(directory) = std::env::var_os("ASH_CHECKED_DEPENDENCY_CAPTURE") else {
+        return;
+    };
+    const MAX_BYTES: usize = 16 * 1024 * 1024;
+    assert!(bytes.len() <= MAX_BYTES && expectations.len() <= MAX_BYTES);
+    let thread = std::thread::current();
+    let selector = thread.name().expect("named exact test thread");
+    assert!(matches!(
+        selector,
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_private_static_image_roundtrip_and_bounds"
+            | "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_retained_access_borrow_requires_exact_window"
+    ));
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let ordinal = NEXT.fetch_add(1, Ordering::Relaxed);
+    assert!(ordinal < 2, "bounded exact-selector image captures");
+    let directory = std::path::PathBuf::from(directory);
+    assert!(
+        directory.is_dir(),
+        "runner creates a fresh capture directory"
+    );
+    for (extension, data) in [("image", bytes), ("expectations", expectations)] {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(directory.join(format!("{ordinal}.{extension}")))
+            .unwrap();
+        file.write_all(data).unwrap();
+    }
+    let mut association = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(directory.join(format!("{ordinal}.txt")))
+        .unwrap();
+    writeln!(
+        association,
+        "selector={selector}\nordinal={ordinal}\nimage_bytes={}\nexpectation_bytes={}",
+        bytes.len(),
+        expectations.len()
+    )
+    .unwrap();
+    eprintln!(
+        "retained checked dependency input ordinal={ordinal} image_bytes={} expectation_bytes={}",
+        bytes.len(),
+        expectations.len()
+    );
+}
+
 pub(crate) fn controls(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(super::super::ModuleId, Arc<super::super::SourceFile>)],
@@ -49,6 +100,7 @@ pub(crate) fn controls(
     let expectations = image
         .encode_native_expectations(&mut TypeWorkBudget::default())
         .unwrap();
+    retain_encoded_inputs(&bytes, &expectations);
     drop(image);
     let decode = || PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
     let canonical = decode();
