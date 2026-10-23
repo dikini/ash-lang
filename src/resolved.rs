@@ -22709,9 +22709,10 @@ impl ResolvedRegistry {
             let Some(fact) = self.scalar_preflight(row.owner) else {
                 return Ok(false);
             };
-            let Some(_) = fact.role().borrowed_parameter(fact.module()) else {
+            if fact.role().borrowed_parameter(fact.module()).is_none()
+                && fact.role().host_parameter(fact.module()).is_none() {
                 return Ok(false);
-            };
+            }
             if !modules.contains_key(&fact.module())
                 || !fact
                     .role()

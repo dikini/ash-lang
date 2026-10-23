@@ -506,6 +506,8 @@ impl Machine<'_> {
                             return Err(RuntimeFailure::ForeignBinding);
                         }
                         let actual = owner.owner.as_ref().ok_or(RuntimeFailure::ForeignBinding)?;
+                        actual.pay_group_checks(usize::from(source_phase == SourceResourcePhase::Handler) + usize::from(!invocation.uses_checked_leaf()), &mut self.instantiation_work)
+                            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
                         if !Arc::ptr_eq(
                             actual.owner(),
                             symbol.owner().ok_or(RuntimeFailure::ForeignBinding)?,

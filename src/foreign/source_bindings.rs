@@ -842,6 +842,51 @@ pub(super) struct SourceOwnerCopyIdentity {
     pub(super) application: crate::core::NodeId,
     pub(super) function: crate::resolved::BinderId,
 }
+/// Exact original conservative-denial occurrence. This contains no owner,
+/// native entry or caller-created group identity.
+#[derive(Debug)]
+pub(crate) struct SourceOwnerViolationRequest {
+    pub(super) scope: Arc<crate::core::source_resource::CheckedSourceResourceTemplate>,
+    pub(super) scope_node: crate::core::NodeId,
+    pub(super) phase: crate::core::source_resource::SourceResourcePhase,
+    pub(super) acquisition: Option<crate::core::NodeId>,
+    pub(super) reject: bool,
+}
+impl SourceOwnerViolationRequest {
+    pub(crate) fn admit(
+        executable: &crate::eval::ExecutableProgram,
+        scope_node: crate::core::NodeId,
+        phase: crate::core::source_resource::SourceResourcePhase,
+        call: crate::core::source_resource::SourceByteCall,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        use super::scalar_preflight::ForeignScalarPreflightRole as Role;
+        paid(work, 7)?;
+        let crate::eval::ExecutableProgram::Effect(program) = executable else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let Some(EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope))) =
+            program.node(scope_node).map(|node| &node.kind)
+        else { return Err(RuntimeFailure::ForeignBinding); };
+        let fact = program.registry().scalar_preflight(call.function)
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+        let reject = fact.role() == Role::CheckedRejectAcquisition;
+        if (!reject && fact.role() != Role::CheckedQuarantine)
+            || Some(fact.module()) != call.function.module()
+            || !fact.module().is_builtin_foreign()
+            || scope.header().original.host.is_none()
+            || call.apply.is_none()
+            || (reject && (phase != crate::core::source_resource::SourceResourcePhase::Acquire
+                || call.acquisition.is_none()))
+            || !scope.contains_violation_call(phase, call, work)
+                .map_err(|error| core_admission_failure(error, work))?
+        { return Err(RuntimeFailure::ForeignBinding); }
+        paid(work, 1)?;
+        Ok(Self { scope: Arc::clone(scope), scope_node, phase,
+            acquisition: call.acquisition, reject })
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct SourceOwnerCopyRequest {
     pub(super) scope: Arc<crate::core::source_resource::CheckedSourceResourceTemplate>,
@@ -1294,7 +1339,7 @@ impl<'bindings> AdmittedSourceOwnerBorrowInvocation<'bindings> {
                 return Err(error);
             }
         };
-        let checked = self.checked.map(|record| record.returned());
+        let checked = self.checked.map(|record| record.returned(Some(raw)));
         Ok((
             SourceOwnerReturnedAuthority {
                 checked,
@@ -1385,7 +1430,11 @@ impl<'bindings> AdmittedSourceWindowInvocation<'bindings> {
                 return Err(error);
             }
         };
-        let checked = self.checked.map(|record| record.returned());
+        let status = match &raw {
+            SourceWindowRaw::Scalar(status) => Some(*status),
+            SourceWindowRaw::View(_) => None,
+        };
+        let checked = self.checked.map(|record| record.returned(status));
         Ok((
             SourceOwnerReturnedAuthority {
                 checked,
@@ -2036,5 +2085,5 @@ mod boundary_tests;
 pub(crate) use boundary_tests::{
     with_eight_byte_boundary_for_test, with_recorded_boundary_for_test,
     ClosingStage, with_eight_byte_closing_for_test,
-    with_eight_byte_body_pair_for_test,
+    with_eight_byte_body_pair_for_test, with_violation_boundary_for_test,
 };

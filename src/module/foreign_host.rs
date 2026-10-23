@@ -128,6 +128,8 @@ pub(super) const FORMALS: &[(&str, &[u32])] = &[
     ("pub checked_byte_write<H, S>", &[25, 26]),
     ("pub checked_copy_bytes<H, V>", &[27, 28]),
     ("pub checked_copy_nul<H, V>", &[29, 30]),
+    ("pub checked_quarantine<H, S>", &[31, 32]),
+    ("pub checked_reject_acquisition<H>", &[33]),
 ];
 
 /// Exact formal-name coordinates to reserved builtin locals; not a role grant.
@@ -402,7 +404,7 @@ mod tests {
                 "ViolationCause"
             ]
         );
-        assert_eq!(module.surface.definitions.len(), 15);
+        assert_eq!(module.surface.definitions.len(), 17);
         assert!(!module.surface.definitions[10].public);
         let crate::surface::SurfaceDefinitionKind::Equational(metadata) =
             &module.surface.definitions[10].kind

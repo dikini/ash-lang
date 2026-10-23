@@ -9,6 +9,10 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
+- [TASK-0054: Checked SQLite Source and State Policy](TASK-0054-checked-sqlite-source-policy.md)
+  implements the authorized opt-in F5 library source/state-policy subset under
+  accepted CP-0024; protected/native and isolated acceptance remain pending.
+
 - [TASK-0051: Checked FFI Contract Carriers](TASK-0051-checked-ffi-contract-carriers.md)
   implements F3 under accepted CP-0024; source/summary/Core/image acceptance remains
   pending until the complete carrier boundary is independently verified.

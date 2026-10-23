@@ -66,6 +66,10 @@ pub enum Intrinsic {
     ForeignCopyNul { function: crate::resolved::BinderId },
     /// Exposes a copied length without adding access permission.
     ForeignExtentValue { function: crate::resolved::BinderId },
+    /// Conservatively denies the exact authenticated Current/Enclosing group.
+    ForeignQuarantine { function: crate::resolved::BinderId },
+    /// Denies the exact pending unpublished acquisition group, including null.
+    ForeignRejectAcquisition { function: crate::resolved::BinderId },
     /// Produces an opaque witness from one independently authenticated dictionary.
     ForeignLayoutWitness {
         /// Copied header; canonical dictionary validation is mandatory.
@@ -123,6 +127,30 @@ impl IntrinsicNode {
     /// Returns the fixed ordinary signature, including nominal result identity.
     #[must_use]
     pub fn expected_type(self) -> Type {
+        if matches!(self.operation, Intrinsic::ForeignQuarantine { .. }
+            | Intrinsic::ForeignRejectAcquisition { .. }) {
+            use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+            use crate::types::{ComputationType, EffectId, EffectInstance, EffectRow, NominalTypeId};
+            let role = if matches!(self.operation, Intrinsic::ForeignQuarantine { .. }) {
+                Role::CheckedQuarantine
+            } else { Role::CheckedRejectAcquisition };
+            let host = role.host_parameter(self.module).expect("checked denial host");
+            let cause = Type::Nominal(NominalTypeId::new(self.module,
+                crate::module::ForeignCheckedNominalRole::ViolationCause.local()));
+            let input = if let Some(state) = role.state_parameter(self.module) {
+                Type::Tuple(Box::new([Type::Variable(state), cause]))
+            } else { cause };
+            let output = Type::Application(
+                Box::new(Type::Nominal(NominalTypeId::new(self.module, 12))),
+                Box::new(Type::Unit),
+            );
+            return Type::EffectfulFunction(Box::new(input), Box::new(ComputationType::new(
+                output, EffectRow::singleton(EffectInstance::new(
+                    EffectId::new(self.module, crate::module::FOREIGN_NATIVE_HOST_LOCAL),
+                    Box::new([Type::Variable(host)]),
+                )),
+            )));
+        }
         // The operation tags share the existing callable carrier, while distinct
         // defining function IDs select the checked codec and latent Host row.
         let function = match self.operation {
@@ -177,6 +205,8 @@ impl IntrinsicNode {
             );
         }
         let (input, output) = match self.operation {
+            Intrinsic::ForeignQuarantine { .. } | Intrinsic::ForeignRejectAcquisition { .. } =>
+                unreachable!("checked denial signature handled above"),
             Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. } => (
                 Type::Int,
                 Type::Application(
@@ -311,7 +341,9 @@ impl IntrinsicNode {
             | Intrinsic::ForeignByteWrite { .. }
             | Intrinsic::ForeignCopyBytes { .. }
             | Intrinsic::ForeignCopyNul { .. }
-            | Intrinsic::ForeignExtentValue { .. } => self.module.is_builtin_foreign(),
+            | Intrinsic::ForeignExtentValue { .. }
+            | Intrinsic::ForeignQuarantine { .. }
+            | Intrinsic::ForeignRejectAcquisition { .. } => self.module.is_builtin_foreign(),
             Intrinsic::ForeignLayoutWitness { .. } => false,
             Intrinsic::BytesEmpty
             | Intrinsic::BytesAppendByte { .. }

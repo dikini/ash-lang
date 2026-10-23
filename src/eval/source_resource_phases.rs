@@ -107,6 +107,8 @@ impl Machine<'_> {
                         .owner
                         .as_ref()
                         .ok_or(RuntimeFailure::InvalidControlState)?;
+                    guard.pay_group_checks(1, &mut self.instantiation_work)
+                        .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
                     if guard.completion_address().is_none()
                         || !std::sync::Arc::ptr_eq(guard.owner(), &finishing.header().owner)
                     {

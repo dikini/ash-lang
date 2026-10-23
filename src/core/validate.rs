@@ -12958,9 +12958,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         // reconstructed registry must have the same exact admission cost.
         for (_, fact) in self.program.registry.scalar_preflights() {
             self.charge_type_work(1)?;
-            let Some(_) = fact.role().borrowed_parameter(fact.module()) else {
+            if fact.role().borrowed_parameter(fact.module()).is_none()
+                && fact.role().host_parameter(fact.module()).is_none() {
                 continue;
-            };
+            }
             // Exact declaration-owned quantifier identity is necessary. An
             // alpha-equivalent ordinary generic function has no byte role.
             if fact.matches_parameters(parameters)
@@ -13147,6 +13148,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             Intrinsic::ForeignCopyBytes { .. } => ForeignScalarPreflightRole::CopyBytes,
             Intrinsic::ForeignCopyNul { .. } => ForeignScalarPreflightRole::CopyNul,
             Intrinsic::ForeignExtentValue { .. } => ForeignScalarPreflightRole::ExtentValue,
+            Intrinsic::ForeignQuarantine { .. } => ForeignScalarPreflightRole::CheckedQuarantine,
+            Intrinsic::ForeignRejectAcquisition { .. } => ForeignScalarPreflightRole::CheckedRejectAcquisition,
             Intrinsic::ForeignByteRead { .. } => ForeignScalarPreflightRole::ByteRead,
             Intrinsic::ForeignByteWrite { .. } => ForeignScalarPreflightRole::ByteWrite,
             _ => return Err(ValidationError::new(ValidationReason::Registry, Some(id))),
@@ -13218,7 +13221,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     | Intrinsic::ForeignByteWrite { function }
                     | Intrinsic::ForeignCopyBytes { function }
                     | Intrinsic::ForeignCopyNul { function }
-                    | Intrinsic::ForeignExtentValue { function } => {
+                    | Intrinsic::ForeignExtentValue { function }
+                    | Intrinsic::ForeignQuarantine { function }
+                    | Intrinsic::ForeignRejectAcquisition { function } => {
                         self.validate_scalar_preflight_intrinsic(id, node, *intrinsic, function)?;
                     }
                     Intrinsic::ForeignLayoutWitness { producer } => {

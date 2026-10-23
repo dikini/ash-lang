@@ -777,6 +777,7 @@ pub(super) struct RuntimeBoundary {
     activation: usize,
     acquire_request: crate::core::NodeId,
     pending: Option<Call>,
+    acquisition_observed: bool,
     finish_prepared: Option<FinishEntry>,
     finish_claimed: bool,
     // These fixed future ledger operations were paid before native entry.
@@ -861,8 +862,8 @@ impl RuntimeBoundary {
         // Future enter/commit/witness operations use only the prepaid meter.
         let future = limits
             .observations
-            .checked_mul(12)
-            .and_then(|n| n.checked_add(8 + 8 + 4 + 3 + 3 + 8))
+            .checked_mul(14)
+            .and_then(|n| n.checked_add(8 + 8 + 4 + 3 + 3 + 8 + 4))
             .ok_or(Failure::Resource)?;
         pay(work, future.checked_add(2 + 3).ok_or(Failure::Resource)?)?;
         let mut ledger = Ledger::reserve(limits.groups, limits.owners, limits.observations, work)?;
@@ -881,11 +882,18 @@ impl RuntimeBoundary {
             activation,
             acquire_request: receipt._request,
             pending: None,
+            acquisition_observed: false,
             finish_prepared: None,
             finish_claimed: false,
             prepaid: TypeWorkBudget::with_limit(future),
         })
     }
+    // Each prepared native entry checks its shared denial root before C.
+    // This fixed work was funded with the existing observation reservations.
+    pub(super) fn check_group_entry(&mut self) -> Result<(), Failure> {
+        pay(&mut self.prepaid, 2)
+    }
+
     pub(super) fn begin_acquire(&mut self) -> Result<(), Failure> {
         let call = self.ledger.enter(
             self.owner,
@@ -898,6 +906,7 @@ impl RuntimeBoundary {
     }
     pub(super) fn acquired(&mut self, present: bool) {
         if let Some(call) = self.pending.take() {
+            self.acquisition_observed = true;
             // The single-use native ticket and exclusive slot borrow establish
             // this exact transition before conversion or source reporting.
             self.ledger
@@ -911,6 +920,24 @@ impl RuntimeBoundary {
                 )
                 .expect("reserved acquisition observation");
         }
+    }
+    pub(super) fn acquisition_request(&self) -> Option<crate::core::NodeId> {
+        self.acquisition_observed.then_some(self.acquire_request)
+    }
+    pub(super) fn authorize_rejection(
+        &self, receipt: &super::source_bindings::SourceOwnerViolationRequest,
+        activation: usize, work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        pay(work, 6)?;
+        let record = &self.ledger.records[self.owner.index];
+        if !receipt.reject || !self.acquisition_observed || self.pending.is_some()
+            || receipt.acquisition != Some(self.acquire_request)
+            || receipt.phase != crate::core::source_resource::SourceResourcePhase::Acquire
+            || activation != self.activation || receipt.scope_node != self.scope_node
+            || !std::sync::Arc::ptr_eq(&receipt.scope, &self.scope)
+            || record.delivery == Delivery::Published || self.ledger.terminal
+        { return Err(Failure::Original); }
+        Ok(())
     }
     pub(super) fn publish(
         &mut self,

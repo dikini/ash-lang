@@ -112,6 +112,8 @@ const FOREIGN_SOURCE: &str = concat!(
     "pub checked_byte_write<H, S> : (S, Int, Int) -> CheckedCall<Unit> ! {NativeHost<H>}\nchecked_byte_write value = checked_byte_write value\n",
     "pub checked_copy_bytes<H, V> : (V, Extent<V>) -> CheckedCall<Bytes> ! {NativeHost<H>}\nchecked_copy_bytes value = checked_copy_bytes value\n",
     "pub checked_copy_nul<H, V> : (V, Int) -> CheckedCall<Bytes> ! {NativeHost<H>}\nchecked_copy_nul value = checked_copy_nul value\n",
+    "pub checked_quarantine<H, S> : (S, ViolationCause) -> CheckedCall<Unit> ! {NativeHost<H>}\nchecked_quarantine value = checked_quarantine value\n",
+    "pub checked_reject_acquisition<H> : ViolationCause -> CheckedCall<Unit> ! {NativeHost<H>}\nchecked_reject_acquisition value = checked_reject_acquisition value\n",
 );
 
 /// Immutable coordinate data; matching these bytes alone grants no builtin role.
@@ -145,6 +147,8 @@ pub(crate) fn foreign_scalar_preflight_ranges(
         12 => ("checked_byte_write", 6, 52),
         13 => ("checked_copy_bytes", 6, 54),
         14 => ("checked_copy_nul", 6, 48),
+        16 => ("checked_reject_acquisition", 3, 53),
+        15 => ("checked_quarantine", 6, 58),
         _ => return None,
     };
     // Only the immutable compiler-owned source is inspected here. Runtime

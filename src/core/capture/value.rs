@@ -7614,6 +7614,7 @@ mod tests {
             .application(function, argument, Type::Bytes, origin)
             .unwrap();
         let raw = |module, local| crate::core::source_resource::SourceByteCall {
+            acquisition: None,
             apply: Some(apply),
             application: function,
             function: BinderId::resolved(module, local),

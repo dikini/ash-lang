@@ -252,10 +252,10 @@ const HOST_START: usize = unique(FOREIGN_SOURCE.as_bytes(), b"pub effect NativeH
 pub(super) const HOST_NAME: ByteRange = range(HOST_START + 11, HOST_START + 21);
 pub(super) const HOST_FORMAL: ByteRange = range(HOST_START + 22, HOST_START + 23);
 
-const fn formal_table() -> [ByteRange; 31] {
+const fn formal_table() -> [ByteRange; 34] {
     let text = FOREIGN_SOURCE.as_bytes();
-    let mut rows = [EMPTY_RANGE; 31];
-    let mut seen = [false; 31];
+    let mut rows = [EMPTY_RANGE; 34];
+    let mut seen = [false; 34];
     let mut index = 0;
     while index < FORMALS.len() {
         let (header, locals) = FORMALS[index];
@@ -311,4 +311,4 @@ const fn formal_table() -> [ByteRange; 31] {
     rows
 }
 
-pub(super) const FORMAL_RANGES: [ByteRange; 31] = formal_table();
+pub(super) const FORMAL_RANGES: [ByteRange; 34] = formal_table();

@@ -1378,6 +1378,8 @@ impl Encoder<'_> {
                             Intrinsic::ForeignExtentValue { function } => {
                                 (function, Role::ExtentValue)
                             }
+                            Intrinsic::ForeignQuarantine { function } => (function, Role::CheckedQuarantine),
+                            Intrinsic::ForeignRejectAcquisition { function } => (function, Role::CheckedRejectAcquisition),
                             Intrinsic::ForeignByteRead { function } => (function, Role::ByteRead),
                             Intrinsic::ForeignByteWrite { function } => (function, Role::ByteWrite),
                             _ => return Err(ImageFailure::Unsupported(Unsupported::Intrinsic)),
@@ -3500,6 +3502,8 @@ impl Decoder<'_> {
                 let function = self.binder_id(function)?;
                 let module = *get(&self.modules, module)?;
                 let operation = match role {
+                    Role::CheckedQuarantine => Intrinsic::ForeignQuarantine { function },
+                    Role::CheckedRejectAcquisition => Intrinsic::ForeignRejectAcquisition { function },
                     Role::I64 => Intrinsic::ForeignCheckedI64 { function },
                     Role::SizeT => Intrinsic::ForeignCheckedSizeT { function },
                     Role::Nul => Intrinsic::ForeignCheckedNul { function },
@@ -6583,7 +6587,9 @@ main () = {
                     | Role::CheckedByteRead
                     | Role::CheckedByteWrite
                     | Role::CheckedCopyBytes
-                    | Role::CheckedCopyNul => Role::I64,
+                    | Role::CheckedCopyNul
+                    | Role::CheckedQuarantine
+                    | Role::CheckedRejectAcquisition => Role::I64,
                 }
             },
             |image| image.scalar_preflights[0].annotation.provenance = u32::MAX,
@@ -8042,6 +8048,8 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
             Self::CheckedByteWrite => 11,
             Self::CheckedCopyBytes => 12,
             Self::CheckedCopyNul => 13,
+            Self::CheckedQuarantine => 14,
+            Self::CheckedRejectAcquisition => 15,
         }
         .write(writer)
     }
@@ -8061,6 +8069,8 @@ impl Wire for crate::foreign::scalar_preflight::ForeignScalarPreflightRole {
             11 => Ok(Self::CheckedByteWrite),
             12 => Ok(Self::CheckedCopyBytes),
             13 => Ok(Self::CheckedCopyNul),
+            14 => Ok(Self::CheckedQuarantine),
+            15 => Ok(Self::CheckedRejectAcquisition),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -8696,7 +8706,7 @@ impl Encoder<'_> {
                         && !matches!(input, StructuralInput::Type(Type::Forall(parameters, _))
                         if parameters.first().and_then(|(id,_)| id.module()).is_some_and(|module| {
                             use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
-                            [Role::ByteRead, Role::ByteWrite, Role::DataOf, Role::ReplaceData, Role::CopyBytes, Role::CopyNul, Role::ExtentValue, Role::CheckedByteRead, Role::CheckedByteWrite, Role::CheckedCopyBytes, Role::CheckedCopyNul].iter().any(|role| role.matches_parameters(module, parameters))
+                            [Role::ByteRead, Role::ByteWrite, Role::DataOf, Role::ReplaceData, Role::CopyBytes, Role::CopyNul, Role::ExtentValue, Role::CheckedByteRead, Role::CheckedByteWrite, Role::CheckedCopyBytes, Role::CheckedCopyNul, Role::CheckedQuarantine, Role::CheckedRejectAcquisition].iter().any(|role| role.matches_parameters(module, parameters))
                         }))
                     {
                         return Err(ImageFailure::Unsupported(Unsupported::Type));
@@ -9495,7 +9505,7 @@ impl Encoder<'_> {
             return Ok(false);
         };
         Ok(parameter.module().is_some_and(|original| {
-            role.borrowed_parameter(original).is_some()
+            (role.borrowed_parameter(original).is_some() || role.host_parameter(original).is_some())
                 && role.matches_parameters(original, abstraction.parameters())
                 && self.modules.get(&original) == Some(&module)
         }))
@@ -13530,3 +13540,44 @@ mod decoded_row_tests;
 #[cfg(test)]
 #[path = "structural_destination_tests.rs"]
 mod structural_destination_tests;
+
+#[cfg(test)]
+mod checked_violation_image_tests {
+    use super::*;
+    #[test]
+    fn original_violation_roles_roundtrip_and_role_donors_refuse() {
+        let (program, provenance) = crate::elaborate::checked_owner_violation_program();
+        let mut work = TypeWorkBudget::default();
+        let image = encode_program(&program, &provenance, &mut work, true, |encoder| {
+            for node in program.nodes() {
+                charge(encoder.work, 1)?;
+                if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) = &node.kind {
+                    encoder.encode_source_registry_view(scope.original(), program.registry())?;
+                }
+            }
+            Ok(())
+        }, |encoder, kind| encoder.encode_effect_node(kind)).unwrap().image;
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let facts = image.encode_native_expectations(&mut TypeWorkBudget::default()).unwrap();
+        let mut startup = crate::build::gas::startup(bytes.len(), facts.len()).unwrap();
+        let decoded = PureImage::decode_bytes(&bytes, &mut startup).unwrap();
+        let _facts = decoded.admit_expected_native_facts(&facts, &mut startup).unwrap();
+        let restored = decoded.restore_effect(&mut startup).unwrap();
+        let sources = provenance.iter().map(|(_, source)| source.id()).collect::<Vec<_>>();
+        let modules = provenance.iter().map(|(module, source)| (*module, source.id())).collect::<Vec<_>>();
+        for transformed in [crate::core::transform::identity_effect_traversal(&restored.program).unwrap(),
+            crate::core::transform::fold_effect_literal_primitives(&restored.program).unwrap()] {
+            crate::core::validate_effect_modules(transformed, &sources, &modules).unwrap();
+        }
+        use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+        for (original, donor) in [(Role::CheckedQuarantine, Role::CheckedRejectAcquisition),
+            (Role::CheckedRejectAcquisition, Role::CheckedQuarantine)] {
+            let mut changed = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+            let record = changed.scalar_preflights.iter_mut().find(|record| record.role == original).unwrap();
+            record.role = donor;
+            let mut work = crate::build::gas::startup(bytes.len(), facts.len()).unwrap();
+            let error = match changed.restore_effect(&mut work) { Err(error) => error, Ok(_) => panic!("role donor accepted") };
+            assert!(!matches!(error, ImageFailure::Resource), "donor must fail semantically: {error:?}");
+        }
+    }
+}

@@ -496,3 +496,18 @@ fn checked_owner_dependency_initialized_byte_child_remains_refused() {
 fn checked_owner_dependency_body_free_facade_requires_exact_hidden_child() {
     crate::resolved::source_control_assert_dependent_facade_closure(&row_source_from(DEPENDENT));
 }
+
+#[test]
+fn checked_quarantine_requires_declared_enclosing_state_and_exact_host() {
+    let before = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => Refused ()";
+    let after = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n                let denied = Foreign.checked_quarantine<H, ParentState<H, C>> (dependency, Foreign.UnexpectedNull)\n                Refused ()\n            }";
+    // Only the child acquire has the exact declared Enclosing dependency in
+    // scope. Parent remains the unchanged independent original owner.
+    let start = DEPENDENT.find("resource Child<").unwrap();
+    let source = format!("{}{}", &DEPENDENT[..start], DEPENDENT[start..].replacen(before, after, 1));
+    linked_core(&source, CONSUMER);
+    source_refuses(&source.replace("Foreign.checked_quarantine<H, ParentState<H, C>>",
+        "Foreign.checked_quarantine<C, ParentState<H, C>>"));
+    // A merely ordinary parent handle is not the descriptor-witnessed State.
+    source_refuses(&source.replace("(dependency, Foreign.UnexpectedNull)", "(parent, Foreign.UnexpectedNull)"));
+}

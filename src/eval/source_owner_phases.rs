@@ -1220,6 +1220,8 @@ impl<'runtime> super::Machine<'runtime> {
                                 .owner
                                 .as_ref()
                                 .ok_or(super::RuntimeFailure::ForeignBinding)?;
+                            owner.pay_group_checks(1 + usize::from(actual_phase == crate::core::source_resource::SourceResourcePhase::Handler), &mut self.instantiation_work)
+                                .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
                             if !Arc::ptr_eq(
                                 owner.owner(),
                                 symbol
@@ -1651,6 +1653,9 @@ impl<'runtime> super::Machine<'runtime> {
                                 }
                                 continue;
                             }
+                            boundary.owner.as_ref().ok_or(super::RuntimeFailure::ForeignBinding)?
+                                .pay_group_checks(1, &mut self.instantiation_work)
+                                .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
                             NativeOwnerOperand::Address(
                                 boundary
                                     .owner
@@ -1831,6 +1836,8 @@ impl<'runtime> super::Machine<'runtime> {
         if !permitted {
             return Err(super::RuntimeFailure::ForeignBinding);
         }
+        dependency.pay_group_checks(1, &mut self.instantiation_work)
+            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
         Ok(NativeOwnerOperand::Address(
             dependency
                 .address()
@@ -2279,6 +2286,10 @@ fn prepare_destruction_operands(
                         }
                         selected = Some(dependency);
                     }
+                }
+                if let Some(dependency) = selected {
+                    dependency.pay_group_checks(1, work)
+                        .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, work))?;
                 }
                 NativeOwnerOperand::Address(
                     selected

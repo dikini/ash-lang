@@ -1046,3 +1046,17 @@ mod checked_byte_window_tests;
 
 #[path = "checked_owner_dependency_tests.rs"]
 mod checked_owner_dependency_tests;
+
+/// Genuine original calls for conservative-denial controls; no native binding.
+pub(crate) fn checked_owner_violation_program() -> (
+    crate::core::ValidatedEffectProgram,
+    Vec<(crate::module::ModuleId, Arc<crate::source::SourceFile>)>,
+) {
+    let source = PRODUCER
+        .replace("Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => Refused ()",
+            "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n            let denied = Foreign.checked_reject_acquisition<H> Foreign.UnexpectedNull\n            Refused ()\n        }")
+        .replace("read access => resume 42",
+            "read access => {\n            let denied = Foreign.checked_quarantine<H, State<H, R>> (state, Foreign.UnexpectedStatus(999))\n            resume 42\n        }");
+    checked_owner_passive_program_for_source(&source,
+        "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n")
+}
