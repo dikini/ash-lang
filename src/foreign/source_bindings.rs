@@ -48,6 +48,14 @@ pub(crate) struct SourceScalarBinding {
 /// lifecycle authority until a controlled source-scope receipt admits a request.
 #[derive(Debug)]
 pub(crate) enum SourceOwnerCallback {
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    CheckedAcquire,
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    CheckedQuery,
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    CheckedLength,
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    CheckedFree,
     View(super::source_runtime::NativeViewCallback),
     Borrow(fn(&[NativeOwnerOperand]) -> Result<NativeScalarReply, NativeScalarCallError>),
     Acquire(NativeOwnerAcquireCallback),
@@ -67,6 +75,10 @@ impl SourceOwnerCallback {
     ) -> Result<super::source_runtime::NativeOwnerDestruction, RuntimeFailure> {
         use super::{source_contract::PreparedOwnerCall, source_runtime::NativeOwnerDestruction};
         match (self, symbol.owner_role()) {
+            #[cfg(any(test, ash_checked_owner_root = "v1"))]
+            (Self::CheckedFree, Some(PreparedOwnerCall::Teardown { consumes: true, .. })) => {
+                Ok(NativeOwnerDestruction::CheckedLeaf)
+            }
             (Self::Teardown(callback), Some(PreparedOwnerCall::Teardown { consumes, .. })) => {
                 Ok(NativeOwnerDestruction::Void {
                     callback: *callback,
@@ -219,6 +231,12 @@ impl SourceNativeBindings {
         }
         paid(work, symbol.symbol().operands().len())?;
         let admitted = match (&callback, symbol.owner_role()) {
+            #[cfg(any(test, ash_checked_owner_root = "v1"))]
+            (SourceOwnerCallback::CheckedAcquire | SourceOwnerCallback::CheckedQuery
+                | SourceOwnerCallback::CheckedLength | SourceOwnerCallback::CheckedFree, _) => {
+                paid(work, 6)?; // fixed profile/role/ordered operand/result checks
+                checked_leaf_shape(&callback, &symbol)
+            }
             (
                 SourceOwnerCallback::Borrow(_),
                 Some(PreparedOwnerCall::Borrow {
@@ -545,6 +563,27 @@ impl SourceNativeBindings {
             })
             .ok_or(RuntimeFailure::ForeignBinding)?;
         match (phase, &binding.callback, &teardown.callback) {
+            #[cfg(any(test, ash_checked_owner_root = "v1"))]
+            (SourceOwnerPhase::Acquire, SourceOwnerCallback::CheckedAcquire, SourceOwnerCallback::CheckedFree) => {
+                let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
+                paid(work, 1)?;
+                let readiness = NativeOwnerGuardReady::in_storage_plan(
+                    Arc::clone(&header.owner), super::source_runtime::NativeOwnerDestruction::CheckedLeaf,
+                    0, 0, Rc::clone(&self.owner_storage),
+                ).map_err(|()| storage(1))?;
+                Ok(AdmittedSourceOwnerInvocation::Acquire(AdmittedSourceOwnerAcquireInvocation {
+                    binding, readiness, receipt, hidden_error, destructor: &teardown.symbol,
+                }))
+            }
+            #[cfg(any(test, ash_checked_owner_root = "v1"))]
+            (SourceOwnerPhase::Finish, SourceOwnerCallback::CheckedFree, SourceOwnerCallback::CheckedFree) => {
+                let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
+                Ok(AdmittedSourceOwnerInvocation::Teardown(AdmittedSourceOwnerTeardownInvocation {
+                    symbol: &binding.symbol, plan: super::source_runtime::NativeOwnerDestruction::CheckedLeaf,
+                    receipt, hidden_error,
+                }))
+            }
+
             (SourceOwnerPhase::Borrow(_), SourceOwnerCallback::Borrow(_), _) => {
                 let hidden_error = authenticate_hidden_error(program.registry(), symbol, work)?;
                 Ok(AdmittedSourceOwnerInvocation::Borrow(
@@ -646,7 +685,11 @@ impl SourceNativeBindings {
             .owners
             .get(&symbol.operation())
             .ok_or(RuntimeFailure::ForeignBinding)?;
-        if !matches!(
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        let checked_leaf = matches!(binding.callback, SourceOwnerCallback::CheckedQuery | SourceOwnerCallback::CheckedLength);
+        #[cfg(not(any(test, ash_checked_owner_root = "v1")))]
+        let checked_leaf = false;
+        if !checked_leaf && !matches!(
             (&binding.callback, symbol.owner_role()),
             (
                 SourceOwnerCallback::View(_) | SourceOwnerCallback::Borrow(_),
@@ -1278,12 +1321,22 @@ pub(crate) enum SourceWindowRaw {
     Scalar(NativeScalarReply),
 }
 impl<'bindings> AdmittedSourceWindowInvocation<'bindings> {
+    pub(crate) fn uses_checked_leaf(&self) -> bool {
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        if matches!(self.binding.callback, SourceOwnerCallback::CheckedQuery | SourceOwnerCallback::CheckedLength) { return true; }
+        false
+    }
+
     pub(crate) fn prepare_checked_boundary(
         mut self,
         guard: &NativeOwnerGuard,
         activation: usize,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, RuntimeFailure> {
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        if matches!(self.binding.callback, SourceOwnerCallback::CheckedQuery) {
+            paid(work, 1)?; // exact slot retain for the returned opaque descriptor
+        }
         self.checked = guard
             .prepare_checked_borrow(&self.receipt, &self.binding.symbol, activation, work)
             .map_err(|error| owner_admission_failure(error, work))?;
@@ -1304,6 +1357,13 @@ impl<'bindings> AdmittedSourceWindowInvocation<'bindings> {
         operands: &[NativeOwnerOperand],
     ) -> Result<(SourceOwnerReturnedAuthority<'bindings>, SourceWindowRaw), NativeScalarCallError>
     {
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        if self.uses_checked_leaf() {
+            let [NativeOwnerOperand::Scalar(NativeScalarValue::USize(key))] = operands else { return Err(NativeScalarCallError::ArgumentContract); };
+            let query = matches!(self.binding.callback, SourceOwnerCallback::CheckedQuery);
+            let (checked, raw) = self.checked.ok_or(NativeScalarCallError::ArgumentContract)?.invoke_leaf(*key, query)?;
+            return Ok((SourceOwnerReturnedAuthority { checked: Some(checked), _symbol: &self.binding.symbol, _receipt: self.receipt }, raw));
+        }
         if let Some(checked) = &self.checked {
             checked
                 .begin()
@@ -1372,6 +1432,12 @@ impl SourceOwnerReturnedAuthority<'_> {
 }
 
 impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
+    pub(crate) fn uses_checked_leaf(&self) -> bool {
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        if matches!(self.binding.callback, SourceOwnerCallback::CheckedAcquire) { return true; }
+        false
+    }
+
     pub(crate) fn checked_boundary(
         &self,
         work: &mut TypeWorkBudget,
@@ -1480,13 +1546,21 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
         ),
         NativeScalarCallError,
     > {
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        if matches!(self.binding.callback, SourceOwnerCallback::CheckedAcquire) {
+            let [NativeOwnerOperand::Scalar(NativeScalarValue::USize(capacity)),
+                NativeOwnerOperand::Scalar(NativeScalarValue::USize(initialized))] = values else {
+                return Err(NativeScalarCallError::ArgumentContract);
+            };
+            let raw = self.readiness.invoke_checked_leaf(*capacity, *initialized)?;
+            return Ok((SourceOwnerReturnedAuthority {
+                checked: None, _symbol: &self.binding.symbol, _receipt: self.receipt,
+            }, raw));
+        }
         let callback = match &self.binding.callback {
             SourceOwnerCallback::Acquire(callback)
             | SourceOwnerCallback::ByteAcquire(callback, _) => callback,
-            SourceOwnerCallback::View(_)
-            | SourceOwnerCallback::Borrow(_)
-            | SourceOwnerCallback::Teardown(_)
-            | SourceOwnerCallback::StatusTeardown(_) => {
+            _ => {
                 return Err(NativeScalarCallError::ArgumentContract);
             }
         };
@@ -1507,6 +1581,12 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
 }
 
 impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
+    pub(crate) fn uses_checked_leaf(&self) -> bool {
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        if matches!(self.plan, super::source_runtime::NativeOwnerDestruction::CheckedLeaf) { return true; }
+        false
+    }
+
     pub(crate) fn prepare_checked_finish(
         &self,
         guard: &NativeOwnerGuard,
@@ -1880,6 +1960,40 @@ fn storage(units: usize) -> RuntimeFailure {
         None,
     ))
 }
+
+#[cfg(any(test, ash_checked_owner_root = "v1"))]
+fn checked_leaf_shape(callback: &SourceOwnerCallback, symbol: &CheckedForeignSymbol) -> bool {
+    use super::source_contract::{PreparedAbiResult as Result, PreparedAddressRepresentation as Address,
+        PreparedOperandSource as Source, PreparedOwnerCall as Role, PreparedRepresentation as Repr,
+        PreparedScalarRepresentation as Scalar};
+    let Some(owner) = symbol.owner() else { return false; };
+    if symbol.prepared().checked_contract().is_none()
+        || owner.owner().representation() != Address::Bytes { return false; }
+    let operands = symbol.symbol().operands();
+    let scalar = |index: usize| operands.get(index).is_some_and(|operand|
+        matches!(operand.source(), Source::Source(_) | Source::Constant(_))
+            && operand.representation() == Repr::Scalar(Scalar::SizeT));
+    let current = || operands.first().is_some_and(|operand|
+        matches!(operand.source(), Source::Current(_))
+            && operand.representation() == Repr::Address(Address::Bytes));
+    match (callback, symbol.owner_role()) {
+        (SourceOwnerCallback::CheckedAcquire, Some(Role::Acquire { initialized_bytes: Some(_), .. })) =>
+            operands.len() == 2 && scalar(0) && scalar(1)
+                && symbol.symbol().result() == Result::Address(Address::Bytes),
+        (SourceOwnerCallback::CheckedQuery, Some(Role::Borrow { current_operand: 0, .. })) =>
+            operands.len() == 2 && current() && scalar(1)
+                && matches!(symbol.symbol().access_result(), Some(super::source_contract::PreparedAccessResult::View { .. }))
+                && symbol.symbol().result() == Result::Address(Address::Bytes),
+        (SourceOwnerCallback::CheckedLength, Some(Role::Borrow { current_operand: 0, .. })) =>
+            operands.len() == 2 && current() && scalar(1)
+                && matches!(symbol.symbol().access_result(), Some(super::source_contract::PreparedAccessResult::Extent { .. }))
+                && symbol.symbol().result() == Result::Scalar(Scalar::SizeT),
+        (SourceOwnerCallback::CheckedFree, Some(Role::Teardown { current_operand: 0, consumes: true, .. })) =>
+            operands.len() == 1 && current() && symbol.symbol().result() == Result::Void,
+        _ => false,
+    }
+}
+
 
 #[cfg(test)]
 #[path = "source_owner_boundary_tests.rs"]

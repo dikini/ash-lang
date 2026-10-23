@@ -1528,13 +1528,18 @@ impl<'runtime> super::Machine<'runtime> {
                 );
                 #[cfg(test)]
                 post_record_test::destruction_preflight(&mut self.instantiation_work);
-                let Some(destruction) = prepare_destruction_operands(
+                let Some(destruction) = (if invocation.uses_checked_leaf() {
+                    if !boundary.dependencies.is_empty() {
+                        return Err(super::RuntimeFailure::ForeignBinding);
+                    }
+                    Some(Vec::new())
+                } else { prepare_destruction_operands(
                     invocation.destructor(),
                     &state,
                     &boundary.dependencies,
                     Some((invocation.symbol(), &self.heap, &value)),
                     &mut self.instantiation_work,
-                )?
+                )? })
                 else {
                     self.control = Some(super::Control::Return(prepare_conversion_refusal(
                         &mut self.heap,
@@ -1640,6 +1645,12 @@ impl<'runtime> super::Machine<'runtime> {
                             else {
                                 return Err(super::RuntimeFailure::InvalidControlState);
                             };
+                            if invocation.uses_checked_leaf() {
+                                if !boundary.owner.as_ref().is_some_and(NativeOwnerGuard::physically_live) {
+                                    return Err(super::RuntimeFailure::ForeignBinding);
+                                }
+                                continue;
+                            }
                             NativeOwnerOperand::Address(
                                 boundary
                                     .owner
