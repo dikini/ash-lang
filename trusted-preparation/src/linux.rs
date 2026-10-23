@@ -251,9 +251,9 @@ pub(crate) fn require_live(pidfd: &File) -> Result<(), Refusal> {
 }
 /// Follow only a caller-selected fixed kernel magic link below verified procfs.
 pub(crate) fn proc_magic(dir: &File, name: &std::ffi::CStr, path_only: bool) -> Result<File, Refusal> {
+    let flags = 0x80000 | if path_only { 0x200000 } else { 0x800 };
     // SAFETY: The only callers supply fixed exe or fd/3 under pinned procfs.
     // O_PATH is mandatory for the peer pipe, so this never opens a pipe reader.
-    let flags = 0x80000 | if path_only { 0x200000 } else { 0x800 };
     owned(unsafe { openat(dir.as_raw_fd(), name.as_ptr(), flags) })
 }
 

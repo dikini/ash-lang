@@ -875,7 +875,7 @@ pub fn launch_fixed() -> Result<LaunchOutcome, Refusal> {
             let sealed = SealedData::copy_metered(&mut executable, launcher_pin, limits, &mut image_work)?;
             check_context(c, &mut budget)?;
             same_metadata(&installed.config_metadata, &io(installed.config_file.metadata())?)?;
-            drop(bundle); drop(current); drop(executable); drop(installed);
+            drop(current); drop(executable); drop(installed);
             return match linux::exec_fixed(sealed.file(), false, sink.as_deref())? {};
         }
         Some(15) => {}
@@ -902,7 +902,7 @@ pub fn launch_fixed() -> Result<LaunchOutcome, Refusal> {
         // FD5 must not survive into the root census; all managed handles are
         // CLOEXEC. Root independently checks role3/4 and its actual sealed exe.
         linux::close_role(5)?;
-        drop(parent); drop(parent_image); drop(bundle); drop(current); drop(executable); drop(installed);
+        drop(parent); drop(parent_image); drop(current); drop(executable); drop(installed);
         return match linux::exec_fixed(image.file(), true, None)? {};
     }
     // Reserve bounded output storage before starting any child. This separate
@@ -921,7 +921,7 @@ pub fn launch_fixed() -> Result<LaunchOutcome, Refusal> {
     let pins = [bundle.request, bundle.image, bundle.launcher];
     let mut process = linux::spawn_launcher(executable.file(), &writer, &request, &application)?;
     // Never retain a writer in the parent: EOF means all child writers closed.
-    drop(writer); drop(request); drop(application); drop(image); drop(bundle); drop(current); drop(executable); drop(installed);
+    drop(writer); drop(request); drop(application); drop(image); drop(current); drop(executable); drop(installed);
     let observation = collect_child(&reader, &mut process, &mut output);
     // Reader's actual FD3 remains unchanged until process.wait has reaped child.
     drop(reader);
