@@ -12,6 +12,13 @@ mod checked_selected_declaration_closure_tests;
 mod checked_selected_tests;
 #[cfg(test)]
 mod checked_wrapper_tests;
+#[cfg(test)]
+mod checked_dependency_wrapper_tests;
+#[cfg(test)]
+pub(crate) fn source_control_assert_dependent_facade_closure(source: &str) {
+    checked_dependency_wrapper_tests::assert_body_free_dependent_facade(source);
+}
+
 mod constructor_original;
 #[cfg(test)]
 mod constructor_original_route_tests;

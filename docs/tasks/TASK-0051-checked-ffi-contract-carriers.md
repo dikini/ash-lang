@@ -603,3 +603,23 @@ full Row segment uses 415977/1282908 (67.58% remaining); Access uses
 the delivered dependency/Access subset while checked execution remains excluded.
 The new prose/evidence is post-test documentation; exact-head delivery review and
 retention remain pending. This is not later binding/native or whole-F3 acceptance.
+
+### Dependent-owner facade coverage
+
+PR110 is retained as `334935b8`; its partial issue #59 acceptance was independently
+read back and PM-confirmed, with all whole-F3 criteria still open. The next
+bounded test-only slice is based on retained PR118 `2121d126`. It combines the
+real row-bearing dependent owner with a renamed body-free facade, preserves exact
+defining publication/Child/Parent originals, refuses sole Child erasure at the
+actual imported-family reconstruction boundary and admits a fresh intact retry.
+The same restored originals and fresh consumer link and pass independent Core,
+identity and literal-fold validation.
+
+Final local session 40997 passes that control, three directly affected existing
+wrapper/helper controls and targeted Ash Clippy with `clippy::all` denied.
+Ordinary inherited Rust warnings remain visible. Independent audit `ce5f2bec`
+checks exact inputs/artifact/cleanup. The earlier wrong diagnostic-context
+assertion remains historical red evidence. See the
+[compact facade evidence](evidence/checked-owner-dependencies/body-free-facade/README.md).
+Current-head review, publication and retention are next; whole F3, private-image
+coverage for this combined facade, later binding/native and F-core remain open.

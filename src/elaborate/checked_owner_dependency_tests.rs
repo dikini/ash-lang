@@ -491,3 +491,8 @@ fn checked_owner_dependency_initialized_byte_child_remains_refused() {
     );
     binding_refuses(&source);
 }
+
+#[test]
+fn checked_owner_dependency_body_free_facade_requires_exact_hidden_child() {
+    crate::resolved::source_control_assert_dependent_facade_closure(&row_source_from(DEPENDENT));
+}
