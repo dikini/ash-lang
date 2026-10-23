@@ -788,6 +788,8 @@ impl Machine<'_> {
                 return Err(RuntimeFailure::ForeignBinding);
             }
         }
+        dependency.pay_group_checks(1, &mut self.instantiation_work)
+            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
         Ok(crate::foreign::source_runtime::NativeOwnerOperand::Address(
             dependency.address().ok_or(RuntimeFailure::ForeignBinding)?,
         ))

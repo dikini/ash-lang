@@ -882,7 +882,7 @@ impl SourceOwnerViolationRequest {
                 .map_err(|error| core_admission_failure(error, work))?
         { return Err(RuntimeFailure::ForeignBinding); }
         paid(work, 1)?;
-        Ok(Self { scope: Arc::clone(scope), scope_node, phase,
+        Ok(Self { scope: Arc::clone(scope.original()), scope_node, phase,
             acquisition: call.acquisition, reject })
     }
 }
