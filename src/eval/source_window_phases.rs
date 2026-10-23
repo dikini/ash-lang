@@ -176,7 +176,7 @@ impl Machine<'_> {
                 .as_ref()
                 .ok_or(RuntimeFailure::ForeignBinding)?;
             if !Arc::ptr_eq(guard.owner(), &original_owner)
-                || guard.completion_address().is_none()
+                || !guard.physically_live()
                 || boundary.phase == ProviderPhase::Body && !guard.ordinary_live()
             {
                 return Err(RuntimeFailure::ForeignBinding);
@@ -514,13 +514,21 @@ impl Machine<'_> {
                         {
                             return Err(RuntimeFailure::ForeignBinding);
                         }
-                        guard = Some(
+                        if invocation.uses_checked_leaf() {
+                            if !actual.physically_live() { return Err(RuntimeFailure::ForeignBinding); }
+                            // Presence only; no physical address is projected.
+                            guard = Some(None);
+                            continue;
+                        }
+                        guard = Some(Some(
                             actual
                                 .completion_address()
                                 .ok_or(RuntimeFailure::ForeignBinding)?,
-                        );
+                        ));
                     }
-                    NativeOwnerOperand::Address(guard.ok_or(RuntimeFailure::ForeignBinding)?)
+                    let address = guard.ok_or(RuntimeFailure::ForeignBinding)?;
+                    if invocation.uses_checked_leaf() { continue; }
+                    NativeOwnerOperand::Address(address.ok_or(RuntimeFailure::ForeignBinding)?)
                 }
                 PreparedOperandSource::Enclosing(path) => {
                     self.window_enclosing_operand(provider, selected, request, &value, path)?
@@ -1093,7 +1101,7 @@ impl Machine<'_> {
             if live
                 || owner.consumed
                 || owner.blocked
-                || guard.completion_address().is_none()
+                || !guard.physically_live()
                 || boundary.phase == ProviderPhase::Body && !guard.ordinary_live()
             {
                 return Err(RuntimeFailure::ForeignBinding);
@@ -1234,6 +1242,12 @@ impl Machine<'_> {
             unreachable!("prepaid window remains selected")
         };
         let view = &window.views[view_key.slot];
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        if view.raw.is_checked_leaf() {
+            let value = ready.copy_checked_leaf(&view.raw, copy_record.take().ok_or(RuntimeFailure::ForeignBinding)?, &mut self.heap, &self.instantiation_work)?;
+            self.control = Some(Control::Return(value));
+            return Ok(());
+        }
         if let Some(record) = &mut copy_record {
             record.begin().map_err(|error| {
                 crate::foreign::source_bindings::owner_admission_failure(
@@ -1286,6 +1300,15 @@ struct CopyReplyReady {
     failure: Option<(crate::types::ConstructorId, super::Location)>,
 }
 impl CopyReplyReady {
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    fn copy_checked_leaf(mut self, view: &NativeViewReturned, record: crate::foreign::source_runtime::NativeOwnerCopyRecord, heap: &mut [super::HeapCell], work: &TypeWorkBudget) -> Result<Value, RuntimeFailure> {
+        if !matches!(self.mode, CopyMode::Bytes(_)) { return Err(RuntimeFailure::ForeignBinding); }
+        let bytes = Arc::get_mut(self.bytes.as_mut().ok_or(RuntimeFailure::ForeignBinding)?).ok_or(RuntimeFailure::ForeignBinding)?;
+        record.copy_checked_leaf(view, bytes).map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, work))?;
+        heap[self.report] = super::HeapCell::Constructor(self.returned, Some(Value::Bytes(self.bytes.take().expect("prepaid checked bytes"))));
+        Ok(Value::Location(self.report))
+    }
+
     fn admit(
         mode: CopyMode,
         returned: crate::types::ConstructorId,

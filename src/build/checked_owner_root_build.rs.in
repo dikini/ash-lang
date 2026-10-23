@@ -163,7 +163,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if read(&project.join("lock_policy.rs"), 1024 * 1024)? != read(&canonical.join("src/build/checked_root_lock_policy.rs"), 1024 * 1024)? { return Err("lock verifier substitution".into()); }
     lock_policy::validate(&read(&canonical.join("Cargo.lock"), 1024 * 1024)?, &lock).map_err(|()| "unsupported settled dependency graph")?;
     let leaf_manifest = read(&project.join("leaf/Cargo.toml"), 64 * 1024)?;
-    let leaf = read(&project.join("leaf/src/lib.rs"), 32 * 1024 * 1024)?;
+    // The producer uses one closed content-addressed relative source target.
+    // Read only that shape, then independently establish its complete digest.
+    let leaf_manifest_text = std::str::from_utf8(&leaf_manifest)?;
+    let paths: Vec<_> = leaf_manifest_text.lines().filter_map(|line| line.strip_prefix("path = ")).collect();
+    if paths.len() != 1 { return Err("leaf source target shape".into()); }
+    let leaf_path: String = serde_json::from_str(paths[0])?;
+    let digest = leaf_path.strip_prefix("src/leaf-").and_then(|path| path.strip_suffix(".rs"))
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        .ok_or("leaf source target shape")?;
+    let leaf = read(&project.join("leaf").join(&leaf_path), 32 * 1024 * 1024)?;
+    if format!("{:x}", Sha256::digest(&leaf)) != digest { return Err("leaf source target digest".into()); }
     let shim = read(&project.join("root-shim.rs"), 32 * 1024 * 1024)?;
     if read(&project.join("rust-toolchain.toml"), 64 * 1024)? != read(&canonical.join("rust-toolchain.toml"), 64 * 1024)? {
         return Err("root toolchain substitution".into());

@@ -290,7 +290,11 @@ mod tests {
         let mut work = TypeWorkBudget::default();
         let source = render_root_shim(&mut work).unwrap();
         assert_eq!(source, ROOT_SHIM);
-        assert!(source.contains("self.owner = returned; // FIRST root action"));
+        assert!(source.contains("destination.owner = leaf::invoke_acquire(native); // FIRST root action"));
+        assert!(source.contains("destination: &'cell mut OwnerCell"));
+        let vacancy = source.find("if self.owner.is_some() { return Err(AcquirePreparationFailure::DestinationOccupied);").unwrap();
+        let preparation = source.find("let native = leaf::prepare_acquire(capacity, initialized)").unwrap();
+        assert!(vacancy < preparation);
         assert!(!source.contains("unsafe"));
         assert!(!source.contains("impl Drop"));
         let required = work.used();

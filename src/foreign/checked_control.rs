@@ -1098,7 +1098,15 @@ impl RuntimeBoundary {
         Ok(())
     }
     pub(super) fn begin_finish_entry(&mut self) -> Result<FinishEntry, Failure> {
+        self.begin_finish_entry_with_blocked(false)
+    }
+    pub(super) fn begin_finish_entry_with_blocked(&mut self, blocked: bool) -> Result<FinishEntry, Failure> {
         pay(&mut self.prepaid, 3)?;
+        // An invoke-time contradiction cannot record native entry. A genuine
+        // synthetic entry already owns its non-native witness and remains valid.
+        if blocked && matches!(self.finish_prepared, Some(FinishEntry::NativeReady)) {
+            return Err(Failure::State);
+        }
         let entry = self.finish_prepared.take().ok_or(Failure::State)?;
         match &entry {
             FinishEntry::NativeReady => {

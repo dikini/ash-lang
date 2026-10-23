@@ -55,28 +55,49 @@ pub struct View<'a> {
     offset: usize,
     available: usize,
 }
+impl std::fmt::Debug for ViewDescriptor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ViewDescriptor { .. }")
+    }
+}
 /// Only a returning release of a consumed Owner can construct this fact.
 pub struct ReleaseReturned {
     _serial: u64,
 }
 
-/// Invoke the fixed acquisition. The root must reserve and exclusively borrow a
-/// vacant destination before calling, then arm it by its first infallible move.
-pub fn acquire(capacity: usize, initialized: usize) -> AcquireReply {
-    if capacity != 8 || initialized != 8 { return AcquireReply::NotEntered(Refusal::Profile); }
-    let serial = match NEXT_OWNER.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1)) {
-        Ok(serial) => serial,
-        Err(_) => return AcquireReply::NotEntered(Refusal::Identity),
-    };
-    // SAFETY: the exact fixed ABI is established by the generated native plan
-    // and same-build header checks. Callee allocation/initialization validity is
-    // an explicit AD16 whole-image premise, never inferred from this wrapper.
+/// Fixed transport preparation, not source permission or protected admission.
+/// Dropping it consumes only a fresh serial and never calls native code.
+pub struct PreparedAcquire {
+    capacity: usize,
+    initialized: usize,
+    serial: u64,
+}
+/// Reserve the fixed profile and a nonreused serial before native entry.
+pub fn prepare_acquire(capacity: usize, initialized: usize) -> Result<PreparedAcquire, Refusal> {
+    if capacity != 8 || initialized != 8 { return Err(Refusal::Profile); }
+    let serial = NEXT_OWNER.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .map_err(|_| Refusal::Identity)?;
+    Ok(PreparedAcquire { capacity, initialized, serial })
+}
+/// Invoke an already prepared acquisition. No pre-entry refusal remains.
+/// The root holds its vacant destination borrow and arms the returned Owner first.
+pub fn invoke_acquire(prepared: PreparedAcquire) -> Option<Owner> {
+    let PreparedAcquire { capacity, initialized, serial } = prepared;
+    // SAFETY: the fixed ABI is established by the native plan/header checks;
+    // actual allocation/initialization validity remains an AD16 image premise.
     let address = unsafe { native_acquire(capacity, initialized) };
-    // No allocation, fallible check, or borrow acquisition follows native return.
-    AcquireReply::Returned(match NonNull::new(address) {
-        Some(address) => Some(Owner {address, initialized, serial}),
+    match NonNull::new(address) {
+        Some(address) => Some(Owner { address, initialized, serial }),
         None => None,
-    })
+    }
+}
+/// Compatibility transport entry; checked evaluator entry uses prepare/invoke
+/// so its pending native fact is committed only after all pre-entry refusals.
+pub fn acquire(capacity: usize, initialized: usize) -> AcquireReply {
+    match prepare_acquire(capacity, initialized) {
+        Ok(prepared) => AcquireReply::Returned(invoke_acquire(prepared)),
+        Err(reason) => AcquireReply::NotEntered(reason),
+    }
 }
 /// Observe a native view and validate integer address bounds before arithmetic.
 pub fn query(owner: &Owner, key: usize) -> Result<Option<ViewDescriptor>, Refusal> {

@@ -1,0 +1,2369 @@
+{
+  "scope": "Private opaque leaf evaluator transport and paid content-bound generated source target. Current combined03 Clippy+15ordinary+actual1; historical02compile-only and combined01 stale-leaf failure, combined02UNRUN. No activation/native/fullFcore claim.",
+  "base": "3db53d2f4fdd2d8662cd2c55cd6dedeb4327e40e",
+  "maps": {
+    "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1": {
+      "blob": "blobs/240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1.gz",
+      "size": 1535946,
+      "entries": 8511
+    },
+    "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad": {
+      "blob": "blobs/43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad.gz",
+      "size": 1535946,
+      "entries": 8511
+    },
+    "eef0408020418c3c5f052a1d782aa9b6f67b0c3d4e65de3c67f6eab763183958": {
+      "blob": "blobs/eef0408020418c3c5f052a1d782aa9b6f67b0c3d4e65de3c67f6eab763183958.gz",
+      "size": 1444158,
+      "entries": 8094
+    },
+    "fd4a2f4d26e047765fa24c05427485dbad3a76e2c10efec1bf5b92c0fe9fc029": {
+      "blob": "blobs/fd4a2f4d26e047765fa24c05427485dbad3a76e2c10efec1bf5b92c0fe9fc029.gz",
+      "size": 72352,
+      "entries": 636
+    },
+    "092815ab98b607da28fbf73ffa68ef2ba3bbc28967e57bd65f5b92d4f096900a": {
+      "blob": "blobs/092815ab98b607da28fbf73ffa68ef2ba3bbc28967e57bd65f5b92d4f096900a.gz",
+      "size": 1444158,
+      "entries": 8094
+    },
+    "02141616fd816458f85d0a1d5b49cb301729273fce0a628c52b64a740d2ae0d9": {
+      "blob": "blobs/02141616fd816458f85d0a1d5b49cb301729273fce0a628c52b64a740d2ae0d9.gz",
+      "size": 72352,
+      "entries": 636
+    }
+  },
+  "records": [
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/batch-results.json",
+      "sha256": "c0fd801e6fb5dba165b5b66dec920a0aa69351f910c519ab0c711dc1ad8889ca",
+      "size": 222446,
+      "blob": "blobs/c0fd801e6fb5dba165b5b66dec920a0aa69351f910c519ab0c711dc1ad8889ca.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-after.json",
+      "sha256": "be7cf3270f2b6662ff0d27791737f3c501b2ad0c747b61868e764476dc962f30",
+      "size": 200,
+      "blob": "blobs/be7cf3270f2b6662ff0d27791737f3c501b2ad0c747b61868e764476dc962f30.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-before.json",
+      "sha256": "9acbe7b585bd816f2c125f4732b01a95e82d5be83f1c82aecc4e305305a0da46",
+      "size": 200,
+      "blob": "blobs/9acbe7b585bd816f2c125f4732b01a95e82d5be83f1c82aecc4e305305a0da46.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/fresh-cargo.stderr",
+      "sha256": "2febfa6e31d4c7933961e67c9546c43cb2d9063f9b620b655ea6c4f631753941",
+      "size": 9853,
+      "blob": "blobs/2febfa6e31d4c7933961e67c9546c43cb2d9063f9b620b655ea6c4f631753941.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/fresh-leaf-Cargo.toml",
+      "sha256": "ebffcf8bb58d2182b88ff4b3adb8496325f0b62f14d681db06714b2df696005d",
+      "size": 175,
+      "blob": "blobs/ebffcf8bb58d2182b88ff4b3adb8496325f0b62f14d681db06714b2df696005d.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/fresh-leaf.rs",
+      "sha256": "b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1",
+      "size": 7489,
+      "blob": "blobs/b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/index.json",
+      "sha256": "f052088adbf975633fa41a063286322c13dc92b87532b6e5e2fefd43fe7e6611",
+      "size": 3321,
+      "blob": "blobs/f052088adbf975633fa41a063286322c13dc92b87532b6e5e2fefd43fe7e6611.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/old-leaf-fingerprint.json",
+      "sha256": "5a213decd3d3b3cabe09e990432e3426badd98a509117e7f63fb0c4c42a92c5b",
+      "size": 420,
+      "blob": "blobs/5a213decd3d3b3cabe09e990432e3426badd98a509117e7f63fb0c4c42a92c5b.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/old-leaf.d",
+      "sha256": "0579125faf42eb995d079714afe5b4ca6a3e6da0d2ce7d6cf1f96891a8cb84bd",
+      "size": 504,
+      "blob": "blobs/0579125faf42eb995d079714afe5b4ca6a3e6da0d2ce7d6cf1f96891a8cb84bd.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/old-leaf.rlib",
+      "sha256": "a5d0b9ff97c236281e2bf13d1c9769d069bfa7757df54f2a9ec0a3a072c84610",
+      "size": 88114,
+      "blob": "blobs/a5d0b9ff97c236281e2bf13d1c9769d069bfa7757df54f2a9ec0a3a072c84610.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/old-leaf.rmeta",
+      "sha256": "abb0a861b1df3e22e183c7a4200885439819f03480b9e5bccf93e71e13098d15",
+      "size": 16819,
+      "blob": "blobs/abb0a861b1df3e22e183c7a4200885439819f03480b9e5bccf93e71e13098d15.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/old-leaf.rs",
+      "sha256": "e4a255e0533f5f754f2ef2b824dafe77879fa8931669d99ebcd27cef91ac10b2",
+      "size": 6626,
+      "blob": "blobs/e4a255e0533f5f754f2ef2b824dafe77879fa8931669d99ebcd27cef91ac10b2.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-01.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-01.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-01.log",
+      "sha256": "7986cc44d19bcc1afcec3b8ae1cfcafc017f07f56ac4456ad3cf576c994efeb0",
+      "size": 157777,
+      "blob": "blobs/7986cc44d19bcc1afcec3b8ae1cfcafc017f07f56ac4456ad3cf576c994efeb0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-01.process.json",
+      "sha256": "dbcb31a77b6afd20d5bebd816b603eb9589efe748735342c7bb7076571dd447d",
+      "size": 344,
+      "blob": "blobs/dbcb31a77b6afd20d5bebd816b603eb9589efe748735342c7bb7076571dd447d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-01.receipt.json",
+      "sha256": "d2b040c7128683438f4269896fef22d7cc4346dc3ac218a0514d3ea808d72e0b",
+      "size": 152885,
+      "blob": "blobs/d2b040c7128683438f4269896fef22d7cc4346dc3ac218a0514d3ea808d72e0b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-01.resources.json",
+      "sha256": "745af181a591a1846231c788a7dc1bccb17286c3ddcacc5f3ac56401be63b129",
+      "size": 20421,
+      "blob": "blobs/745af181a591a1846231c788a7dc1bccb17286c3ddcacc5f3ac56401be63b129.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-02.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-02.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-02.log",
+      "sha256": "af0f19082e0fddebec25401cb25ab07dea47ddd43c73e5e459bab22c7212980d",
+      "size": 57687,
+      "blob": "blobs/af0f19082e0fddebec25401cb25ab07dea47ddd43c73e5e459bab22c7212980d.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-02.process.json",
+      "sha256": "1420b55617fe35b0d5ff6f3858ca24e514fb9acfb343d85bd36944e2da11a9c5",
+      "size": 371,
+      "blob": "blobs/1420b55617fe35b0d5ff6f3858ca24e514fb9acfb343d85bd36944e2da11a9c5.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-02.receipt.json",
+      "sha256": "eaef75851d4d9540f1ee77e97fd106eb421cb237e847c77e1c0b10af175122c6",
+      "size": 5570,
+      "blob": "blobs/eaef75851d4d9540f1ee77e97fd106eb421cb237e847c77e1c0b10af175122c6.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-02.resources.json",
+      "sha256": "774bd979f45da7cd3805b67640e601d2b24a147abdbb6c1c0f45db0bb02df7bf",
+      "size": 35897,
+      "blob": "blobs/774bd979f45da7cd3805b67640e601d2b24a147abdbb6c1c0f45db0bb02df7bf.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-03.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-03.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-03.log",
+      "sha256": "bb4b415b4f8f9d819feec2e40ca2402d3f7b3a0cefb7f6727082d68d06f45e7d",
+      "size": 57519,
+      "blob": "blobs/bb4b415b4f8f9d819feec2e40ca2402d3f7b3a0cefb7f6727082d68d06f45e7d.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-03.process.json",
+      "sha256": "c7c047fd51f2dcb1d2e3da312442d39556be2ef622eba53325fb22cf4fa15a75",
+      "size": 387,
+      "blob": "blobs/c7c047fd51f2dcb1d2e3da312442d39556be2ef622eba53325fb22cf4fa15a75.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-03.receipt.json",
+      "sha256": "5e5f9cd55cef002611970453a6475362c30c1a06be4c6998de4dac54789d3422",
+      "size": 5576,
+      "blob": "blobs/5e5f9cd55cef002611970453a6475362c30c1a06be4c6998de4dac54789d3422.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-03.resources.json",
+      "sha256": "ed519c125210a1b75f9cc6cfac0bd6d1158aff492e8b8fefc6fe0cf31ff4b152",
+      "size": 772,
+      "blob": "blobs/ed519c125210a1b75f9cc6cfac0bd6d1158aff492e8b8fefc6fe0cf31ff4b152.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-04.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-04.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-04.log",
+      "sha256": "bc3bb33c7beb3e4c30e29d59d44d2dc3ef985aa42c8b5d5ac1e1172d29cb22b2",
+      "size": 57386,
+      "blob": "blobs/bc3bb33c7beb3e4c30e29d59d44d2dc3ef985aa42c8b5d5ac1e1172d29cb22b2.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-04.process.json",
+      "sha256": "c124a373a3a3af3fb89afb3a70c2671de95d30ad1285849ebd9674d93ed20ba3",
+      "size": 472,
+      "blob": "blobs/c124a373a3a3af3fb89afb3a70c2671de95d30ad1285849ebd9674d93ed20ba3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-04.receipt.json",
+      "sha256": "aa0d4e13d473bdf48b99a756ca8bba48d0823b9846abce8836f3320363533709",
+      "size": 5662,
+      "blob": "blobs/aa0d4e13d473bdf48b99a756ca8bba48d0823b9846abce8836f3320363533709.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-04.resources.json",
+      "sha256": "20d05c6bedc482108a3a9e2480792035f7d49b1e87af55cfa33cdce17480a16d",
+      "size": 772,
+      "blob": "blobs/20d05c6bedc482108a3a9e2480792035f7d49b1e87af55cfa33cdce17480a16d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-05.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-05.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-05.log",
+      "sha256": "acb762d308d1a441c0f9256049b54e656487934c9368dc699c3db412b2a1a214",
+      "size": 57372,
+      "blob": "blobs/acb762d308d1a441c0f9256049b54e656487934c9368dc699c3db412b2a1a214.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-05.process.json",
+      "sha256": "01f67ccd4a9bce4fdea83a930377d9a400d73bfbb3f8a0bdff388d57ccc750d6",
+      "size": 460,
+      "blob": "blobs/01f67ccd4a9bce4fdea83a930377d9a400d73bfbb3f8a0bdff388d57ccc750d6.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-05.receipt.json",
+      "sha256": "d91d82ccfd20b94179c2580a8f42b3c27eac5623d7b1832655f37ae19e7a3a64",
+      "size": 5647,
+      "blob": "blobs/d91d82ccfd20b94179c2580a8f42b3c27eac5623d7b1832655f37ae19e7a3a64.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-05.resources.json",
+      "sha256": "049606b3174c328a1765295515e71820a27593b71e72701961221e409445cf52",
+      "size": 770,
+      "blob": "blobs/049606b3174c328a1765295515e71820a27593b71e72701961221e409445cf52.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-06.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-06.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-06.log",
+      "sha256": "d90992a23a1ffd5806b404b3e74dfead392a907da0e06782e65a970c99f9d3af",
+      "size": 57390,
+      "blob": "blobs/d90992a23a1ffd5806b404b3e74dfead392a907da0e06782e65a970c99f9d3af.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-06.process.json",
+      "sha256": "adc200143037b2a34c59a021b7cc52f233d7b436414bcb75d1e995787b315f0e",
+      "size": 478,
+      "blob": "blobs/adc200143037b2a34c59a021b7cc52f233d7b436414bcb75d1e995787b315f0e.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-06.receipt.json",
+      "sha256": "b2ade866df5ec39a24f9b1a6343bd660f5ff442db017ec4975807009f13a5112",
+      "size": 5665,
+      "blob": "blobs/b2ade866df5ec39a24f9b1a6343bd660f5ff442db017ec4975807009f13a5112.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-06.resources.json",
+      "sha256": "2592d5cb3a92eced249361531750f479cc9d84e40e0d452310864c8cd7a0f13e",
+      "size": 770,
+      "blob": "blobs/2592d5cb3a92eced249361531750f479cc9d84e40e0d452310864c8cd7a0f13e.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-07.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-07.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-07.log",
+      "sha256": "ea7a38e84effcc3a54aacf6779f9ebfc129656e87d510edebd8bdc5c37d2ea0e",
+      "size": 57363,
+      "blob": "blobs/ea7a38e84effcc3a54aacf6779f9ebfc129656e87d510edebd8bdc5c37d2ea0e.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-07.process.json",
+      "sha256": "611a6d735d68bad8f947e0cd6f1980f95dd681f2363b3cf9933684835374af97",
+      "size": 450,
+      "blob": "blobs/611a6d735d68bad8f947e0cd6f1980f95dd681f2363b3cf9933684835374af97.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-07.receipt.json",
+      "sha256": "af047af30c07ccb3aa4b5bd8bbd0d7558a6ceaee1796b9e870031e488c08e6bf",
+      "size": 5639,
+      "blob": "blobs/af047af30c07ccb3aa4b5bd8bbd0d7558a6ceaee1796b9e870031e488c08e6bf.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-07.resources.json",
+      "sha256": "41a9baa56770d7ad2e4447c8f5f7d249b896e9c59ade5b00fc028c0e6849c929",
+      "size": 769,
+      "blob": "blobs/41a9baa56770d7ad2e4447c8f5f7d249b896e9c59ade5b00fc028c0e6849c929.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-08.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-08.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-08.log",
+      "sha256": "81b86028495cb0149bc923ad7478dad223b36877ec9a4463c9f468dba8347645",
+      "size": 57377,
+      "blob": "blobs/81b86028495cb0149bc923ad7478dad223b36877ec9a4463c9f468dba8347645.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-08.process.json",
+      "sha256": "bebc6cd5bd140cff51b6f574676edee4d25ec41bc52a10dec37ae5985688f384",
+      "size": 465,
+      "blob": "blobs/bebc6cd5bd140cff51b6f574676edee4d25ec41bc52a10dec37ae5985688f384.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-08.receipt.json",
+      "sha256": "d23baca3b83d26b4a32ad6228244013ae6a6bfcccaa3d5b42a77bb63be3ad657",
+      "size": 5652,
+      "blob": "blobs/d23baca3b83d26b4a32ad6228244013ae6a6bfcccaa3d5b42a77bb63be3ad657.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-08.resources.json",
+      "sha256": "96ee4a0d484b2c70e9e14855797a7ba4ea0f0f7a62f8b720f9d81d26127ad42e",
+      "size": 770,
+      "blob": "blobs/96ee4a0d484b2c70e9e14855797a7ba4ea0f0f7a62f8b720f9d81d26127ad42e.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-09.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-09.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-09.log",
+      "sha256": "f1a14d43c57c27020c0dfb15999bc1005adffd55b8bf1ad641b26641ab34cbe5",
+      "size": 57377,
+      "blob": "blobs/f1a14d43c57c27020c0dfb15999bc1005adffd55b8bf1ad641b26641ab34cbe5.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-09.process.json",
+      "sha256": "fff65467d69fea964db8880dd4072388d4679f06b8dea1bd4016e1cbd2558d2d",
+      "size": 464,
+      "blob": "blobs/fff65467d69fea964db8880dd4072388d4679f06b8dea1bd4016e1cbd2558d2d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-09.receipt.json",
+      "sha256": "a29b8147272baefd20289dd89437ec00deb073c2d8e6df51eaa12e13fdc6f01c",
+      "size": 5653,
+      "blob": "blobs/a29b8147272baefd20289dd89437ec00deb073c2d8e6df51eaa12e13fdc6f01c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-09.resources.json",
+      "sha256": "0f40238658479562b61daf69cc0dc53388306c8da88d48a81ff3f7615fbd523e",
+      "size": 772,
+      "blob": "blobs/0f40238658479562b61daf69cc0dc53388306c8da88d48a81ff3f7615fbd523e.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-10.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-10.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-10.log",
+      "sha256": "076a7cf7705bd057e0a8409b020888a14c88a70aad6c8ec4e46495583cc8d2a5",
+      "size": 57355,
+      "blob": "blobs/076a7cf7705bd057e0a8409b020888a14c88a70aad6c8ec4e46495583cc8d2a5.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-10.process.json",
+      "sha256": "4bbdbc6faee087af2a8a5595ad5cf09246b0564044418e75be0b07de9a564bbd",
+      "size": 443,
+      "blob": "blobs/4bbdbc6faee087af2a8a5595ad5cf09246b0564044418e75be0b07de9a564bbd.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-10.receipt.json",
+      "sha256": "93042280befed633830bb837b82d276cf5aeba9bbb72faba521542da3bfd26c0",
+      "size": 5631,
+      "blob": "blobs/93042280befed633830bb837b82d276cf5aeba9bbb72faba521542da3bfd26c0.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-10.resources.json",
+      "sha256": "be4a7764d0e7dffd3652b91d3712f942471026ed645d54b7893d5d9b00f31cec",
+      "size": 768,
+      "blob": "blobs/be4a7764d0e7dffd3652b91d3712f942471026ed645d54b7893d5d9b00f31cec.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-11.before.json",
+      "sha256": "240d62c8b72094f63282e650759c054f7301144dab30052417c66209b26c97c1",
+      "size": 1535946,
+      "blob": "blobs/3333e5b279169068511ccd65be0ba4f477fd4029f32deeb1b095aa0f8c978c33.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-11.inputs.json",
+      "sha256": "d248f9e0921843b730811f282dfde946d7f1e5a8e64666bc76a65d4632372eb3",
+      "size": 3105968,
+      "blob": "blobs/3873d59ff3f1e2344f06410aa513367a71d893c59f440ea160ae97ce9830c985.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-11.log",
+      "sha256": "59eb844ca08db8fd38b801ad39b2c76e2f24812e90799f9f67411fb6166ebf10",
+      "size": 57838,
+      "blob": "blobs/59eb844ca08db8fd38b801ad39b2c76e2f24812e90799f9f67411fb6166ebf10.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-11.process.json",
+      "sha256": "240f56111a4030b0a89da63e35c05a15db02a404acc5e6eb2c9ab8922cb88ef9",
+      "size": 465,
+      "blob": "blobs/240f56111a4030b0a89da63e35c05a15db02a404acc5e6eb2c9ab8922cb88ef9.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-11.receipt.json",
+      "sha256": "0f4ffaefa74102cd6fdfc0acd586641554dbaaad25aa6481c64e90ec46b253e6",
+      "size": 5660,
+      "blob": "blobs/0f4ffaefa74102cd6fdfc0acd586641554dbaaad25aa6481c64e90ec46b253e6.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/phase-11.resources.json",
+      "sha256": "6467a4dfc5039b89ba90ace2c7fc4d25eb732f086c4ce05eb51284dafa087db2",
+      "size": 17546,
+      "blob": "blobs/6467a4dfc5039b89ba90ace2c7fc4d25eb732f086c4ce05eb51284dafa087db2.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/retained-after.json",
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "size": 3859,
+      "blob": "blobs/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/retained-before.json",
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "size": 3859,
+      "blob": "blobs/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/runner-process.json",
+      "sha256": "21f05e6f2fccf9b5ef605d82e116004bd06cff68677ece22dcb0450386dd7860",
+      "size": 944,
+      "blob": "blobs/21f05e6f2fccf9b5ef605d82e116004bd06cff68677ece22dcb0450386dd7860.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/tools-after.json",
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "size": 3110,
+      "blob": "blobs/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/tools-before.json",
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "size": 3110,
+      "blob": "blobs/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/freeze.json",
+      "sha256": "4d9e7786f2da61584357a1ca94df64de05dbb43d474a44f3842fe53909f1438a",
+      "size": 847,
+      "blob": "blobs/4d9e7786f2da61584357a1ca94df64de05dbb43d474a44f3842fe53909f1438a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/manifest.json",
+      "sha256": "d014be1701e412c5d6d8b1c1a1e91988cee069d1c8a018c47c187bc2f2821fcf",
+      "size": 3834997,
+      "blob": "blobs/d014be1701e412c5d6d8b1c1a1e91988cee069d1c8a018c47c187bc2f2821fcf.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/proposal.json",
+      "sha256": "7ad145ad9700ee2598ed241703f491465e97d509fdf9fe76721d9711b52b65c4",
+      "size": 6780,
+      "blob": "blobs/7ad145ad9700ee2598ed241703f491465e97d509fdf9fe76721d9711b52b65c4.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/run.py",
+      "sha256": "9b5282cc86691dfd8af37978576d5da980af00c272cbc25d0a341266c7b0cd23",
+      "size": 17465,
+      "blob": "blobs/9b5282cc86691dfd8af37978576d5da980af00c272cbc25d0a341266c7b0cd23.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/source.patch",
+      "sha256": "4bdfc53ec1de279103eb2d3325caee0722fbb8264bccbed0ba4aaa7f3226d240",
+      "size": 75599,
+      "blob": "blobs/4bdfc53ec1de279103eb2d3325caee0722fbb8264bccbed0ba4aaa7f3226d240.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/docs/tasks/plans/checked-owner-core-execution.md",
+      "sha256": "13f9f9efd4aa60237cbb8301c3590055d4c2fad06b189fc87b836f64e3227210",
+      "size": 30503,
+      "blob": "blobs/13f9f9efd4aa60237cbb8301c3590055d4c2fad06b189fc87b836f64e3227210.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/build/checked_leaf.rs",
+      "sha256": "6f88fcf57f032b6fe3fc8657e2f3feabf791198a594541e78f2658af20de4471",
+      "size": 12610,
+      "blob": "blobs/6f88fcf57f032b6fe3fc8657e2f3feabf791198a594541e78f2658af20de4471.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/checked_owner_root.rs",
+      "sha256": "c83c8bd66e768cccf01a37fdcb493ac3d344fe093fc7486bb58a4a16feb85ac0",
+      "size": 2496,
+      "blob": "blobs/c83c8bd66e768cccf01a37fdcb493ac3d344fe093fc7486bb58a4a16feb85ac0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/eval/source_owner_phases.rs",
+      "sha256": "1eea815d57a1a330e92685a39a4cf2aef4719d9ab951764851557520982c6828",
+      "size": 135100,
+      "blob": "blobs/1eea815d57a1a330e92685a39a4cf2aef4719d9ab951764851557520982c6828.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/eval/source_window_phases.rs",
+      "sha256": "958499fbc6eaf98844b50a80302ea5bcc0a56a62e06065e3d52d93ac1c9d20ab",
+      "size": 71423,
+      "blob": "blobs/958499fbc6eaf98844b50a80302ea5bcc0a56a62e06065e3d52d93ac1c9d20ab.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/foreign/checked_control.rs",
+      "sha256": "ae38302dd874b58c67d28fbea80fa6eb7338ab46f02aff7ed52bb820571dffd8",
+      "size": 56126,
+      "blob": "blobs/ae38302dd874b58c67d28fbea80fa6eb7338ab46f02aff7ed52bb820571dffd8.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/foreign/checked_leaf_transport.rs",
+      "sha256": "2abbcbe3498b17e61d6d8c6f50e5e8290a0760b0f1d5464a9a2551bc4860b9ab",
+      "size": 8389,
+      "blob": "blobs/2abbcbe3498b17e61d6d8c6f50e5e8290a0760b0f1d5464a9a2551bc4860b9ab.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/foreign/source_bindings.rs",
+      "sha256": "f49ea19212d84893f20a32e5c3a0e4caf8ce6e2da797e390198e38c7ac2824c0",
+      "size": 82242,
+      "blob": "blobs/f49ea19212d84893f20a32e5c3a0e4caf8ce6e2da797e390198e38c7ac2824c0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/foreign/source_owner_boundary_tests.rs",
+      "sha256": "374d5d6576dd7d8b7faeba06e8b099381e874378ad8953f83dec650f4f20af9d",
+      "size": 56303,
+      "blob": "blobs/374d5d6576dd7d8b7faeba06e8b099381e874378ad8953f83dec650f4f20af9d.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/foreign/source_owner_runtime.rs",
+      "sha256": "88ae2b396cddf4b973b007a5d219c630a7f0422c6e010b8df170c09ad2943520",
+      "size": 71172,
+      "blob": "blobs/88ae2b396cddf4b973b007a5d219c630a7f0422c6e010b8df170c09ad2943520.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/foreign/source_view_runtime.rs",
+      "sha256": "7e00a87e3a8c0ff335fabb529d23f633e9046aebe2d025cdb2334479b9c0c725",
+      "size": 3204,
+      "blob": "blobs/7e00a87e3a8c0ff335fabb529d23f633e9046aebe2d025cdb2334479b9c0c725.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source/src/foreign.rs",
+      "sha256": "8d4b960130d680292b4a27f83bf34f76b83b3266562894df5955f50326cb6834",
+      "size": 93292,
+      "blob": "blobs/8d4b960130d680292b4a27f83bf34f76b83b3266562894df5955f50326cb6834.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01-freeze/tested-source-index.json",
+      "sha256": "4e19c6b045847f6bc39966fd1e85d28df4bd8a4570cb7326f9227de8b42efcbb",
+      "size": 2051,
+      "blob": "blobs/4e19c6b045847f6bc39966fd1e85d28df4bd8a4570cb7326f9227de8b42efcbb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/author-terminal-summary.json",
+      "sha256": "4062f81099208e212b8dc61709776f38170ee1ac7bfcb8a27735fa9838f142b9",
+      "size": 9442,
+      "blob": "blobs/4062f81099208e212b8dc61709776f38170ee1ac7bfcb8a27735fa9838f142b9.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/batch-results.json",
+      "sha256": "14d90f95f53236df81e40a084351d15e636588a6b1c397ec57420f1e30237a71",
+      "size": 228348,
+      "blob": "blobs/14d90f95f53236df81e40a084351d15e636588a6b1c397ec57420f1e30237a71.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/cache-after.json",
+      "sha256": "c8e2c8a3825df78e919fa4f3e2b55fe99e466d8123ffd5ea97fa3f66d234bc54",
+      "size": 200,
+      "blob": "blobs/c8e2c8a3825df78e919fa4f3e2b55fe99e466d8123ffd5ea97fa3f66d234bc54.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/cache-before.json",
+      "sha256": "9200844938441312b7b26897004b7e1e722880b2187ce15cfdf3aa18eb8a6193",
+      "size": 200,
+      "blob": "blobs/9200844938441312b7b26897004b7e1e722880b2187ce15cfdf3aa18eb8a6193.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/cargo.stderr",
+      "sha256": "0109ad7ab1328a7cf3643d1ddafab326fe27b83d363e20865b430c4ca334822e",
+      "size": 27560,
+      "blob": "blobs/0109ad7ab1328a7cf3643d1ddafab326fe27b83d363e20865b430c4ca334822e.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/fingerprint.json",
+      "sha256": "8c7b7dda9af6df7e5a0fd8ee29a5193e82218525da0d71172b11b3d79788958e",
+      "size": 422,
+      "blob": "blobs/8c7b7dda9af6df7e5a0fd8ee29a5193e82218525da0d71172b11b3d79788958e.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/index.json",
+      "sha256": "44e6edab32ab09a7ee586193031e85d301aae26ee9403ab1e138610270f8d520",
+      "size": 4449,
+      "blob": "blobs/44e6edab32ab09a7ee586193031e85d301aae26ee9403ab1e138610270f8d520.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/leaf-Cargo.toml",
+      "sha256": "4a746f12d45425177da56acf7a8c95ff39fe559c8aa4a1d7ec2af57f5228c7b0",
+      "size": 268,
+      "blob": "blobs/4a746f12d45425177da56acf7a8c95ff39fe559c8aa4a1d7ec2af57f5228c7b0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/observation.json",
+      "sha256": "2aed2b2139d27c6c39083bcca131ef7ba9636ce03996b104d966116b2bfc244c",
+      "size": 852,
+      "blob": "blobs/2aed2b2139d27c6c39083bcca131ef7ba9636ce03996b104d966116b2bfc244c.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/selected-leaf.d",
+      "sha256": "c7e582165d2b7ea8d6c676ed1048c6b5f9ac3325d2c4ac63a99b81dc5f2f3950",
+      "size": 768,
+      "blob": "blobs/c7e582165d2b7ea8d6c676ed1048c6b5f9ac3325d2c4ac63a99b81dc5f2f3950.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/selected-leaf.rlib",
+      "sha256": "aad5bcc7376a8f4fb929cc9292f2b2035c264df4c19cb758e2c257ce3e87c51c",
+      "size": 102626,
+      "blob": "blobs/aad5bcc7376a8f4fb929cc9292f2b2035c264df4c19cb758e2c257ce3e87c51c.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/selected-leaf.rmeta",
+      "sha256": "76f7f4bb5f93a0af14718bda1af1f6a3415a1a38de1adae54c847f4c567eb17d",
+      "size": 18915,
+      "blob": "blobs/76f7f4bb5f93a0af14718bda1af1f6a3415a1a38de1adae54c847f4c567eb17d.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/selected-leaf.rs",
+      "sha256": "b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1",
+      "size": 7489,
+      "blob": "blobs/b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-01.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-01.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-01.log",
+      "sha256": "3e1aadd897aa0ab57695aa89fe2cde4ca102d564cc143272bac6ff0ae2df911e",
+      "size": 157781,
+      "blob": "blobs/3e1aadd897aa0ab57695aa89fe2cde4ca102d564cc143272bac6ff0ae2df911e.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-01.process.json",
+      "sha256": "bab40ffd983969bc1e793684f571f8393a160b17d0189d4aa55f2e91eadbc67b",
+      "size": 344,
+      "blob": "blobs/bab40ffd983969bc1e793684f571f8393a160b17d0189d4aa55f2e91eadbc67b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-01.receipt.json",
+      "sha256": "175ed18da44c50f1d16876f344432ec15d5dc9843ba6d70fe1805ccbbfaa12bb",
+      "size": 152883,
+      "blob": "blobs/175ed18da44c50f1d16876f344432ec15d5dc9843ba6d70fe1805ccbbfaa12bb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-01.resources.json",
+      "sha256": "1e18ee9b18ecfdee4356a39f2f1b79f11b44e6f850a4be4ec22612387e0e84d0",
+      "size": 10590,
+      "blob": "blobs/1e18ee9b18ecfdee4356a39f2f1b79f11b44e6f850a4be4ec22612387e0e84d0.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-02.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-02.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-02.log",
+      "sha256": "fa608b778c91d4252a944afabbd6838167e54f73d9c0d3a958e2d4288fee28e0",
+      "size": 57691,
+      "blob": "blobs/fa608b778c91d4252a944afabbd6838167e54f73d9c0d3a958e2d4288fee28e0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-02.process.json",
+      "sha256": "2a62d9c31ddf3754d60700b57f32f9a66d52d014298dc87c6239c6268f2dd2ca",
+      "size": 371,
+      "blob": "blobs/2a62d9c31ddf3754d60700b57f32f9a66d52d014298dc87c6239c6268f2dd2ca.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-02.receipt.json",
+      "sha256": "f31f20674d2011c7ca6c2e717ab6387266b6d53964e8063ed714a38dc7a254dc",
+      "size": 5568,
+      "blob": "blobs/f31f20674d2011c7ca6c2e717ab6387266b6d53964e8063ed714a38dc7a254dc.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-02.resources.json",
+      "sha256": "ddf999c3af7de03c4b7bc13f36a67eaa5eebfc5f23a44d2c08ac184a11760cf0",
+      "size": 8983,
+      "blob": "blobs/ddf999c3af7de03c4b7bc13f36a67eaa5eebfc5f23a44d2c08ac184a11760cf0.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-03.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-03.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-03.log",
+      "sha256": "9252195d5a0f6e1bfc013ef188d2084ef0fd80e33b04832dc40b9d28b2bd1336",
+      "size": 57524,
+      "blob": "blobs/9252195d5a0f6e1bfc013ef188d2084ef0fd80e33b04832dc40b9d28b2bd1336.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-03.process.json",
+      "sha256": "c08d8145c217321e1fbb96fba53eda62016a17cfb420a8d277eba9bcd929c804",
+      "size": 388,
+      "blob": "blobs/c08d8145c217321e1fbb96fba53eda62016a17cfb420a8d277eba9bcd929c804.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-03.receipt.json",
+      "sha256": "50938b80b6286421740b4985705c1ff1e8583751dcb64663de670cab1badd113",
+      "size": 5576,
+      "blob": "blobs/50938b80b6286421740b4985705c1ff1e8583751dcb64663de670cab1badd113.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-03.resources.json",
+      "sha256": "b5730604000ed98ed1557c90a34c488a4a16c5036b2590692c2c568826a7f0d0",
+      "size": 772,
+      "blob": "blobs/b5730604000ed98ed1557c90a34c488a4a16c5036b2590692c2c568826a7f0d0.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-04.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-04.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-04.log",
+      "sha256": "c2ab45a2900265bed0a96c9dbcc96e2407ac599421e91e4e0c3c84f1f2c5468c",
+      "size": 57391,
+      "blob": "blobs/c2ab45a2900265bed0a96c9dbcc96e2407ac599421e91e4e0c3c84f1f2c5468c.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-04.process.json",
+      "sha256": "fec4a1d160e43bdecd0f026875ad52f1d254bc76a87864676f652fc7f246ee90",
+      "size": 474,
+      "blob": "blobs/fec4a1d160e43bdecd0f026875ad52f1d254bc76a87864676f652fc7f246ee90.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-04.receipt.json",
+      "sha256": "d043397dd7bdc235dec3a93f337dd483a609e9632e457644094a8010783207d1",
+      "size": 5661,
+      "blob": "blobs/d043397dd7bdc235dec3a93f337dd483a609e9632e457644094a8010783207d1.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-04.resources.json",
+      "sha256": "7c554d862b5222cf2e7e2ff4f1961be646605edc12f22bf5b46e5c5efa76726c",
+      "size": 769,
+      "blob": "blobs/7c554d862b5222cf2e7e2ff4f1961be646605edc12f22bf5b46e5c5efa76726c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-05.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-05.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-05.log",
+      "sha256": "77a211bbeb0ba1f189b13c8748f58213a4f79264d3c9616ac77de331f7604ec9",
+      "size": 57377,
+      "blob": "blobs/77a211bbeb0ba1f189b13c8748f58213a4f79264d3c9616ac77de331f7604ec9.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-05.process.json",
+      "sha256": "97bf9627a30b5dc8894273d4e8483095a9d65a49415f006ec0bb8ab43607beb9",
+      "size": 459,
+      "blob": "blobs/97bf9627a30b5dc8894273d4e8483095a9d65a49415f006ec0bb8ab43607beb9.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-05.receipt.json",
+      "sha256": "f8a116e63d3a8aced1feda99b419b8fefe1a7237af30653609d9a17bef9f87a5",
+      "size": 5647,
+      "blob": "blobs/f8a116e63d3a8aced1feda99b419b8fefe1a7237af30653609d9a17bef9f87a5.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-05.resources.json",
+      "sha256": "466bc2116adca8439e9446a2c2cbb89659a9f7fd7d1254220b73b6e017c75da5",
+      "size": 770,
+      "blob": "blobs/466bc2116adca8439e9446a2c2cbb89659a9f7fd7d1254220b73b6e017c75da5.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-06.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-06.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-06.log",
+      "sha256": "7876fea4d55ec2539295a23e845344f92c61db7782c416fe79feb6bada17a87d",
+      "size": 57395,
+      "blob": "blobs/7876fea4d55ec2539295a23e845344f92c61db7782c416fe79feb6bada17a87d.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-06.process.json",
+      "sha256": "14100b3fee387ad7dcd91f77de8016bae1e37112a88ff36775ad8b89f060fcbf",
+      "size": 478,
+      "blob": "blobs/14100b3fee387ad7dcd91f77de8016bae1e37112a88ff36775ad8b89f060fcbf.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-06.receipt.json",
+      "sha256": "05344d2c806f137f3b448f33fc7b707a0091c155f2fbdf899d3caf3a3a830903",
+      "size": 5665,
+      "blob": "blobs/05344d2c806f137f3b448f33fc7b707a0091c155f2fbdf899d3caf3a3a830903.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-06.resources.json",
+      "sha256": "22f78f81c0756d78e3a890c95126b51a554b9abcb159c706775a28d9713aa3fa",
+      "size": 768,
+      "blob": "blobs/22f78f81c0756d78e3a890c95126b51a554b9abcb159c706775a28d9713aa3fa.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-07.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-07.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-07.log",
+      "sha256": "1d7d2f1606ba6105206d3128e9a8cb83164c87355daec758cfe8e59fb2c0e6e1",
+      "size": 57368,
+      "blob": "blobs/1d7d2f1606ba6105206d3128e9a8cb83164c87355daec758cfe8e59fb2c0e6e1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-07.process.json",
+      "sha256": "48d368fad07cf0bdaec422b1b37302feed3bf8b182bdf26ed0b09f20810933c5",
+      "size": 451,
+      "blob": "blobs/48d368fad07cf0bdaec422b1b37302feed3bf8b182bdf26ed0b09f20810933c5.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-07.receipt.json",
+      "sha256": "4fbe91435bb814e26ce24c4a74ab23b9a938d53fe3617cec7e81e7f6a7ffcdb3",
+      "size": 5639,
+      "blob": "blobs/4fbe91435bb814e26ce24c4a74ab23b9a938d53fe3617cec7e81e7f6a7ffcdb3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-07.resources.json",
+      "sha256": "1575b9abc5210c905a1bd8bc3f5fc9f1e25141454f8b575967d57c0cf29410ba",
+      "size": 772,
+      "blob": "blobs/1575b9abc5210c905a1bd8bc3f5fc9f1e25141454f8b575967d57c0cf29410ba.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-08.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-08.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-08.log",
+      "sha256": "1122603470603afdc1712d0a41416d096cc4f996c2790293c9dfeea4024afa8f",
+      "size": 57382,
+      "blob": "blobs/1122603470603afdc1712d0a41416d096cc4f996c2790293c9dfeea4024afa8f.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-08.process.json",
+      "sha256": "1a5e799b35496b9029dd7db3f9cf18ac821761925a990ef11d681f1f19d26acb",
+      "size": 465,
+      "blob": "blobs/1a5e799b35496b9029dd7db3f9cf18ac821761925a990ef11d681f1f19d26acb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-08.receipt.json",
+      "sha256": "04e442e9d41584d3adc46fc791a9cb59eb64c01d3a617a77487ac937b3dbfa0d",
+      "size": 5652,
+      "blob": "blobs/04e442e9d41584d3adc46fc791a9cb59eb64c01d3a617a77487ac937b3dbfa0d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-08.resources.json",
+      "sha256": "97bb70128a7586a7c07c747315cd4ab2377402b7d70c44cbcd0ddb10f4fd3f65",
+      "size": 770,
+      "blob": "blobs/97bb70128a7586a7c07c747315cd4ab2377402b7d70c44cbcd0ddb10f4fd3f65.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-09.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-09.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-09.log",
+      "sha256": "ba849f2c5b2bb5652ec76315c72c857932995e0d2768923e9559b50dbebc3fd1",
+      "size": 57382,
+      "blob": "blobs/ba849f2c5b2bb5652ec76315c72c857932995e0d2768923e9559b50dbebc3fd1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-09.process.json",
+      "sha256": "cfdf6e475ff109817aaa78037cb5c8741fcad6c93143ab7b1f0ab01b968c0b59",
+      "size": 465,
+      "blob": "blobs/cfdf6e475ff109817aaa78037cb5c8741fcad6c93143ab7b1f0ab01b968c0b59.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-09.receipt.json",
+      "sha256": "12609b501a63f5b8f77294867b4f5b64a4a43f4e4abd60de82ceb7c423a02ae8",
+      "size": 5653,
+      "blob": "blobs/12609b501a63f5b8f77294867b4f5b64a4a43f4e4abd60de82ceb7c423a02ae8.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-09.resources.json",
+      "sha256": "fa99f4bcaa5e362aa2facd37b3532bc7bf8f8a7dd81edf0b4af246f4ab9f7005",
+      "size": 772,
+      "blob": "blobs/fa99f4bcaa5e362aa2facd37b3532bc7bf8f8a7dd81edf0b4af246f4ab9f7005.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-10.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-10.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-10.log",
+      "sha256": "cb3a1ed825b294d6c40041c275627c4b88188efaad9d0118217424fb142b779f",
+      "size": 57360,
+      "blob": "blobs/cb3a1ed825b294d6c40041c275627c4b88188efaad9d0118217424fb142b779f.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-10.process.json",
+      "sha256": "33f4952ed545067a667a981ca29ecec896aaead5102dc8fe651dfd2d21d227a7",
+      "size": 443,
+      "blob": "blobs/33f4952ed545067a667a981ca29ecec896aaead5102dc8fe651dfd2d21d227a7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-10.receipt.json",
+      "sha256": "6162afed61429f0ddf753455cb067ec142e81555b5966a5cd5ab62c2c74ee79f",
+      "size": 5630,
+      "blob": "blobs/6162afed61429f0ddf753455cb067ec142e81555b5966a5cd5ab62c2c74ee79f.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-10.resources.json",
+      "sha256": "45826d96e80d348840ca00d4176ed559b055560348d3bf03e928967bf32b10d3",
+      "size": 770,
+      "blob": "blobs/45826d96e80d348840ca00d4176ed559b055560348d3bf03e928967bf32b10d3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-11.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-11.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-11.log",
+      "sha256": "a10461ddbf2dc140bb6b3c4942ccf6f51f97d23a3b24c4da1572e964bbc605af",
+      "size": 57683,
+      "blob": "blobs/a10461ddbf2dc140bb6b3c4942ccf6f51f97d23a3b24c4da1572e964bbc605af.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-11.process.json",
+      "sha256": "b9385ced3f3e0dd94015924cf1bd4e1e4f5332b4ba2d27486546a2937f766a70",
+      "size": 369,
+      "blob": "blobs/b9385ced3f3e0dd94015924cf1bd4e1e4f5332b4ba2d27486546a2937f766a70.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-11.receipt.json",
+      "sha256": "2499753f0bac0429127ec81b0c7d44da7648cb599a05fb2e338315d1570dddab",
+      "size": 5557,
+      "blob": "blobs/2499753f0bac0429127ec81b0c7d44da7648cb599a05fb2e338315d1570dddab.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-11.resources.json",
+      "sha256": "85ee8c7a492448f49ea50440c04f6a64b10d216814904a3609c07f5a6c687495",
+      "size": 770,
+      "blob": "blobs/85ee8c7a492448f49ea50440c04f6a64b10d216814904a3609c07f5a6c687495.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-12.before.json",
+      "sha256": "43ab6f4db59e19d2827b97d1b29245b066e987fa19178d390e8e8156672138ad",
+      "size": 1535946,
+      "blob": "blobs/4f1f146b1146600ea041dd552e0a8f52b64f84aeeff50354b4fae186ad693b99.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-12.inputs.json",
+      "sha256": "d0396a4933ed2e9d4af516bfbd5295833c9f8f4b45c8c9239bc8201f352b6d33",
+      "size": 3105968,
+      "blob": "blobs/4d97441496eaf1faf94e3943d128b7f0062bc74297e73ee14fc0fb2c99b7d286.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-12.log",
+      "sha256": "a1de797719218ef9bda701ecb7e0eb0367b921c404d5b7a40cc980e807c7b4c9",
+      "size": 57517,
+      "blob": "blobs/a1de797719218ef9bda701ecb7e0eb0367b921c404d5b7a40cc980e807c7b4c9.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-12.process.json",
+      "sha256": "edbf256b8054a3472bb30d1cc98a58889ee7f14b3d9c4ec0b1fd2d774994d292",
+      "size": 465,
+      "blob": "blobs/edbf256b8054a3472bb30d1cc98a58889ee7f14b3d9c4ec0b1fd2d774994d292.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-12.receipt.json",
+      "sha256": "a768845e2e8b2d94aa125bc3e20393fccf84eb63e8165c053f5f2c78202c3442",
+      "size": 5658,
+      "blob": "blobs/a768845e2e8b2d94aa125bc3e20393fccf84eb63e8165c053f5f2c78202c3442.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/phase-12.resources.json",
+      "sha256": "b65d9eb03bf530abbf943e489d1c7acd877c60172cd5d2bd68385f4652309be9",
+      "size": 23615,
+      "blob": "blobs/b65d9eb03bf530abbf943e489d1c7acd877c60172cd5d2bd68385f4652309be9.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/retained-after.json",
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "size": 3859,
+      "blob": "blobs/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/retained-before.json",
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "size": 3859,
+      "blob": "blobs/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/runner-process.json",
+      "sha256": "302cd1737fecc02b4fb25b3472ad0721669a977d2e67116abfcdc58c25e85b83",
+      "size": 944,
+      "blob": "blobs/302cd1737fecc02b4fb25b3472ad0721669a977d2e67116abfcdc58c25e85b83.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/tools-after.json",
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "size": 3110,
+      "blob": "blobs/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/tools-before.json",
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "size": 3110,
+      "blob": "blobs/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/freeze.json",
+      "sha256": "3504f080ebbb59a0cb5936671c330507e55211b74505138c917f60398c6fbc49",
+      "size": 847,
+      "blob": "blobs/3504f080ebbb59a0cb5936671c330507e55211b74505138c917f60398c6fbc49.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/manifest.json",
+      "sha256": "61a0086a4fba6c930fcf9bf742f10d300918b034e10c11f575bdbc85ce894af6",
+      "size": 3834997,
+      "blob": "blobs/61a0086a4fba6c930fcf9bf742f10d300918b034e10c11f575bdbc85ce894af6.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/proposal.json",
+      "sha256": "fbfb861f4ee55e9321eff03526b3be46a6c1214dcd6f557e5bf0999da60bdedc",
+      "size": 7461,
+      "blob": "blobs/fbfb861f4ee55e9321eff03526b3be46a6c1214dcd6f557e5bf0999da60bdedc.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/run.py",
+      "sha256": "b99bac32860f6b3e5ec2915bc0cc4bdbe639c30b4aa01aafc56c0bc30dc0eeae",
+      "size": 17465,
+      "blob": "blobs/b99bac32860f6b3e5ec2915bc0cc4bdbe639c30b4aa01aafc56c0bc30dc0eeae.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/source.patch",
+      "sha256": "bfa841d445e30eaef146382557074b7d828128fe3d7cb972de8cd5aa37523c7f",
+      "size": 87278,
+      "blob": "blobs/bfa841d445e30eaef146382557074b7d828128fe3d7cb972de8cd5aa37523c7f.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/docs/tasks/plans/checked-owner-core-execution.md",
+      "sha256": "13f9f9efd4aa60237cbb8301c3590055d4c2fad06b189fc87b836f64e3227210",
+      "size": 30503,
+      "blob": "blobs/13f9f9efd4aa60237cbb8301c3590055d4c2fad06b189fc87b836f64e3227210.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/build/checked_leaf.rs",
+      "sha256": "6f88fcf57f032b6fe3fc8657e2f3feabf791198a594541e78f2658af20de4471",
+      "size": 12610,
+      "blob": "blobs/6f88fcf57f032b6fe3fc8657e2f3feabf791198a594541e78f2658af20de4471.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/build/checked_root_build.rs",
+      "sha256": "c28a6cfb49ac388ccaf75f418764741b39371907ebe9754c5a8e7073386142f6",
+      "size": 25373,
+      "blob": "blobs/c28a6cfb49ac388ccaf75f418764741b39371907ebe9754c5a8e7073386142f6.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/build/checked_root_project.rs",
+      "sha256": "de5a22d879bf9970e9b9cc6c6efe6b3c0d3f14d148d2329372290b031ded53f3",
+      "size": 25402,
+      "blob": "blobs/de5a22d879bf9970e9b9cc6c6efe6b3c0d3f14d148d2329372290b031ded53f3.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/checked_owner_root.rs",
+      "sha256": "c83c8bd66e768cccf01a37fdcb493ac3d344fe093fc7486bb58a4a16feb85ac0",
+      "size": 2496,
+      "blob": "blobs/c83c8bd66e768cccf01a37fdcb493ac3d344fe093fc7486bb58a4a16feb85ac0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/eval/source_owner_phases.rs",
+      "sha256": "1eea815d57a1a330e92685a39a4cf2aef4719d9ab951764851557520982c6828",
+      "size": 135100,
+      "blob": "blobs/1eea815d57a1a330e92685a39a4cf2aef4719d9ab951764851557520982c6828.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/eval/source_window_phases.rs",
+      "sha256": "958499fbc6eaf98844b50a80302ea5bcc0a56a62e06065e3d52d93ac1c9d20ab",
+      "size": 71423,
+      "blob": "blobs/958499fbc6eaf98844b50a80302ea5bcc0a56a62e06065e3d52d93ac1c9d20ab.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/foreign/checked_control.rs",
+      "sha256": "ae38302dd874b58c67d28fbea80fa6eb7338ab46f02aff7ed52bb820571dffd8",
+      "size": 56126,
+      "blob": "blobs/ae38302dd874b58c67d28fbea80fa6eb7338ab46f02aff7ed52bb820571dffd8.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/foreign/checked_leaf_transport.rs",
+      "sha256": "2abbcbe3498b17e61d6d8c6f50e5e8290a0760b0f1d5464a9a2551bc4860b9ab",
+      "size": 8389,
+      "blob": "blobs/2abbcbe3498b17e61d6d8c6f50e5e8290a0760b0f1d5464a9a2551bc4860b9ab.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/foreign/source_bindings.rs",
+      "sha256": "f49ea19212d84893f20a32e5c3a0e4caf8ce6e2da797e390198e38c7ac2824c0",
+      "size": 82242,
+      "blob": "blobs/f49ea19212d84893f20a32e5c3a0e4caf8ce6e2da797e390198e38c7ac2824c0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/foreign/source_owner_boundary_tests.rs",
+      "sha256": "374d5d6576dd7d8b7faeba06e8b099381e874378ad8953f83dec650f4f20af9d",
+      "size": 56303,
+      "blob": "blobs/374d5d6576dd7d8b7faeba06e8b099381e874378ad8953f83dec650f4f20af9d.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/foreign/source_owner_runtime.rs",
+      "sha256": "88ae2b396cddf4b973b007a5d219c630a7f0422c6e010b8df170c09ad2943520",
+      "size": 71172,
+      "blob": "blobs/88ae2b396cddf4b973b007a5d219c630a7f0422c6e010b8df170c09ad2943520.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/foreign/source_view_runtime.rs",
+      "sha256": "7e00a87e3a8c0ff335fabb529d23f633e9046aebe2d025cdb2334479b9c0c725",
+      "size": 3204,
+      "blob": "blobs/7e00a87e3a8c0ff335fabb529d23f633e9046aebe2d025cdb2334479b9c0c725.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source/src/foreign.rs",
+      "sha256": "8d4b960130d680292b4a27f83bf34f76b83b3266562894df5955f50326cb6834",
+      "size": 93292,
+      "blob": "blobs/8d4b960130d680292b4a27f83bf34f76b83b3266562894df5955f50326cb6834.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03-freeze/tested-source-index.json",
+      "sha256": "da827b432522fc81a7ec8d8ec99a7dcca0ff85c6a32a2e55d58ea88cad74d6fb",
+      "size": 2497,
+      "blob": "blobs/da827b432522fc81a7ec8d8ec99a7dcca0ff85c6a32a2e55d58ea88cad74d6fb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined01/cache-cause/old-leaf-dep-info",
+      "sha256": "ead5695bd1ea393af87052e69eee134a16c7dada3ffc741ebe8fcf249caef0a3",
+      "size": 89,
+      "blob": "blobs/ead5695bd1ea393af87052e69eee134a16c7dada3ffc741ebe8fcf249caef0a3.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined03/current-leaf-correspondence/selected-dep-info",
+      "sha256": "3acdb3bb6e0f5633b53fc2bcb05d17ca9120a9d7e4c01b60870f953abf761497",
+      "size": 152,
+      "blob": "blobs/3acdb3bb6e0f5633b53fc2bcb05d17ca9120a9d7e4c01b60870f953abf761497.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined02-freeze/freeze.json",
+      "sha256": "06b7d9d0deae06c5de87914ab60ec24e8212c0166da5d13afe56f7fb245d4a5c",
+      "size": 847,
+      "blob": "blobs/06b7d9d0deae06c5de87914ab60ec24e8212c0166da5d13afe56f7fb245d4a5c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-leaf-evaluator-combined02-freeze/UNRUN-superseded.txt",
+      "sha256": "6f811753b8199b481975f9d2c194477b378a66edbc00ddea1085fa38978abe35",
+      "size": 145,
+      "blob": "blobs/6f811753b8199b481975f9d2c194477b378a66edbc00ddea1085fa38978abe35.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/author-terminal-summary.json",
+      "sha256": "03eece781cdd40a8f54775f70d39753d29f944977a64f385a107f9b6df950247",
+      "size": 3026,
+      "blob": "blobs/03eece781cdd40a8f54775f70d39753d29f944977a64f385a107f9b6df950247.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/cleanup.json",
+      "sha256": "b467233d8e77d7c899082561cf2800b3298c93c079fd13eeb7008183f9087e57",
+      "size": 195,
+      "blob": "blobs/b467233d8e77d7c899082561cf2800b3298c93c079fd13eeb7008183f9087e57.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/freeze.json",
+      "sha256": "fc596f3b37fd9068a788ff5ca617bceff48e1aa30516838ac208c5127d5d330b",
+      "size": 1554333,
+      "blob": "blobs/da02e6320134609824d9191a25ab23227625aac0da080fd8eea071151c140757.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/inputs.json",
+      "sha256": "cf2436172041a866fcaac6ede97a83c139f50275f37a1ad9c1fc8f5f9e64acb0",
+      "size": 3102972,
+      "blob": "blobs/ab2eb5c21bef6fbad7c990c0fb61ca32632ce33a62327e15b2f20bca60c4986a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/process.json",
+      "sha256": "2bf99a8c416a8dca52380cb12f6dbb2f3310dd61359266b268c28dc00c331244",
+      "size": 230,
+      "blob": "blobs/2bf99a8c416a8dca52380cb12f6dbb2f3310dd61359266b268c28dc00c331244.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/raw.log",
+      "sha256": "7f5071a111c3203845bf57ffdb699a2ce90d847b7e602e013c29466af66dc569",
+      "size": 50811,
+      "blob": "blobs/7f5071a111c3203845bf57ffdb699a2ce90d847b7e602e013c29466af66dc569.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/receipt.json",
+      "sha256": "bf51ba2e5e0d95474cdb91d1dce81b623196781d0ac19ced704b8a5089fd4d73",
+      "size": 1055,
+      "blob": "blobs/bf51ba2e5e0d95474cdb91d1dce81b623196781d0ac19ced704b8a5089fd4d73.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/resources.json",
+      "sha256": "b15e495edadac094557e65262431135107f7d8b564305263d87d0eca9512f3ac",
+      "size": 6234,
+      "blob": "blobs/b15e495edadac094557e65262431135107f7d8b564305263d87d0eca9512f3ac.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/leaf/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/cleanup.json",
+      "sha256": "fc7aad171aa032477e08277e71e36d07a1ad82c23b019d6ed899f226c04b9081",
+      "size": 193,
+      "blob": "blobs/fc7aad171aa032477e08277e71e36d07a1ad82c23b019d6ed899f226c04b9081.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/freeze.json",
+      "sha256": "09520fc4fb22b008a7a1a85553f05a4c999a8227ca38c3c5e06b419a7899b828",
+      "size": 1554265,
+      "blob": "blobs/7576f6eb0a78237becc27de767b4b85d32437d3da72632b3229f4f748456a12a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/inputs.json",
+      "sha256": "cf2436172041a866fcaac6ede97a83c139f50275f37a1ad9c1fc8f5f9e64acb0",
+      "size": 3102972,
+      "blob": "blobs/ab2eb5c21bef6fbad7c990c0fb61ca32632ce33a62327e15b2f20bca60c4986a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/process.json",
+      "sha256": "34efff26e089e2cc4f189f00c81772c7bad32e573ecb9f95081c104de17eb2b7",
+      "size": 156,
+      "blob": "blobs/34efff26e089e2cc4f189f00c81772c7bad32e573ecb9f95081c104de17eb2b7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/raw.log",
+      "sha256": "836e2a781aaa4fe6e4ea11a0a77cf1e3e42f435d133cb82bf24a33793a07e8ae",
+      "size": 43828,
+      "blob": "blobs/836e2a781aaa4fe6e4ea11a0a77cf1e3e42f435d133cb82bf24a33793a07e8ae.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/receipt.json",
+      "sha256": "79415090b3c511f02985e267cdd80e425b0db74ca2f2f07241b2b0c9504a7ba7",
+      "size": 1061,
+      "blob": "blobs/79415090b3c511f02985e267cdd80e425b0db74ca2f2f07241b2b0c9504a7ba7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/resources.json",
+      "sha256": "2ac34753f6a369a3cf1809e92fb543d45e827ab6053334101430a4f497d2824f",
+      "size": 1314,
+      "blob": "blobs/2ac34753f6a369a3cf1809e92fb543d45e827ab6053334101430a4f497d2824f.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/ordinary/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/pins.json",
+      "sha256": "d9ae4305b0da68d7b295a8006ff7ac9be9fdf9e4c6422f8e98e9831b3ab4738e",
+      "size": 1562349,
+      "blob": "blobs/76f926b3dc4557d00b50440787567daa6875160021d7def30104323253e2eab5.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/proposal.json",
+      "sha256": "cbe46645ffe5453435bf265141e5f28fd4f0a6a95dbacc7b1b0212645c3101a3",
+      "size": 3030,
+      "blob": "blobs/cbe46645ffe5453435bf265141e5f28fd4f0a6a95dbacc7b1b0212645c3101a3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/run-batch.py",
+      "sha256": "0f497a86004f5925e8480c435f65f1db877377b006520dd2e2236df2ad0e5066",
+      "size": 444,
+      "blob": "blobs/0f497a86004f5925e8480c435f65f1db877377b006520dd2e2236df2ad0e5066.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/run.py",
+      "sha256": "5325b5a7a822de1ac47c572f99b1b20883798da99ea910d6933afc5410271daa",
+      "size": 10238,
+      "blob": "blobs/5325b5a7a822de1ac47c572f99b1b20883798da99ea910d6933afc5410271daa.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/source.patch",
+      "sha256": "5f1a1cbef6def7466c212432de3738538650588b06dbf599bebef455fb3bd251",
+      "size": 61451,
+      "blob": "blobs/5f1a1cbef6def7466c212432de3738538650588b06dbf599bebef455fb3bd251.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/tested-source/src/eval/source_owner_phases.rs",
+      "sha256": "1eea815d57a1a330e92685a39a4cf2aef4719d9ab951764851557520982c6828",
+      "size": 135100,
+      "blob": "blobs/1eea815d57a1a330e92685a39a4cf2aef4719d9ab951764851557520982c6828.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/tested-source/src/eval/source_window_phases.rs",
+      "sha256": "958499fbc6eaf98844b50a80302ea5bcc0a56a62e06065e3d52d93ac1c9d20ab",
+      "size": 71423,
+      "blob": "blobs/958499fbc6eaf98844b50a80302ea5bcc0a56a62e06065e3d52d93ac1c9d20ab.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/tested-source/src/foreign/checked_leaf_transport.rs",
+      "sha256": "905dcf04d901bd20cfd26b0cea6a5bd6932e9db57079ba7e40cb3d394631f24b",
+      "size": 8395,
+      "blob": "blobs/905dcf04d901bd20cfd26b0cea6a5bd6932e9db57079ba7e40cb3d394631f24b.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/tested-source/src/foreign/source_bindings.rs",
+      "sha256": "f49ea19212d84893f20a32e5c3a0e4caf8ce6e2da797e390198e38c7ac2824c0",
+      "size": 82242,
+      "blob": "blobs/f49ea19212d84893f20a32e5c3a0e4caf8ce6e2da797e390198e38c7ac2824c0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/tested-source/src/foreign/source_owner_boundary_tests.rs",
+      "sha256": "c66e137f9ab3da762a7ff8961ddcb280d9cdd8ae12e2b7a133ae4f0a3664c8e1",
+      "size": 55199,
+      "blob": "blobs/c66e137f9ab3da762a7ff8961ddcb280d9cdd8ae12e2b7a133ae4f0a3664c8e1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/tested-source/src/foreign/source_owner_runtime.rs",
+      "sha256": "757f9cfe9328fed5c384f09d54029c25eab878c5cd97001343d2eba00b0dc872",
+      "size": 71134,
+      "blob": "blobs/757f9cfe9328fed5c384f09d54029c25eab878c5cd97001343d2eba00b0dc872.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/tested-source/src/foreign/source_view_runtime.rs",
+      "sha256": "7e00a87e3a8c0ff335fabb529d23f633e9046aebe2d025cdb2334479b9c0c725",
+      "size": 3204,
+      "blob": "blobs/7e00a87e3a8c0ff335fabb529d23f633e9046aebe2d025cdb2334479b9c0c725.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-02/tested-source/src/foreign.rs",
+      "sha256": "8d4b960130d680292b4a27f83bf34f76b83b3266562894df5955f50326cb6834",
+      "size": 93292,
+      "blob": "blobs/8d4b960130d680292b4a27f83bf34f76b83b3266562894df5955f50326cb6834.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/author-terminal-summary.json",
+      "sha256": "240d95cb70d970f030a6a220796894c7fc8c9a8245e7fd007a9160fb70875977",
+      "size": 8965,
+      "blob": "blobs/240d95cb70d970f030a6a220796894c7fc8c9a8245e7fd007a9160fb70875977.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/cleanup.json",
+      "sha256": "61725b4a75899173eae5f7a26436964387fa8d67d63fef9dc240405a5d4d7960",
+      "size": 192,
+      "blob": "blobs/61725b4a75899173eae5f7a26436964387fa8d67d63fef9dc240405a5d4d7960.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/freeze.json",
+      "sha256": "8011f7369edae3f6f278b8a841413cd006e77f9365f7c0abcd157420e9435678",
+      "size": 1554452,
+      "blob": "blobs/48ddd8094cd92cb2aeed6e068803e1c064dba44ed4d18d852e927cb82680318e.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/inputs.json",
+      "sha256": "9e9d40887110baffe3ac33f51d7350dfb251264945b2af04845b3e1305f2a494",
+      "size": 3102972,
+      "blob": "blobs/734fa6202b0fd988e0b02c002db5c92aac50c2aba44e1841fad41b5fef98b8bb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/process.json",
+      "sha256": "04be4cc1e5aafb279d38f09d89d5967056d796418feec0bccf326e4e13f4b75c",
+      "size": 345,
+      "blob": "blobs/04be4cc1e5aafb279d38f09d89d5967056d796418feec0bccf326e4e13f4b75c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/raw.log",
+      "sha256": "5cc46da2c4be66488fd75cb1e41ac81bb38191e1937894535bf5e9af1812d0ff",
+      "size": 51046,
+      "blob": "blobs/5cc46da2c4be66488fd75cb1e41ac81bb38191e1937894535bf5e9af1812d0ff.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/receipt.json",
+      "sha256": "5822761f9af1d383d118f6aff4dfbb83f4cd7f48c0d4cfdd12674f8bfe2d6681",
+      "size": 1294,
+      "blob": "blobs/5822761f9af1d383d118f6aff4dfbb83f4cd7f48c0d4cfdd12674f8bfe2d6681.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/resources.json",
+      "sha256": "ac7210f56e640f84faec26e3c953df195888c26f2702e8b5372e89a96925e818",
+      "size": 331,
+      "blob": "blobs/ac7210f56e640f84faec26e3c953df195888c26f2702e8b5372e89a96925e818.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/boundary/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/cleanup.json",
+      "sha256": "b38b0adb3a4077a79331f3a60350d9e43bcf274702b894f5b7f025e7fdd87f1a",
+      "size": 193,
+      "blob": "blobs/b38b0adb3a4077a79331f3a60350d9e43bcf274702b894f5b7f025e7fdd87f1a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/freeze.json",
+      "sha256": "a895ac3da7452ba6d2c0fefd0f8c2222cd173fdc0eb453e1b270bd5502703fc5",
+      "size": 1554466,
+      "blob": "blobs/d85d2bc02e6a4aae771deb386759caa398752ea45aacbf1d3367ba7a5745e633.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/inputs.json",
+      "sha256": "9e9d40887110baffe3ac33f51d7350dfb251264945b2af04845b3e1305f2a494",
+      "size": 3102972,
+      "blob": "blobs/734fa6202b0fd988e0b02c002db5c92aac50c2aba44e1841fad41b5fef98b8bb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/process.json",
+      "sha256": "84adf5456cbf9fc791e0200da49e616000e970973a21789d4d2f3b49c8ff677c",
+      "size": 363,
+      "blob": "blobs/84adf5456cbf9fc791e0200da49e616000e970973a21789d4d2f3b49c8ff677c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/raw.log",
+      "sha256": "ea29a87cedbd6d4c402b43e6478f107f5617a4c089f6a412d52ca790fa30675d",
+      "size": 51064,
+      "blob": "blobs/ea29a87cedbd6d4c402b43e6478f107f5617a4c089f6a412d52ca790fa30675d.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/receipt.json",
+      "sha256": "efa45ee2ce77da14fbecdb62572e635879dcaec2ebf1834e9971e51ab9890342",
+      "size": 1288,
+      "blob": "blobs/efa45ee2ce77da14fbecdb62572e635879dcaec2ebf1834e9971e51ab9890342.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/resources.json",
+      "sha256": "482732e3295a7e3e90225a3f8397126d740a63361bab99eb0f55a6df8720165e",
+      "size": 331,
+      "blob": "blobs/482732e3295a7e3e90225a3f8397126d740a63361bab99eb0f55a6df8720165e.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/copy/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/cleanup.json",
+      "sha256": "b52b138557c298dec4542772e963d620248c38019247bc35d6d68ccd31b1c0c2",
+      "size": 192,
+      "blob": "blobs/b52b138557c298dec4542772e963d620248c38019247bc35d6d68ccd31b1c0c2.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/freeze.json",
+      "sha256": "40bd1344040ecffc525e46bca2510e1fdd687d9b780922201c9a275faef448aa",
+      "size": 1554464,
+      "blob": "blobs/589246b1052cdcd4e03b4f5f38ff275c344979cfbb06be8fa017e4e282820acc.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/inputs.json",
+      "sha256": "9e9d40887110baffe3ac33f51d7350dfb251264945b2af04845b3e1305f2a494",
+      "size": 3102972,
+      "blob": "blobs/734fa6202b0fd988e0b02c002db5c92aac50c2aba44e1841fad41b5fef98b8bb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/process.json",
+      "sha256": "c8894c43be9a1d1c593d5804bc0d688411194f3a1080397a88a8f20eb0466cbd",
+      "size": 359,
+      "blob": "blobs/c8894c43be9a1d1c593d5804bc0d688411194f3a1080397a88a8f20eb0466cbd.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/raw.log",
+      "sha256": "32279d3632b0c260546f4462ffe17810c79c1c101e6693bdcaa4184d3e504967",
+      "size": 51060,
+      "blob": "blobs/32279d3632b0c260546f4462ffe17810c79c1c101e6693bdcaa4184d3e504967.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/receipt.json",
+      "sha256": "e2756793a0a7a23837dfd73dc53c2035aa26e8052d0421b30004dc7d3fdb94dd",
+      "size": 1289,
+      "blob": "blobs/e2756793a0a7a23837dfd73dc53c2035aa26e8052d0421b30004dc7d3fdb94dd.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/resources.json",
+      "sha256": "1a8f9773e4b7207920991de9fa7f0ee2d759bd6da14c61b311fd67176aa5b02d",
+      "size": 331,
+      "blob": "blobs/1a8f9773e4b7207920991de9fa7f0ee2d759bd6da14c61b311fd67176aa5b02d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/legacy/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/cleanup.json",
+      "sha256": "cc405990cfa2d75bcde6547aec32f1e6992dc484b174348a51ac6543b4c54eb9",
+      "size": 193,
+      "blob": "blobs/cc405990cfa2d75bcde6547aec32f1e6992dc484b174348a51ac6543b4c54eb9.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/freeze.json",
+      "sha256": "551f4985ad703d825c25adb6ced87024a1a81c763a7fc4c31ba82a8953b1bbd8",
+      "size": 1554265,
+      "blob": "blobs/67d28d8a7699611ca0c20f5d2ff63bfd79cbb748c9e082477fb75f48b6a229d7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/inputs.json",
+      "sha256": "9e9d40887110baffe3ac33f51d7350dfb251264945b2af04845b3e1305f2a494",
+      "size": 3102972,
+      "blob": "blobs/734fa6202b0fd988e0b02c002db5c92aac50c2aba44e1841fad41b5fef98b8bb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/process.json",
+      "sha256": "4bc502ba138b7c47a7def650a4392ab515b9cd9ce2fefb58b1cec31da25becbb",
+      "size": 155,
+      "blob": "blobs/4bc502ba138b7c47a7def650a4392ab515b9cd9ce2fefb58b1cec31da25becbb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/raw.log",
+      "sha256": "66ccc2653072caf30aa06958e14c37e2edb643771f0f3c2f7a2a900efbbf05fd",
+      "size": 43828,
+      "blob": "blobs/66ccc2653072caf30aa06958e14c37e2edb643771f0f3c2f7a2a900efbbf05fd.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/receipt.json",
+      "sha256": "3bb80216de620ea5e9e507492b12a172ae380f0f809cf0a21ff1ce8e0e722249",
+      "size": 1060,
+      "blob": "blobs/3bb80216de620ea5e9e507492b12a172ae380f0f809cf0a21ff1ce8e0e722249.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/resources.json",
+      "sha256": "c651d9e859bd9d0a7732ee51ded0e52c0ce3b2616eb6c042c2dc1a5e0de75d0a",
+      "size": 1314,
+      "blob": "blobs/c651d9e859bd9d0a7732ee51ded0e52c0ce3b2616eb6c042c2dc1a5e0de75d0a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/ordinary/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/pins.json",
+      "sha256": "daf0ca9473de76ecf60889ce513b31f9d7fbbcba7c5408f7338db1dcea742a32",
+      "size": 1562751,
+      "blob": "blobs/e8b5170acd8cbb4caa889c91426c7401d3334ac132a0b38219f1b4a6faad0a9d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/proposal.json",
+      "sha256": "f25b4794f715587b9378a0bc3a8eb5476e9aa74db67a16fde802cb0aef0af5a1",
+      "size": 3308,
+      "blob": "blobs/f25b4794f715587b9378a0bc3a8eb5476e9aa74db67a16fde802cb0aef0af5a1.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/run-batch.py",
+      "sha256": "c53f7b86342b4349ff191fd58fb0bcdf00b01c21adc2a1916c89a7a9cfc84798",
+      "size": 456,
+      "blob": "blobs/c53f7b86342b4349ff191fd58fb0bcdf00b01c21adc2a1916c89a7a9cfc84798.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/run.py",
+      "sha256": "5325b5a7a822de1ac47c572f99b1b20883798da99ea910d6933afc5410271daa",
+      "size": 10238,
+      "blob": "blobs/5325b5a7a822de1ac47c572f99b1b20883798da99ea910d6933afc5410271daa.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/cleanup.json",
+      "sha256": "b2b8097c48fe657b4d8345a07d47ecb5255c41b7673fb78a74434adb9fc1168d",
+      "size": 192,
+      "blob": "blobs/b2b8097c48fe657b4d8345a07d47ecb5255c41b7673fb78a74434adb9fc1168d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/freeze.json",
+      "sha256": "975cd9fd750f3e8df93a8867ff9c6db53ad7fc4f71bb7ea9863648f496a2c0cf",
+      "size": 1554376,
+      "blob": "blobs/e9dbb72a6d63bc1ff3f7f24abe0231bd3606236074c6b800c4daadcf0223dfdf.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/inputs.json",
+      "sha256": "9e9d40887110baffe3ac33f51d7350dfb251264945b2af04845b3e1305f2a494",
+      "size": 3102972,
+      "blob": "blobs/734fa6202b0fd988e0b02c002db5c92aac50c2aba44e1841fad41b5fef98b8bb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/process.json",
+      "sha256": "f6697a6b059bb81c9e539482f87903bb2639c0dff1bcf67e84c085801d215bc3",
+      "size": 273,
+      "blob": "blobs/f6697a6b059bb81c9e539482f87903bb2639c0dff1bcf67e84c085801d215bc3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/raw.log",
+      "sha256": "46f033aba7820b79efc1be3ad205816ff96e0f4a096b47c53ff2f01197fe139b",
+      "size": 51193,
+      "blob": "blobs/46f033aba7820b79efc1be3ad205816ff96e0f4a096b47c53ff2f01197fe139b.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/receipt.json",
+      "sha256": "220811224364237a672bc2b21af27bc40ac7b0f6d1db48f00830e0e22b14e44f",
+      "size": 1285,
+      "blob": "blobs/220811224364237a672bc2b21af27bc40ac7b0f6d1db48f00830e0e22b14e44f.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/resources.json",
+      "sha256": "38b875a5522cf18092f96fd45efe2dc19fa8d8b5721a0e362a589cbb7f074297",
+      "size": 330,
+      "blob": "blobs/38b875a5522cf18092f96fd45efe2dc19fa8d8b5721a0e362a589cbb7f074297.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/slot/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/source.patch",
+      "sha256": "895d2e73fd302fdecd9c505fb90f19bf2766c36880ac62b2f3583cf2d6f95ed4",
+      "size": 61444,
+      "blob": "blobs/895d2e73fd302fdecd9c505fb90f19bf2766c36880ac62b2f3583cf2d6f95ed4.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/tested-source/src/eval/source_owner_phases.rs",
+      "sha256": "1eea815d57a1a330e92685a39a4cf2aef4719d9ab951764851557520982c6828",
+      "size": 135100,
+      "blob": "blobs/1eea815d57a1a330e92685a39a4cf2aef4719d9ab951764851557520982c6828.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/tested-source/src/eval/source_window_phases.rs",
+      "sha256": "958499fbc6eaf98844b50a80302ea5bcc0a56a62e06065e3d52d93ac1c9d20ab",
+      "size": 71423,
+      "blob": "blobs/958499fbc6eaf98844b50a80302ea5bcc0a56a62e06065e3d52d93ac1c9d20ab.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/tested-source/src/foreign/checked_leaf_transport.rs",
+      "sha256": "2abbcbe3498b17e61d6d8c6f50e5e8290a0760b0f1d5464a9a2551bc4860b9ab",
+      "size": 8389,
+      "blob": "blobs/2abbcbe3498b17e61d6d8c6f50e5e8290a0760b0f1d5464a9a2551bc4860b9ab.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/tested-source/src/foreign/source_bindings.rs",
+      "sha256": "f49ea19212d84893f20a32e5c3a0e4caf8ce6e2da797e390198e38c7ac2824c0",
+      "size": 82242,
+      "blob": "blobs/f49ea19212d84893f20a32e5c3a0e4caf8ce6e2da797e390198e38c7ac2824c0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/tested-source/src/foreign/source_owner_boundary_tests.rs",
+      "sha256": "c66e137f9ab3da762a7ff8961ddcb280d9cdd8ae12e2b7a133ae4f0a3664c8e1",
+      "size": 55199,
+      "blob": "blobs/c66e137f9ab3da762a7ff8961ddcb280d9cdd8ae12e2b7a133ae4f0a3664c8e1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/tested-source/src/foreign/source_owner_runtime.rs",
+      "sha256": "757f9cfe9328fed5c384f09d54029c25eab878c5cd97001343d2eba00b0dc872",
+      "size": 71134,
+      "blob": "blobs/757f9cfe9328fed5c384f09d54029c25eab878c5cd97001343d2eba00b0dc872.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/tested-source/src/foreign/source_view_runtime.rs",
+      "sha256": "7e00a87e3a8c0ff335fabb529d23f633e9046aebe2d025cdb2334479b9c0c725",
+      "size": 3204,
+      "blob": "blobs/7e00a87e3a8c0ff335fabb529d23f633e9046aebe2d025cdb2334479b9c0c725.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/tested-source/src/foreign.rs",
+      "sha256": "8d4b960130d680292b4a27f83bf34f76b83b3266562894df5955f50326cb6834",
+      "size": 93292,
+      "blob": "blobs/8d4b960130d680292b4a27f83bf34f76b83b3266562894df5955f50326cb6834.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/cleanup.json",
+      "sha256": "92ba5ffdd881af9f513c9939edb1aad102c8da71032e061aa736b29a177e12b1",
+      "size": 193,
+      "blob": "blobs/92ba5ffdd881af9f513c9939edb1aad102c8da71032e061aa736b29a177e12b1.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/freeze.json",
+      "sha256": "05019f68bae2bccb730d2d76b26f1f1053df05cd9444ba60312911bf59bbdbfd",
+      "size": 1554366,
+      "blob": "blobs/68598c608c8c6ee9c98d8fb8c34b87c2161649ed66474d9696f1595d6850a7fc.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/inputs.json",
+      "sha256": "9e9d40887110baffe3ac33f51d7350dfb251264945b2af04845b3e1305f2a494",
+      "size": 3102972,
+      "blob": "blobs/734fa6202b0fd988e0b02c002db5c92aac50c2aba44e1841fad41b5fef98b8bb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/process.json",
+      "sha256": "c1b453eba94399c37ff74be582203519b0a45ab7c7ce5497658c541d7fc4224e",
+      "size": 258,
+      "blob": "blobs/c1b453eba94399c37ff74be582203519b0a45ab7c7ce5497658c541d7fc4224e.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/raw.log",
+      "sha256": "872ea167937305149722756f5e5762a1a09380df2660078c2d94b19c0af368a2",
+      "size": 51357,
+      "blob": "blobs/872ea167937305149722756f5e5762a1a09380df2660078c2d94b19c0af368a2.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/receipt.json",
+      "sha256": "e9154635d3422be95e1490494d3ca5dc3fe1c5e914028a7e22fa1831b806de0a",
+      "size": 1297,
+      "blob": "blobs/e9154635d3422be95e1490494d3ca5dc3fe1c5e914028a7e22fa1831b806de0a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/resources.json",
+      "sha256": "bd246295df1fac635760bf5c9b222eb728494d6f5a0f7ade9e614c13567d6e72",
+      "size": 11158,
+      "blob": "blobs/bd246295df1fac635760bf5c9b222eb728494d6f5a0f7ade9e614c13567d6e72.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/checked-leaf-evaluator-03/transport/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1543-1792787697089739447/root/producer-receipt.bin",
+      "sha256": "ae975782b62f5c40f4ff403202999b46b145453cc71b58351e18b07924dfb13a",
+      "size": 750,
+      "blob": "blobs/ae975782b62f5c40f4ff403202999b46b145453cc71b58351e18b07924dfb13a.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1543-1792787697089739447/root/applicability-request.json",
+      "sha256": "bbacf335e026dc60a7b3b2d003a96ed7965a330e01acbafc82a6bd4d69ba6878",
+      "size": 668273,
+      "blob": "blobs/bbacf335e026dc60a7b3b2d003a96ed7965a330e01acbafc82a6bd4d69ba6878.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1543-1792787697089739447/root/native-build.log",
+      "sha256": "dc5d610bfae95f793bbf4b24f54a9f12b16441c03f1f55ca77fbbcab212ba149",
+      "size": 27664,
+      "blob": "blobs/dc5d610bfae95f793bbf4b24f54a9f12b16441c03f1f55ca77fbbcab212ba149.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1543-1792787697089739447/missing-release/root/native-build.log",
+      "sha256": "b62f8b6e5cc1e63f69a621521bb023cc80c16ae0782bb96dba7091ad6f4eac9e",
+      "size": 30657,
+      "blob": "blobs/b62f8b6e5cc1e63f69a621521bb023cc80c16ae0782bb96dba7091ad6f4eac9e.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1543-1792787697089739447/missing-release/root/checked-link/cargo-0/cargo.stderr",
+      "sha256": "1ef576e5a7aecf1643567b9c768511e24d58a2a92fb990a6726d2be882f23780",
+      "size": 30553,
+      "blob": "blobs/1ef576e5a7aecf1643567b9c768511e24d58a2a92fb990a6726d2be882f23780.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/tmp/ash-checked-leaf-evaluator66882-independent-audit.json",
+      "sha256": "c869b6fbcc1d2ad63851c827c70fb70fc90cf0cee8c327d778d06f3c413b3cbe",
+      "size": 38461,
+      "blob": "blobs/c869b6fbcc1d2ad63851c827c70fb70fc90cf0cee8c327d778d06f3c413b3cbe.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/tmp/ash-leaf-evaluator92014-independent-audit.json",
+      "sha256": "6a850c74ef6c001d24933dc313df3bd705a142a61920be23c7396109360deb41",
+      "size": 7532,
+      "blob": "blobs/6a850c74ef6c001d24933dc313df3bd705a142a61920be23c7396109360deb41.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/tmp/ash-leaf-evaluator-combined03-independent-review.json",
+      "sha256": "e4ddf56750bffbd7c253810d8191918a5c53a41d72da9ec8afbb4359dde97367",
+      "size": 1586,
+      "blob": "blobs/e4ddf56750bffbd7c253810d8191918a5c53a41d72da9ec8afbb4359dde97367.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/tmp/ash-leaf-source-path-repair-independent-review.json",
+      "sha256": "45f385c8380a0e6c7afa19463635f9596cf5c07d17f79cc99c71d32019a72a1c",
+      "size": 1711,
+      "blob": "blobs/45f385c8380a0e6c7afa19463635f9596cf5c07d17f79cc99c71d32019a72a1c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/tmp/ash-leaf-evaluator31339-independent-audit.json",
+      "sha256": "05433551ef780d0f19dd05d9d5acf01af19d260e3657b3769c422a1259084d57",
+      "size": 12872,
+      "blob": "blobs/05433551ef780d0f19dd05d9d5acf01af19d260e3657b3769c422a1259084d57.gz",
+      "encoding": "json-map-template"
+    }
+  ]
+}

@@ -1185,3 +1185,176 @@ pub(crate) fn with_eight_byte_boundary_for_test(
         boundary,
     });
 }
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+fn leaf_authority_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> NativeOwnerGuardReady {
+    let mut ready = NativeOwnerGuardReady::in_storage_plan(
+        Arc::clone(&acquire._scope.header().owner),
+        crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf,
+        0, 0, Rc::new(NativeOwnerStorage::default()),
+    ).unwrap();
+    ready.prepare_authority(111,
+        crate::types::IterativeTypeOwner::new(crate::types::clone_type_with_budget(&acquire.state, work).unwrap()),
+        crate::types::IterativeTypeOwner::new(crate::types::clone_type_with_budget(&acquire.access, work).unwrap()),
+        Vec::new(), Vec::new(), work).unwrap();
+    ready.prepare_initialized_bytes(Some(8));
+    ready
+}
+#[cfg(not(ash_checked_owner_root = "v1"))]
+fn leaf_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> NativeOwnerGuardReady {
+    let mut ready = leaf_authority_ready(acquire, work);
+    ready.prepare_checked_boundary(acquire, 111, Some(crate::foreign::source_runtime::CheckedOwnerLimits {
+        observations: 5, history: 6, ..limits()
+    }), work).unwrap();
+    ready
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn checked_leaf_full_slot_query_copy_and_native_finish_record_before_output_failure() {
+    use crate::foreign::checked_leaf_transport as leaf;
+    leaf::reset();
+    let (_, acquire, finish, queries, copy) = eight_byte_fixture();
+    assert!(checked_leaf_shape(&SourceOwnerCallback::CheckedAcquire, &acquire._scope.header().acquire));
+    assert!(checked_leaf_shape(&SourceOwnerCallback::CheckedFree, &finish._scope.header().teardown));
+    assert!(checked_leaf_shape(&SourceOwnerCallback::CheckedQuery, &queries[0].1));
+    assert!(checked_leaf_shape(&SourceOwnerCallback::CheckedLength, &queries[1].1));
+    let mut work = TypeWorkBudget::default();
+    let ready = leaf_ready(&acquire, &mut work);
+    let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+    let guard = ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard().unwrap();
+    assert!(guard.physically_live());
+    assert!(guard.completion_address().is_none());
+    assert_eq!(handle.snapshot().native, crate::foreign::checked_control::Native::Owned);
+    assert!(!handle.snapshot().unresolved);
+    handle.publish(111, acquire._scope_node, &mut work).unwrap();
+    let mut queries = queries.into_iter();
+    let (receipt, symbol) = queries.next().unwrap();
+    let binding = SourceOwnerBinding { symbol, target: "x86_64-unknown-linux-gnu", callback: SourceOwnerCallback::CheckedQuery };
+    let hidden_error = ConstructorId::new(binding.symbol.call_codec().ids().conversion_error, 0);
+    let invocation = AdmittedSourceWindowInvocation { checked: None, binding: &binding, hidden_error, receipt }
+        .prepare_checked_boundary(&guard, 111, &mut work).unwrap();
+    let (_, SourceWindowRaw::View(view)) = invocation.invoke(&[NativeOwnerOperand::Scalar(NativeScalarValue::USize(0))]).unwrap() else { panic!("opaque view"); };
+    let (receipt, symbol) = queries.next().unwrap();
+    let binding = SourceOwnerBinding { symbol, target: "x86_64-unknown-linux-gnu", callback: SourceOwnerCallback::CheckedLength };
+    let hidden_error = ConstructorId::new(binding.symbol.call_codec().ids().conversion_error, 0);
+    let invocation = AdmittedSourceWindowInvocation { checked: None, binding: &binding, hidden_error, receipt }
+        .prepare_checked_boundary(&guard, 111, &mut work).unwrap();
+    let (_, SourceWindowRaw::Scalar(NativeScalarReply::Scalar(NativeScalarValue::USize(8)))) = invocation.invoke(&[NativeOwnerOperand::Scalar(NativeScalarValue::USize(0))]).unwrap() else { panic!("native scalar length"); };
+    let mut measured = TypeWorkBudget::default();
+    drop(guard.prepare_checked_copy(&copy, 111, &mut measured).unwrap());
+    let needed = measured.used();
+    for prefix in [0, 7] {
+        let before = handle.snapshot();
+        let mut short = TypeWorkBudget::with_limit(prefix + needed - 1);
+        short.charge(prefix).unwrap();
+        assert!(guard.prepare_checked_copy(&copy, 111, &mut short).is_err());
+        assert_eq!(handle.snapshot(), before);
+        assert_eq!(leaf::calls()[3], 0);
+    }
+    let record = guard.prepare_checked_copy(&copy, 111, &mut work).unwrap();
+    let mut bytes = [0; 8];
+    record.copy_checked_leaf(&view, &mut bytes).unwrap();
+    assert_eq!(bytes, [5, 255, 0, 65, 66, 67, 0, 9]);
+    handle.closing(111, acquire._scope_node, &mut work).unwrap();
+    guard.prepare_checked_finish(&finish, 111, false, &mut work).unwrap();
+    assert!(matches!(guard.finish_checked_admitted(&crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], false).unwrap().0,
+        crate::foreign::source_runtime::NativeOwnerDisposition::Consumed(_)));
+    assert_eq!(handle.snapshot().native, crate::foreign::checked_control::Native::Consumed);
+    handle.output_failed();
+    assert_eq!(handle.snapshot().native, crate::foreign::checked_control::Native::Consumed);
+    assert_eq!(leaf::calls(), [1, 1, 1, 1, 1]);
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn checked_leaf_preentry_null_output_loss_and_synthetic_finish_do_not_invent_release() {
+    use crate::foreign::checked_leaf_transport as leaf;
+    let (_, acquire, finish, _, _) = eight_byte_fixture();
+    leaf::reset();
+    let mut work = TypeWorkBudget::default();
+    leaf_ready(&acquire, &mut work).assert_leaf_borrow_refusal_for_test();
+    assert_eq!(leaf::calls(), [0; 5]);
+    let policy = crate::foreign::source_runtime::CheckedOwnerLimits { observations: 5, history: 6, ..limits() };
+    let mut measured = TypeWorkBudget::default();
+    let mut ready = leaf_authority_ready(&acquire, &mut work);
+    ready.prepare_checked_boundary(&acquire, 111, Some(policy), &mut measured).unwrap();
+    let needed = measured.used();
+    drop(ready);
+    for prefix in [0, 7] {
+        for available in [0, needed - 1] {
+            let mut ready = leaf_authority_ready(&acquire, &mut work);
+            let mut short = TypeWorkBudget::with_limit(prefix + available);
+            short.charge(prefix).unwrap();
+            assert!(ready.prepare_checked_boundary(&acquire, 111, Some(policy), &mut short).is_err());
+            drop(ready);
+            assert_eq!(leaf::calls(), [0; 5]);
+        }
+    }
+    let ready = leaf_ready(&acquire, &mut work);
+    let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+    let guard = ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard().unwrap();
+    handle.publish(111, acquire._scope_node, &mut work).unwrap();
+    handle.closing(111, acquire._scope_node, &mut work).unwrap();
+    guard.prepare_checked_finish(&finish, 111, false, &mut work).unwrap();
+    guard.assert_leaf_finish_borrow_refusal_for_test();
+    assert_eq!(leaf::calls(), [1, 0, 0, 0, 0]);
+    leaf::reset();
+    let ready = leaf_ready(&acquire, &mut work);
+    let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+    let guard = ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard().unwrap();
+    handle.publish(111, acquire._scope_node, &mut work).unwrap();
+    handle.closing(111, acquire._scope_node, &mut work).unwrap();
+    guard.prepare_checked_finish(&finish, 111, false, &mut work).unwrap();
+    let before = handle.snapshot();
+    assert!(guard.finish_checked_admitted(&crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], true).is_err());
+    let after = handle.snapshot();
+    assert_eq!(after.native, crate::foreign::checked_control::Native::Owned);
+    assert_eq!(after.observations, before.observations);
+    assert!(!after.unresolved, "no pending native entry was fabricated");
+    assert_eq!(after.k, crate::foreign::checked_control::K::Transferred, "lost guard uses the existing terminal transfer");
+    assert_eq!(handle.closing_status(), None);
+    assert!(handle.retains_backing());
+    assert_eq!(leaf::calls(), [1, 0, 0, 0, 0]);
+    for refusal in [false, true] {
+        leaf::reset();
+        let mut work = TypeWorkBudget::default();
+        let ready = leaf_ready(&acquire, &mut work);
+        let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let before = handle.snapshot();
+        if refusal { leaf::refuse_identity_next(); }
+        assert!(ready.invoke_checked_leaf(if refusal {8} else {7}, 8).is_err());
+        assert_eq!(leaf::calls(), [0; 5]);
+        assert_eq!(handle.snapshot().native, before.native);
+        assert_eq!(handle.snapshot().observations, before.observations);
+        assert!(!handle.snapshot().unresolved);
+    }
+    leaf::reset();
+    leaf::null_next();
+    let mut work = TypeWorkBudget::default();
+    let ready = leaf_ready(&acquire, &mut work);
+    let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+    assert!(ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard().is_none());
+    assert_eq!(leaf::calls(), [1, 0, 0, 0, 0]);
+    assert_eq!(handle.snapshot().native, crate::foreign::checked_control::Native::NoOwner);
+    for synthetic in [false, true] {
+        leaf::reset();
+        let ready = leaf_ready(&acquire, &mut work);
+        let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let mut guard = ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard().unwrap();
+        if synthetic {
+            handle.publish(111, acquire._scope_node, &mut work).unwrap();
+            guard.quarantine();
+            handle.closing(111, acquire._scope_node, &mut work).unwrap();
+            guard.prepare_checked_finish(&finish, 111, true, &mut work).unwrap();
+            assert!(matches!(guard.finish_checked_admitted(&crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], true).unwrap().0,
+                crate::foreign::source_runtime::NativeOwnerDisposition::Synthetic { .. }));
+        } else {
+            handle.output_failed();
+            drop(guard);
+        }
+        assert_eq!(leaf::calls(), [1, 0, 0, 0, 0]);
+        assert_eq!(handle.snapshot().native, crate::foreign::checked_control::Native::Owned);
+        assert!(handle.retains_backing());
+    }
+}

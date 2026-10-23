@@ -367,3 +367,37 @@ The [current compile/link evidence](../evidence/checked-owner-core-execution/gen
 The genuine generated canonical root and opaque leaf compile/link with all four native references retained. Actual ELF `15141b6b` (1,569,672 bytes), receipt/request, seven physical parts, independent root identity `79271fec` and raw configuration→native→link bindings match. The coherently rebound wrong-original configuration passes both prior chain checks then refuses at the raw-data join; a fresh missing-release definition reaches an actual linker error. No selected native callback or generated application executes. Six closure fields stay Missing and protected activation refuses. Raw ordinary warnings and two glibc possible-loading warnings remain; compatible cached leaf source is byte-equal, not a cold-build claim.
 
 Earlier lock/HOME and postlink failures remain historical evidence. The source-proven linked-vs-raw pin defect is corrected without relaxing full associations or meters; 28740's first failing predicate was not recorded and its removed ELF is not recovered. After this bounded delivery is retained, apply the reviewed PreparedAcquire leaf/shim split and combine the actual evaluator adapter before its real root-cfg compile. Actual provider/current-image admission, protected one-shot launch/reporting, native acquire/copy/Finish/Trace and complete F-core remain pending. Root-owned formatting/check precedes that integration freeze/fresh artifact/approval.
+
+## Private evaluator and opaque leaf connection
+
+This slice starts from retained PR120 `3db53d2f`. It connects the existing
+source-owner/window call sites to the fixed opaque leaf through four private
+role markers and the original sealed symbol/scope receipts. The slot keeps its
+physical owner separately from the ledger. Raw-address access refuses that
+backing; an occupied cell supplies liveness, descriptor association and bounded
+copy. Legacy callbacks keep their existing route.
+
+Acquisition preparation checks vacancy/profile/identity before ledger entry.
+Invocation holds the actual mutable slot, arms the returned owner first and
+records disposition through that borrow. Query, copy and native Finish also
+record their outcome before fallible source reporting. Only an admitted native
+Finish consumes the cell; synthetic Finish, loss and Drop do not call release.
+The extra invoke-time blocked fence refuses an inconsistent native decision
+before entry while preserving a prepared synthetic witness.
+
+Session 66882 passed the ordinary cfg-off check and seven private Rust controls
+before that last fence. Session 44927 stopped during test compilation on an
+unstable injected counter API; it selected no tests. The stable counter fix and
+fully qualified selectors are preserved with that history. The coherent final session31339 passes targeted Ash Clippy, fifteen ordinary
+controls and one actual generated-root cfg compile/link control. The platform
+PreparedAcquire API is reconciled in the same source; independent audit
+`05433551` and the [adapter evidence](../evidence/checked-owner-core-execution/leaf-evaluator/README.md)
+record exact source/tool/cleanup and actual artifact associations. Combined01/session92014
+passed Clippy+eleven ordinary controls but failed actual compilation on stale leaf
+metadata; the paid content-bound source target repairs that association.
+Preparatory combined02 was UNRUN; the fresh combined03 result proves the selected
+current leaf source and dep-info. No package/version/lock-policy or budget change
+is involved.
+These checks grant no activation: protected provider construction, same-FD
+launch/reporting, native execution, authored Finish/Trace and full F-core remain
+pending. Type availability never substitutes for current-image admission.
