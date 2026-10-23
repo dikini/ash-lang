@@ -1001,7 +1001,7 @@ fn publish_observation(path: &std::ffi::CStr, pins: &[ArtifactPin;3], outcome: &
     // Fixed256-byte envelope, no additional heap allocation. All variable bytes
     // were reserved before the child; this write happens only after actual reap.
     let mut header = [0u8;256];
-    header[..8].copy_from_slice(b"ASHOBS02");
+    header[..8].copy_from_slice(b"ASHOBS03");
     header[8..16].copy_from_slice(&(crate::outcome::STREAM_BYTES as u64).to_le_bytes());
     header[16..24].copy_from_slice(&(outcome.bytes.len() as u64).to_le_bytes());
     header[24..32].copy_from_slice(&(outcome.observed_bytes as u64).to_le_bytes());
@@ -1092,7 +1092,7 @@ fn collect_child(reader: &File, process: &mut std::process::Child, bytes: &mut V
 mod launcher_tests {
     use super::*;
     fn frame(seq: u64, kind: u32, bytes: &[u8]) -> Vec<u8> {
-        let mut raw = b"ASHOUT02".to_vec(); raw.extend_from_slice(&seq.to_le_bytes());
+        let mut raw = b"ASHOUT03".to_vec(); raw.extend_from_slice(&seq.to_le_bytes());
         raw.extend_from_slice(&kind.to_le_bytes()); raw.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
         raw.extend_from_slice(bytes); raw
     }
@@ -1120,7 +1120,7 @@ mod launcher_tests {
         assert!(!path.exists()); outcome.reaped = true;
         publish_observation(&cpath, &pins, &outcome).unwrap();
         let before = std::fs::read(&path).unwrap();
-        assert_eq!(&before[..8], b"ASHOBS02"); assert_eq!(before.len(),256+24);
+        assert_eq!(&before[..8], b"ASHOBS03"); assert_eq!(before.len(),256+24);
         assert_eq!(&before[48..56], &7u64.to_le_bytes()); assert_eq!(&before[56..88], &[9;32]);
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,0o600);
         assert_eq!(publish_observation(&cpath, &pins, &outcome), Err(Refusal::Input));
@@ -1128,7 +1128,7 @@ mod launcher_tests {
         let link = dir.join("link"); std::os::unix::fs::symlink(&path,&link).unwrap();
         let clink = CString::new(link.as_os_str().as_bytes()).unwrap();
         assert_eq!(publish_observation(&clink, &pins, &outcome), Err(Refusal::Input));
-        let mut file=File::open(&path).unwrap(); let mut first=[0;8];file.read_exact(&mut first).unwrap();assert_eq!(&first,b"ASHOBS02");
+        let mut file=File::open(&path).unwrap(); let mut first=[0;8];file.read_exact(&mut first).unwrap();assert_eq!(&first,b"ASHOBS03");
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]

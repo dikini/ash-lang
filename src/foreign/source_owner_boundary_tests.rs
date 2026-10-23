@@ -755,6 +755,94 @@ fn eight_byte_fixture_for_program(program: crate::core::ValidatedEffectProgram) 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ClosingStage { Reserved, Armed, Body, Consumed, Retained, Synthetic, SyntheticNotRequested }
 
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn checked_status_disposal_accounting_model_preserves_open_error_and_raw_unreadable_status() {
+    use crate::foreign::source_runtime::{NativeScalarReply as Reply, NativeScalarValue as Scalar,
+        CheckedLocalCompletion as K, CheckedNativeFact as Native};
+    thread_local! {
+        static REPLY: std::cell::Cell<Reply> = const { std::cell::Cell::new(Reply::Scalar(Scalar::I32(0))) };
+        static CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    fn reply(_: &[NativeOwnerOperand]) -> Reply {
+        CALLS.set(CALLS.get() + 1);
+        REPLY.get()
+    }
+    let original = include_str!("../../tests/fixtures/checked-owner-lifecycle/owner.ash");
+    let allocate = original.find("    symbol Allocate").unwrap();
+    let free = original.find("    symbol Free").unwrap();
+    let acquire = original.find("    acquire size =>").unwrap();
+    let finish = original.find("    finish (state, data)").unwrap();
+    let source = format!("{}{}{}{}{}", &original[..allocate], r#"
+    symbol Allocate<H, R> : Int -> Foreign.CheckedCall<(Int, Foreign.Output<Foreign.Nullable<State<H, R>>>)> {
+        name "status_model_acquire"
+        abi (Size, out(pointer(Address))) -> Status
+        host H
+        assumes { Callee }
+        operand 0 from 0 scalar
+        output result as scalar
+        output 1 as owner(State<H, R>)
+        outcome otherwise { readable result, readable 1 }
+    }
+"#, &original[free..acquire], r#"
+    acquire size => match perform Allocate<H, R>.call size {
+        Foreign.CheckedReturned((_, Foreign.Readable(Foreign.NonNull(state)))) => Acquired(state, ())
+        Foreign.CheckedReturned((_, _)) => Refused ()
+        Foreign.CheckedConversionFailed(_) => Refused ()
+        Foreign.BoundaryFailed(_) => Refused ()
+    }
+"#, &original[finish..]);
+    let source = source.replace("repr Size = size_t", "repr Size = size_t\n    repr Status = signed(32)\n    const Held : Status = 7")
+        .replace("Foreign.Disposition<Unit>", "Foreign.Disposition<Int>")
+        .replace("abi (pointer(Address)) -> void", "abi (pointer(Address)) -> Status")
+        .replace("outcome otherwise { consumed 0 }", "output result as scalar\n        outcome result == Held { retained 0 }\n        outcome otherwise { consumed 0 }")
+        .replace("Foreign.Consumed(())", "Foreign.Consumed(_)")
+        .replace("Foreign.Retained(())", "Foreign.Retained(_)");
+    for observed in [Reply::Scalar(Scalar::I32(0)), Reply::Scalar(Scalar::I32(7)), Reply::Scalar(Scalar::U64(99))] {
+        REPLY.set(observed); CALLS.set(0);
+        let (program, _) = crate::elaborate::checked_owner_passive_program_for_source(&source,
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n");
+        with_program_context(&program, |_, acquire, _| {
+            let mut work = TypeWorkBudget::default();
+            let ready = leaf_authority_ready(&acquire, &mut work);
+            let policy = crate::foreign::source_runtime::CheckedOwnerLimits { observations: 5, history: 6, ..limits() };
+            let mut guard = ready.inject_checked_status_model(&acquire, policy,
+                Reply::Scalar(Scalar::I32(-11)), reply, &mut work).unwrap();
+            let handle = guard.checked_boundary(&mut work).unwrap().unwrap();
+            assert_eq!(handle.acquisition_status(), Some(-11));
+            assert_eq!(handle.closing_status(), Some(-11));
+            guard.dispose_unpublished(111, acquire._scope_node, false).unwrap();
+            guard.dispose_unpublished(111, acquire._scope_node, false).unwrap();
+            let invalid = matches!(observed, Reply::Scalar(Scalar::U64(_)));
+            let consumed = matches!(observed, Reply::Scalar(Scalar::I32(0)));
+            assert_eq!(CALLS.get(), 1);
+            assert_eq!(handle.acquisition_status(), Some(-11));
+            assert_eq!(handle.closing_status(), Some(if invalid { -11 } else if consumed { 0 } else { 7 }));
+            assert_eq!(handle.snapshot().native, if consumed { Native::Consumed } else { Native::Owned });
+            assert_eq!(handle.snapshot().unresolved, invalid);
+            assert_eq!(handle.snapshot().k, K::Absent);
+            assert_eq!(handle.retains_backing(), !consumed);
+            assert!(handle.publish(111, acquire._scope_node, &mut work).is_err());
+            drop(guard);
+            assert_eq!(CALLS.get(), 1, "retained or unknown disposal is never retried by Drop");
+        });
+    }
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+pub(crate) fn with_unpublished_leaf_for_test(
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        crate::foreign::source_runtime::NativeOwnerBoundary,
+        Option<crate::foreign::source_runtime::NativeOwnerGuard>),
+) {
+    let (program, acquire, _, _, _) = eight_byte_fixture();
+    let mut work = TypeWorkBudget::default();
+    let ready = leaf_ready(&acquire, &mut work);
+    let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+    let guard = ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard();
+    test(&program, acquire._scope_node, handle, guard);
+}
+
 pub(crate) fn with_eight_byte_closing_for_test(
     stage: ClosingStage,
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,

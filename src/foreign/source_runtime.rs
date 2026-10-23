@@ -15,6 +15,7 @@ pub(crate) use super::checked_control::{
 
 #[path = "source_owner_runtime.rs"]
 mod owner;
+pub(in crate::foreign) use owner::scalar_observation;
 #[path = "source_view_runtime.rs"]
 mod view;
 #[doc(hidden)]

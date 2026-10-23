@@ -151,7 +151,13 @@ impl NativeOwnerStatus {
     /// Fixed-size observation only; unreadable or invalid output is absence,
     /// never a fabricated numeric status. No allocation or narrowing occurs.
     pub(crate) fn independent(self) -> Option<i128> {
-        if !self.readable || !self.valid { return None; }
+        if !self.readable { return None; }
+        self.raw_observation()
+    }
+    /// A valid primitive observation is independent of permission to expose
+    /// its payload to source code. Invalid replies establish no new fact.
+    fn raw_observation(self) -> Option<i128> {
+        if !self.valid { return None; }
         match self.reply {
             NativeScalarReply::Void => None,
             NativeScalarReply::Scalar(value) => match value {
@@ -182,6 +188,24 @@ fn observed_scalar_status(reply: NativeScalarReply) -> Option<i128> {
             NativeScalarValue::FunctionAddressAllBitsOne => None,
         },
     }
+}
+
+/// A primitive return is an independent observation only at its exact admitted
+/// ABI representation. This does not grant source payload readability.
+pub(in crate::foreign) fn scalar_observation(
+    reply: NativeScalarReply,
+    result: crate::foreign::source_contract::PreparedAbiResult,
+) -> Option<i128> {
+    use crate::foreign::source_contract::{PreparedAbiResult as Result, PreparedScalarRepresentation as Repr};
+    let valid = matches!((result, reply),
+        (Result::Scalar(Repr::Signed(8)), NativeScalarReply::Scalar(NativeScalarValue::I8(_)))
+        | (Result::Scalar(Repr::Signed(32)), NativeScalarReply::Scalar(NativeScalarValue::I32(_)))
+        | (Result::Scalar(Repr::Signed(64)), NativeScalarReply::Scalar(NativeScalarValue::I64(_)))
+        | (Result::Scalar(Repr::Unsigned(8)), NativeScalarReply::Scalar(NativeScalarValue::U8(_)))
+        | (Result::Scalar(Repr::Unsigned(32)), NativeScalarReply::Scalar(NativeScalarValue::U32(_)))
+        | (Result::Scalar(Repr::Unsigned(64)), NativeScalarReply::Scalar(NativeScalarValue::U64(_)))
+        | (Result::Scalar(Repr::SizeT), NativeScalarReply::Scalar(NativeScalarValue::USize(_))));
+    NativeOwnerStatus { reply, readable: false, valid }.raw_observation()
 }
 
 impl NativeOwnerDestruction {
@@ -419,6 +443,8 @@ struct NativeOwnerSlot {
 #[derive(Debug)]
 enum CheckedLeafBacking {
     Cell(super::super::checked_leaf_transport::OwnerCell),
+    #[cfg(test)]
+    StatusModel { occupied: bool, plan: NativeOwnerDestruction },
     Consumed,
 }
 impl NativeOwnerSlot {
@@ -427,6 +453,8 @@ impl NativeOwnerSlot {
         if let Some(leaf) = &self.leaf {
             return match leaf {
                 CheckedLeafBacking::Cell(cell) => cell.is_occupied(),
+                #[cfg(test)]
+                CheckedLeafBacking::StatusModel { occupied, .. } => *occupied,
                 CheckedLeafBacking::Consumed => false,
             };
         }
@@ -846,6 +874,88 @@ impl NativeOwnerGuard {
         .0
     }
 
+    /// Dispose only the unpublished checked guard through its sealed original
+    /// teardown. This does not run authored Finish or create a source K event.
+    pub(crate) fn dispose_unpublished(
+        &mut self,
+        activation: usize,
+        scope: crate::core::NodeId,
+        blocked: bool,
+    ) -> Result<(), NativeOwnerAdmissionError> {
+        let mut slots = self.storage.slots.try_borrow_mut()
+            .map_err(|_| NativeOwnerAdmissionError::Authority)?;
+        let slot = slots.get_mut(self.slot).ok_or(NativeOwnerAdmissionError::Authority)?;
+        // Legacy destruction remains on its existing path. A checked guard
+        // never falls back to an address-based callback when transport is absent.
+        if slot.checked.is_none() { return Ok(()); }
+        if blocked || slot.quarantined || slot.host_attempted || !slot.physically_live() {
+            return Ok(());
+        }
+        if slot.live_dependents != 0 || !slot.dependencies.is_empty() {
+            return Ok(());
+        }
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        {
+            use super::super::checked_leaf_transport::FreeObservation;
+            let NativeOwnerSlot { leaf, checked, host_attempted, closing_status, .. } = slot;
+            // Without opaque transport there is no admitted checked dispatcher.
+            // Retain the slot without falling back to a raw callback.
+            if leaf.is_none() { return Ok(()); }
+            #[cfg(test)]
+            if let Some(CheckedLeafBacking::StatusModel { occupied, plan }) = leaf {
+                let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
+                if !*occupied { return Ok(()); }
+                control.begin_guard_disposal(activation, scope).map_err(control_error)?;
+                *host_attempted = true;
+                // Private Rust injection only. No production status transport
+                // or raw-address fallback is supplied by this model branch.
+                let (consumed, status) = plan.invoke(&[]);
+                if let Some(status) = status.filter(|status| status.valid)
+                    && let Some(raw) = status.raw_observation() {
+                    *occupied = !consumed;
+                    *closing_status = Some(raw);
+                    control.guard_disposed_status_model(consumed, raw);
+                } else {
+                    // No admitted O4: keep both prior facts and backing, with
+                    // an unresolved one-shot attempt and no retry.
+                    control.output_failed();
+                }
+                self.initialized_bytes = None;
+                return Ok(());
+            }
+            // Check the physical destination before recording native entry.
+            if !matches!(leaf, Some(CheckedLeafBacking::Cell(cell)) if cell.is_occupied()) {
+                return Err(NativeOwnerAdmissionError::Authority);
+            }
+            let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
+            control.begin_guard_disposal(activation, scope).map_err(control_error)?;
+            *host_attempted = true;
+            let Some(CheckedLeafBacking::Cell(cell)) = leaf.take() else {
+                unreachable!("held checked disposal slot");
+            };
+            *leaf = Some(CheckedLeafBacking::Consumed);
+            match cell.free() {
+                FreeObservation::Returned(_) => {
+                    *closing_status = None;
+                    control.guard_disposed(true);
+                }
+                FreeObservation::NoOwner => {
+                    // No conforming return fact: preserve the last observation
+                    // and the unresolved attempt; never retry or fabricate K.
+                    control.output_failed();
+                    return Err(NativeOwnerAdmissionError::Authority);
+                }
+            }
+            self.initialized_bytes = None;
+            return Ok(());
+        }
+        #[cfg(not(any(test, ash_checked_owner_root = "v1")))]
+        {
+            let _ = (activation, scope);
+            Err(NativeOwnerAdmissionError::Authority)
+        }
+    }
+
     /// Consume the preflighted one-shot decision before dispatch. A synthetic
     /// return retains the exact physical owner and closing witness, and never
     /// invokes the native plan or fabricates a scalar status.
@@ -1042,6 +1152,10 @@ impl NativeOwnerBoundary {
     }
     pub(crate) fn closing_status(&self) -> Option<i128> {
         self.storage.slots.borrow()[self.slot].closing_status
+    }
+    pub(crate) fn acquisition_status(&self) -> Option<i128> {
+        self.storage.slots.borrow()[self.slot].checked.as_ref()
+            .and_then(crate::foreign::checked_control::RuntimeBoundary::acquisition_status)
     }
     pub(crate) fn closing_record(&self) -> Result<(
         Option<crate::foreign::checked_control::Completion>,
@@ -1394,6 +1508,55 @@ pub struct NativeOwnerGuardReady {
 }
 
 impl NativeOwnerGuardReady {
+    /// Test-only accounting model for the status profile not yet emitted by
+    /// the production opaque leaf. Ordinary profile admission stays closed.
+    #[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+    pub(in crate::foreign) fn inject_checked_status_model(
+        self,
+        receipt: &super::super::source_bindings::SourceOwnerScopeRequest,
+        limits: crate::foreign::checked_control::BoundaryLimits,
+        acquisition: NativeScalarReply,
+        callback: NativeOwnerStatusTeardownCallback,
+        work: &mut TypeWorkBudget,
+    ) -> Result<NativeOwnerGuard, NativeOwnerAdmissionError> {
+        use crate::foreign::source_contract::PreparedOwnerCall;
+        let mut slots = self.guard.storage.slots.try_borrow_mut()
+            .map_err(|_| NativeOwnerAdmissionError::Authority)?;
+        let slot = &mut slots[self.guard.slot];
+        let activation = slot.authority.as_ref().ok_or(NativeOwnerAdmissionError::Authority)?.activation;
+        if !Arc::ptr_eq(&self.guard.owner, &receipt._scope.header().owner)
+            || slot.checked.is_some() || slot.physically_live()
+            || !slot.dependencies.is_empty() || !slot.closure.is_empty()
+            || !matches!(slot.leaf, Some(CheckedLeafBacking::Cell(_))) {
+            return Err(NativeOwnerAdmissionError::Authority);
+        }
+        let symbol = Arc::clone(&receipt._scope.header().teardown);
+        let Some(PreparedOwnerCall::StatusTeardown { outcomes, .. }) = symbol.owner_role() else {
+            return Err(NativeOwnerAdmissionError::Authority);
+        };
+        // Both fixed post-return classification walks are funded before entry.
+        let mut classification = 4usize;
+        for outcome in outcomes {
+            classification = classification.checked_add(outcome.predicates.len().checked_add(1)
+                .and_then(|n| n.checked_mul(2)).ok_or(NativeOwnerAdmissionError::Work)?)
+                .ok_or(NativeOwnerAdmissionError::Work)?;
+        }
+        pay(work, classification)?;
+        let mut checked = crate::foreign::checked_control::RuntimeBoundary::reserve_status_model(
+            receipt, activation, limits, work,
+        ).map_err(control_error)?;
+        let plan = NativeOwnerDestruction::Status { callback, symbol };
+        checked.begin_acquire().map_err(control_error)?;
+        // Simulated returned-owner arming precedes its independent ledger fact.
+        slot.leaf = Some(CheckedLeafBacking::StatusModel { occupied: true, plan });
+        checked.observe_acquisition_status(Some(acquisition));
+        checked.acquired(true);
+        slot.closing_status = checked.acquisition_status();
+        slot.checked = Some(checked);
+        drop(slots);
+        Ok(self.guard)
+    }
+
     #[cfg(test)]
     pub(crate) fn new(
         owner: Arc<CheckedForeignOwner>,
@@ -1721,7 +1884,10 @@ impl NativeOwnerCallReturned {
             let present = slots[index].raw.address.is_some();
             slots[index].last_observed_status = self.scalar.and_then(observed_scalar_status);
             if let Some(checked) = &mut slots[index].checked {
+                checked.observe_acquisition_status(self.scalar);
                 checked.acquired(present);
+                let status = checked.acquisition_status();
+                slots[index].closing_status = status;
             }
         }
         }
@@ -1791,6 +1957,18 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static DESTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn unreadable_valid_status_is_independent_but_invalid_status_is_absent() {
+        use super::{NativeOwnerStatus, NativeScalarReply, NativeScalarValue};
+        let valid = NativeOwnerStatus { reply: NativeScalarReply::Scalar(NativeScalarValue::I32(-7)), readable: false, valid: true };
+        assert_eq!(valid.independent(), None, "source readability remains closed");
+        assert_eq!(valid.raw_observation(), Some(-7));
+        assert_eq!(NativeOwnerStatus { valid: false, ..valid }.raw_observation(), None);
+        use crate::foreign::source_contract::{PreparedAbiResult as Result, PreparedScalarRepresentation as Repr};
+        assert_eq!(super::scalar_observation(valid.reply, Result::Scalar(Repr::Signed(32))), Some(-7));
+        assert_eq!(super::scalar_observation(valid.reply, Result::Scalar(Repr::Unsigned(32))), None);
+    }
 
     thread_local! {
         static HOST_ORDER: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };

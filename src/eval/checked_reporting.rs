@@ -62,7 +62,7 @@ impl super::Machine<'_> {
             Native::Owned => ResourceNativeFact::Owned, Native::Consumed => ResourceNativeFact::Consumed };
         let backing = if checked.retains_backing() { GuardBackingObservation::Retained }
             else { GuardBackingObservation::Unknown };
-        let observation = UnpublishedGuardInspection::observed(native, unresolved, checked.closing_status(), backing, point);
+        let observation = UnpublishedGuardInspection::observed(native, unresolved, checked.closing_status(), checked.acquisition_status(), backing, point);
         self.checked_reports.as_mut().expect("checked entry reserved observation storage")
             .commit_guard(slot.expect("armed guard retained its funded inspection slot"), observation);
     }
