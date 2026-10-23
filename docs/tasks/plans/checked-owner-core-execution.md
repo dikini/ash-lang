@@ -580,10 +580,12 @@ new observation framework is proposed.
 
 The source checkpoint connects actual Machine Acquire/Refused and discarded
 Acquire to the checked opaque void guard path before refusal payload copying.
-Its private status controls are explicitly accounting/classification models:
-only their test-only constructor permits exact StatusTeardown metadata, retaining
-the ordinary original-owner, dependency-free and CheckedScope checks. Production
-status-profile admission and emitted status transport remain unsupported.
+Its private status controls are explicitly accounting/classification models over
+exact admitted legacy output/status-symbol metadata and the shared fixed raw
+observation/disposition code. Core rejects checked OutputAcquire and
+StatusTeardown before a genuine checked receipt exists, so no test constructor
+bypasses that fence or fabricates a checked ScopeRequest. Production status
+profile admission and emitted status transport remain unsupported.
 Acquisition status is preserved separately from the latest admitted native
 observation. Invalid disposal leaves the prior observation and backing with an
 unresolved one-shot attempt; source payload readability does not erase a valid
@@ -600,3 +602,12 @@ readiness checkpoint and old unconfigured ELF remain qualified historical data.
 These source controls are authored but not yet compiled or run. The next source
 join uses the exact common-quarantine candidate solely for the shared-root denial
 API; final freeze and focused verification require the actual retaining tip.
+
+Source reconciliation now uses common candidate2d5a1f7a, preserving its explicit
+shared-group denial and last-observation storage. Disposal invokes the common
+entry barrier under the same held slot borrow before native entry; denied shared
+roots retain backing and never call the destructor. Acquisition status remains
+separate from that common latest-observation field. Three overlap resolutions
+preserve both scalar helpers, the existing borrowed fixture-program helper and
+the common acquisition/rejection authority methods. This candidate is not a
+retaining tip and supplies no combined verification claim.

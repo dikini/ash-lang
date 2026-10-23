@@ -76,7 +76,7 @@ impl UnpublishedGuardInspection {
     pub fn native(&self) -> ResourceNativeFact { self.native }
     /// Whether the native transition remains unresolved.
     pub fn unresolved(&self) -> bool { self.unresolved }
-    /// Exact recorded scalar status or genuine absence.
+    /// Latest admitted native observation's scalar status or genuine absence.
     pub fn status(&self) -> Option<i128> { self.status }
     /// Acquisition status retained separately from any subsequent disposal.
     pub fn acquisition_status(&self) -> Option<i128> { self.acquisition_status }

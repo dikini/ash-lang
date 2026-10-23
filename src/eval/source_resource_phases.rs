@@ -437,8 +437,18 @@ impl Machine<'_> {
                         self.inspect_unpublished_guard(checked, boundary.report_slot.as_ref(),
                             super::super::GuardInspectionPoint::AfterUnpublishedDisposal);
                     }
-                    let (_, payload) = self.foreign_report(&value, RuntimePhase::Acquisition)?;
-                    let error = payload.ok_or(RuntimeFailure::ForeignBinding)?;
+                    let error = if boundary.checked.is_some() {
+                        let Some(HeapCell::Constructor(_, Some(error))) = self.heap.get(location) else {
+                            return Err(RuntimeFailure::ForeignBinding);
+                        };
+                        // Generic E may contain a BigInt or closure origin.
+                        // Pay its actual copy after mandatory native facts are
+                        // committed, rather than cloning an unbounded value.
+                        super::copy_generic_cell_value(error, &mut self.instantiation_work)?
+                    } else {
+                        self.foreign_report(&value, RuntimePhase::Acquisition)?.1
+                            .ok_or(RuntimeFailure::ForeignBinding)?
+                    };
                     self.live_resources = self
                         .live_resources
                         .checked_sub(1)

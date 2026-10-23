@@ -172,8 +172,6 @@ pub(super) enum Observed {
     FinishedRetained,
     GuardConsumed,
     GuardRetained,
-    #[cfg(test)]
-    GuardStatus { consumed: bool, status: i128 },
 }
 
 struct GroupState {
@@ -316,14 +314,6 @@ impl<'p> Ledger<'p> {
         header: Header<'p>,
         work: &mut TypeWorkBudget,
     ) -> Result<Owner, Failure> {
-        self.owner_header_inner::<false>(group, header, work)
-    }
-    fn owner_header_inner<const STATUS_MODEL: bool>(
-        &mut self,
-        group: Group,
-        header: Header<'p>,
-        work: &mut TypeWorkBudget,
-    ) -> Result<Owner, Failure> {
         pay(work, 10)?;
         let group_index = self.group_index(group)?;
         // An independent owner consumes one fresh provisional group, even if
@@ -346,10 +336,8 @@ impl<'p> Ledger<'p> {
                 header.codec.report,
                 crate::core::source_resource::SourceResourceReportCodec::CheckedScope { .. }
             )
-            || !(matches!(header.teardown.owner_role(),
+            || !matches!(header.teardown.owner_role(),
                 Some(super::source_contract::PreparedOwnerCall::Teardown { .. }))
-                || cfg!(test) && STATUS_MODEL && matches!(header.teardown.owner_role(),
-                    Some(super::source_contract::PreparedOwnerCall::StatusTeardown { .. })))
             || !header
                 .acquire
                 .owner()
@@ -580,19 +568,6 @@ impl<'p> Ledger<'p> {
                     record.header.teardown.owner_role(),
                     Some(super::source_contract::PreparedOwnerCall::Teardown { consumes: false, .. })
                 ) => Native::Owned,
-            #[cfg(test)]
-            (CallKind::GuardDisposal, Observed::GuardStatus { consumed, status }) => {
-                let Some(super::source_contract::PreparedOwnerCall::StatusTeardown { outcomes, .. }) = record.header.teardown.owner_role() else {
-                    return Err(Failure::Original);
-                };
-                let magnitude = u64::try_from(status.unsigned_abs()).map_err(|_| Failure::Original)?;
-                let value = super::source_contract::PreparedScalarValue { negative: status < 0, magnitude };
-                if !outcomes.iter().find(|outcome| outcome.predicates.iter().all(|p| p.value == value))
-                    .is_some_and(|outcome| outcome.consumes == consumed) {
-                    return Err(Failure::Original);
-                }
-                if consumed { Native::Consumed } else { Native::Owned }
-            }
             _ => return Err(Failure::Original),
         };
         // O4 and K3: no allocation, conversion, reporting or callback intervenes.
@@ -882,23 +857,6 @@ impl RuntimeBoundary {
         limits: BoundaryLimits,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
-        Self::reserve_inner::<false>(receipt, activation, limits, work)
-    }
-    #[cfg(test)]
-    pub(super) fn reserve_status_model(
-        receipt: &super::source_bindings::SourceOwnerScopeRequest,
-        activation: usize,
-        limits: BoundaryLimits,
-        work: &mut TypeWorkBudget,
-    ) -> Result<Self, Failure> {
-        Self::reserve_inner::<true>(receipt, activation, limits, work)
-    }
-    fn reserve_inner<const STATUS_MODEL: bool>(
-        receipt: &super::source_bindings::SourceOwnerScopeRequest,
-        activation: usize,
-        limits: BoundaryLimits,
-        work: &mut TypeWorkBudget,
-    ) -> Result<Self, Failure> {
         pay(work, 6)?;
         let minimum = receipt
             ._scope
@@ -940,7 +898,7 @@ impl RuntimeBoundary {
         pay(work, future.checked_add(2 + 3 + 1).ok_or(Failure::Resource)?)?;
         let mut ledger = Ledger::reserve(limits.groups, limits.owners, limits.observations, work)?;
         let group = ledger.group(work)?;
-        let owner = ledger.owner_header_inner::<STATUS_MODEL>(
+        let owner = ledger.owner_header(
             group,
             Header::Owned(std::sync::Arc::clone(receipt._scope.header())),
             work,
@@ -1046,12 +1004,6 @@ impl RuntimeBoundary {
         } else {
             Observed::GuardRetained
         }).expect("reserved unpublished disposal observation");
-    }
-    #[cfg(test)]
-    pub(super) fn guard_disposed_status_model(&mut self, consumed: bool, status: i128) {
-        let call = self.pending.take().expect("entered status-model disposal");
-        self.ledger.observed(call, Observed::GuardStatus { consumed, status })
-            .expect("exact status-model contract observation");
     }
     pub(super) fn publish(
         &mut self,
