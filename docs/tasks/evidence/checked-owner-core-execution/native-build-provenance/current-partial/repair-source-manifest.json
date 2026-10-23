@@ -1,0 +1,61 @@
+{
+  "base": "8b844436bacb5afbcdedf84ef3cf6daef0b57048",
+  "files": [
+    {
+      "path": "src/build/bridge.rs",
+      "after": {
+        "bytes": 55615,
+        "sha256": "0361f9daf8398a27d71e10f98891e03958affccfaee32b33fb05a394844f19b0"
+      }
+    },
+    {
+      "path": "src/build/checked_receipt.rs",
+      "after": {
+        "bytes": 36386,
+        "sha256": "eb8c24f13063dff68cf7dbc763f896ed6b8a824ca1fc09bb74f2b623881a530e"
+      }
+    },
+    {
+      "path": "src/build/host.rs",
+      "after": {
+        "bytes": 32852,
+        "sha256": "90a477c0907b067097aa4b979a3b78c101306cd9c3ba2fb87a897e54b8e2050f"
+      }
+    },
+    {
+      "path": "src/build/mod.rs",
+      "after": {
+        "bytes": 20378,
+        "sha256": "a03ea8bce05fa55233be370bfb30291704deb7f9ef5f8113b732e157e99ce99f"
+      }
+    },
+    {
+      "path": "src/build/checked_native_build.rs",
+      "after": {
+        "bytes": 50358,
+        "sha256": "d954295e1a8864c29f888f9f698e4e2b60b233560fb72814536d79be8c9f268b"
+      }
+    },
+    {
+      "path": "tests/fixtures/checked-owner-runtime/owner.c",
+      "after": {
+        "bytes": 851,
+        "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac"
+      }
+    },
+    {
+      "path": "tests/fixtures/checked-owner-runtime/owner.h",
+      "after": {
+        "bytes": 333,
+        "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3"
+      }
+    },
+    {
+      "path": "tests/fixtures/checked-owner-runtime/owner.ash",
+      "after": {
+        "bytes": 5753,
+        "sha256": "71dc568d0cb1525d1ee6db9a355f466c19c5e316b356da78caa631974c1871f5"
+      }
+    }
+  ]
+}

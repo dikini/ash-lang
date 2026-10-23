@@ -1264,7 +1264,8 @@ mod tests {
         .unwrap();
         let provenance = fs::read(
             built
-                .generated_source()
+                .producer_receipt()
+                .unwrap()
                 .parent()
                 .unwrap()
                 .join("native-provenance.json"),

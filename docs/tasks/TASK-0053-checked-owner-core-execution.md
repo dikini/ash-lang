@@ -160,14 +160,14 @@ Its sidecar is bound to the existing same-image ReceiptSeed configuration;
 prebuilt archives do not inherit this provenance. No complete Header/Tool/Native/
 Runtime closure, reviewed premises, protected context or activation is inferred.
 
-[Early verification](evidence/checked-owner-core-execution/native-build-provenance/README.md)
-records three ordinary units and one genuine helper/header/ABI compile/query/
-object/archive control passing on frozen source. No helper function or generated
-output was executed. The subsequent test-only nonce/canonical-Record refinements
-need fresh verification. The actual same-build static artifact/sidecar gate,
-affected regressions, Clippy and final review remain pending. This product work
-continues in an individual milestone PR; it changes no current Main semantics,
-whole acceptance criteria or public execution guards.
+[Verification](evidence/checked-owner-core-execution/native-build-provenance/README.md)
+records four initial controls, then Clippy and 34 distinct current-source tests
+passing in PR113. The final static test built the actual checked artifact and
+decoded its receipt before a test-only sidecar path error. Separate post-test
+readback verified artifact/data associations without crediting unexecuted test
+assertions. The narrow receipt-parent path repair needs a fresh static gate;
+final review and retention remain pending. No output was executed. This work
+changes no whole acceptance criteria or public execution guards.
 
 ## Acceptance for this bounded delivery
 

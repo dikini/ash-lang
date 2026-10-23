@@ -1,0 +1,12 @@
+{
+  "tested": {
+    "bytes": 50332,
+    "sha256": "c1d53481d2be9f03bd05bf43a8bc2c911e654b2db50fb985eccb7e62548725c7"
+  },
+  "current": {
+    "bytes": 50358,
+    "sha256": "d954295e1a8864c29f888f9f698e4e2b60b233560fb72814536d79be8c9f268b"
+  },
+  "production_prefix_equal": true,
+  "qualification": "only cfg(test) sidecar path repaired; full runtime fingerprint changes; fresh actual static gate pending"
+}

@@ -178,8 +178,9 @@ Public execution remains closed.
    actual bridge originals, discovers/revalidates canonical include inputs,
    compiles the object/archive and binds partial tool/configuration observations
    into that same receipt. Its [early evidence](../evidence/checked-owner-core-execution/native-build-provenance/README.md)
-   records four passing controls; current test refinements, actual final sidecar/
-   static association and affected verification remain pending. These observations
+   records four initial controls, then 34 distinct tests and Clippy passing. The
+   final static test built the artifact before a test-only sidecar path failure;
+   its narrow repair and fresh static association test remain pending. These observations
    do not discharge complete closure or protected deployment. Freeze bounded deterministic receipt/plan and policy versions binding the full checked
    required closure, original operation/bridge/payload/facts mappings, native/
    headers/runtime/tool/config hashes, mode/role/target, finite capacities and
