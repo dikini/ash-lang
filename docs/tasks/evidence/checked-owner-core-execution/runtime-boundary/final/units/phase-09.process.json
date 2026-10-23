@@ -1,0 +1,17 @@
+{
+  "pid": 1394,
+  "pgid": 1394,
+  "argv": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--message-format=json-render-diagnostics",
+    "--lib",
+    "foreign::source_bindings::boundary_tests::checked_owner_boundary_null_return_and_closed_public_admission_are_distinct",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "started_unix": 1792728022.011713
+}

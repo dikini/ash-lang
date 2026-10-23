@@ -501,13 +501,15 @@ fn eight_byte_copy_request(
     panic!("genuine checked-copy original in its exact source window");
 }
 
-fn eight_byte_fixture() -> (
+type EightByteFixture = (
     crate::core::ValidatedEffectProgram,
     FixtureRequest,
     SourceOwnerScopeRequest,
     Vec<(SourceOwnerScopeRequest, Arc<CheckedForeignSymbol>)>,
     SourceOwnerCopyRequest,
-) {
+);
+
+fn eight_byte_fixture() -> EightByteFixture {
     let program = eight_byte_program();
     let executable = crate::eval::ExecutableProgram::Effect(program.shared());
     let ids = nodes(&program);
@@ -577,15 +579,15 @@ fn eight_byte_fixture() -> (
                 }
             }
         }
-        if let (Some(acquire), Some(finish)) = (acquire, finish) {
-            if queries.len() == 2 {
-                selected = Some((
-                    FixtureRequest::new(acquire, scope, &mut work),
-                    finish,
-                    queries,
-                ));
-                break;
-            }
+        if let (Some(acquire), Some(finish)) = (acquire, finish)
+            && queries.len() == 2
+        {
+            selected = Some((
+                FixtureRequest::new(acquire, scope, &mut work),
+                finish,
+                queries,
+            ));
+            break;
         }
     }
     let (acquire, finish, mut queries) =

@@ -37,8 +37,9 @@ cache figures are samples, not hard quotas or complete peak proofs.
 The [source pins](preparation/source-manifest.json),
 [finite selectors](preparation/proposal.json) and [operator](preparation/verify-run.py)
 are historical records with original host paths, not instructions to rerun an
-unassigned command. The product/test/helper files retain the tested bytes;
-post-test task/plan progress and this evidence are documentation additions.
+unassigned command. These original receipts remain historical. Later mechanical lint corrections and
+their fresh verification are recorded below; their results are not transferred
+across source maps.
 
 ## Preserved failures and limits
 
@@ -51,10 +52,42 @@ The repair counts actual window mappings and narrows visibility. Neither failure
 is credited as a semantic red. Two later intermediate source snapshots were
 superseded before launch; the earlier e917 batch was cancelled before start.
 
-Remaining gates include affected legacy/storage/source/Core/image regressions,
-Clippy, and final published-head review. The C helper remains unbuilt/unexecuted.
-There is no evidence here of C allocation, native Free, authored Trace, deployed
-checked startup or the complete connected F-core path. Public build/binding/
+The first affected batch passed 55 units, then Clippy refused three nested-if
+lints. Its [receipt inventory](history/affected-lint/execution-manifest.json) is
+separate from the next [test-lint attempt](history/test-lint/execution-manifest.json),
+which found re-export placement, fixture type complexity and another nested-if.
+Neither lint failure is a semantic test failure. The repairs only collapse
+conditionals, name the existing tuple type and relocate unchanged re-exports.
+
+## Final affected verification
+
+The repaired source passed Clippy with warnings denied, all eleven connected
+controls and 55 affected units: 66 distinct tests, with no duplicate selections.
+The [unit readback](final/units/readback.json),
+[original inventory](final/units/execution-manifest.json) and
+[frozen source/fixture pins](final/preparation/manifest.json) preserve that scope.
+All 50 before/after maps covered the same 4,868 files. The library test executable
+was observed as 854,271,104 bytes, SHA-256
+`8b5b4a0a455dec5d07987aa2f79969006fd18d773d87f08690be6e83a6e1bd4e`.
+
+A separately authorized [legacy batch](final/legacy/readback.json) passed three
+existing exact tests: static and shared scalar destruction captures, then byte
+read/write and mutation refusal. Their unchanged helpers asserted exact results
+and cleanup traces; successful stdout/trace is captured by the test harness.
+Transient generated binaries were deleted by those helpers and are not copied
+or assigned invented pins. The actual integration test executable was observed
+as 590,909,984 bytes, SHA-256
+`7cf9201ca5fe832c0a89c004f6d3914a4c6806d7338e7288e39a57f807141477`.
+The [legacy inventory](final/legacy/execution-manifest.json) records actual tools,
+commands, test artifacts, input equality and settled owned groups. These are
+legacy regression results, not checked native or immutable-execution authority.
+
+Both final batches used the same repaired source map and unchanged tool pins.
+All commands exited zero, children were reaped and owned groups were empty.
+Resource/cache observations remain sampled figures. Independent result audits
+cleared both batches; final published-head review remains pending. The checked fixture C helper remains unbuilt/unexecuted.
+There is no evidence here of checked C allocation, checked native Free, authored
+checked Trace, deployed checked startup or the complete connected F-core path. Public build/binding/
 initializer/report guards remain closed. Complete checked producer closure,
 independent protected approval/context and immutable same-fd launch remain later
 components. All broad F4/F6 acceptance criteria remain unchecked; unsupported
@@ -65,5 +98,5 @@ derived gzip containers and external records. Each raw log is retained once in
 compressed form; one complete source map represents the equal maps, without
 copying caches, binaries or full source archives. The
 [bounded streaming verifier](verify_evidence.py) checks original hashes and decoded
-content under finite limits. Its [receipt](verification.json) is archival
-verification, not runtime authority. External file availability is not promised.
+content under finite limits. The [final receipt](final-verification.json) is archival verification, not runtime
+authority; the original [early-payload receipt](verification.json) remains historical. External file availability is not promised.

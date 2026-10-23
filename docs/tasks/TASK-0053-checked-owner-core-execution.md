@@ -106,10 +106,13 @@ continuation remains independent of native consumption and terminal failure.
 [Focused boundary verification](evidence/checked-owner-core-execution/runtime-boundary/README.md)
 passed all eleven exact units on the frozen current-base candidate, including the
 real private evaluator copy phase with initialized Rust storage. The earlier
-compile and inventory failures remain separate. Affected regressions, Clippy and
-published-head review are still pending on the early draft. They include
-genuine initialized-eight-byte source/Core preparation, with explicitly injected
-native returns and copy completion. The C helper remains unbuilt and unexecuted;
+compile and inventory failures remain separate. After mechanical lint repairs,
+all eleven connected controls, 55 affected unit tests and Clippy passed on one
+frozen source map. Three separately authorized existing legacy native regressions
+also passed, covering static/shared destruction captures and byte mutation refusal.
+Independent audits verified both batches; final published-head review remains
+pending. The genuine initialized-eight-byte source/Core preparation uses explicitly
+injected native returns and copy completion. The C helper remains unbuilt and unexecuted;
 the private evaluator phase additionally copies initialized Rust test storage
 through the actual checked-copy code. That is injected-phase evidence, not C
 initialization, native freeing, authored Trace or deployed execution evidence. Existing public build, binding, initializer and report

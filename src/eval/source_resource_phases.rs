@@ -359,10 +359,10 @@ impl Machine<'_> {
             .as_ref()
             .map(|control| control.prepaid_scope_observer());
         let result = self.return_source_resource_inner(boundary, value);
-        if result.is_err() {
-            if let Some(control) = checked {
-                control.output_failed();
-            }
+        if result.is_err()
+            && let Some(control) = checked
+        {
+            control.output_failed();
         }
         result
     }

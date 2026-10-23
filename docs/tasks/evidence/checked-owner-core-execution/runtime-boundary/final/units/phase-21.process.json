@@ -1,0 +1,17 @@
+{
+  "pid": 1715,
+  "pgid": 1715,
+  "argv": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--message-format=json-render-diagnostics",
+    "--lib",
+    "elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_body_free_consumer_core_and_transforms",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "started_unix": 1792728046.9530933
+}

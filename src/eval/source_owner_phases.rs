@@ -538,10 +538,10 @@ impl OwnerAcquireRecorded<'_> {
     ) -> Result<OwnerAcquireReported, OwnerPhaseFailure> {
         let checked = self.slots.checked.take();
         let mut result = self.report_inner(heap);
-        if result.is_err() {
-            if let Some(checked) = &checked {
-                checked.output_failed();
-            }
+        if result.is_err()
+            && let Some(checked) = &checked
+        {
+            checked.output_failed();
         }
         if let Ok(reported) = &mut result {
             reported.checked = checked;
@@ -812,10 +812,10 @@ impl OwnerTeardownRecorded<'_> {
     ) -> Result<OwnerTeardownReported, OwnerPhaseFailure> {
         let checked = self.slots.checked.take();
         let result = self.report_inner(heap);
-        if result.is_err() {
-            if let Some(checked) = checked {
-                checked.output_failed();
-            }
+        if result.is_err()
+            && let Some(checked) = checked
+        {
+            checked.output_failed();
         }
         result
     }

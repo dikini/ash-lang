@@ -329,6 +329,11 @@ pub(crate) fn widen_gnu_reply(
 pub(crate) use super::source_bindings::admit_source_native_program;
 pub use super::source_bindings::{AdmittedSourceNativeProgram, SourceNativeBindings};
 
+pub(crate) use super::checked_control::BoundaryLimits as CheckedOwnerLimits;
+
+#[cfg(test)]
+pub(crate) use super::checked_control::Continuation as CheckedOwnerContinuation;
+
 #[cfg(test)]
 mod declared_constant_tests {
     use super::*;
@@ -443,8 +448,3 @@ mod declared_constant_tests {
         );
     }
 }
-
-pub(crate) use super::checked_control::BoundaryLimits as CheckedOwnerLimits;
-
-#[cfg(test)]
-pub(crate) use super::checked_control::Continuation as CheckedOwnerContinuation;

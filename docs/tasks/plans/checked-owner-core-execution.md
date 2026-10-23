@@ -120,8 +120,11 @@ The active boundary source candidate implements steps 3–4 on retained
 `c51089c8`. Its eleven focused tests passed on the frozen candidate, including the real
 private evaluator phase over initialized Rust storage. The
 [focused receipts](../evidence/checked-owner-core-execution/runtime-boundary/README.md)
-retain exact inputs and scope. Affected regressions, Clippy and final review remain
-pending on the early draft. The genuine source/Core
+retain exact inputs and scope. The final repaired map passed eleven connected
+controls, 55 affected units, Clippy, and three separately authorized existing legacy
+native regressions. Those legacy helpers assert exact output/trace results; they
+are not checked execution evidence. Final published-head review remains pending.
+The genuine source/Core
 fixture selects Acquire, QueryView, Extent, checked-copy and Finish: five distinct
 observations. The primitive keeps its actual scope/window/type-application/function
 association, and repeated calls cannot spend mandatory Finish capacity. Finite
