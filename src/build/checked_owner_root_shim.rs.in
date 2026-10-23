@@ -1,6 +1,6 @@
-//! Artifact-local safe transport. Only the generated root can name these types.
-//! CP24 policy and pre-funded observation remain in the evaluator; this module
-//! neither authenticates a context nor admits a source operation.
+// Artifact-local safe transport. Only the generated root can name these types.
+// CP24 policy and pre-funded observation remain in the evaluator; this module
+// neither authenticates a context nor admits a source operation.
 use checked_owner_leaf as leaf;
 
 pub(crate) struct OwnerCell {

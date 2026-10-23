@@ -5,14 +5,20 @@ use std::{env, error::Error, fs, path::PathBuf, process::Command};
 use sha2::{Digest, Sha256};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    println!("cargo:rustc-check-cfg=cfg(ash_checked_owner_root, values(\"v1\"))");
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("missing manifest root")?);
     let canonical_root = root.to_str().filter(|path| !path.chars().any(char::is_control))
         .ok_or("unsupported canonical source path")?;
     println!("cargo:rustc-env=ASH_RUNTIME_CANONICAL_SOURCE_ROOT={canonical_root}");
-    let home = PathBuf::from(env::var_os("HOME").ok_or("missing build cache home")?);
+    let cache_root = |variable: &str, fallback: &str| -> Result<PathBuf, &'static str> {
+        match env::var_os(variable) {
+            Some(path) => Ok(PathBuf::from(path)),
+            None => Ok(PathBuf::from(env::var_os("HOME").ok_or("missing build cache home")?).join(fallback)),
+        }
+    };
     for (key,path) in [
-        ("ASH_BUILD_CARGO_HOME", env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".cargo"))),
-        ("ASH_BUILD_RUSTUP_HOME", env::var_os("RUSTUP_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".rustup"))),
+        ("ASH_BUILD_CARGO_HOME", cache_root("CARGO_HOME", ".cargo")?),
+        ("ASH_BUILD_RUSTUP_HOME", cache_root("RUSTUP_HOME", ".rustup")?),
     ] {
         let text=path.to_str().filter(|p| path.is_absolute() && !p.chars().any(char::is_control)).ok_or("unsupported build cache path")?;
         println!("cargo:rustc-env={key}={text}");
@@ -23,6 +29,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         root.join("Cargo.lock"),
         root.join("rust-toolchain.toml"),
         root.join("trusted-preparation/Cargo.toml"),
+        root.join("locales/en-US.ftl"),
+        root.join("locales/bg.ftl"),
     ];
     let mut pending = vec![root.join("src"), root.join("trusted-preparation/src")];
     while let Some(directory) = pending.pop() {

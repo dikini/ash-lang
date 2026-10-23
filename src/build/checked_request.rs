@@ -270,7 +270,7 @@ fn image_error(e: super::image::ImageFailure) -> ReceiptFailure {
         _ => ReceiptFailure::Association,
     }
 }
-fn native_image_error(error: super::image::NativeImageFailure) -> ReceiptFailure {
+pub(super) fn native_image_error(error: super::image::NativeImageFailure) -> ReceiptFailure {
     match error {
         super::image::NativeImageFailure::Image(error) => image_error(error),
         super::image::NativeImageFailure::Bridge(error) if error.is_resource() => {
@@ -279,7 +279,7 @@ fn native_image_error(error: super::image::NativeImageFailure) -> ReceiptFailure
         _ => ReceiptFailure::Association,
     }
 }
-fn emission_error(error: super::emit::EmissionFailure) -> ReceiptFailure {
+pub(super) fn emission_error(error: super::emit::EmissionFailure) -> ReceiptFailure {
     match error {
         super::emit::EmissionFailure::Image(error) => image_error(error),
         super::emit::EmissionFailure::Resource => ReceiptFailure::Resource,
@@ -389,6 +389,7 @@ fn decode_with_work(
         .reencode_checked_data(work)
         .map_err(native_image_error)?;
     let mut root_identity = None;
+    let mut root_configuration = None;
     let emission = if let Some(data) = &record.root_build {
         let root = super::emit::checked_root_host(&rebuilt, &restored.program, capacities, work).map_err(emission_error)?;
         root_identity = Some(data.reconstruct(&root.leaf.source, &root.host.rust_source, work).map_err(|error| match error {
@@ -398,7 +399,8 @@ fn decode_with_work(
         let upper = bytes.len().checked_mul(8).ok_or(ReceiptFailure::Resource)?;
         pay(work, upper)?;
         let configuration = serde_json::to_vec(data).map_err(|_| ReceiptFailure::Resource)?;
-        if configuration.len() > upper || receipt.pin(ReceiptField::BuildConfiguration) != Some(pin(&configuration, work)?) { return Err(ReceiptFailure::Association); }
+        if configuration.len() > upper { return Err(ReceiptFailure::Association); }
+        root_configuration = Some(pin(&configuration, work)?);
         root.host
     } else {
         super::emit::checked_native_host(&rebuilt, &restored.program, capacities, &super::runtime_fingerprint(), work).map_err(emission_error)?
@@ -476,11 +478,25 @@ fn decode_with_work(
             native_limits,
             work,
         )?;
+        if let Some(expected) = root_configuration {
+            // Full link/native matching above authenticates both binding layers.
+            // Compare closed BuildData to their original configuration, not to
+            // the final ASHNAT01/ASHLNK01 configuration commitment.
+            let (original, _) = super::checked_native_build::binding(
+                slots[5].ok_or(ReceiptFailure::Malformed)?, native_limits, work,
+            )?;
+            if original != expected { return Err(ReceiptFailure::Association); }
+        }
         if receipt.pin(ReceiptField::FinalElf).is_none() {
             return Err(ReceiptFailure::Association);
         }
     } else if slots[5].is_some() || slots[6].is_some() || record.native_limits.is_some() {
         return Err(ReceiptFailure::Malformed);
+    }
+    if !record.linked && root_configuration.is_some()
+        && receipt.pin(ReceiptField::BuildConfiguration) != root_configuration
+    {
+        return Err(ReceiptFailure::Association);
     }
     if slots[7].is_some() {
         return Err(ReceiptFailure::Malformed);

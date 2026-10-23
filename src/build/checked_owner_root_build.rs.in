@@ -128,7 +128,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let compiler_pin = Sha256::digest(&compiler);
     if format!("{compiler_pin:x}") != config.compiler { return Err("compiler substitution".into()); }
     let canonical = &config.canonical_source_root;
-    let mut paths = ["build.rs", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "trusted-preparation/Cargo.toml"].map(|p| canonical.join(p)).to_vec();
+    let mut paths = ["build.rs", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "trusted-preparation/Cargo.toml", "locales/en-US.ftl", "locales/bg.ftl"].map(|p| canonical.join(p)).to_vec();
     let mut pending = vec![canonical.join("src"), canonical.join("trusted-preparation/src")];
     let mut entries = 0usize;
     while let Some(directory) = pending.pop() {

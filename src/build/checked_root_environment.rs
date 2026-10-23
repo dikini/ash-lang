@@ -168,7 +168,7 @@ impl Environment {
             .and_then(|n| n.checked_add(project.as_os_str().len()))
             .and_then(|n| n.checked_add(2048)).and_then(|n| n.checked_mul(8)).ok_or(Failure::Resource)?;
         pay(work, bytes)?;
-        if !matches!(verb, "rustc" | "generate-lockfile") { return Err(Failure::Unsupported); }
+        if !matches!(verb, "rustc" | "generate-lockfile" | "clean") { return Err(Failure::Unsupported); }
         let bin = self.rustc.parent().ok_or(Failure::Unsupported)?;
         let search = std::env::join_paths([bin, Path::new("/usr/bin"), Path::new("/bin")]).map_err(|_| Failure::Unsupported)?;
         let mut command = Command::new(&self.cargo);

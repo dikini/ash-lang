@@ -13,6 +13,7 @@ mod checked_leaf;
 mod checked_root_identity;
 mod checked_root_environment;
 mod checked_root_project;
+mod checked_root_build;
 mod checked_root_lock_policy;
 mod checked_native_build;
 mod checked_producer;

@@ -321,6 +321,24 @@ source needs critical review before generated/native verification. Root owns
 format cleanup/check at the F-core integration freeze before `cargo xtask verify`,
 the fresh final artifact and per-image approval. Whole F3/F4/F6 remains open.
 
+### Actual generated root/leaf compilation (active)
+
+PR118's bounded settlement and closed root-request DATA delivery is retained as
+`2121d126` after [current-head review](https://github.com/dikini/ash-lang/pull/118#pullrequestreview-5632653984)
+and [retention verification](https://github.com/dikini/ash-lang/pull/118#issuecomment-6371734150).
+The guarded #60/#62 partial records preserve all whole-scope criteria unchecked.
+
+The next source tranche adds a canonical artifact-only binary entry, the private
+opaque shim and exact embedded image/facts/policy, and an owned generated Cargo
+transaction. Its first discriminator is actual lock settling, canonical root
+and leaf compilation, static linking, same-build ELF/receipt/request association
+and root artifact cleanup. A fresh missing-release-definition closure must
+reach the actual linker after canonical success; typed private shim function
+pointers retain the required native relocations without invoking them. The
+entry preserves startup refusal and has no legacy callback fallback. This work
+is not yet tested; template compilation does not establish evaluator adapter
+integration, protected admission or any native behavior.
+
 ## Acceptance for this bounded delivery
 
 - [ ] The real producer, body-free direct/facade consumer, link and independent
@@ -377,3 +395,11 @@ receipt; do not open another standalone preparation/evidence PR as completion.
 The separate root assignment authorizes this passive source implementation.
 These documents grant no build, native command, protected deployment or store
 provisioning permission.
+
+## Generated root compile/link component
+
+The [current compile/link evidence](evidence/checked-owner-core-execution/generated-root-compile/README.md) records all 13 controls PASS in session 46665 and targeted Ash Clippy PASS in 12075 on exact runtime source `893fd2ee`, based on retained PR119 `a3fc751d`. All nine maps contain the same 8,382 inputs; 97 snapshots, tools and cleanup match. This prose/evidence assembly follows the tested product bytes.
+
+The genuine generated canonical root and opaque leaf compile/link with all four native references retained. Actual ELF `15141b6b` (1,569,672 bytes), receipt/request, seven physical parts, independent root identity `79271fec` and raw configuration→native→link bindings match. The coherently rebound wrong-original configuration passes both prior chain checks then refuses at the raw-data join; a fresh missing-release definition reaches an actual linker error. No selected native callback or generated application executes. Six closure fields stay Missing and protected activation refuses. Raw ordinary warnings and two glibc possible-loading warnings remain; compatible cached leaf source is byte-equal, not a cold-build claim.
+
+Earlier lock/HOME and postlink failures remain historical evidence. The source-proven linked-vs-raw pin defect is corrected without relaxing full associations or meters; 28740's first failing predicate was not recorded and its removed ELF is not recovered. After this bounded delivery is retained, apply the reviewed PreparedAcquire leaf/shim split and combine the actual evaluator adapter before its real root-cfg compile. Actual provider/current-image admission, protected one-shot launch/reporting, native acquire/copy/Finish/Trace and complete F-core remain pending. Root-owned formatting/check precedes that integration freeze/fresh artifact/approval.
