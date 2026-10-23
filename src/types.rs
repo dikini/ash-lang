@@ -1377,6 +1377,24 @@ fn canonical_instances_with_budget<B: TypeWorkMeter>(
     budget: &mut B,
     storage_error: &mut impl FnMut(&mut B) -> B::Error,
 ) -> Result<Vec<EffectInstance>, B::Error> {
+    // Prove that the existing insertion loop would append every input member.
+    // Use its exact comparison orientation and prior-member order; no ordering
+    // law is needed to return this allocation. A failed check leaves all input
+    // members untouched for the complete normalization below.
+    let mut append_only = true;
+    'incoming: for (index, instance) in instances.iter().enumerate().skip(1) {
+        for previous in &instances[..index] {
+            if compare_effect_instances_with_charge(previous, instance, budget, storage_error)?
+                != Ordering::Less
+            {
+                append_only = false;
+                break 'incoming;
+            }
+        }
+    }
+    if append_only {
+        return Ok(instances);
+    }
     let mut canonical = Vec::new();
     for instance in instances {
         let mut position = 0;
@@ -4742,6 +4760,9 @@ impl Drop for Kind {
 }
 
 #[cfg(test)]
+mod canonical_owned_tests;
+
+#[cfg(test)]
 mod row_comparator_tests;
 
 #[cfg(test)]
@@ -7488,12 +7509,12 @@ mod owned_tail_reconstruction_tests {
                 assert_eq!(exact.used(), prefix + cost);
             }
         }
-        for site in [
-            RowReservationSite::RebuildMembers,
-            RowReservationSite::CanonicalMembers,
-        ] {
+        // This already-canonical result reuses its owned member allocation.
+        // CanonicalMembers refusal is exercised on an actual fallback in
+        // canonical_owned_tests instead.
+        {
             let input = source();
-            let _fault = row_reservation_fault::fail(site, 0);
+            let _fault = row_reservation_fault::fail(RowReservationSite::RebuildMembers, 0);
             let mut work = TypeWorkBudget::default();
             assert_eq!(
                 input.substitute_owned_tail_for_reconstruction(

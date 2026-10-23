@@ -927,3 +927,28 @@ pass on the retained producer base, but both required canonical images remain
 work failures. Preserve their distinct outcomes and localize applicable repeated
 construction before extending Decoder representation reuse. No acceptance
 result, pending-row context or earlier failure path may be reused as proof.
+
+After retained comparator correction PR #116 (`577b0c87`) and verified #114
+acceptance, resume PR110 on that exact retaining tip while preserving its
+published `f0e316c5` branch. Reconstruct the owned-Vec fast path from current code:
+compare each incoming member against every prior original member in the old
+insertion order. Return the original allocation only after every comparison is
+Less; on the first other result retain the entire input and run the unchanged
+insertion/dedup fallback. Pay attempted prechecks and fallback work independently.
+Fresh tests must use the repaired function laws and raw constructors, not the
+withdrawn comparator-cycle expectations. Require full-kind/reference parity,
+actual pointer/capacity reuse, genuine fallback allocation refusal and paid
+exact/short/prefix/spent/fresh controls. Then run both original Row and Access
+image cases independently under their unchanged default allowance. No predicted
+net saving or default-fit result transfers from the previous source.
+
+The [canonical allocation evidence](../evidence/checked-owner-dependencies/canonical-allocation/README.md)
+keeps 15 focused passes and two independently observed image failures separate
+from the next source. After reconciliation onto producer `9e57263b`, replace the
+decoder guarded-transit/final-vector pair with one guarded final vector in
+Instance, Resource, ForeignOwner and Tuple reconstruction. Preserve identity,
+count, child shape/order, traversal/depth and all retained work; remove only the
+discarded allocation and transfer. Require full-kind/raw output parity, malformed
+later-child iterative cleanup on a small stack, exact/short/prefix/spent/fresh
+controls, then both original canonical images independently. No acceptance
+cache, inferred saving, cap change or easier fixture is authorized.

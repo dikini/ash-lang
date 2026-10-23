@@ -57,6 +57,18 @@ Follow the [task-owned implementation plan](plans/checked-ffi-contract-carriers.
 
 ## Progress
 
+PR #116 retained the separate comparator correction as
+`577b0c87305b7bea5f905c6e8833ff49d26dd39e`; independent retained-tree and author
+acceptance readback passed, PM confirmed and issue #114 is closed. The resumed
+PR110 work preserves its published `f0e316c5` checkpoint and reconstructs its
+source on that retained correction. A narrow candidate checks every prior member
+in the existing insertion order before reusing an owned canonical Vec. Failed
+checks retain the complete input for the unchanged paid fallback. This removes
+second-vector construction only; comparison work, full-kind identities and fresh
+admission remain required. Both genuine default-budget dependency image cases
+and final regressions are still pending on the new combined source. No whole-F3
+criterion or connected F-core gate is accepted by this candidate.
+
 Issue [#114](https://github.com/dikini/ash-lang/issues/114) tracks a separate
 current-specification correctness defect discovered during PR110 review. Mixed
 pure, explicitly empty-effectful and nonempty-effectful function arguments can
@@ -537,3 +549,13 @@ map and independently owned signature output. Both required canonical images
 were attempted separately and still fail their unchanged default work limits;
 their current callers and total deficits are not inferred from earlier traces.
 This is partial static progress, with all final image and delivery gates open.
+
+The [canonical allocation checkpoint](evidence/checked-owner-dependencies/canonical-allocation/README.md)
+records 15 focused passes and two independent canonical image work failures on
+retained comparator base `577b0c87`. Fresh bounded observations locate Row's
+remaining allowance refusal in header/builtin authentication and Access's root
+refusal in structural Type reconstruction. All admission remains fresh; neither
+trace establishes a total deficit. Preserve these old inputs before reconciling
+with producer `9e57263b`. The next reviewed repair removes a discarded decoder
+transit vector while keeping complete child checks and iterative cleanup.
+Default image fit and final delivery gates remain pending.
