@@ -19,6 +19,18 @@ pub(super) struct LeafEmission {
     pub members: [usize; 4],
 }
 const TEMPLATE: &str = include_str!("checked_owner_leaf.rs.in");
+const ROOT_SHIM: &str = include_str!("checked_owner_root_shim.rs.in");
+
+/// The fixed private root shim names only opaque leaf types. Its complete bytes
+/// are code/config identity inputs, never an excluded program-data payload.
+pub(super) fn render_root_shim(work: &mut TypeWorkBudget) -> Result<String, LeafFailure> {
+    pay(work, ROOT_SHIM.len().checked_mul(2).ok_or(LeafFailure::Resource)?)?;
+    let mut source = String::new();
+    source.try_reserve_exact(ROOT_SHIM.len()).map_err(|_| LeafFailure::Resource)?;
+    source.push_str(ROOT_SHIM);
+    Ok(source)
+}
+
 const MARKERS: [&str; 4] = [
     "__ACQUIRE_NAME__",
     "__QUERY_NAME__",
@@ -273,6 +285,26 @@ mod tests {
             Err(LeafFailure::Unsupported)
         ));
     }
+    #[test]
+    fn root_transport_moves_into_vacant_destination_with_exact_render_work() {
+        let mut work = TypeWorkBudget::default();
+        let source = render_root_shim(&mut work).unwrap();
+        assert_eq!(source, ROOT_SHIM);
+        assert!(source.contains("self.owner = returned; // FIRST root action"));
+        assert!(!source.contains("unsafe"));
+        assert!(!source.contains("impl Drop"));
+        let required = work.used();
+        assert_eq!(required, ROOT_SHIM.len() * 2);
+        let mut short = TypeWorkBudget::with_limit(required - 1);
+        assert!(matches!(render_root_shim(&mut short), Err(LeafFailure::Resource)));
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(required);
+            assert_eq!(render_root_shim(&mut exact).unwrap(), source);
+            assert_eq!(exact.used(), required);
+            assert!(matches!(render_root_shim(&mut exact), Err(LeafFailure::Resource)));
+        }
+    }
+
     #[test]
     fn leaf_link_name_escaping_is_paid_and_cannot_inject_rust_items() {
         let name = "a\"\\\n\u{2603}";

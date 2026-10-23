@@ -20,6 +20,204 @@ struct ClosingFacts {
     status: Option<i128>,
 }
 
+fn constructor(module: ModuleId, role: Role, ordinal: u32) -> ConstructorId {
+    ConstructorId::new(NominalTypeId::new(module, role.local()), ordinal)
+}
+
+// This reader never clones the untrusted constructor payload.
+fn read_constructor<'a>(heap: &'a [HeapCell], work: &mut crate::types::TypeWorkBudget, value: &Value)
+    -> Result<(ConstructorId, &'a Option<Value>), RuntimeFailure> {
+    let Value::Location(location) = value else { return Err(RuntimeFailure::ForeignBinding); };
+    let location = resolve_location_with_work(heap, *location, work)?;
+    match heap.get(location) {
+        Some(HeapCell::Constructor(id, payload)) => Ok((*id, payload)),
+        _ => Err(RuntimeFailure::ForeignBinding),
+    }
+}
+
+impl Machine<'_> {
+    fn checked_owned_tuple<const N: usize>(&mut self, values: [Value; N]) -> Result<Value, RuntimeFailure> {
+        charge_effect_work(&mut self.instantiation_work, N + 1, RuntimePhase::Cleanup)?;
+        let mut fields = Vec::new();
+        fields.try_reserve_exact(N).map_err(|_| RuntimeFailure::HeapCapacity)?;
+        fields.extend(values);
+        self.heap.try_reserve(1).map_err(|_| RuntimeFailure::HeapCapacity)?;
+        Ok(Value::Location(super::allocate_heap(&mut self.heap, HeapCell::Tuple(fields.into_boxed_slice()))?))
+    }
+
+    fn checked_closing_facts(&mut self, boundary: &SourceResourceBoundary) -> Result<ClosingFacts, RuntimeFailure> {
+        charge_effect_work(&mut self.instantiation_work, 16, RuntimePhase::Cleanup)?;
+        let record = self.checked_reports.as_ref()
+            .and_then(|reports| reports.record_for(boundary.report_slot.as_ref()?))
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+        // The current fixed owner profile requests no diagnostic callback. Do
+        // not silently replace another absence class or text with this one.
+        if record.diagnostic() != &ResourceDiagnostic::NotRequested {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        let checked = boundary.checked.as_ref().ok_or(RuntimeFailure::ForeignBinding)?;
+        let (completion, k, native, unresolved) = checked.closing_record().map_err(|_| RuntimeFailure::ForeignBinding)?;
+        let expected = crate::eval::ResourceReport::closing_facts(completion, k, native, unresolved, checked.closing_status())
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+        if &expected != record || record.closing() == ResourceClosing::Transferred {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        Ok(ClosingFacts { closing: record.closing(), native: record.native(),
+            unresolved: record.unresolved(), status: record.status() })
+    }
+
+    fn checked_record_value(&mut self, module: ModuleId, facts: ClosingFacts) -> Result<Value, RuntimeFailure> {
+        let status = if let Some(status) = facts.status {
+            // Every selected scalar is at most 64 bits. Pay before constructing
+            // the independent mathematical integer used by the source codec.
+            charge_effect_work(&mut self.instantiation_work, 8, RuntimePhase::Cleanup)?;
+            let integer = if status < 0 {
+                crate::integer::Integer::from_i64(i64::try_from(status).map_err(|_| RuntimeFailure::ForeignBinding)?)
+            } else {
+                crate::integer::Integer::from_u64(u64::try_from(status).map_err(|_| RuntimeFailure::ForeignBinding)?)
+            };
+            self.foreign_constructor(constructor(module, Role::NativeStatus, 1), Some(Value::Integer(integer)), RuntimePhase::Cleanup)?
+        } else {
+            self.foreign_constructor(constructor(module, Role::NativeStatus, 0), None, RuntimePhase::Cleanup)?
+        };
+        let native = match facts.native { ResourceNativeFact::NoOwner => 0, ResourceNativeFact::Owned => 1,
+            ResourceNativeFact::Consumed => 2, ResourceNativeFact::Unknown => 3 };
+        let native = self.foreign_constructor(constructor(module, Role::NativeFact, native), None, RuntimePhase::Cleanup)?;
+        let absence = self.foreign_constructor(constructor(module, Role::DiagnosticAbsence, 0), None, RuntimePhase::Cleanup)?;
+        let diagnostic = self.foreign_constructor(constructor(module, Role::Diagnostic, 0), Some(absence), RuntimePhase::Cleanup)?;
+        let fields = self.foreign_tuple(&[status, native, Value::Boolean(facts.unresolved), diagnostic], RuntimePhase::Cleanup)?;
+        self.foreign_constructor(constructor(module, Role::BoundaryRecord, 0), Some(fields), RuntimePhase::Cleanup)
+    }
+
+    fn checked_record_matches(&mut self, module: ModuleId, value: &Value, facts: ClosingFacts) -> Result<bool, RuntimeFailure> {
+        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, value)?;
+        if id != constructor(module, Role::BoundaryRecord, 0) { return Ok(false); }
+        let Some(Value::Location(location)) = payload else { return Ok(false); };
+        let location = resolve_location_with_work(&self.heap, *location, &mut self.instantiation_work)?;
+        charge_effect_work(&mut self.instantiation_work, 5, RuntimePhase::Cleanup)?;
+        let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else { return Ok(false); };
+        // Copy only fixed handles and a bool. In particular, an adversarial
+        // inline integer is never cloned merely to reject its shape.
+        let [Value::Location(status), Value::Location(native), Value::Boolean(unresolved), Value::Location(diagnostic)] = fields.as_ref() else { return Ok(false); };
+        let (status, native, unresolved, diagnostic) = (*status, *native, *unresolved, *diagnostic);
+        if unresolved != facts.unresolved { return Ok(false); }
+        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &Value::Location(status))?;
+        let status_matches = match (facts.status, payload) {
+            (None, None) => id == constructor(module, Role::NativeStatus, 0),
+            (Some(expected), Some(Value::Integer(actual))) => {
+                // Length inspection is constant work; conversion is restricted
+                // to the selected fixed ABI range and paid before it runs.
+                charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Cleanup)?;
+                if id != constructor(module, Role::NativeStatus, 1) || actual.magnitude_byte_length() > 8 { false }
+                else {
+                    charge_effect_work(&mut self.instantiation_work, 8, RuntimePhase::Cleanup)?;
+                    if expected < 0 { actual.to_i64().map(i128::from) == Some(expected) }
+                    else { actual.to_u64().map(i128::from) == Some(expected) }
+                }
+            }
+            _ => false,
+        };
+        if !status_matches { return Ok(false); }
+        let ordinal = match facts.native { ResourceNativeFact::NoOwner => 0, ResourceNativeFact::Owned => 1,
+            ResourceNativeFact::Consumed => 2, ResourceNativeFact::Unknown => 3 };
+        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &Value::Location(native))?;
+        if id != constructor(module, Role::NativeFact, ordinal) || payload.is_some() { return Ok(false); }
+        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &Value::Location(diagnostic))?;
+        if id != constructor(module, Role::Diagnostic, 0) { return Ok(false); }
+        let Some(Value::Location(absence)) = payload else { return Ok(false); };
+        let absence = *absence;
+        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &Value::Location(absence))?;
+        Ok(id == constructor(module, Role::DiagnosticAbsence, 0) && payload.is_none())
+    }
+
+    pub(super) fn return_checked_source_finish(
+        &mut self, mut boundary: Box<SourceResourceBoundary>, value: Value,
+        finish: [ConstructorId; 3], report: [ConstructorId; 2], completion: [ConstructorId; 3],
+    ) -> Result<(), RuntimeFailure> {
+        let facts = self.checked_closing_facts(&boundary)?;
+        let module = finish[0].owner().module();
+        if !module.is_builtin_foreign() || boundary.checked.is_none() { return Err(RuntimeFailure::ForeignBinding); }
+        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &value)?;
+        let Some(Value::Location(payload)) = payload else { return Err(RuntimeFailure::ForeignBinding); };
+        let payload = Value::Location(*payload);
+        let (completion_value, source_failed) = match facts.closing {
+            ResourceClosing::NativeConsumed => {
+                if id != finish[0] || !boundary.consumed || boundary.owner.is_some()
+                    || facts.native != ResourceNativeFact::Consumed || facts.unresolved {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                let (result, error) = read_constructor(&self.heap, &mut self.instantiation_work, &payload)?;
+                let failed = if result == constructor(module, Role::FinishResult, 0) && error.is_none() { false }
+                    else if result == constructor(module, Role::FinishResult, 1) && error.is_some() { true }
+                    else { return Err(RuntimeFailure::ForeignBinding); };
+                (FinishPayload::Consumed(payload), failed)
+            }
+            ResourceClosing::NativeRetained => {
+                if id != finish[1] || boundary.consumed || facts.native != ResourceNativeFact::Owned || facts.unresolved {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                let Value::Location(location) = payload else { return Err(RuntimeFailure::ForeignBinding); };
+                let location = resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
+                charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Cleanup)?;
+                let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else { return Err(RuntimeFailure::ForeignBinding); };
+                let [Value::NativeStateView(key), _error] = fields.as_ref() else { return Err(RuntimeFailure::ForeignBinding); };
+                if *key != boundary.key { return Err(RuntimeFailure::ForeignBinding); }
+                boundary.owner.as_mut().ok_or(RuntimeFailure::ForeignBinding)?.quarantine();
+                // Keep the immutable field coordinate until source completion
+                // is admitted. A later proportional copy is output work.
+                (FinishPayload::Retained(location), true)
+            }
+            ResourceClosing::SessionLost | ResourceClosing::DependencyBlocked | ResourceClosing::Quarantined => {
+                if id != finish[2] || boundary.consumed { return Err(RuntimeFailure::ForeignBinding); }
+                let reason = match facts.closing { ResourceClosing::SessionLost => 0,
+                    ResourceClosing::DependencyBlocked => 1, _ => 2 };
+                let (id, record) = read_constructor(&self.heap, &mut self.instantiation_work, &payload)?;
+                let Some(Value::Location(record)) = record else { return Err(RuntimeFailure::ForeignBinding); };
+                let record = Value::Location(*record);
+                if id != constructor(module, Role::BoundaryFailure, reason)
+                    || !self.checked_record_matches(module, &record, facts)? {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                (FinishPayload::Local(payload), true)
+            }
+            ResourceClosing::Transferred => return Err(RuntimeFailure::ForeignBinding),
+        };
+        // The authored Finish has returned and its exact codec/private witness
+        // relation is now admitted. Completion survives later host discard or
+        // optional wrapper/output failure; neither event can rerun source code.
+        boundary.checked.as_ref().ok_or(RuntimeFailure::ForeignBinding)?
+            .source_continued(boundary.key.0 as usize, boundary.node)
+            .map_err(|_| RuntimeFailure::ForeignBinding)?;
+        self.live_resources = self.live_resources.checked_sub(1).ok_or(RuntimeFailure::InvalidControlState)?;
+        self.trace_effect(EffectTraceEvent::ResourceReleased(boundary.key.0));
+        let returned = if boundary.discarded {
+            if source_failed { return Err(RuntimeFailure::ResourceCompletion); }
+            Value::Unit
+        } else {
+            let completion_value = match completion_value {
+                FinishPayload::Consumed(result) => {
+                    let record = self.checked_record_value(module, facts)?;
+                    let fields = self.checked_owned_tuple([result, record])?;
+                    self.foreign_constructor(completion[0], Some(fields), RuntimePhase::Cleanup)?
+                }
+                FinishPayload::Retained(location) => {
+                    let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else { return Err(RuntimeFailure::ForeignBinding); };
+                    let error = super::copy_generic_cell_value(&fields[1], &mut self.instantiation_work)?;
+                    let record = self.checked_record_value(module, facts)?;
+                    let fields = self.checked_owned_tuple([error, record])?;
+                    self.foreign_constructor(completion[1], Some(fields), RuntimePhase::Cleanup)?
+                }
+                FinishPayload::Local(reason) => self.foreign_constructor(completion[2], Some(reason), RuntimePhase::Cleanup)?,
+            };
+            let body = boundary.saved.take().ok_or(RuntimeFailure::InvalidControlState)?;
+            let fields = self.checked_owned_tuple([body, completion_value])?;
+            self.foreign_constructor(report[1], Some(fields), RuntimePhase::Cleanup)?
+        };
+        self.control = Some(Control::Return(returned));
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,7 +287,7 @@ mod tests {
                 assert!(matches!(machine.control, Some(Control::Return(_))));
                 assert_eq!(machine.live_resources, 0);
                 let before = checked.snapshot();
-                machine.settle_checked_observer(&checked, Some(&slot));
+                machine.settle_checked_observer(&checked, Some(&slot), crate::eval::GuardInspectionPoint::ReturnFailureAfterDisposal);
                 assert_eq!(machine.checked_reports.as_ref().unwrap().record_count(), 1);
                 assert_eq!(checked.snapshot().native, before.native);
             });
@@ -325,6 +523,21 @@ mod tests {
     }
 
     #[test]
+    fn failed_unpublished_return_has_after_disposal_point_and_no_scope_closing() {
+        with_case(ClosingStage::Armed, |mut machine, mut boundary, _finish| {
+            let checked = boundary.checked.as_ref().unwrap().prepaid_scope_observer();
+            boundary.phase = super::super::ProviderPhase::Acquire;
+            assert_eq!(machine.return_source_resource(boundary, Value::Unit), Err(RuntimeFailure::ForeignBinding));
+            let (records, guards) = machine.checked_reports.take().unwrap().into_inspections();
+            assert!(records.is_empty());
+            assert_eq!(guards.len(), 1);
+            assert_eq!(guards[0].point(), crate::eval::GuardInspectionPoint::ReturnFailureAfterDisposal);
+            assert_eq!(checked.snapshot().k, K::Absent);
+            assert_eq!(checked.snapshot().continuation, CheckedOwnerContinuation::Absent);
+        });
+    }
+
+    #[test]
     fn terminal_machine_settles_published_owner_and_separates_unpublished_guard() {
         for stage in [ClosingStage::Reserved, ClosingStage::Armed, ClosingStage::Body] {
             with_case(stage, |mut machine, mut boundary, _finish| {
@@ -344,6 +557,7 @@ mod tests {
                 if matches!(stage, ClosingStage::Armed) {
                     let guard = &result.unpublished_guards()[0];
                     assert_eq!(guard.native(), ResourceNativeFact::Owned);
+                    assert_eq!(guard.point(), crate::eval::GuardInspectionPoint::TerminalBeforeQuarantine);
                     assert_eq!(guard.backing(), crate::eval::GuardBackingObservation::Retained);
                     assert_eq!(guard.status(), None);
                     assert!(!guard.unresolved());
@@ -406,203 +620,5 @@ mod tests {
             assert!(guards.is_empty());
             assert!(records.iter().all(|record| record.closing() == ResourceClosing::Transferred && record.native() == ResourceNativeFact::Owned));
         });
-    }
-}
-
-fn constructor(module: ModuleId, role: Role, ordinal: u32) -> ConstructorId {
-    ConstructorId::new(NominalTypeId::new(module, role.local()), ordinal)
-}
-
-// This reader never clones the untrusted constructor payload.
-fn read_constructor<'a>(heap: &'a [HeapCell], work: &mut crate::types::TypeWorkBudget, value: &Value)
-    -> Result<(ConstructorId, &'a Option<Value>), RuntimeFailure> {
-    let Value::Location(location) = value else { return Err(RuntimeFailure::ForeignBinding); };
-    let location = resolve_location_with_work(heap, *location, work)?;
-    match heap.get(location) {
-        Some(HeapCell::Constructor(id, payload)) => Ok((*id, payload)),
-        _ => Err(RuntimeFailure::ForeignBinding),
-    }
-}
-
-impl Machine<'_> {
-    fn checked_owned_tuple<const N: usize>(&mut self, values: [Value; N]) -> Result<Value, RuntimeFailure> {
-        charge_effect_work(&mut self.instantiation_work, N + 1, RuntimePhase::Cleanup)?;
-        let mut fields = Vec::new();
-        fields.try_reserve_exact(N).map_err(|_| RuntimeFailure::HeapCapacity)?;
-        fields.extend(values);
-        self.heap.try_reserve(1).map_err(|_| RuntimeFailure::HeapCapacity)?;
-        Ok(Value::Location(super::allocate_heap(&mut self.heap, HeapCell::Tuple(fields.into_boxed_slice()))?))
-    }
-
-    fn checked_closing_facts(&mut self, boundary: &SourceResourceBoundary) -> Result<ClosingFacts, RuntimeFailure> {
-        charge_effect_work(&mut self.instantiation_work, 16, RuntimePhase::Cleanup)?;
-        let record = self.checked_reports.as_ref()
-            .and_then(|reports| reports.record_for(boundary.report_slot.as_ref()?))
-            .ok_or(RuntimeFailure::ForeignBinding)?;
-        // The current fixed owner profile requests no diagnostic callback. Do
-        // not silently replace another absence class or text with this one.
-        if record.diagnostic() != &ResourceDiagnostic::NotRequested {
-            return Err(RuntimeFailure::ForeignBinding);
-        }
-        let checked = boundary.checked.as_ref().ok_or(RuntimeFailure::ForeignBinding)?;
-        let (completion, k, native, unresolved) = checked.closing_record().map_err(|_| RuntimeFailure::ForeignBinding)?;
-        let expected = crate::eval::ResourceReport::closing_facts(completion, k, native, unresolved, checked.closing_status())
-            .ok_or(RuntimeFailure::ForeignBinding)?;
-        if &expected != record || record.closing() == ResourceClosing::Transferred {
-            return Err(RuntimeFailure::ForeignBinding);
-        }
-        Ok(ClosingFacts { closing: record.closing(), native: record.native(),
-            unresolved: record.unresolved(), status: record.status() })
-    }
-
-    fn checked_record_value(&mut self, module: ModuleId, facts: ClosingFacts) -> Result<Value, RuntimeFailure> {
-        let status = if let Some(status) = facts.status {
-            // Every selected scalar is at most 64 bits. Pay before constructing
-            // the independent mathematical integer used by the source codec.
-            charge_effect_work(&mut self.instantiation_work, 8, RuntimePhase::Cleanup)?;
-            let integer = if status < 0 {
-                crate::integer::Integer::from_i64(i64::try_from(status).map_err(|_| RuntimeFailure::ForeignBinding)?)
-            } else {
-                crate::integer::Integer::from_u64(u64::try_from(status).map_err(|_| RuntimeFailure::ForeignBinding)?)
-            };
-            self.foreign_constructor(constructor(module, Role::NativeStatus, 1), Some(Value::Integer(integer)), RuntimePhase::Cleanup)?
-        } else {
-            self.foreign_constructor(constructor(module, Role::NativeStatus, 0), None, RuntimePhase::Cleanup)?
-        };
-        let native = match facts.native { ResourceNativeFact::NoOwner => 0, ResourceNativeFact::Owned => 1,
-            ResourceNativeFact::Consumed => 2, ResourceNativeFact::Unknown => 3 };
-        let native = self.foreign_constructor(constructor(module, Role::NativeFact, native), None, RuntimePhase::Cleanup)?;
-        let absence = self.foreign_constructor(constructor(module, Role::DiagnosticAbsence, 0), None, RuntimePhase::Cleanup)?;
-        let diagnostic = self.foreign_constructor(constructor(module, Role::Diagnostic, 0), Some(absence), RuntimePhase::Cleanup)?;
-        let fields = self.foreign_tuple(&[status, native, Value::Boolean(facts.unresolved), diagnostic], RuntimePhase::Cleanup)?;
-        self.foreign_constructor(constructor(module, Role::BoundaryRecord, 0), Some(fields), RuntimePhase::Cleanup)
-    }
-
-    fn checked_record_matches(&mut self, module: ModuleId, value: &Value, facts: ClosingFacts) -> Result<bool, RuntimeFailure> {
-        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, value)?;
-        if id != constructor(module, Role::BoundaryRecord, 0) { return Ok(false); }
-        let Some(Value::Location(location)) = payload else { return Ok(false); };
-        let location = resolve_location_with_work(&self.heap, *location, &mut self.instantiation_work)?;
-        charge_effect_work(&mut self.instantiation_work, 5, RuntimePhase::Cleanup)?;
-        let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else { return Ok(false); };
-        // Copy only fixed handles and a bool. In particular, an adversarial
-        // inline integer is never cloned merely to reject its shape.
-        let [Value::Location(status), Value::Location(native), Value::Boolean(unresolved), Value::Location(diagnostic)] = fields.as_ref() else { return Ok(false); };
-        let (status, native, unresolved, diagnostic) = (*status, *native, *unresolved, *diagnostic);
-        if unresolved != facts.unresolved { return Ok(false); }
-        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &Value::Location(status))?;
-        let status_matches = match (facts.status, payload) {
-            (None, None) => id == constructor(module, Role::NativeStatus, 0),
-            (Some(expected), Some(Value::Integer(actual))) => {
-                // Length inspection is constant work; conversion is restricted
-                // to the selected fixed ABI range and paid before it runs.
-                charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Cleanup)?;
-                if id != constructor(module, Role::NativeStatus, 1) || actual.magnitude_byte_length() > 8 { false }
-                else {
-                    charge_effect_work(&mut self.instantiation_work, 8, RuntimePhase::Cleanup)?;
-                    if expected < 0 { actual.to_i64().map(i128::from) == Some(expected) }
-                    else { actual.to_u64().map(i128::from) == Some(expected) }
-                }
-            }
-            _ => false,
-        };
-        if !status_matches { return Ok(false); }
-        let ordinal = match facts.native { ResourceNativeFact::NoOwner => 0, ResourceNativeFact::Owned => 1,
-            ResourceNativeFact::Consumed => 2, ResourceNativeFact::Unknown => 3 };
-        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &Value::Location(native))?;
-        if id != constructor(module, Role::NativeFact, ordinal) || payload.is_some() { return Ok(false); }
-        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &Value::Location(diagnostic))?;
-        if id != constructor(module, Role::Diagnostic, 0) { return Ok(false); }
-        let Some(Value::Location(absence)) = payload else { return Ok(false); };
-        let absence = *absence;
-        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &Value::Location(absence))?;
-        Ok(id == constructor(module, Role::DiagnosticAbsence, 0) && payload.is_none())
-    }
-
-    pub(super) fn return_checked_source_finish(
-        &mut self, mut boundary: Box<SourceResourceBoundary>, value: Value,
-        finish: [ConstructorId; 3], report: [ConstructorId; 2], completion: [ConstructorId; 3],
-    ) -> Result<(), RuntimeFailure> {
-        let facts = self.checked_closing_facts(&boundary)?;
-        let module = finish[0].owner().module();
-        if !module.is_builtin_foreign() || boundary.checked.is_none() { return Err(RuntimeFailure::ForeignBinding); }
-        let (id, payload) = read_constructor(&self.heap, &mut self.instantiation_work, &value)?;
-        let Some(Value::Location(payload)) = payload else { return Err(RuntimeFailure::ForeignBinding); };
-        let payload = Value::Location(*payload);
-        let (completion_value, source_failed) = match facts.closing {
-            ResourceClosing::NativeConsumed => {
-                if id != finish[0] || !boundary.consumed || boundary.owner.is_some()
-                    || facts.native != ResourceNativeFact::Consumed || facts.unresolved {
-                    return Err(RuntimeFailure::ForeignBinding);
-                }
-                let (result, error) = read_constructor(&self.heap, &mut self.instantiation_work, &payload)?;
-                let failed = if result == constructor(module, Role::FinishResult, 0) && error.is_none() { false }
-                    else if result == constructor(module, Role::FinishResult, 1) && error.is_some() { true }
-                    else { return Err(RuntimeFailure::ForeignBinding); };
-                (FinishPayload::Consumed(payload), failed)
-            }
-            ResourceClosing::NativeRetained => {
-                if id != finish[1] || boundary.consumed || facts.native != ResourceNativeFact::Owned || facts.unresolved {
-                    return Err(RuntimeFailure::ForeignBinding);
-                }
-                let Value::Location(location) = payload else { return Err(RuntimeFailure::ForeignBinding); };
-                let location = resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
-                charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Cleanup)?;
-                let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else { return Err(RuntimeFailure::ForeignBinding); };
-                let [Value::NativeStateView(key), _error] = fields.as_ref() else { return Err(RuntimeFailure::ForeignBinding); };
-                if *key != boundary.key { return Err(RuntimeFailure::ForeignBinding); }
-                boundary.owner.as_mut().ok_or(RuntimeFailure::ForeignBinding)?.quarantine();
-                // Keep the immutable field coordinate until source completion
-                // is admitted. A later proportional copy is output work.
-                (FinishPayload::Retained(location), true)
-            }
-            ResourceClosing::SessionLost | ResourceClosing::DependencyBlocked | ResourceClosing::Quarantined => {
-                if id != finish[2] || boundary.consumed { return Err(RuntimeFailure::ForeignBinding); }
-                let reason = match facts.closing { ResourceClosing::SessionLost => 0,
-                    ResourceClosing::DependencyBlocked => 1, _ => 2 };
-                let (id, record) = read_constructor(&self.heap, &mut self.instantiation_work, &payload)?;
-                let Some(Value::Location(record)) = record else { return Err(RuntimeFailure::ForeignBinding); };
-                let record = Value::Location(*record);
-                if id != constructor(module, Role::BoundaryFailure, reason)
-                    || !self.checked_record_matches(module, &record, facts)? {
-                    return Err(RuntimeFailure::ForeignBinding);
-                }
-                (FinishPayload::Local(payload), true)
-            }
-            ResourceClosing::Transferred => return Err(RuntimeFailure::ForeignBinding),
-        };
-        // The authored Finish has returned and its exact codec/private witness
-        // relation is now admitted. Completion survives later host discard or
-        // optional wrapper/output failure; neither event can rerun source code.
-        boundary.checked.as_ref().ok_or(RuntimeFailure::ForeignBinding)?
-            .source_continued(boundary.key.0 as usize, boundary.node)
-            .map_err(|_| RuntimeFailure::ForeignBinding)?;
-        self.live_resources = self.live_resources.checked_sub(1).ok_or(RuntimeFailure::InvalidControlState)?;
-        self.trace_effect(EffectTraceEvent::ResourceReleased(boundary.key.0));
-        let returned = if boundary.discarded {
-            if source_failed { return Err(RuntimeFailure::ResourceCompletion); }
-            Value::Unit
-        } else {
-            let completion_value = match completion_value {
-                FinishPayload::Consumed(result) => {
-                    let record = self.checked_record_value(module, facts)?;
-                    let fields = self.checked_owned_tuple([result, record])?;
-                    self.foreign_constructor(completion[0], Some(fields), RuntimePhase::Cleanup)?
-                }
-                FinishPayload::Retained(location) => {
-                    let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else { return Err(RuntimeFailure::ForeignBinding); };
-                    let error = super::copy_generic_cell_value(&fields[1], &mut self.instantiation_work)?;
-                    let record = self.checked_record_value(module, facts)?;
-                    let fields = self.checked_owned_tuple([error, record])?;
-                    self.foreign_constructor(completion[1], Some(fields), RuntimePhase::Cleanup)?
-                }
-                FinishPayload::Local(reason) => self.foreign_constructor(completion[2], Some(reason), RuntimePhase::Cleanup)?,
-            };
-            let body = boundary.saved.take().ok_or(RuntimeFailure::InvalidControlState)?;
-            let fields = self.checked_owned_tuple([body, completion_value])?;
-            self.foreign_constructor(report[1], Some(fields), RuntimePhase::Cleanup)?
-        };
-        self.control = Some(Control::Return(returned));
-        Ok(())
     }
 }

@@ -53,6 +53,8 @@ pub enum GuardInspectionPoint {
     AfterUnpublishedDisposal,
     /// Snapshot at terminal traversal before physical owner quarantine.
     TerminalBeforeQuarantine,
+    /// Snapshot after a failed return path has disposed its boundary owner.
+    ReturnFailureAfterDisposal,
 }
 
 /// Separate supervisor inspection for a never-published acquisition. This is

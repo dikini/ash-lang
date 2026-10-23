@@ -689,6 +689,44 @@ pub(super) fn checked_native_host(
     native_host_kind(build, runtime_fingerprint, work, Some((program, limits)))
 }
 
+pub(super) struct RootHostEmission {
+    pub host: NativeHostEmission,
+    pub leaf: super::checked_leaf::LeafEmission,
+}
+
+/// Artifact-root payloads use the same exact image/facts/policy encoders. The
+/// generated Rust is the private safe shim, not standalone raw provider code.
+/// Its full bytes are separately bound in the root identity and receipt.
+pub(super) fn checked_root_host(
+    build: &super::image::NativeBuildImage,
+    program: &crate::core::ValidatedEffectProgram,
+    limits: crate::foreign::source_runtime::CheckedOwnerLimits,
+    work: &mut TypeWorkBudget,
+) -> Result<RootHostEmission, EmissionFailure> {
+    let image = build.image.encode_bytes(work).map_err(EmissionFailure::Image)?;
+    let expected_facts = build.image.encode_native_expectations(work).map_err(EmissionFailure::Image)?;
+    let policy = (|| {
+        let image_pin = super::checked_receipt::pin(&image, work)?;
+        let facts_pin = super::checked_receipt::pin(&expected_facts, work)?;
+        super::checked_producer::policy_bytes(program, image_pin, facts_pin, limits, work)
+    })().map_err(|error| if error == super::checked_receipt::ReceiptFailure::Resource {
+        EmissionFailure::Resource
+    } else { EmissionFailure::Image(ImageFailure::InvalidRecord) })?;
+    // Revalidate the exact original four-operation projection, not just the
+    // leaf/shim spellings supplied by a generated project.
+    let leaf = super::checked_leaf::render(build, work).map_err(|error| match error {
+        super::checked_leaf::LeafFailure::Resource => EmissionFailure::Resource,
+        _ => EmissionFailure::Image(ImageFailure::InvalidRecord),
+    })?;
+    let rust_source = super::checked_leaf::render_root_shim(work).map_err(|error| match error {
+        super::checked_leaf::LeafFailure::Resource => EmissionFailure::Resource,
+        _ => EmissionFailure::Image(ImageFailure::InvalidRecord),
+    })?;
+    Ok(RootHostEmission { leaf, host: NativeHostEmission { rust_source, payloads: NativePayloads {
+        image, expected_facts, checked_policy: Some(policy),
+    } } })
+}
+
 fn native_host_kind(
     build: &super::image::NativeBuildImage,
     runtime_fingerprint: &[u8; 32],

@@ -264,7 +264,7 @@ The guarded [partial acceptance](https://github.com/dikini/ash-lang/issues/62)
 keeps all four whole F6 criteria unchecked. All six complete closure fields remain
 Missing and premises proposed. Genuine protected positives require external
 administrator-established installation and independent applicable per-image
-approval; no test token substitutes for them. The active connected component implements the reviewed approval/launcher-to-runtime transfer for actual owner
+approval; no test token substitutes for them. The active connected component is implementing the reviewed approval/launcher-to-runtime transfer for actual owner
 acquire, copy, finish and Trace, plus refreshed required F3 images on this codec.
 Protected deployment and any generated output execution require their separate
 gates; the connected F-core and whole acceptance remain open.
@@ -276,7 +276,7 @@ implementation on retained `4e995067`. Unsigned checkpoint `14b1b148` preserves
 session 33968's 25 distinct Rust tests across eight commands: genuine request
 DATA, ledger/native-versus-synthetic Finish, private checked dispatch, real copy
 phase, authenticated leaf rendering, report preflight and Machine result/report
-preservation. All 6,403 input maps and tools match; every child is reaped with
+preservation. All eight maps contain the same 6,403 input files, and tools match; every child is reaped with
 its owned group absent. The raw logs retain nine ordinary-library dead-code
 warnings plus their summary. These are intermediate controls, not Clippy,
 generated-template compilation, terminal settlement or native execution proof.
@@ -293,7 +293,32 @@ report channel. Shared pre-entry storage does not merge these categories.
 
 The next tested settlement checkpoint passes session 23592's 37 distinct ordinary Rust controls across nine commands. It implements cumulative pre-entry report tickets, actual terminal/captured settlement, separate successful-refusal/discard guard inspection, and checked Finish admission before optional output failure. [Compact evidence](evidence/checked-owner-core-execution/connected-runtime-settlement/README.md) preserves all tested inputs, actual results and historical 99447's 35-pass/setup-failure outcome. The current raw logs retain 13 ordinary-library dead-code warnings plus their summary. This paragraph and evidence were assembled after tests; runtime blobs remain exact.
 
-The return-failure observation point still has a P2 label mismatch: its inner boundary has already been disposed, whereas the label says terminal-before-quarantine. The next connected tranche must distinguish these points. Actual generated safe-root/leaf connection and compilation, pre-vacant infallible arming, root code/config identity and the one-shot protected launcher/report transport remain pending. Serialized data never grants admission. Concrete verifier/syscall source requires critical review before generated/native verification; protected installation, applicable independent approval and selected native/application execution remain separate gates. Root owns format cleanup/check at the F-core integration freeze before `cargo xtask verify`, the fresh final artifact and per-image approval. This WIP checkpoint has no Clippy or whole F3/F4/F6 verdict.
+The next bounded source checkpoint passes session 25968's targeted ash-only
+Clippy and 45 Rust controls. It distinguishes return-failure disposal from terminal
+traversal, prepares a fixed generated-project recipe, and independently restores
+full originals to reconstruct version2 root-request code/configuration DATA.
+Closed Cargo configuration/tool/cache selection and pinned dependency edges are
+checked; image, facts, policy, Rust, original mappings and contracts remain exact.
+Version1 stays separate. The [root/request evidence](evidence/checked-owner-core-execution/connected-runtime-root-data/README.md)
+retains all 63 tested snapshots and 15 equal maps containing6,575 inputs, tools and
+reaped/empty owned groups. Raw logs retain 14 ordinary-library warnings and 6 test
+warnings (five duplicates), plus summaries. Clippy denies `clippy::all`; it does
+not claim warning-free Rust. This paragraph/evidence is post-test, with runtime
+blobs exact. The checkpoint is qualified to old base `4e995067`: retain PR110
+first, then rebase PR118 to the actual retaining tip and refresh both gates.
+
+Historical 33360's exact-work replay failure and fresh 47297's 16-unit reencoding
+variation remain separate evidence. The narrow test correction preserves the
+configured request allowance, all byte/original checks, spent refusal and
+deterministic framing/component cuts; it adds no quota margin or new tariff.
+No generated project or leaf was compiled by these Rust gates, and no selected
+native/application output executed. Six complete closures remain Missing and
+premises proposed. Actual root/leaf evaluator connection, pre-vacant infallible
+arming, protected child/FD/report transport, installed applicable approval and
+genuine native acquire/copy/Finish/Trace remain open. Concrete verifier/syscall
+source needs critical review before generated/native verification. Root owns
+format cleanup/check at the F-core integration freeze before `cargo xtask verify`,
+the fresh final artifact and per-image approval. Whole F3/F4/F6 remains open.
 
 ## Acceptance for this bounded delivery
 

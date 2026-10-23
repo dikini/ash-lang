@@ -1140,6 +1140,10 @@ impl<'runtime> Machine<'runtime> {
             },
             result => result,
         };
+        // run_loop can return Ok only after both native progress machines
+        // drain and frames/live/captured obligations are empty. Err explicitly
+        // traverses that forest above. Therefore disposing self below cannot
+        // still own an unobserved checked source boundary.
         // Move already funded report storage before disposing the machine. No
         // source result, failure, or host cleanup overwrites these observations.
         let (reports, unpublished) = self
@@ -1189,7 +1193,8 @@ impl<'runtime> Machine<'runtime> {
                     // Commit before taking/dropping the physical owner.
                     if let Some(checked) = &boundary.checked {
                         if self.checked_reports.is_some() {
-                            self.settle_checked_observer(checked, boundary.report_slot.as_ref());
+                            self.settle_checked_observer(checked, boundary.report_slot.as_ref(),
+                                super::GuardInspectionPoint::TerminalBeforeQuarantine);
                         } else {
                             checked.output_failed();
                         }

@@ -310,4 +310,38 @@ root-owned format-before-F-core/full-gate/final-artifact trigger above.
 
 Session 23592 passes 37 ordinary Rust controls with nine equal before/after maps of 6,404 input files, 57 source snapshots and matching tools and all children reaped/groups absent. The [compact settlement evidence](../evidence/checked-owner-core-execution/connected-runtime-settlement/README.md) preserves exact source and historical 99447's 35-pass/envelope-setup failure. Runtime blobs remain tested; this record/evidence is post-test. Raw logs have 13 ordinary-library warnings plus summary, not Clippy success.
 
-Next fix the Err-wrapper observation-point P2 in the same connected tranche, then implement actual generated safe-root/leaf connection, immediate vacant-slot arming, independently recomputed root identity and protected child/FD/report handoff. Keep sixMissing/proposed, actual installed approval and native/output execution separate; no authority token/caller path replaces bootstrap. Root-owned fmt/check and full F-core gate precede final native artifact/approval. No standalone evidence completion or merge verdict.
+The P2 return-failure point is now distinct from frame traversal. Session 25968
+refreshes targeted ash-only Clippy and 45 Rust controls for settlement plus closed
+project/identity/request DATA. The [compact root/request evidence](../evidence/checked-owner-core-execution/connected-runtime-root-data/README.md)
+retains actual snapshots/maps/tools/cleanup and historical failures. This is an
+old-`4e995067` checkpoint: PR110 retains first, then PR118 rebases to the actual
+tip and refreshes Clippy plus 45. Code remains tested; this plan/evidence is
+post-test. Ordinary Rust warnings remain visible; no warning-free, generated
+project, native, protected positive or full F-core claim transfers.
+
+### Remaining finite slices
+
+1. Rebase and retain the bounded settlement/project/request delivery after
+   actual-tip Clippy plus 45 and exact-head review. Benefit: a reviewed current
+   producer-to-decoder DATA seam and settled evaluator observations. Complexity 1;
+   stop for any changed-input/refusal or review finding, preserving prior receipts.
+2. Connect the canonical binary root and opaque leaf to actual evaluator entry,
+   prepaid vacant-slot arming and report/result extraction. Compile/link the
+   generated project and independently rederive its actual code/configuration
+   identity; bind all fixed build-script, lock-policy, toolchain, manifest/lock,
+   leaf/shim and payload bytes. Benefit: removes the generated-code/evaluator
+   gap rather than adding another observation layer. Complexity 3; stop on any
+   ABI, nominal DATA boundary, identity or incomplete-closure mismatch. Protected
+   positive execution remains unrun.
+3. Implement the reviewed one-shot trusted child, same-FD execution and
+   authenticated one-way report endpoints, with real context/store/refusal
+   controls and independent syscall/FD review. Benefit: connects approved image
+   preparation to the protected runtime path. Complexity 4; absent administrator-
+   established installation or independent per-image approval remains an
+   explicit external prerequisite, never a caller token or provisioning shortcut.
+4. Apply root-owned formatting/check before the complete F-core gate and fresh
+   final artifact/approval. Under separately assigned real deployment/native
+   verification, demonstrate eight initialized copied bytes after exact Free,
+   authored Trace and ordered independent closing/failure reports. Complexity 3;
+   missing deployment/closure or any required regression keeps whole acceptance
+   open. No old executable or source fingerprint substitutes for these gates.

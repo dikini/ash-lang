@@ -365,7 +365,8 @@ impl Machine<'_> {
             && let Some(control) = checked
         {
             if self.checked_reports.is_some() {
-                self.settle_checked_observer(&control, report_slot.as_ref());
+                self.settle_checked_observer(&control, report_slot.as_ref(),
+                    super::super::GuardInspectionPoint::ReturnFailureAfterDisposal);
             } else {
                 // Ordinary public checked activation remains closed. No
                 // selected acquisition can enter without the funded collector.

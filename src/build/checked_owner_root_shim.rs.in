@@ -1,0 +1,53 @@
+//! Artifact-local safe transport. Only the generated root can name these types.
+//! CP24 policy and pre-funded observation remain in the evaluator; this module
+//! neither authenticates a context nor admits a source operation.
+use checked_owner_leaf as leaf;
+
+pub(crate) struct OwnerCell {
+    owner: Option<leaf::Owner>,
+}
+pub(crate) enum AcquireObservation {
+    DestinationOccupied,
+    NotEntered(leaf::Refusal),
+    Returned { nonnull: bool },
+}
+pub(crate) enum FreeObservation {
+    NoOwner,
+    Returned(leaf::ReleaseReturned),
+}
+impl OwnerCell {
+    /// Construct before native entry and reserve its enclosing storage then.
+    pub(crate) fn vacant() -> Self { Self { owner: None } }
+    /// The caller must already own the pending-call and mandatory report slots.
+    pub(crate) fn acquire(&mut self, capacity: usize, initialized: usize) -> AcquireObservation {
+        // Vacancy and the exclusive destination borrow precede C. Assignment
+        // cannot replace/drop an existing owner or acquire a later borrow.
+        if self.owner.is_some() { return AcquireObservation::DestinationOccupied; }
+        match leaf::acquire(capacity, initialized) {
+            leaf::AcquireReply::NotEntered(reason) => AcquireObservation::NotEntered(reason),
+            leaf::AcquireReply::Returned(returned) => {
+                self.owner = returned; // FIRST root action on the returned owner.
+                AcquireObservation::Returned { nonnull: self.owner.is_some() }
+            }
+        }
+    }
+    pub(crate) fn query(&self, key: usize) -> Result<Option<leaf::ViewDescriptor>, leaf::Refusal> {
+        let owner = self.owner.as_ref().ok_or(leaf::Refusal::Owner)?;
+        leaf::query(owner, key)
+    }
+    pub(crate) fn length(&self, key: usize) -> Result<usize, leaf::Refusal> {
+        let owner = self.owner.as_ref().ok_or(leaf::Refusal::Owner)?;
+        Ok(leaf::length(owner, key))
+    }
+    pub(crate) fn copy(&self, descriptor: &leaf::ViewDescriptor, offset: usize, destination: &mut [u8]) -> Result<(), leaf::Refusal> {
+        let owner = self.owner.as_ref().ok_or(leaf::Refusal::Owner)?;
+        let view = leaf::borrow_view(owner, descriptor)?;
+        leaf::copy(&view, offset, destination)
+    }
+    /// Consumes this exact transport cell. There is no foreign Drop or retry.
+    /// The caller records the returned fact before optional source output.
+    pub(crate) fn free(mut self) -> FreeObservation {
+        let Some(owner) = self.owner.take() else { return FreeObservation::NoOwner; };
+        FreeObservation::Returned(leaf::release(owner))
+    }
+}

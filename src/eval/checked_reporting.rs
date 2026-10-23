@@ -18,6 +18,7 @@ impl super::Machine<'_> {
         &mut self,
         checked: &crate::foreign::source_runtime::NativeOwnerBoundary,
         slot: Option<&super::super::checked_reports::ResourceReportSlot>,
+        point: super::super::GuardInspectionPoint,
     ) -> Option<usize> {
         use crate::foreign::source_runtime::{CheckedLocalCompletion as K, CheckedNativeFact as Native};
         checked.output_failed();
@@ -31,7 +32,7 @@ impl super::Machine<'_> {
             return None;
         }
         if k == K::Absent {
-            self.inspect_unpublished_guard(checked, slot, super::super::GuardInspectionPoint::TerminalBeforeQuarantine);
+            self.inspect_unpublished_guard(checked, slot, point);
             return None;
         }
         let record = super::super::ResourceReport::closing_facts(
