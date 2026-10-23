@@ -310,6 +310,7 @@ impl Machine<'_> {
         let acquisition_environment = environment.clone().extend(acquire_parameter, initializer)?;
         let boundary = Box::new(SourceResourceBoundary {
             checked: None,
+            report_slot: None,
             node,
             key,
             environment,
@@ -329,7 +330,7 @@ impl Machine<'_> {
         Ok(())
     }
 
-    fn source_pair(
+    pub(super) fn source_pair(
         &mut self,
         value: Value,
         phase: RuntimePhase,
@@ -358,11 +359,19 @@ impl Machine<'_> {
             .checked
             .as_ref()
             .map(|control| control.prepaid_scope_observer());
+        let report_slot = boundary.report_slot.as_ref().map(|slot| slot.observer());
         let result = self.return_source_resource_inner(boundary, value);
         if result.is_err()
             && let Some(control) = checked
         {
-            control.output_failed();
+            if self.checked_reports.is_some() {
+                self.settle_checked_observer(&control, report_slot.as_ref(),
+                    super::super::GuardInspectionPoint::ReturnFailureAfterDisposal);
+            } else {
+                // Ordinary public checked activation remains closed. No
+                // selected acquisition can enter without the funded collector.
+                control.output_failed();
+            }
         }
         result
     }
@@ -382,6 +391,10 @@ impl Machine<'_> {
                     // Acquisition has not published state or private data. Its
                     // pending native guard is revoked without fabricating either.
                     drop(boundary.owner.take());
+                    if self.checked_reports.is_some() && let Some(checked) = &boundary.checked {
+                        self.inspect_unpublished_guard(checked, boundary.report_slot.as_ref(),
+                            super::super::GuardInspectionPoint::AfterUnpublishedDisposal);
+                    }
                     self.live_resources = self
                         .live_resources
                         .checked_sub(1)
@@ -395,6 +408,10 @@ impl Machine<'_> {
                     // Refusal revokes a pending unpublished guard before reporting.
                     // An acquired native object may be refused by source policy.
                     drop(boundary.owner.take());
+                    if self.checked_reports.is_some() && let Some(checked) = &boundary.checked {
+                        self.inspect_unpublished_guard(checked, boundary.report_slot.as_ref(),
+                            super::super::GuardInspectionPoint::AfterUnpublishedDisposal);
+                    }
                     let error = payload.ok_or(RuntimeFailure::ForeignBinding)?;
                     self.live_resources = self
                         .live_resources
@@ -451,6 +468,7 @@ impl Machine<'_> {
                     .environment
                     .clone()
                     .extend(scope.handle.id(), Value::ResourceHandle(key))?;
+                self.reserve_checked_terminal_spare(2, RuntimePhase::Cleanup)?;
                 self.frames
                     .try_reserve(2)
                     .map_err(|_| RuntimeFailure::ResourceCapacity)?;
@@ -521,6 +539,14 @@ impl Machine<'_> {
                 self.control = Some(Control::Evaluate(finish_body, finish_environment));
             }
             ProviderPhase::Finish => {
+                if let crate::core::source_resource::SourceResourceReportCodec::CheckedScope {
+                    report,
+                    completion,
+                } = protocol.report {
+                    return self.return_checked_source_finish(
+                        boundary, value, protocol.finish, report, completion,
+                    );
+                }
                 // Ordinary source constructors cannot consume an owner. The
                 // native transition recorded consumption before this report.
                 let (constructor, payload) = self.foreign_report(&value, RuntimePhase::Cleanup)?;
@@ -818,6 +844,7 @@ fn checked_owner_boundary_discarded_finish_continuation_model() {
                     .unwrap();
                 let boundary = Box::new(SourceResourceBoundary {
                     checked: Some(checked),
+                    report_slot: None,
                     node,
                     key: ActivationKey(111),
                     environment: Environment::new(),
@@ -2066,6 +2093,7 @@ mod source_handler_entry_tests {
                             Frame::SourceResourceBoundary(Box::new(
                                 super::super::SourceResourceBoundary {
                                     checked: None,
+                                    report_slot: None,
                                     node,
                                     key: ActivationKey(depth),
                                     phase: super::super::ProviderPhase::Body,
@@ -2223,6 +2251,7 @@ mod source_handler_entry_tests {
                     };
                     let copy = SourceResourceBoundary {
                         checked: None,
+                        report_slot: None,
                         node: original.node,
                         key: original.key,
                         environment: original.environment.clone(),

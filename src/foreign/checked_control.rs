@@ -88,6 +88,46 @@ struct ClosingSnapshot {
 }
 /// One locally issued finish result. Non-Clone; never replaces source execution.
 pub(super) struct FinishWitness(ClosingSnapshot);
+
+/// Exact local closing evidence. Its constructor stays in this ledger module;
+/// it is not a native-entry permission or the later source-continuation witness.
+#[derive(Debug)]
+pub(crate) struct SyntheticFinishWitness(ClosingSnapshot);
+impl SyntheticFinishWitness {
+    pub(crate) fn completion(&self) -> Completion {
+        self.0.completion
+    }
+    pub(crate) fn native(&self) -> Native {
+        self.0.native
+    }
+    pub(crate) fn unresolved(&self) -> bool {
+        self.0.unresolved
+    }
+}
+
+/// A one-shot finish entry decision. Local completion must never dispatch Free.
+#[derive(Debug)]
+pub(crate) enum FinishEntry {
+    NativeReady,
+    Synthetic(SyntheticFinishWitness),
+}
+
+fn synthetic_finish_record(
+    record: &Record<'_>,
+    owner: Owner,
+) -> Result<SyntheticFinishWitness, Failure> {
+    let snapshot = record.closing.ok_or(Failure::State)?;
+    if record.k != K::Discharged
+        || record.continuation != Continuation::Required
+        || snapshot.owner != owner
+        || snapshot.operation != record.header.teardown.operation()
+        || matches!(snapshot.completion, Completion::Observed(_))
+    {
+        return Err(Failure::State);
+    }
+    Ok(SyntheticFinishWitness(snapshot))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum History {
     Native(Outcome),
@@ -106,7 +146,7 @@ pub(crate) enum Continuation {
     Completed,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Completion {
+pub(crate) enum Completion {
     Observed(Native),
     SessionLost,
     Quarantined,
@@ -737,7 +777,8 @@ pub(super) struct RuntimeBoundary {
     activation: usize,
     acquire_request: crate::core::NodeId,
     pending: Option<Call>,
-    finish_prepared: bool,
+    finish_prepared: Option<FinishEntry>,
+    finish_claimed: bool,
     // These fixed future ledger operations were paid before native entry.
     prepaid: TypeWorkBudget,
 }
@@ -821,7 +862,7 @@ impl RuntimeBoundary {
         let future = limits
             .observations
             .checked_mul(12)
-            .and_then(|n| n.checked_add(8 + 8 + 4 + 3))
+            .and_then(|n| n.checked_add(8 + 8 + 4 + 3 + 3 + 8))
             .ok_or(Failure::Resource)?;
         pay(work, future.checked_add(2 + 3).ok_or(Failure::Resource)?)?;
         let mut ledger = Ledger::reserve(limits.groups, limits.owners, limits.observations, work)?;
@@ -840,7 +881,8 @@ impl RuntimeBoundary {
             activation,
             acquire_request: receipt._request,
             pending: None,
-            finish_prepared: false,
+            finish_prepared: None,
+            finish_claimed: false,
             prepaid: TypeWorkBudget::with_limit(future),
         })
     }
@@ -1024,7 +1066,7 @@ impl RuntimeBoundary {
         blocked: bool,
         work: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        pay(work, 5)?;
+        pay(work, 6)?;
         if activation != self.activation
             || receipt._scope_node != self.scope_node
             || receipt._phase != super::source_bindings::SourceOwnerPhase::Finish
@@ -1034,34 +1076,59 @@ impl RuntimeBoundary {
         {
             return Err(Failure::Original);
         }
-        if self.finish_prepared || self.pending.is_some() {
+        if self.finish_claimed || self.finish_prepared.is_some() || self.pending.is_some() {
             return Err(Failure::State);
         }
-        match self
+        let entry = match self
             .ledger
             .close(self.owner, true, blocked, &mut self.prepaid)?
         {
-            Close::NativeFinish => self.finish_prepared = true,
-            Close::Local => {}
+            Close::NativeFinish => FinishEntry::NativeReady,
+            Close::Local | Close::Already => {
+                pay(&mut self.prepaid, 8)?;
+                FinishEntry::Synthetic(synthetic_finish_record(
+                    &self.ledger.records[self.owner.index],
+                    self.owner,
+                )?)
+            }
             _ => return Err(Failure::State),
-        }
+        };
+        self.finish_claimed = true;
+        self.finish_prepared = Some(entry);
         Ok(())
     }
+    pub(super) fn begin_finish_entry(&mut self) -> Result<FinishEntry, Failure> {
+        pay(&mut self.prepaid, 3)?;
+        let entry = self.finish_prepared.take().ok_or(Failure::State)?;
+        match &entry {
+            FinishEntry::NativeReady => {
+                self.pending = Some(self.ledger.enter(
+                    self.owner,
+                    CallKind::Finish,
+                    &self.scope.header().teardown,
+                    &mut self.prepaid,
+                )?);
+            }
+            FinishEntry::Synthetic(witness) => {
+                let record = &self.ledger.records[self.owner.index];
+                if self.ledger.terminal
+                    || record.k != K::Discharged
+                    || record.closing != Some(witness.0)
+                    || record.continuation != Continuation::Required
+                {
+                    return Err(Failure::State);
+                }
+            }
+        }
+        Ok(entry)
+    }
+    /// Legacy teardown dispatch accepts only actual native readiness. The
+    /// checked path must consume the complete entry decision instead.
     pub(super) fn begin_finish(&mut self) -> Result<(), Failure> {
-        if self.ledger.records[self.owner.index].k == K::Discharged {
-            return Ok(());
+        match self.begin_finish_entry()? {
+            FinishEntry::NativeReady => Ok(()),
+            FinishEntry::Synthetic(_) => Err(Failure::State),
         }
-        if !self.finish_prepared {
-            return Err(Failure::State);
-        }
-        self.finish_prepared = false;
-        self.pending = Some(self.ledger.enter(
-            self.owner,
-            CallKind::Finish,
-            &self.scope.header().teardown,
-            &mut self.prepaid,
-        )?);
-        Ok(())
     }
     pub(super) fn finished(&mut self, consumed: bool) {
         if let Some(call) = self.pending.take() {
@@ -1093,9 +1160,18 @@ impl RuntimeBoundary {
         if activation != self.activation || scope != self.scope_node {
             return Err(Failure::Original);
         }
+        if !self.finish_claimed || self.finish_prepared.is_some() || self.pending.is_some() {
+            return Err(Failure::State);
+        }
         let witness = self.ledger.finish_witness(self.owner, &mut self.prepaid)?;
         self.ledger
             .source_continued(self.owner, witness, &mut self.prepaid)
+    }
+    /// Fixed-size admitted facts only. Unlike the diagnostic snapshot, this
+    /// does not scan history or reconstruct a native transition.
+    pub(super) fn closing_record(&self) -> (Option<Completion>, K, Native, bool) {
+        let record = &self.ledger.records[self.owner.index];
+        (record.completion, record.k, record.native, record.unresolved)
     }
     pub(super) fn snapshot(&self) -> BoundarySnapshot {
         let record = &self.ledger.records[self.owner.index];
@@ -1205,6 +1281,48 @@ mod tests {
         ledger.observed(call, Observed::Acquired).unwrap();
         ledger.publish_acquired(owner, &mut work).unwrap();
         (ledger, owner)
+    }
+
+    #[test]
+    fn local_finish_has_exact_non_native_witness_and_preserves_continuation() {
+        with_header(|header| {
+            let (mut ledger, owner) = acquired(header);
+            let group = ledger.records[owner.index].group;
+            ledger.lose_group(group, true).unwrap();
+            let mut work = TypeWorkBudget::default();
+            assert_eq!(
+                ledger.close(owner, true, false, &mut work),
+                Ok(Close::Local)
+            );
+            let witness = synthetic_finish_record(&ledger.records[owner.index], owner).unwrap();
+            assert_eq!(witness.completion(), Completion::Quarantined);
+            assert_eq!(witness.native(), Native::Owned);
+            assert!(!witness.unresolved());
+            assert_eq!(ledger.observed_calls, 1); // no fabricated native Finish
+            assert_eq!(
+                ledger.records[owner.index].continuation,
+                Continuation::Required
+            );
+            assert!(
+                ledger
+                    .enter(owner, CallKind::Finish, &header.teardown, &mut work)
+                    .is_err()
+            );
+            let source = ledger.finish_witness(owner, &mut work).unwrap();
+            ledger.source_continued(owner, source, &mut work).unwrap();
+            assert!(synthetic_finish_record(&ledger.records[owner.index], owner).is_err());
+
+            let (mut native, owner) = acquired(header);
+            assert_eq!(
+                native.close(owner, true, false, &mut work),
+                Ok(Close::NativeFinish)
+            );
+            let call = native
+                .enter(owner, CallKind::Finish, &header.teardown, &mut work)
+                .unwrap();
+            native.observed(call, Observed::FinishedConsumed).unwrap();
+            assert!(synthetic_finish_record(&native.records[owner.index], owner).is_err());
+        });
     }
 
     #[test]

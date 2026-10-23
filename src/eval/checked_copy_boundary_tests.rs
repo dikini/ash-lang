@@ -163,6 +163,7 @@ fn with_case(
             machine.frames.push(Frame::SourceResourceBoundary(Box::new(
                 SourceResourceBoundary {
                     checked: Some(fixture.boundary),
+                    report_slot: None,
                     node: fixture.scope,
                     key: ActivationKey(111),
                     environment,

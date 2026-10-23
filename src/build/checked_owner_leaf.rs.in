@@ -1,0 +1,135 @@
+//! Fixed owner transport for the generated initialized-eight-byte whole image.
+//! This crate has no Ash dependency and grants no CP24 execution permission.
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(missing_docs)]
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu", target_pointer_width = "64")))]
+compile_error!("unsupported checked owner leaf target");
+use std::{ffi::c_void, ptr::NonNull, sync::atomic::{AtomicU64, Ordering}};
+
+unsafe extern "C" {
+    #[link_name = __ACQUIRE_NAME__]
+    fn native_acquire(capacity: usize, initialized: usize) -> *mut c_void;
+    #[link_name = __QUERY_NAME__]
+    fn native_query(owner: *mut c_void, key: usize) -> *mut c_void;
+    #[link_name = __LENGTH_NAME__]
+    fn native_length(owner: *mut c_void, key: usize) -> usize;
+    #[link_name = __RELEASE_NAME__]
+    fn native_release(owner: *mut c_void);
+}
+static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
+
+/// A pre-entry refusal or a post-query range mismatch. No variant retries C.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refusal {
+    /// The selected fixed allocation profile was not requested.
+    Profile,
+    /// The process-local transport serial cannot advance without reuse.
+    Identity,
+    /// Native query output is outside the live initialized owner interval.
+    Range,
+    /// A descriptor came from another acquisition or a stale owner.
+    Owner,
+}
+/// Unique opaque native backing. There is intentionally no foreign Drop.
+pub struct Owner {
+    address: NonNull<c_void>,
+    initialized: usize,
+    serial: u64,
+}
+/// Exactly one returning acquisition, distinct from pre-entry refusal.
+pub enum AcquireReply {
+    /// No C entry occurred.
+    NotEntered(Refusal),
+    /// C returned a nullable owner. Non-null backing is immediately representable.
+    Returned(Option<Owner>),
+}
+/// A checked relative native view, tied to one acquisition. No raw address escapes.
+pub struct ViewDescriptor {
+    serial: u64,
+    offset: usize,
+    available: usize,
+}
+/// A lexical borrow from the actual live owner, preventing release during copy.
+pub struct View<'a> {
+    owner: &'a Owner,
+    offset: usize,
+    available: usize,
+}
+/// Only a returning release of a consumed Owner can construct this fact.
+pub struct ReleaseReturned {
+    _serial: u64,
+}
+
+/// Invoke the fixed acquisition. The root must reserve and exclusively borrow a
+/// vacant destination before calling, then arm it by its first infallible move.
+pub fn acquire(capacity: usize, initialized: usize) -> AcquireReply {
+    if capacity != 8 || initialized != 8 { return AcquireReply::NotEntered(Refusal::Profile); }
+    let serial = match NEXT_OWNER.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1)) {
+        Ok(serial) => serial,
+        Err(_) => return AcquireReply::NotEntered(Refusal::Identity),
+    };
+    // SAFETY: the exact fixed ABI is established by the generated native plan
+    // and same-build header checks. Callee allocation/initialization validity is
+    // an explicit AD16 whole-image premise, never inferred from this wrapper.
+    let address = unsafe { native_acquire(capacity, initialized) };
+    // No allocation, fallible check, or borrow acquisition follows native return.
+    AcquireReply::Returned(match NonNull::new(address) {
+        Some(address) => Some(Owner {address, initialized, serial}),
+        None => None,
+    })
+}
+/// Observe a native view and validate integer address bounds before arithmetic.
+pub fn query(owner: &Owner, key: usize) -> Result<Option<ViewDescriptor>, Refusal> {
+    let begin = owner.address.as_ptr() as usize;
+    let end = begin.checked_add(owner.initialized).ok_or(Refusal::Range)?;
+    // SAFETY: Owner is live, unique backing supplied by the fixed acquisition;
+    // the admitted ABI and non-consuming query contract remain AD16 premises.
+    let address = unsafe { native_query(owner.address.as_ptr(), key) };
+    if address.is_null() { return Ok(None); }
+    let address = address as usize;
+    if address < begin || address > end { return Err(Refusal::Range); }
+    let offset = address.checked_sub(begin).ok_or(Refusal::Range)?;
+    let available = owner.initialized.checked_sub(offset).ok_or(Refusal::Range)?;
+    Ok(Some(ViewDescriptor {serial: owner.serial, offset, available}))
+}
+/// Observe the exact native scalar; the root separately authenticates its extent.
+pub fn length(owner: &Owner, key: usize) -> usize {
+    // SAFETY: the fixed length ABI and live non-consuming owner contract are
+    // established by the exact generated plan and finite native premises.
+    unsafe { native_length(owner.address.as_ptr(), key) }
+}
+/// Borrow only a descriptor from this same live acquisition.
+pub fn borrow_view<'a>(owner: &'a Owner, descriptor: &ViewDescriptor) -> Result<View<'a>, Refusal> {
+    if owner.serial != descriptor.serial { return Err(Refusal::Owner); }
+    if descriptor.offset.checked_add(descriptor.available).is_none_or(|end| end > owner.initialized) {
+        return Err(Refusal::Range);
+    }
+    Ok(View {owner, offset: descriptor.offset, available: descriptor.available})
+}
+/// Copy into an existing Rust destination after checked initialized-range bounds.
+pub fn copy(view: &View<'_>, offset: usize, destination: &mut [u8]) -> Result<(), Refusal> {
+    let end = offset.checked_add(destination.len()).ok_or(Refusal::Range)?;
+    if end > view.available { return Err(Refusal::Range); }
+    let start = view.offset.checked_add(offset).ok_or(Refusal::Range)?;
+    let end = start.checked_add(destination.len()).ok_or(Refusal::Range)?;
+    if end > view.owner.initialized { return Err(Refusal::Range); }
+    // SAFETY: integer checks precede pointer arithmetic. The pointer is derived
+    // from the live Owner, not the query pointer; the admitted initialized-eight
+    // contract bounds all arithmetic. Opaque transport exposes no alias into a
+    // Rust destination, and its exclusive borrow excludes destination aliases.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            view.owner.address.as_ptr().cast::<u8>().add(start),
+            destination.as_mut_ptr(), destination.len(),
+        );
+    }
+    Ok(())
+}
+/// Release exactly the moved owner; neither replay nor automatic foreign Drop exists.
+pub fn release(owner: Owner) -> ReleaseReturned {
+    let Owner {address, serial, ..} = owner;
+    // SAFETY: the consumed unique handle supplies the exact fixed release ABI.
+    // Actual native consumption is the separately approved finite callee premise.
+    unsafe { native_release(address.as_ptr()); }
+    ReleaseReturned {_serial: serial}
+}

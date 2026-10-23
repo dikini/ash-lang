@@ -1,0 +1,198 @@
+//! Independently recompute the generated root's acyclic code/config identity.
+use sha2::{Digest, Sha256};
+mod lock_policy;
+use serde::Deserialize;
+use std::{env, error::Error, fs, io::Read, path::{Path, PathBuf}, process::{Command, Stdio}};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Configuration {
+    version: u32,
+    canonical_source_root: PathBuf,
+    project_root: PathBuf,
+    source_component: String,
+    compiler: String,
+    environment: Environment,
+}
+#[derive(Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct CargoConfiguration { path: PathBuf, bytes: Vec<u8> }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Environment {
+    version: u32, cargo: PathBuf, rustc: PathBuf, cargo_home: PathBuf, rustup_home: PathBuf,
+    configurations: Vec<CargoConfiguration>,
+}
+fn read(path: &Path, limit: u64) -> Result<Vec<u8>, Box<dyn Error>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.len() > limit { return Err("unsupported code/config file".into()); }
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit || bytes.len() as u64 != metadata.len() { return Err("code/config changed or exceeded bound".into()); }
+    println!("cargo:rerun-if-changed={}", path.display());
+    Ok(bytes)
+}
+fn field(hash: &mut Sha256, tag: &[u8], bytes: &[u8]) {
+    hash.update((tag.len() as u64).to_le_bytes()); hash.update(tag);
+    hash.update((bytes.len() as u64).to_le_bytes()); hash.update(bytes);
+}
+fn configuration_allowed(bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    let text = std::str::from_utf8(bytes)?;
+    let mut section = "";
+    let mut seen = 0u8;
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') { continue; }
+        if line.starts_with('[') {
+            section = match line { "[alias]"=>"alias", "[build]"=>"build", _=>return Err("unknown Cargo configuration section".into()) };
+            continue;
+        }
+        let (key, value) = line.split_once('=').ok_or("Cargo configuration shape")?;
+        let (key, value) = (key.trim(), value.trim());
+        let bit = match (section, key) {
+            ("alias", "xtask") if matches!(value, "\"run --package xtask --\"" | "\"run --package xtask --profile verification --\"") => 1,
+            ("build", "jobs") if value == "1" => 2,
+            ("build", "rustc-wrapper") => {
+                let value: String = serde_json::from_str(value)?;
+                if value.len()>4096 || value.chars().any(char::is_control) { return Err("Cargo wrapper spelling".into()); }
+                4
+            }
+            _=>return Err("unknown Cargo configuration field".into()),
+        };
+        if seen & bit != 0 { return Err("duplicate Cargo configuration".into()); }
+        seen |= bit;
+    }
+    Ok(())
+}
+fn verify_environment(project: &Path, selected: &Environment) -> Result<(), Box<dyn Error>> {
+    if selected.version != 1 || selected.configurations.len()>130 { return Err("build environment version/bound".into()); }
+    for (key, value) in [("CARGO", &selected.cargo), ("RUSTC", &selected.rustc), ("CARGO_HOME", &selected.cargo_home), ("RUSTUP_HOME", &selected.rustup_home)] {
+        if !value.is_absolute() || env::var_os(key).as_deref() != Some(value.as_os_str()) { return Err("build environment substitution".into()); }
+    }
+    let mut paths=Vec::new();
+    for (index, ancestor) in project.ancestors().enumerate() {
+        if index>=64 { return Err("config ancestry bound".into()); }
+        paths.push(ancestor.join(".cargo/config")); paths.push(ancestor.join(".cargo/config.toml"));
+    }
+    paths.push(selected.cargo_home.join("config")); paths.push(selected.cargo_home.join("config.toml"));
+    paths.sort(); paths.dedup();
+    let mut observed=Vec::new();
+    for path in paths {
+        match fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_file() => {},
+            Ok(_) => return Err("unsupported config object".into()),
+            Err(error) if error.kind()==std::io::ErrorKind::NotFound => continue,
+            Err(error)=>return Err(error.into()),
+        }
+        let bytes=read(&path,64*1024)?;
+        configuration_allowed(&bytes)?;
+        observed.push(CargoConfiguration{path,bytes});
+    }
+    if observed != selected.configurations { return Err("Cargo config discovery changed".into()); }
+    Ok(())
+}
+fn main() -> Result<(), Box<dyn Error>> {
+    let project = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("no generated root")?);
+    let bytes = read(&project.join("root-config.json"), 16 * 1024)?;
+    let config: Configuration = serde_json::from_slice(&bytes)?;
+    if config.version != 1 || config.project_root != project || !config.canonical_source_root.is_absolute()
+        || config.canonical_source_root.to_str().is_none_or(|p| p.chars().any(char::is_control))
+        || env::vars_os().any(|(key, _)| key.to_string_lossy().starts_with("CARGO_FEATURE_")) {
+        return Err("unknown generated root configuration".into());
+    }
+    verify_environment(&project, &config.environment)?;
+    let build_configuration = bytes;
+    let target = env::var("TARGET")?;
+    let profile = env::var("PROFILE")?;
+    let optimization = env::var("OPT_LEVEL")?;
+    let panic = env::var("CARGO_CFG_PANIC")?;
+    if target != "x86_64-unknown-linux-gnu" || profile != "debug" || optimization != "0"
+        || panic != "unwind" || env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_none()
+        || env::var_os("CARGO_ENCODED_RUSTFLAGS").is_some_and(|value| !value.is_empty()) {
+        return Err("unsupported actual root compiler configuration".into());
+    }
+    let mut child = Command::new(env::var_os("RUSTC").ok_or("no compiler")?)
+        .args(["--version", "--verbose"]).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    let mut compiler = Vec::new();
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill(); let _ = child.wait(); return Err("no version pipe".into());
+    };
+    let result = stdout.take(16 * 1024 + 1).read_to_end(&mut compiler);
+    if result.is_err() || compiler.len() > 16 * 1024 {
+        let _ = child.kill(); let _ = child.wait();
+        return Err("compiler transcript refused".into());
+    }
+    match child.wait() {
+        Ok(status) if status.success() => {},
+        _ => { let _ = child.kill(); let _ = child.wait(); return Err("compiler transcript failed".into()); }
+    }
+    let compiler_pin = Sha256::digest(&compiler);
+    if format!("{compiler_pin:x}") != config.compiler { return Err("compiler substitution".into()); }
+    let canonical = &config.canonical_source_root;
+    let mut paths = ["build.rs", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "trusted-preparation/Cargo.toml"].map(|p| canonical.join(p)).to_vec();
+    let mut pending = vec![canonical.join("src"), canonical.join("trusted-preparation/src")];
+    let mut entries = 0usize;
+    while let Some(directory) = pending.pop() {
+        println!("cargo:rerun-if-changed={}", directory.display());
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            entries = entries.checked_add(1).ok_or("source count overflow")?;
+            if entries > 4096 { return Err("source inventory bound".into()); }
+            let kind = entry.file_type()?;
+            if kind.is_dir() { pending.push(entry.path()); }
+            else if kind.is_file() { paths.push(entry.path()); }
+            else { return Err("unsupported canonical source object".into()); }
+        }
+    }
+    paths.sort();
+    let mut component = Sha256::new();
+    component.update(b"Ash canonical runtime source component v1\0");
+    let mut total = 0usize;
+    for path in paths {
+        let relative = path.strip_prefix(canonical)?.to_str().ok_or("source path encoding")?;
+        let bytes = read(&path, 32 * 1024 * 1024)?;
+        total = total.checked_add(bytes.len()).ok_or("source size overflow")?;
+        if total > 256 * 1024 * 1024 { return Err("source inventory byte bound".into()); }
+        component.update((relative.len() as u64).to_le_bytes()); component.update(relative.as_bytes());
+        component.update((bytes.len() as u64).to_le_bytes()); component.update(bytes);
+    }
+    component.update(&compiler);
+    let component = component.finalize();
+    if format!("{component:x}") != config.source_component { return Err("canonical source substitution".into()); }
+    let manifest = read(&project.join("Cargo.toml"), 64 * 1024)?;
+    let lock = read(&project.join("Cargo.lock"), 1024 * 1024)?;
+    if read(&project.join("lock_policy.rs"), 1024 * 1024)? != read(&canonical.join("src/build/checked_root_lock_policy.rs"), 1024 * 1024)? { return Err("lock verifier substitution".into()); }
+    lock_policy::validate(&read(&canonical.join("Cargo.lock"), 1024 * 1024)?, &lock).map_err(|()| "unsupported settled dependency graph")?;
+    let leaf_manifest = read(&project.join("leaf/Cargo.toml"), 64 * 1024)?;
+    let leaf = read(&project.join("leaf/src/lib.rs"), 32 * 1024 * 1024)?;
+    let shim = read(&project.join("root-shim.rs"), 32 * 1024 * 1024)?;
+    if read(&project.join("rust-toolchain.toml"), 64 * 1024)? != read(&canonical.join("rust-toolchain.toml"), 64 * 1024)? {
+        return Err("root toolchain substitution".into());
+    }
+    let mut hash = Sha256::new();
+    for (tag, bytes) in [
+        (&b"schema"[..], &b"Ash checked artifact root code/configuration v1\0"[..]),
+        (b"canonical-source-component", &component[..]), (b"compiler-transcript", &compiler_pin[..]),
+        (b"canonical-source-path", canonical.to_str().ok_or("source path encoding")?.as_bytes()),
+        (b"project-root", project.to_str().ok_or("project path encoding")?.as_bytes()),
+        (b"target", target.as_bytes()), (b"profile", profile.as_bytes()),
+        (b"optimization", optimization.as_bytes()), (b"panic", panic.as_bytes()),
+        (b"debug-assertions", &[1][..]), (b"root-cfg", b"ash_checked_owner_root=\"v1\""),
+        (b"features", b""), (b"root-policy", b"unsafe_code=forbid;overflow-checks=true"),
+        (b"root-rustc", b"linker=owned-observer;fuse-ld=bfd;crt-static;relocation=static;no-pie;strip=debuginfo"),
+        (b"build-configuration", build_configuration.as_slice()),
+        (b"manifest", manifest.as_slice()), (b"settled-lock", lock.as_slice()),
+        (b"leaf-manifest", leaf_manifest.as_slice()), (b"leaf-code", leaf.as_slice()), (b"private-shim-code", shim.as_slice()),
+    ] { field(&mut hash, tag, bytes); }
+    println!("cargo:rustc-env=ASH_RUNTIME_FINGERPRINT={:x}", hash.finalize());
+    println!("cargo:rustc-env=ASH_RUNTIME_SOURCE_COMPONENT={component:x}");
+    println!("cargo:rustc-env=ASH_RUNTIME_COMPILER_ID={compiler_pin:x}");
+    println!("cargo:rustc-env=ASH_RUNTIME_RUSTC_PATH={}", config.environment.rustc.display());
+    println!("cargo:rustc-env=ASH_BUILD_CARGO_HOME={}", config.environment.cargo_home.display());
+    println!("cargo:rustc-env=ASH_BUILD_RUSTUP_HOME={}", config.environment.rustup_home.display());
+    println!("cargo:rustc-env=ASH_RUNTIME_CANONICAL_SOURCE_ROOT={}", canonical.display());
+    println!("cargo:rustc-env=ASH_RUNTIME_CARGO_PROFILE=debug");
+    println!("cargo:rustc-env=ASH_RUNTIME_OPT_LEVEL=0");
+    println!("cargo:rustc-check-cfg=cfg(ash_checked_owner_root, values(\"v1\"))");
+    println!("cargo:rustc-cfg=ash_checked_owner_root=\"v1\"");
+    Ok(())
+}

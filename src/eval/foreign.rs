@@ -939,6 +939,7 @@ impl<'runtime> Machine<'runtime> {
                     let body_environment = environment
                         .clone()
                         .extend(handle, Value::ResourceHandle(key))?;
+                    self.reserve_checked_terminal_spare(2, RuntimePhase::Cleanup)?;
                     self.frames
                         .try_reserve(2)
                         .map_err(|_| RuntimeFailure::ResourceCapacity)?;

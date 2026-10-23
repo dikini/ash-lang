@@ -191,6 +191,7 @@ struct TeardownReportSlots {
     blocked: ConstructorId,
     returned_constructor: ConstructorId,
     status: Option<StatusReportStorage>,
+    local_report: Option<super::checked_reporting::LocalBoundaryReport>,
 }
 
 #[derive(Debug)]
@@ -674,6 +675,7 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
         guard: &NativeOwnerGuard,
         activation: ActivationKey,
         boundary: usize,
+        registry: &crate::resolved::ResolvedRegistry,
         heap: &mut Vec<HeapCell>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, OwnerPhaseFailure> {
@@ -717,6 +719,16 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
             }
             _ => OwnerPhaseFailure::Authority,
         })?;
+        // Independent fixed-size native facts/status are copied after return;
+        // fund that recording before ownership is detached or C can be entered.
+        if checked.is_some() {
+            work.charge(13).map_err(|()| OwnerPhaseFailure::WorkReservation)?;
+        }
+        let local_report = if checked.is_some() {
+            Some(super::checked_reporting::LocalBoundaryReport::admit(
+                returned_constructor, registry, heap, work,
+            )?)
+        } else { None };
         invocation
             .prepare_checked_finish(guard, activation.0 as usize, has_dependents, work)
             .map_err(|error| {
@@ -740,6 +752,7 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
                 blocked,
                 returned_constructor,
                 status,
+                local_report,
             },
             blocked: has_dependents,
         })
@@ -767,7 +780,7 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
 impl<'binding> OwnerTeardownReady<'binding> {
     /// The unique guard holds the exact teardown sealed before acquisition.
     /// Its original void/status call records disposition and yields a non-Clone receipt.
-    pub(super) fn invoke(self) -> OwnerTeardownReturned<'binding> {
+    pub(super) fn invoke(self) -> Result<OwnerTeardownReturned<'binding>, OwnerPhaseFailure> {
         let Self {
             invocation,
             guard,
@@ -776,14 +789,18 @@ impl<'binding> OwnerTeardownReady<'binding> {
             recording,
             slots,
         } = self;
-        let (authority, consumed, status) = invocation.invoke(guard, &operands, blocked);
-        OwnerTeardownReturned {
+        let (authority, consumed, status) = invocation.invoke(guard, &operands, blocked)
+            .map_err(|error| match error {
+                crate::foreign::source_runtime::NativeOwnerAdmissionError::Work => OwnerPhaseFailure::WorkReservation,
+                _ => OwnerPhaseFailure::Authority,
+            })?;
+        Ok(OwnerTeardownReturned {
             authority,
             consumed,
             status,
             recording,
             slots,
-        }
+        })
     }
 }
 
@@ -806,6 +823,15 @@ impl<'binding> OwnerTeardownReturned<'binding> {
 }
 
 impl OwnerTeardownRecorded<'_> {
+    fn independent_record(&self) -> Result<Option<super::super::ResourceReport>, OwnerPhaseFailure> {
+        let Some(checked) = &self.slots.checked else { return Ok(None); };
+        let (completion, k, native, unresolved) = checked.closing_record()
+            .map_err(|_| OwnerPhaseFailure::Authority)?;
+        let status = checked.closing_status();
+        super::super::ResourceReport::closing_facts(completion, k, native, unresolved, status)
+            .map(Some)
+            .ok_or(OwnerPhaseFailure::Authority)
+    }
     pub(super) fn report(
         mut self,
         heap: &mut [HeapCell],
@@ -820,9 +846,19 @@ impl OwnerTeardownRecorded<'_> {
         result
     }
     fn report_inner(
-        self,
+        mut self,
         heap: &mut [HeapCell],
     ) -> Result<OwnerTeardownReported, OwnerPhaseFailure> {
+        if let Some(witness) = self.consumed.synthetic_witness() {
+            self.slots.local_report.take().ok_or(OwnerPhaseFailure::Authority)?
+                .report(witness, heap, self.slots.returned)?;
+            return Ok(OwnerTeardownReported {
+                boundary: self.slots.boundary,
+                activation: self.slots.activation,
+                value: Value::Location(self.slots.returned),
+                consumed: self.consumed,
+            });
+        }
         if !empty_slots(heap, self.slots.disposition, 2) {
             return Err(OwnerPhaseFailure::HeapSlotInvariant);
         }
@@ -1533,6 +1569,23 @@ impl<'runtime> super::Machine<'runtime> {
                 let ready = ready
                     .with_inputs(input_storage, &mut self.instantiation_work)
                     .map_err(|error| phase_failure(error, &self.instantiation_work))?;
+                // Retain the prepaid nonowning ledger observer before C entry.
+                // If returned-owner publication later refuses, terminal settlement
+                // must still see the armed owner and its exact unresolved fact.
+                if let Some(checked) = &ready.slots.checked {
+                    self.instantiation_work.charge(1).map_err(|()|
+                        super::effect_work_failure(&self.instantiation_work, None, super::RuntimePhase::Acquisition))?;
+                    let Some(super::Frame::SourceResourceBoundary(boundary)) = self.frames.get_mut(index) else {
+                        return Err(super::RuntimeFailure::InvalidControlState);
+                    };
+                    if boundary.checked.is_some() || boundary.report_slot.is_some() {
+                        return Err(super::RuntimeFailure::InvalidControlState);
+                    }
+                    let report_slot = self.checked_reports.as_mut().ok_or(super::RuntimeFailure::ForeignBinding)?
+                        .reserve_owner(&mut self.instantiation_work)?;
+                    boundary.checked = Some(checked.prepaid_scope_observer());
+                    boundary.report_slot = Some(report_slot);
+                }
                 self.pending_source_owner_call = Some(SourceOwnerCallProgress::AcquireReady(ready));
             }
             AdmittedSourceOwnerInvocation::Teardown(invocation) => {
@@ -1650,11 +1703,18 @@ impl<'runtime> super::Machine<'runtime> {
                     .ok_or(super::RuntimeFailure::ForeignBinding)?;
                 #[cfg(test)]
                 post_record_test::teardown_preflight(&mut self.instantiation_work);
+                if boundary.checked.is_some() {
+                    let reports = self.checked_reports.as_ref().ok_or(super::RuntimeFailure::ForeignBinding)?;
+                    if !reports.owns_pending(boundary.report_slot.as_ref().ok_or(super::RuntimeFailure::ForeignBinding)?) {
+                        return Err(super::RuntimeFailure::ForeignBinding);
+                    }
+                }
                 let prepared = OwnerTeardownPrepared::admit(
                     invocation,
                     guard,
                     key,
                     index,
+                    self.program.registry(),
                     &mut self.heap,
                     &mut self.instantiation_work,
                 );
@@ -1815,8 +1875,10 @@ impl<'runtime> super::Machine<'runtime> {
             }
             SourceOwnerCallProgress::TeardownReady(ready) => {
                 super::disposal::check()?;
+                let returned = ready.invoke()
+                    .map_err(|error| phase_failure(error, &self.instantiation_work))?;
                 self.pending_source_owner_call =
-                    Some(SourceOwnerCallProgress::TeardownReturned(ready.invoke()));
+                    Some(SourceOwnerCallProgress::TeardownReturned(returned));
             }
             SourceOwnerCallProgress::AcquireRecorded(recorded) => {
                 super::disposal::check()?;
@@ -1847,6 +1909,19 @@ impl<'runtime> super::Machine<'runtime> {
                 self.control = Some(super::Control::Return(value));
             }
             SourceOwnerCallProgress::TeardownRecorded(recorded) => {
+                // Preserve mandatory closing facts before any source constructor
+                // allocation/output check or authored Finish continuation.
+                if let Some(report) = recorded.independent_record()
+                    .map_err(|error| phase_failure(error, &self.instantiation_work))?
+                {
+                    let Some(super::Frame::SourceResourceBoundary(boundary)) =
+                        self.frames.get_mut(recorded.slots.boundary) else {
+                        return Err(super::RuntimeFailure::InvalidControlState);
+                    };
+                    let slot = boundary.report_slot.as_ref().ok_or(super::RuntimeFailure::InvalidControlState)?;
+                    self.checked_reports.as_mut().ok_or(super::RuntimeFailure::ForeignBinding)?
+                        .commit_owner(slot, report);
+                }
                 super::disposal::check()?;
                 let reported = recorded.report(&mut self.heap);
                 #[cfg(test)]

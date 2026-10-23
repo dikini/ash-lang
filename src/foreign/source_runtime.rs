@@ -6,6 +6,13 @@
 
 use std::{error::Error, fmt};
 
+// Crate-private observation data only. The control module and all witness
+// constructors remain private; these names grant no activation or native entry.
+pub(crate) use super::checked_control::{
+    Completion as CheckedCompletion, K as CheckedLocalCompletion,
+    Native as CheckedNativeFact, SyntheticFinishWitness,
+};
+
 #[path = "source_owner_runtime.rs"]
 mod owner;
 #[path = "source_view_runtime.rs"]

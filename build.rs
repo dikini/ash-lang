@@ -6,13 +6,25 @@ use sha2::{Digest, Sha256};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("missing manifest root")?);
+    let canonical_root = root.to_str().filter(|path| !path.chars().any(char::is_control))
+        .ok_or("unsupported canonical source path")?;
+    println!("cargo:rustc-env=ASH_RUNTIME_CANONICAL_SOURCE_ROOT={canonical_root}");
+    let home = PathBuf::from(env::var_os("HOME").ok_or("missing build cache home")?);
+    for (key,path) in [
+        ("ASH_BUILD_CARGO_HOME", env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".cargo"))),
+        ("ASH_BUILD_RUSTUP_HOME", env::var_os("RUSTUP_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".rustup"))),
+    ] {
+        let text=path.to_str().filter(|p| path.is_absolute() && !p.chars().any(char::is_control)).ok_or("unsupported build cache path")?;
+        println!("cargo:rustc-env={key}={text}");
+    }
     let mut paths = vec![
         root.join("build.rs"),
         root.join("Cargo.toml"),
         root.join("Cargo.lock"),
         root.join("rust-toolchain.toml"),
+        root.join("trusted-preparation/Cargo.toml"),
     ];
-    let mut pending = vec![root.join("src")];
+    let mut pending = vec![root.join("src"), root.join("trusted-preparation/src")];
     while let Some(directory) = pending.pop() {
         // Directory receipts also invalidate the identity when a file is added.
         println!("cargo:rerun-if-changed={}", directory.display());
@@ -28,6 +40,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     paths.sort();
     let mut hash = Sha256::new();
     hash.update(b"Ash private program runtime v1\0");
+    // Independent of the package/profile/configuration that compiles these
+    // bytes. Artifact roots recompute this canonical component, then bind their
+    // own exact manifest/lock/leaf/shim/configuration separately.
+    let mut source_component = Sha256::new();
+    source_component.update(b"Ash canonical runtime source component v1\0");
     for path in paths {
         println!("cargo:rerun-if-changed={}", path.display());
         let relative = path
@@ -38,7 +55,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         hash.update((relative.len() as u64).to_le_bytes());
         hash.update(relative.as_bytes());
         hash.update((bytes.len() as u64).to_le_bytes());
-        hash.update(bytes);
+        hash.update(&bytes);
+        source_component.update((relative.len() as u64).to_le_bytes());
+        source_component.update(relative.as_bytes());
+        source_component.update((bytes.len() as u64).to_le_bytes());
+        source_component.update(bytes);
     }
     let mut configuration = env::vars()
         .filter(|(key, _)| {
@@ -62,12 +83,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     ] {
         println!("cargo:rustc-env={output}={}", env::var(input)?);
     }
-    let compiler = Command::new(env::var_os("RUSTC").ok_or("missing Rust compiler")?)
+    let rustc = env::var_os("RUSTC").ok_or("missing Rust compiler")?;
+    let rustc_text = rustc.to_str().filter(|path| !path.chars().any(char::is_control)).ok_or("unsupported Rust compiler path")?;
+    println!("cargo:rustc-env=ASH_RUNTIME_RUSTC_PATH={rustc_text}");
+    let compiler = Command::new(rustc)
         .args(["--version", "--verbose"])
         .output()?;
     if !compiler.status.success() {
         return Err("Rust compiler version discovery failed".into());
     }
+    source_component.update(&compiler.stdout);
+    println!("cargo:rustc-env=ASH_RUNTIME_SOURCE_COMPONENT={:x}", source_component.finalize());
+    println!("cargo:rustc-env=ASH_RUNTIME_COMPILER_ID={:x}", Sha256::digest(&compiler.stdout));
     hash.update(compiler.stdout);
     println!(
         "cargo:rustc-env=ASH_RUNTIME_FINGERPRINT={:x}",

@@ -53,7 +53,6 @@ impl CheckedForeignBuiltinFacts {
     pub(crate) const fn conversion_failed(self) -> ConstructorId {
         self.conversion_failed
     }
-    #[cfg(test)]
     pub(crate) const fn boundary_failed(self) -> ConstructorId {
         self.boundary_failed
     }

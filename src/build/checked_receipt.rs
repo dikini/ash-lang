@@ -477,6 +477,23 @@ impl ReceiptSeed {
         )
     }
 
+    /// Root code identity is independently derived from closed code/config
+    /// inputs. The full producer-codec/original re-admission remains exactly
+    /// the existing checked path; this changes only the runtime DATA pin.
+    pub(super) fn from_root_emission(
+        build: &super::image::NativeBuildImage,
+        program: &crate::core::ValidatedEffectProgram,
+        provenance: &[(crate::module::ModuleId, std::sync::Arc<crate::source::SourceFile>)],
+        emission: &super::emit::NativeHostEmission,
+        configuration: &[u8],
+        limits: ProducerReceiptLimits,
+        root: (&super::checked_root_identity::RootCodeIdentity, crate::foreign::source_runtime::CheckedOwnerLimits),
+    ) -> Result<Self, ReceiptFailure> {
+        let mut seed = Self::from_checked_emission(build, program, provenance, emission, configuration, limits, root.1)?;
+        seed.receipt.fields[ReceiptField::RuntimeFingerprint as usize] = Some(pin(root.0.bytes(), &mut seed.work)?);
+        Ok(seed)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn from_emission_kind(
         build: &super::image::NativeBuildImage,

@@ -63,6 +63,8 @@ struct Record {
     parts: Vec<Part>,
     premises: Vec<Premise>,
     native_limits: Option<super::checked_native_build::Limits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_build: Option<super::checked_root_project::BuildData>,
 }
 // Closed supported conformity addendum DATA. It carries the actual admitted
 // originals and validated native/root records, not an arbitrary digest body.
@@ -300,7 +302,7 @@ fn decode_with_work(
         bytes.len().checked_mul(8).ok_or(ReceiptFailure::Resource)?,
     )?;
     let record: Record = serde_json::from_slice(bytes).map_err(|_| ReceiptFailure::Malformed)?;
-    if record.version != 1 {
+    if !matches!((record.version, record.root_build.is_some()), (1, false) | (2, true)) {
         return Err(ReceiptFailure::Version);
     }
     if record.target != super::host::NATIVE_TARGET
@@ -386,14 +388,21 @@ fn decode_with_work(
     let (rebuilt, provenance) = restored
         .reencode_checked_data(work)
         .map_err(native_image_error)?;
-    let emission = super::emit::checked_native_host(
-        &rebuilt,
-        &restored.program,
-        capacities,
-        &super::runtime_fingerprint(),
-        work,
-    )
-    .map_err(emission_error)?;
+    let mut root_identity = None;
+    let emission = if let Some(data) = &record.root_build {
+        let root = super::emit::checked_root_host(&rebuilt, &restored.program, capacities, work).map_err(emission_error)?;
+        root_identity = Some(data.reconstruct(&root.leaf.source, &root.host.rust_source, work).map_err(|error| match error {
+            super::checked_root_identity::Failure::Resource => ReceiptFailure::Resource,
+            _ => ReceiptFailure::Association,
+        })?);
+        let upper = bytes.len().checked_mul(8).ok_or(ReceiptFailure::Resource)?;
+        pay(work, upper)?;
+        let configuration = serde_json::to_vec(data).map_err(|_| ReceiptFailure::Resource)?;
+        if configuration.len() > upper || receipt.pin(ReceiptField::BuildConfiguration) != Some(pin(&configuration, work)?) { return Err(ReceiptFailure::Association); }
+        root.host
+    } else {
+        super::emit::checked_native_host(&rebuilt, &restored.program, capacities, &super::runtime_fingerprint(), work).map_err(emission_error)?
+    };
     let (reimage, refacts) = emission.payloads.bytes();
     pay(
         work,
@@ -417,15 +426,17 @@ fn decode_with_work(
         work: seed_limit,
         ..receipt_limits
     };
-    let fresh = super::checked_receipt::ReceiptSeed::from_checked_emission(
-        &rebuilt,
-        &restored.program,
-        &provenance,
-        &emission,
-        b"request-independent-data",
-        seed_limits,
-        capacities,
-    )?;
+    let fresh = if let Some(identity) = &root_identity {
+        super::checked_receipt::ReceiptSeed::from_root_emission(
+            &rebuilt, &restored.program, &provenance, &emission,
+            b"request-independent-root-data", seed_limits, (identity, capacities),
+        )?
+    } else {
+        super::checked_receipt::ReceiptSeed::from_checked_emission(
+            &rebuilt, &restored.program, &provenance, &emission,
+            b"request-independent-data", seed_limits, capacities,
+        )?
+    };
     for field in [
         ReceiptField::OriginalMappings,
         ReceiptField::CheckedContracts,
@@ -513,9 +524,10 @@ fn decode_with_work(
         context: receipt.pin(ReceiptField::Context),
     })
 }
-fn encode(
+fn encode_kind(
     parts: [&[u8]; 5],
     native: Option<(&[u8], &[u8], super::checked_native_build::Limits)>,
+    root_build: Option<super::checked_root_project::BuildData>,
     limits: RequestLimits,
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<u8>, ReceiptFailure> {
@@ -529,6 +541,11 @@ fn encode(
             .and_then(|v| v.checked_add(l.len()))
             .ok_or(ReceiptFailure::Resource)?;
     }
+    if let Some(root) = &root_build {
+        raw = [&root.manifest, &root.build_configuration, &root.settled_lock, &root.leaf_manifest, &root.leaf, &root.shim].iter()
+            .try_fold(raw, |n, bytes| n.checked_add(bytes.len()))
+            .and_then(|n| n.checked_add(root.project_root.as_os_str().len())).ok_or(ReceiptFailure::Resource)?;
+    }
     let upper = raw
         .checked_mul(4)
         .and_then(|n| n.checked_add(32768))
@@ -538,7 +555,7 @@ fn encode(
     }
     pay(work, upper)?;
     let mut record = Record {
-        version: 1,
+        version: if root_build.is_some() { 2 } else { 1 },
         target: super::host::NATIVE_TARGET.into(),
         mode: "checked-inprocess-static".into(),
         role: "checked-preparation".into(),
@@ -561,6 +578,7 @@ fn encode(
             })
             .collect(),
         native_limits: native.map(|(_, _, l)| l),
+        root_build,
     };
     if let Some((n, l, _)) = native {
         record.parts.push(Part {
@@ -576,6 +594,19 @@ fn encode(
     decode_with_work(&bytes, limits, work)?;
     Ok(bytes)
 }
+fn encode(
+    parts: [&[u8]; 5], native: Option<(&[u8], &[u8], super::checked_native_build::Limits)>,
+    limits: RequestLimits, work: &mut TypeWorkBudget,
+) -> Result<Vec<u8>, ReceiptFailure> { encode_kind(parts,native,None,limits,work) }
+
+/// Root request DATA reuses the same full independent admission, with a closed
+/// independently reconstructed code/configuration identity instead of accepting
+/// a caller-supplied replacement runtime pin.
+pub(super) fn encode_root(
+    parts: [&[u8]; 5], native: Option<(&[u8], &[u8], super::checked_native_build::Limits)>,
+    root: super::checked_root_project::BuildData, limits: RequestLimits, work: &mut TypeWorkBudget,
+) -> Result<Vec<u8>, ReceiptFailure> { encode_kind(parts,native,Some(root),limits,work) }
+
 #[cfg(test)]
 fn encode_preparation(parts: [&[u8]; 5], limits: RequestLimits) -> Result<Vec<u8>, ReceiptFailure> {
     encode(
@@ -954,6 +985,79 @@ mod tests {
             )
             .expect_err("actual emission work cut must refuse");
             assert_eq!(emission_error(error), ReceiptFailure::Resource);
+        }
+    }
+
+    #[test]
+    fn root_request_reconstructs_genuine_originals_and_refuses_rebound_code_data() {
+        let (program, provenance) = crate::elaborate::checked_owner_passive_program_for_source(
+            include_str!("../../tests/fixtures/checked-owner-runtime/owner.ash"),
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Producer.CopyProbe, Unit, Unit>\nmain () = Producer.run ()\n",
+        );
+        let limits = RequestLimits::default();
+        let mut construction = TypeWorkBudget::with_limit(limits.work);
+        let build = super::super::image::encode_checked_preparation(&program,&provenance,super::super::host::NATIVE_TARGET,&mut construction).unwrap();
+        let policy=crate::foreign::source_runtime::CheckedOwnerLimits {groups:1,owners:1,pending:1,observations:5,history:6,continuations:1};
+        let root=super::super::emit::checked_root_host(&build,&program,policy,&mut construction).unwrap();
+        // A closed lock DATA fixture, not an actual Cargo/native build or
+        // installed protected image. Its graph is fully independently checked.
+        let data=super::super::checked_root_project::fixture_data(&root.leaf.source,&root.host.rust_source,&mut construction);
+        let identity=data.reconstruct(&root.leaf.source,&root.host.rust_source,&mut construction).unwrap();
+        let configuration=serde_json::to_vec(&data).unwrap();
+        let receipt_limits=ProducerReceiptLimits {artifact_bytes:limits.bytes,receipt_bytes:4096,records:64,work:limits.work};
+        let seed=super::super::checked_receipt::ReceiptSeed::from_root_emission(&build,&program,&provenance,&root.host,&configuration,receipt_limits,(&identity,policy)).unwrap();
+        let receipt=seed.receipt().encode(&mut construction,receipt_limits).unwrap();
+        let (image,facts)=root.host.payloads.bytes();
+        let parts=[receipt.as_slice(),image,facts,root.host.payloads.checked_policy().unwrap(),root.host.rust_source.as_bytes()];
+        let bytes=encode_root(parts,None,data,limits,&mut TypeWorkBudget::with_limit(limits.work)).unwrap();
+        // Fresh restores allocate new process-local originals and pay actual
+        // comparisons/name construction. Canonical bytes are exact; total work
+        // need not repeat bit-for-bit. Never turn one measured run into credit
+        // for a different reconstruction or add a margin to product limits.
+        for prefix in [0,7] {
+            for _ in 0..2 {
+                let mut work=TypeWorkBudget::with_limit(limits.work);
+                work.charge(prefix).unwrap();
+                assert_eq!(work.used(),prefix);
+                let summary=decode_with_work(&bytes,limits,&mut work).unwrap();
+                assert!(!summary.linked()); assert_eq!(summary.missing_fields().len(),6);
+                assert_eq!(summary.check_complete(),Err(ReceiptFailure::IncompleteClosure));
+                assert_eq!(work.limit(),limits.work);
+                assert!(work.used()>=prefix+bytes.len()*8 && work.used()<=limits.work);
+            }
+        }
+        let mut spent=TypeWorkBudget::with_limit(limits.work);
+        spent.charge(limits.work).unwrap();
+        assert!(matches!(decode_with_work(&bytes,limits,&mut spent),Err(ReceiptFailure::Resource)));
+        assert_eq!(spent.used(),limits.work);
+        // The framing bound is deterministic; exact bytes admit and one byte
+        // short refuses before parse/reconstruction. Component work exact/short
+        // controls remain in root identity/configuration/reconstruction units.
+        let exact_bytes=RequestLimits {bytes:bytes.len(),..limits};
+        assert!(ApplicabilityRequest::decode(&bytes,exact_bytes).is_ok());
+        let mut short=TypeWorkBudget::with_limit(limits.work);
+        assert!(matches!(decode_with_work(&bytes,RequestLimits{bytes:bytes.len()-1,..limits},&mut short),Err(ReceiptFailure::Resource)));
+        assert_eq!(short.used(),0);
+        let canonical:Record=serde_json::from_slice(&bytes).unwrap();
+        for index in 0..8 {
+            let mut donor=canonical.clone();
+            let data=donor.root_build.as_mut().unwrap();
+            match index {
+                0=>data.manifest.push(b' '),1=>data.leaf.push(b' '),2=>data.shim.push(b' '),
+                3=>data.settled_lock=b"version = 3".to_vec(),4=>data.version=2,
+                5=>data.project_root="/tmp/donor".into(),
+                6=>{let mut config:serde_json::Value=serde_json::from_slice(&data.build_configuration).unwrap();config["environment"]["rustc"]=serde_json::json!("/tmp/donor-rustc");data.build_configuration=serde_json::to_vec(&config).unwrap();},
+                _=>{let mut config:serde_json::Value=serde_json::from_slice(&data.build_configuration).unwrap();config["unknown"]=serde_json::json!(true);data.build_configuration=serde_json::to_vec(&config).unwrap();},
+            }
+            // Rebind the outer receipt configuration: rejection must come
+            // from independent closed reconstruction, not a stale outer pin.
+            let raw=serde_json::to_vec(data).unwrap();
+            let bound=pin(&raw,&mut TypeWorkBudget::with_limit(raw.len())).unwrap();
+            donor.parts[0].bytes=ProducerReceipt::decode(&donor.parts[0].bytes,receipt_limits).unwrap()
+                .substituted_pin_data_for_test(ReceiptField::BuildConfiguration,bound)
+                .encode(&mut TypeWorkBudget::default(),receipt_limits).unwrap();
+            let raw=serde_json::to_vec(&donor).unwrap();
+            assert!(matches!(ApplicabilityRequest::decode(&raw,limits),Err(ReceiptFailure::Association)));
         }
     }
 

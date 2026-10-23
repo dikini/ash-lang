@@ -1,7 +1,7 @@
 # TASK-0053: Connected checked owner execution and immutable admission
 
 - ID: `TASK-0053`
-- Status: active for protected applicability-request and sealed-image preparation; connected execution awaits its gates
+- Status: active for connected evaluator, generated safe-root/leaf and one-shot protected-launcher implementation; native execution remains gated
 - Related: [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](TASK-0051-checked-ffi-contract-carriers.md),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
@@ -216,7 +216,7 @@ finite AD16 premises and administrator-established context, rather than another
 query-only observation. Actual initialized-eight-byte acquisition, copy,
 finish/Trace and the root-triggered full F-core gate remain required.
 
-## Active protected preparation component
+## Retained protected preparation component
 
 The current step-5 candidate connects ReceiptSeed/native/root records and full
 image/facts/original/policy re-admission to bounded applicability-request data.
@@ -258,14 +258,68 @@ cadence keeps this tested fingerprint and requires formatting cleanup/check at
 the next root-owned F-core integration freeze before its fresh full gate, final
 artifact and approval.
 
-This candidate is not yet retained. All six complete closure fields remain
+PR117 retained this component at `4e995067`, with [independent review](https://github.com/dikini/ash-lang/pull/117#pullrequestreview-5629158133)
+and [retention receipt](https://github.com/dikini/ash-lang/pull/117#issuecomment-6366477568).
+The guarded [partial acceptance](https://github.com/dikini/ash-lang/issues/62)
+keeps all four whole F6 criteria unchecked. All six complete closure fields remain
 Missing and premises proposed. Genuine protected positives require external
 administrator-established installation and independent applicable per-image
-approval; no test token substitutes for them. Implementable work remaining after
-retention is the reviewed approval/launcher-to-runtime transfer for actual owner
+approval; no test token substitutes for them. The active connected component is implementing the reviewed approval/launcher-to-runtime transfer for actual owner
 acquire, copy, finish and Trace, plus refreshed required F3 images on this codec.
 Protected deployment and any generated output execution require their separate
 gates; the connected F-core and whole acceptance remain open.
+
+## Active connected runtime component
+
+[Draft PR118](https://github.com/dikini/ash-lang/pull/118) carries the connected
+implementation on retained `4e995067`. Unsigned checkpoint `14b1b148` preserves
+session 33968's 25 distinct Rust tests across eight commands: genuine request
+DATA, ledger/native-versus-synthetic Finish, private checked dispatch, real copy
+phase, authenticated leaf rendering, report preflight and Machine result/report
+preservation. All eight maps contain the same 6,403 input files, and tools match; every child is reaped with
+its owned group absent. The raw logs retain nine ordinary-library dead-code
+warnings plus their summary. These are intermediate controls, not Clippy,
+generated-template compilation, terminal settlement or native execution proof.
+The earlier 73724 and 98719 snapshots remain compile failures with zero selected
+tests, separately preserved in their bounded runner output.
+
+The guard inspection boundary follows CP-0024's never-published acquisition
+rule and its adopted [O6/L9/K1 evidence](../design/foreign-authoring/checked-ffi-evidence-map.md):
+K remains absent and no source Finish, witness or scope-closing record is created.
+A separate unpublished-guard inspection retains actual native/status/unresolved
+facts and observed retained backing without claiming protected retention or
+later disposal. Only structural K3–6 owner closings enter the independent scope
+report channel. Shared pre-entry storage does not merge these categories.
+
+The next tested settlement checkpoint passes session 23592's 37 distinct ordinary Rust controls across nine commands. It implements cumulative pre-entry report tickets, actual terminal/captured settlement, separate successful-refusal/discard guard inspection, and checked Finish admission before optional output failure. [Compact evidence](evidence/checked-owner-core-execution/connected-runtime-settlement/README.md) preserves all tested inputs, actual results and historical 99447's 35-pass/setup-failure outcome. The current raw logs retain 13 ordinary-library dead-code warnings plus their summary. This paragraph and evidence were assembled after tests; runtime blobs remain exact.
+
+The rebased bounded source checkpoint passes session 84452's targeted ash-only
+Clippy and 45 Rust controls. It distinguishes return-failure disposal from terminal
+traversal, prepares a fixed generated-project recipe, and independently restores
+full originals to reconstruct version2 root-request code/configuration DATA.
+Closed Cargo configuration/tool/cache selection and pinned dependency edges are
+checked; image, facts, policy, Rust, original mappings and contracts remain exact.
+Version1 stays separate. The [root/request evidence](evidence/checked-owner-core-execution/connected-runtime-root-data/README.md)
+retains all 91 current tested snapshots and 15 equal maps containing 7,894 inputs, tools and
+reaped/empty owned groups. Raw logs retain 14 ordinary-library warnings and 6 test
+warnings (five duplicates), plus summaries. Clippy denies `clippy::all`; it does
+not claim warning-free Rust. This paragraph/evidence is post-test, with runtime
+blobs exact. The checkpoint is based on actual retained PR110 `334935b8`;
+all four replayed commits compare equal in range-diff. Historical 25968 remains
+qualified to old base `4e995067`, with no old executable transfer.
+
+Historical 33360's exact-work replay failure and fresh 47297's 16-unit reencoding
+variation remain separate evidence. The narrow test correction preserves the
+configured request allowance, all byte/original checks, spent refusal and
+deterministic framing/component cuts; it adds no quota margin or new tariff.
+No generated project or leaf was compiled by these Rust gates, and no selected
+native/application output executed. Six complete closures remain Missing and
+premises proposed. Actual root/leaf evaluator connection, pre-vacant infallible
+arming, protected child/FD/report transport, installed applicable approval and
+genuine native acquire/copy/Finish/Trace remain open. Concrete verifier/syscall
+source needs critical review before generated/native verification. Root owns
+format cleanup/check at the F-core integration freeze before `cargo xtask verify`,
+the fresh final artifact and per-image approval. Whole F3/F4/F6 remains open.
 
 ## Acceptance for this bounded delivery
 

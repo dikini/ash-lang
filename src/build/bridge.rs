@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     foreign::{
-        checked_source::CheckedForeignSymbol,
+        checked_source::{CheckedForeignSymbol, NativeLibraryId},
         source_contract::{
             PreparedAbiResult, PreparedAddressRepresentation, PreparedForeignCall,
             PreparedOperandSource, PreparedOwnerCall, PreparedRepresentation,
@@ -24,7 +24,7 @@ use crate::{
 #[cfg(test)]
 use crate::{
     foreign::checked_source::{
-        ForeignBindingContext, NativeLibraryId, authenticate_foreign_symbol,
+        ForeignBindingContext, authenticate_foreign_symbol,
     },
     resolved::ResolvedRegistry,
 };
@@ -268,22 +268,18 @@ impl TargetResolvedForeignBridge {
             _ => None,
         }
     }
-    #[cfg(test)]
     pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
         &self.symbol
     }
-    #[cfg(test)]
     pub(crate) fn library(&self) -> NativeLibraryId {
         self.symbol.library()
     }
     pub(crate) fn operation(&self) -> OperationId {
         self.symbol.operation()
     }
-    #[cfg(test)]
     pub(crate) const fn target(&self) -> ForeignBridgeTarget {
         self.target
     }
-    #[cfg(test)]
     pub(crate) fn operands(&self) -> &[TargetOperand] {
         &self.operands
     }

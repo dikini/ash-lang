@@ -213,8 +213,8 @@ Public execution remains closed.
    four seals precede final hash/ELF inspection. The
    [candidate record](../evidence/checked-owner-core-execution/protected-preparation/README.md)
    qualifies historical failures, the private 2 GiB observation profile, nine
-   native warning lines and absent protected positive/output execution. This
-   candidate is unretained; all six complete fields remain Missing/proposed.
+   native warning lines and absent protected positive/output execution. PR117 retained this
+   component at `4e995067`; all six complete fields remain Missing/proposed.
    An extra read-only workspace formatter check returns 1; no formatter/full
    gate is claimed. Root owns formatting cleanup/check at the next F-core freeze
    before the full gate, final native artifact and approval.
@@ -291,3 +291,62 @@ program work. Native truth/no-loading/source correspondence stays a reviewed
 trust premise, never established by one successful output. Concrete semantic
 ambiguity returns to CP/design; none is currently established for this strict
 path. The architecture and task do not relax completion or authority semantics.
+
+## Current connected implementation
+
+Draft PR118 starts from retained `4e995067`. Its unsigned `14b1b148` checkpoint
+passes session 33968's 25 intermediate Rust controls; nine ordinary-library
+warnings remain and no Clippy/generated/native/full-runtime pass is claimed.
+The same product draft must complete structural terminal/drop/transfer reports,
+CheckedScope Finish/required source continuation, opaque leaf transport with
+immediate owner arming, independent root code/config identity, and the reviewed
+one-shot same-FD child/report handoff. Do not replace these paths with another
+passive observation increment or a caller-created admission token. Verify actual
+root/leaf code and configuration, current request/final ELF and affected behavior
+before considering the separately gated protected native positive. Preserve the
+root-owned format-before-F-core/full-gate/final-artifact trigger above.
+
+### Connected settlement checkpoint (post-test record)
+
+Session 23592 passes 37 ordinary Rust controls with nine equal before/after maps of 6,404 input files, 57 source snapshots and matching tools and all children reaped/groups absent. The [compact settlement evidence](../evidence/checked-owner-core-execution/connected-runtime-settlement/README.md) preserves exact source and historical 99447's 35-pass/envelope-setup failure. Runtime blobs remain tested; this record/evidence is post-test. Raw logs have 13 ordinary-library warnings plus summary, not Clippy success.
+
+The P2 return-failure point is now distinct from frame traversal. Session 84452
+refreshes targeted ash-only Clippy and 45 Rust controls for settlement plus closed
+project/identity/request DATA. The [compact root/request evidence](../evidence/checked-owner-core-execution/connected-runtime-root-data/README.md)
+retains actual snapshots/maps/tools/cleanup and historical failures. This is an
+current-`334935b8` checkpoint after PR110 retention and a conflict-free rebase;
+all four commits remain range-diff equal and both gates are freshly verified.
+Old-base 25968 evidence remains separately qualified. Code remains tested; this plan/evidence is
+post-test. Ordinary Rust warnings remain visible; no warning-free, generated
+project, native, protected positive or full F-core claim transfers.
+
+### Remaining finite slices
+
+1. Retain the bounded settlement/project/request delivery after completed
+   actual-tip Clippy plus 45 and exact-head review. Benefit: a reviewed current
+   producer-to-decoder DATA seam and settled evaluator observations. Complexity 1;
+   stop for any changed-input/refusal or review finding, preserving prior receipts.
+2. Connect the canonical binary root and opaque leaf to actual evaluator entry,
+   prepaid vacant-slot arming and report/result extraction. Compile/link the
+   generated project and independently rederive its actual code/configuration
+   identity; bind all fixed build-script, lock-policy, toolchain, manifest/lock,
+   leaf/shim and payload bytes. Benefit: removes the generated-code/evaluator
+   gap rather than adding another observation layer. The first discriminator is
+   actual generated Cargo/bin/leaf compilation and link with a matching opened
+   ELF and receipt, using the existing owned runner/cache; DATA-only rendering
+   cannot satisfy it. Expected scope is two or three coherent source/test
+   iterations. Complexity 3; stop on any
+   ABI, nominal DATA boundary, identity or incomplete-closure mismatch. Protected
+   positive execution remains unrun.
+3. Implement the reviewed one-shot trusted child, same-FD execution and
+   authenticated one-way report endpoints, with real context/store/refusal
+   controls and independent syscall/FD review. Benefit: connects approved image
+   preparation to the protected runtime path. Complexity 4; absent administrator-
+   established installation or independent per-image approval remains an
+   explicit external prerequisite, never a caller token or provisioning shortcut.
+4. Apply root-owned formatting/check before the complete F-core gate and fresh
+   final artifact/approval. Under separately assigned real deployment/native
+   verification, demonstrate eight initialized copied bytes after exact Free,
+   authored Trace and ordered independent closing/failure reports. Complexity 3;
+   missing deployment/closure or any required regression keeps whole acceptance
+   open. No old executable or source fingerprint substitutes for these gates.

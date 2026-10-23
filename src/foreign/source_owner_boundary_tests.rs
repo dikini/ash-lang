@@ -312,6 +312,132 @@ fn checked_owner_boundary_exact_activation_scope_and_independent_group() {
 }
 
 #[test]
+fn checked_owner_local_finish_never_becomes_native_readiness() {
+    with_requests(|acquire, finish| {
+        let mut work = TypeWorkBudget::default();
+        let (ready, storage) = ready(&acquire, 181, &mut work);
+        let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let mut guard = ready
+            .returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
+            .record()
+            .into_guard()
+            .unwrap();
+        handle.publish(181, acquire._scope_node, &mut work).unwrap();
+        guard.quarantine();
+        handle.closing(181, acquire._scope_node, &mut work).unwrap();
+        guard
+            .prepare_checked_finish(&finish, 181, false, &mut work)
+            .unwrap();
+        let before = DISPOSALS.get();
+        let Some(crate::foreign::checked_control::FinishEntry::Synthetic(witness)) =
+            guard.begin_checked_finish_entry().unwrap()
+        else {
+            panic!("actual local close must not grant native entry")
+        };
+        assert_eq!(
+            witness.completion(),
+            crate::foreign::checked_control::Completion::Quarantined
+        );
+        assert_eq!(
+            witness.native(),
+            crate::foreign::checked_control::Native::Owned
+        );
+        assert!(!witness.unresolved());
+        assert!(guard.begin_checked_finish_entry().is_err());
+        assert!(
+            guard
+                .prepare_checked_finish(&finish, 181, false, &mut work)
+                .is_err()
+        );
+        assert_eq!(DISPOSALS.get(), before);
+        assert_eq!(handle.snapshot().observations, 1); // injected Acquire only
+        assert_eq!(
+            handle.snapshot().k,
+            crate::foreign::checked_control::K::Discharged
+        );
+        assert_eq!(
+            handle.snapshot().continuation,
+            crate::foreign::checked_control::Continuation::Required
+        );
+        drop(guard);
+        assert_eq!(DISPOSALS.get(), before);
+        // Explicit legacy Rust-backed host cleanup is a different phase. It
+        // neither dispatches the source Finish nor manufactures a native fact.
+        assert!(storage.close());
+        assert_eq!(DISPOSALS.get(), before + 1);
+        assert_eq!(
+            handle.snapshot().native,
+            crate::foreign::checked_control::Native::Owned
+        );
+    });
+}
+
+#[test]
+fn checked_owner_finish_missing_control_refuses_without_dispatch_or_drop_retry() {
+    with_requests(|acquire, _| {
+        let mut work = TypeWorkBudget::default();
+        let (ready, storage) = authority_guard(&acquire, 183, &mut work);
+        let guard = ready.returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
+            .record().into_guard().unwrap();
+        let plan = crate::foreign::source_runtime::NativeOwnerDestruction::Void {
+            callback: dispose, consumes: true,
+        };
+        let before = DISPOSALS.get();
+        assert!(guard.finish_checked_admitted(&plan, &[], false).is_err());
+        assert_eq!(DISPOSALS.get(), before);
+        // Explicit legacy fixture reclamation remains a separate host phase.
+        assert!(storage.close());
+        assert_eq!(DISPOSALS.get(), before + 1);
+    });
+}
+
+#[test]
+fn checked_owner_finish_dispatch_keeps_local_witness_without_callback() {
+    for local in [false, true] {
+        with_requests(|acquire, finish| {
+            let mut work = TypeWorkBudget::default();
+            let (ready, storage) = ready(&acquire, 182, &mut work);
+            let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+            let mut guard = ready
+                .returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
+                .record()
+                .into_guard()
+                .unwrap();
+            handle.publish(182, acquire._scope_node, &mut work).unwrap();
+            if local {
+                guard.quarantine();
+            }
+            handle.closing(182, acquire._scope_node, &mut work).unwrap();
+            guard.prepare_checked_finish(&finish, 182, false, &mut work).unwrap();
+            let before = DISPOSALS.get();
+            let plan = crate::foreign::source_runtime::NativeOwnerDestruction::Void {
+                callback: dispose,
+                consumes: true,
+            };
+            // This is the same admitted dispatch used by the source invocation;
+            // the callback is Rust-only and supplies no native ABI/free evidence.
+            let (returned, status) = guard.finish_checked_admitted(&plan, &[], false).unwrap();
+            assert!(status.is_none());
+            assert_eq!(DISPOSALS.get(), before + usize::from(!local));
+            assert_eq!(returned.synthetic_witness().is_some(), local);
+            assert_eq!(returned.is_retained(), local);
+            if let Some(witness) = returned.synthetic_witness() {
+                assert_eq!(witness.completion(), crate::foreign::checked_control::Completion::Quarantined);
+                assert_eq!(witness.native(), crate::foreign::checked_control::Native::Owned);
+                assert!(!witness.unresolved());
+            }
+            assert_eq!(handle.snapshot().observations, if local { 1 } else { 2 });
+            assert_eq!(handle.snapshot().continuation, crate::foreign::checked_control::Continuation::Required);
+            drop(returned);
+            assert_eq!(DISPOSALS.get(), before + usize::from(!local));
+            // Separate explicit legacy fixture reclamation is not source Finish.
+            assert!(storage.close());
+            assert_eq!(DISPOSALS.get(), before + 1);
+        });
+    }
+}
+
+#[test]
 fn checked_owner_boundary_finish_commit_survives_output_failure_without_replay() {
     with_requests(|acquire, finish| {
         let mut work = TypeWorkBudget::default();
@@ -510,7 +636,9 @@ type EightByteFixture = (
 );
 
 fn eight_byte_fixture() -> EightByteFixture {
-    let program = eight_byte_program();
+    eight_byte_fixture_for_program(eight_byte_program())
+}
+fn eight_byte_fixture_for_program(program: crate::core::ValidatedEffectProgram) -> EightByteFixture {
     let executable = crate::eval::ExecutableProgram::Effect(program.shared());
     let ids = nodes(&program);
     let mut work = TypeWorkBudget::default();
@@ -614,6 +742,90 @@ fn eight_byte_fixture() -> EightByteFixture {
     let copy = eight_byte_copy_request(&program, &mut work);
     assert!(Arc::ptr_eq(&copy.scope, &acquire._scope));
     (program, acquire, finish, queries, copy)
+}
+
+/// Unit-injected Rust returns on genuine source/Core. These stages provide no
+/// native binding, executable admission or protected-context constructor.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ClosingStage { Reserved, Armed, Body, Consumed, Retained, Synthetic, SyntheticNotRequested }
+
+pub(crate) fn with_eight_byte_closing_for_test(
+    stage: ClosingStage,
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        crate::foreign::source_runtime::NativeOwnerBoundary,
+        Option<crate::foreign::source_runtime::NativeOwnerGuard>),
+) {
+    let source = include_str!("../../tests/fixtures/checked-owner-runtime/owner.ash");
+    let program = if matches!(stage, ClosingStage::Retained) {
+        let source = source.replace("outcome otherwise { consumed 0 }", "outcome otherwise { retained 0 }");
+        crate::elaborate::checked_owner_passive_program_for_source(&source,
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Producer.CopyProbe, Unit, Unit>\nmain () = Producer.run ()\n").0
+    } else { eight_byte_program() };
+    let (program, acquire, finish, _, _) = eight_byte_fixture_for_program(program);
+    let mut work = TypeWorkBudget::default();
+    let (mut ready, _storage) = authority_guard(&acquire, 111, &mut work);
+    ready.prepare_initialized_bytes(Some(8));
+    ready.prepare_checked_boundary(&acquire, 111, Some(crate::foreign::source_runtime::CheckedOwnerLimits {
+        observations: 5, history: 6, ..limits()
+    }), &mut work).unwrap();
+    let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+    if matches!(stage, ClosingStage::Reserved) {
+        test(&program, acquire._scope_node, handle, None);
+        return;
+    }
+    ready.begin_checked_acquire().unwrap();
+    let mut guard = ready.returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
+        .record().into_guard().unwrap();
+    if matches!(stage, ClosingStage::Armed) {
+        test(&program, acquire._scope_node, handle, Some(guard));
+        return;
+    }
+    handle.publish(111, acquire._scope_node, &mut work).unwrap();
+    if matches!(stage, ClosingStage::Body) {
+        test(&program, acquire._scope_node, handle, Some(guard));
+        return;
+    }
+    if matches!(stage, ClosingStage::Synthetic | ClosingStage::SyntheticNotRequested) { guard.quarantine(); }
+    handle.closing(111, acquire._scope_node, &mut work).unwrap();
+    if matches!(stage, ClosingStage::SyntheticNotRequested) {
+        test(&program, acquire._scope_node, handle, Some(guard));
+        return;
+    }
+    guard.prepare_checked_finish(&finish, 111, false, &mut work).unwrap();
+    if matches!(stage, ClosingStage::Synthetic) {
+        assert!(matches!(guard.begin_checked_finish_entry().unwrap(),
+            Some(crate::foreign::checked_control::FinishEntry::Synthetic(_))));
+        test(&program, acquire._scope_node, handle, Some(guard));
+    } else {
+        guard.begin_checked_finish().unwrap();
+        let disposition = guard.finish(dispose, !matches!(stage, ClosingStage::Retained),
+            &[NativeOwnerOperand::Address(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())], false);
+        test(&program, acquire._scope_node, handle, disposition.into_retained());
+    }
+}
+
+/// Two independent unit-injected acquisitions from the same immutable source
+/// scope, for structural-disposal order tests. No binding/context is installed.
+pub(crate) fn with_eight_byte_body_pair_for_test(
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        [(crate::foreign::source_runtime::NativeOwnerBoundary, crate::foreign::source_runtime::NativeOwnerGuard); 2]),
+) {
+    let (program, acquire, _, _, _) = eight_byte_fixture();
+    let mut work = TypeWorkBudget::default();
+    let pair = std::array::from_fn(|index| {
+        let activation = 111 + index;
+        let (mut ready, _storage) = authority_guard(&acquire, activation, &mut work);
+        ready.prepare_initialized_bytes(Some(8));
+        ready.prepare_checked_boundary(&acquire, activation, Some(crate::foreign::source_runtime::CheckedOwnerLimits {
+            observations: 5, history: 6, ..limits()
+        }), &mut work).unwrap();
+        ready.begin_checked_acquire().unwrap();
+        let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let guard = ready.returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast()).record().into_guard().unwrap();
+        handle.publish(activation, acquire._scope_node, &mut work).unwrap();
+        (handle, guard)
+    });
+    test(&program, acquire._scope_node, pair);
 }
 
 /// Retained PR101 supplies genuine checked byte/Core PREPARATION. Native
