@@ -1,0 +1,1425 @@
+[
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/batch-results.json",
+    "original": {
+      "bytes": 177126,
+      "sha256": "debf72b4199f52a036e7ffd8378ed5cd7b7b023b0751d813c412650e19fe0506"
+    },
+    "retained_as": "current/batch-results.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "bb8b8400f67f7408e772abdbef0b7e0e528be8cd3a0a617a4d965e4047403f5e"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "4ca2be2669556980c8680e794f0af8dfe43bcbe87a5ca29c1a5d7c83d930f8b4"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.before.json",
+    "original": {
+      "bytes": 871000,
+      "sha256": "c518379e4440a2b88b309a4d81b11a3b0af9d67377de79f623d5a35bf5c2b97a"
+    },
+    "retained_as": "current/phase-01.before.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.inputs.json",
+    "original": {
+      "bytes": 1763308,
+      "sha256": "e3d015e08c7d496fe5ce017b7af71416764a11521b7d7ec96d19c3bbd0215dfd"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.log",
+    "original": {
+      "bytes": 153652,
+      "sha256": "e10425ecd71cab69eb42d300fa6792cbff13e1103923b64c245e85c68b6f01de"
+    },
+    "retained_as": "current/phase-01.log.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.process.json",
+    "original": {
+      "bytes": 339,
+      "sha256": "17a63c65846b4108c4c37758597bd2a332d6f1fec85d06b611124ce7ac90a4de"
+    },
+    "retained_as": "current/phase-01.process.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.receipt.json",
+    "original": {
+      "bytes": 156574,
+      "sha256": "9fccbb6b13fc8faba6b449a33fb3d00cd8b3a1e0b3c35be3f85ad79662618edf"
+    },
+    "retained_as": "current/phase-01.receipt.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.resources.json",
+    "original": {
+      "bytes": 14198,
+      "sha256": "4c92d9dac3fe2c1c53f0390ab1009f469f45ac885bf9711689b74d901958cbd7"
+    },
+    "retained_as": "current/phase-01.resources.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.before.json",
+    "original": {
+      "bytes": 871000,
+      "sha256": "c518379e4440a2b88b309a4d81b11a3b0af9d67377de79f623d5a35bf5c2b97a"
+    },
+    "retained_as": "current/phase-01.before.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.inputs.json",
+    "original": {
+      "bytes": 1763308,
+      "sha256": "e3d015e08c7d496fe5ce017b7af71416764a11521b7d7ec96d19c3bbd0215dfd"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.log",
+    "original": {
+      "bytes": 49809,
+      "sha256": "3af332da709636586ab205a6affb34d2b6f8f79c50f832c3a5e53fa1c04b3c86"
+    },
+    "retained_as": "current/phase-02.log.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.process.json",
+    "original": {
+      "bytes": 332,
+      "sha256": "619664ae6681533c55c6c2494f368361e74824da8016203c815ba97ae8cb6c6e"
+    },
+    "retained_as": "current/phase-02.process.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.receipt.json",
+    "original": {
+      "bytes": 5099,
+      "sha256": "8a9adaf9d883d7ab54fc15f639c53512f6ba28b42d44dfd2c0614a40f978ebb8"
+    },
+    "retained_as": "current/phase-02.receipt.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.resources.json",
+    "original": {
+      "bytes": 20180,
+      "sha256": "d256943aacd716f8da291475207bab8c064f5274e070f53d72fe49d6f261e480"
+    },
+    "retained_as": "current/phase-02.resources.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.before.json",
+    "original": {
+      "bytes": 871000,
+      "sha256": "c518379e4440a2b88b309a4d81b11a3b0af9d67377de79f623d5a35bf5c2b97a"
+    },
+    "retained_as": "current/phase-01.before.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.inputs.json",
+    "original": {
+      "bytes": 1763308,
+      "sha256": "e3d015e08c7d496fe5ce017b7af71416764a11521b7d7ec96d19c3bbd0215dfd"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.log",
+    "original": {
+      "bytes": 50017,
+      "sha256": "269a9d33524a1d2e54c96fdc729d8d5da14e3e91736db864f936e2b84877b423"
+    },
+    "retained_as": "current/phase-03.log.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.process.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "5fd2f873384cda981a0348ab93f34d58205f49abd1684b1a9e7e6678e4ddae3c"
+    },
+    "retained_as": "current/phase-03.process.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.receipt.json",
+    "original": {
+      "bytes": 5199,
+      "sha256": "0b0ab17db0fb3d68f66b3fa4532a3ce8b336533d915c88ff7f0dbf1725d28d1b"
+    },
+    "retained_as": "current/phase-03.receipt.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.resources.json",
+    "original": {
+      "bytes": 10748,
+      "sha256": "5e7852a65f2cdc44fd6168f036190b2816df7a3483f235aa5900644acf2070a8"
+    },
+    "retained_as": "current/phase-03.resources.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/runner-process.json",
+    "original": {
+      "bytes": 1005,
+      "sha256": "e95025eac1a711568232fff3fae40d0ae974987c1cfdd9cef5bb170c3bb67d81"
+    },
+    "retained_as": "current/runner-process.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/tools-after.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/tools-before.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/batch-results.json",
+    "original": {
+      "bytes": 171728,
+      "sha256": "94f8e0d2e9ee97f84e2bca9987d21ecde9e9a5d43c27669612b94fa43e9b9532"
+    },
+    "retained_as": "file-policy-refusal/batch-results.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "f8ffae2e9d436b690727f32ae7cb3d160ae46f7fb57c2d560f0eba7d5ff25228"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "ac3be945e77ac8099bdd7b8e7177a177ed9f4448779a373f242aba62ab6c7e45"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.before.json",
+    "original": {
+      "bytes": 870896,
+      "sha256": "c9c2bd5387c9524b69849d081e27d88b5bdb1b4287f665d2f8eecac7eaf84b13"
+    },
+    "retained_as": "file-policy-refusal/phase-01.before.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.inputs.json",
+    "original": {
+      "bytes": 1763096,
+      "sha256": "9faeb8fe74e7d27d4374b37c5ddb972f51bfab9c7e6e3c4f265932f43d449dd5"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.log",
+    "original": {
+      "bytes": 153652,
+      "sha256": "b2477cfdb8ee6cece85d74474012c5e78d9ca7c5619ca614d82e342ceabf4d60"
+    },
+    "retained_as": "file-policy-refusal/phase-01.log.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.process.json",
+    "original": {
+      "bytes": 339,
+      "sha256": "5d8117705770725f237608b0589c06025d5cd4740e2e2bd6566b290b24dd16c4"
+    },
+    "retained_as": "file-policy-refusal/phase-01.process.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.receipt.json",
+    "original": {
+      "bytes": 156579,
+      "sha256": "253aa08032163e27c63c23adeb30fea2a73b631bac118f8dda408b05d06675d4"
+    },
+    "retained_as": "file-policy-refusal/phase-01.receipt.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.resources.json",
+    "original": {
+      "bytes": 10727,
+      "sha256": "b8946141b959092f1cec51e21f2dd3826724006bb15a5640259dfe8584fc16a0"
+    },
+    "retained_as": "file-policy-refusal/phase-01.resources.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.before.json",
+    "original": {
+      "bytes": 870896,
+      "sha256": "c9c2bd5387c9524b69849d081e27d88b5bdb1b4287f665d2f8eecac7eaf84b13"
+    },
+    "retained_as": "file-policy-refusal/phase-01.before.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.inputs.json",
+    "original": {
+      "bytes": 1763096,
+      "sha256": "9faeb8fe74e7d27d4374b37c5ddb972f51bfab9c7e6e3c4f265932f43d449dd5"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.log",
+    "original": {
+      "bytes": 50090,
+      "sha256": "4f3617e50f3d0db20e5d26983a1fae2102a19f6f3c30533eacc1d19110ca8cf7"
+    },
+    "retained_as": "file-policy-refusal/phase-02.log.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.process.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "0a5d23851d181bca83a956aae8aab60e1e8f73b26942ba14ffd87972d18de8d7"
+    },
+    "retained_as": "file-policy-refusal/phase-02.process.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.receipt.json",
+    "original": {
+      "bytes": 5208,
+      "sha256": "a3d7f652a107daaae9d2def076e67de4d02684e1b4129e5ea1aa93c837419875"
+    },
+    "retained_as": "file-policy-refusal/phase-02.receipt.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.resources.json",
+    "original": {
+      "bytes": 11963,
+      "sha256": "7e3363bbb1868feae24ef97aeb5fedde4c1011851386414871895463b3600d5e"
+    },
+    "retained_as": "file-policy-refusal/phase-02.resources.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/runner-process.json",
+    "original": {
+      "bytes": 1023,
+      "sha256": "824d83d63b5a12716d74b70e62b0c971f1d7220b10c4aa5d267669d85a523b26"
+    },
+    "retained_as": "file-policy-refusal/runner-process.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/tools-after.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/tools-before.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/batch-results.json",
+    "original": {
+      "bytes": 171702,
+      "sha256": "2c33f1c602d5d23ed1018e565c9b5f0a7a519aa222ed8808aa7926f832a858d4"
+    },
+    "retained_as": "file-cap-refusal/batch-results.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "7b7b3d4bcdb8e22d009dceb655f34f26ab0a167c66663de4a1d4cd2b3aa877a7"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "8f68b564baf32b171587b3089dcdd88bb9bd6f525e7691f9781bfba2add9dd54"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/cap-cause-readback.json",
+    "original": {
+      "bytes": 819,
+      "sha256": "92e35fd3d82d65fd786e7bef370cfd7a6c581c57f74f72ed54e3ce556fffd71d"
+    },
+    "retained_as": "file-cap-refusal/cap-cause-readback.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.before.json",
+    "original": {
+      "bytes": 870896,
+      "sha256": "b7811fc6b2b24805fbb600e229d2aee76cf4b743e92f75a9907aa7fb5f9d4595"
+    },
+    "retained_as": "file-cap-refusal/phase-01.before.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.inputs.json",
+    "original": {
+      "bytes": 1763096,
+      "sha256": "a8d9ba0d8aaceb5e2837e9e3951a4b0bcb53290998c96bf1ebde8c20b129f9a8"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.log",
+    "original": {
+      "bytes": 153652,
+      "sha256": "84bc23aea3a776ef8b7dd59f28ae60fdae48d7db8c93dbceea3ed5fd57c88782"
+    },
+    "retained_as": "file-cap-refusal/phase-01.log.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.process.json",
+    "original": {
+      "bytes": 338,
+      "sha256": "ae86abcdc8802a829aaab5134302cac9eded08f585e2d18c9a43cefd9f5d0446"
+    },
+    "retained_as": "file-cap-refusal/phase-01.process.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.receipt.json",
+    "original": {
+      "bytes": 156566,
+      "sha256": "9429886463a3e0f3b9f6188de497349694c55f661837c08bc7a2e8de8bddf541"
+    },
+    "retained_as": "file-cap-refusal/phase-01.receipt.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.resources.json",
+    "original": {
+      "bytes": 12280,
+      "sha256": "f319849c092f5922a4aefeb2490c1318726808a669d9e95e03c1000f4d23b07b"
+    },
+    "retained_as": "file-cap-refusal/phase-01.resources.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.before.json",
+    "original": {
+      "bytes": 870896,
+      "sha256": "b7811fc6b2b24805fbb600e229d2aee76cf4b743e92f75a9907aa7fb5f9d4595"
+    },
+    "retained_as": "file-cap-refusal/phase-01.before.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.inputs.json",
+    "original": {
+      "bytes": 1763096,
+      "sha256": "a8d9ba0d8aaceb5e2837e9e3951a4b0bcb53290998c96bf1ebde8c20b129f9a8"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.log",
+    "original": {
+      "bytes": 50231,
+      "sha256": "44c5fb28eb88f27a5ef93a0d39e1190f6c80c80f8fe304166403745be9e644d4"
+    },
+    "retained_as": "file-cap-refusal/phase-02.log.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.process.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "e96526b9cf1bc7ec5316683c583856e15cde6deb1a37675c6af5c0cd903fa7bd"
+    },
+    "retained_as": "file-cap-refusal/phase-02.process.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.receipt.json",
+    "original": {
+      "bytes": 5195,
+      "sha256": "51532742235eec66dc2393eac7d7d5f17f5d7031d00e7565277ed17bc0ac5284"
+    },
+    "retained_as": "file-cap-refusal/phase-02.receipt.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.resources.json",
+    "original": {
+      "bytes": 29850,
+      "sha256": "a356b3bf1d2298b04357388c20cbc4649759f2e99d3e67c8803ed6cce30e75b7"
+    },
+    "retained_as": "file-cap-refusal/phase-02.resources.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/runner-process.json",
+    "original": {
+      "bytes": 984,
+      "sha256": "e3a734ebff281047cd92a7659d54325bd0c6155ab8047225e083e1f8a3fef0ed"
+    },
+    "retained_as": "file-cap-refusal/runner-process.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/tools-after.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/tools-before.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-1.receipt.json",
+    "original": {
+      "bytes": 524,
+      "sha256": "c2e86a9f34689532b2f66e23499c5846426d320c0cc0b08a672e214db795cd76"
+    },
+    "retained_as": "driver-queries/query-1.receipt.json.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-1.stderr",
+    "original": {
+      "bytes": 6149,
+      "sha256": "afb4fff5468cee567f5462645a7d823545f410b0004107a093d0b18d8e8d1275"
+    },
+    "retained_as": "driver-queries/query-1.stderr.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-1.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-2.receipt.json",
+    "original": {
+      "bytes": 524,
+      "sha256": "27a52f09b8f8fbb9c548ce3fd1f3c15a79356122818958e574b2b4ffeb8cfa30"
+    },
+    "retained_as": "driver-queries/query-2.receipt.json.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-2.stderr",
+    "original": {
+      "bytes": 6149,
+      "sha256": "b5782b323de67a6f861e39fbee883dbd87ebf381ab1a9ac00858cafc9696d5bc"
+    },
+    "retained_as": "driver-queries/query-2.stderr.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-2.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/results.json",
+    "original": {
+      "bytes": 1137,
+      "sha256": "80c46fa7119e73f3f077e0e869f3b3731dc67f412d1307e50ceb2edd47b46ec4"
+    },
+    "retained_as": "driver-queries/results.json.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/tools-after.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "9b75d6d9a37421bfe1f8874372f1553658a41a2bf1dac0f4ed799df6b3887434"
+    },
+    "retained_as": "driver-queries/tools-after.json.gz"
+  },
+  {
+    "run": "driver-queries",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/tools-before.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "9b75d6d9a37421bfe1f8874372f1553658a41a2bf1dac0f4ed799df6b3887434"
+    },
+    "retained_as": "driver-queries/tools-after.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/active-map-frames.txt",
+    "original": {
+      "bytes": 10455,
+      "sha256": "2fc9226c686caf71d2ea7f9773b01a76a385d2adf17a515c68fd1a67b3c27913"
+    },
+    "retained_as": "final-static/active-map-frames.txt.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/artifact-readback.json",
+    "original": {
+      "bytes": 4701,
+      "sha256": "daae623efedf47d6509056095dfa435befa8fc39216b18b9ecee9464dcb917f1"
+    },
+    "retained_as": "final-static/artifact-readback.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/batch-results.json",
+    "original": {
+      "bytes": 177106,
+      "sha256": "0c663f2470e1c07c1e0ac7d85784be735eb86aad66e5a024b86d7675baca6584"
+    },
+    "retained_as": "final-static/batch-results.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "0bc55aea71e5fd5ef572f1f199f971e0952e983b2aa275bdf535321e7161f210"
+    },
+    "retained_as": null,
+    "omission": "External cache inventory omitted; no hard quota or peak claim."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "ad831f0734e1529f0d4b9e06e181382481a6919d408e3864dd4fcfcbf6d26df2"
+    },
+    "retained_as": null,
+    "omission": "External cache inventory omitted; no hard quota or peak claim."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-01.before.json",
+    "original": {
+      "bytes": 892705,
+      "sha256": "08dd412ca5306c51125bd690de73da6d746067f2ead5516a3acdc0953696acae"
+    },
+    "retained_as": "final-static/phase-01.before.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-01.inputs.json",
+    "original": {
+      "bytes": 1807190,
+      "sha256": "9bb47483c653dc66a437d7ab4e64fbe081e874db4da6a82b880aa44a1617f9bb"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. Original external wrapper/hash is preserved; no original wrapper bytes claimed."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-01.log",
+    "original": {
+      "bytes": 153652,
+      "sha256": "6e959d3f97df955a2edbc35fffd305e2655f0f3d04a83c53c75d09522fa3cb82"
+    },
+    "retained_as": "final-static/phase-01.log.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-01.process.json",
+    "original": {
+      "bytes": 339,
+      "sha256": "b13518f89670e95af8420376197cdf87713748f63ee63dd65c7175f7afac627a"
+    },
+    "retained_as": "final-static/phase-01.process.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-01.receipt.json",
+    "original": {
+      "bytes": 156567,
+      "sha256": "223ef7cc9da8eeb84d8be60a38b01c3228ef62da84b8ef09a362bb6ee456e83a"
+    },
+    "retained_as": "final-static/phase-01.receipt.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-01.resources.json",
+    "original": {
+      "bytes": 10262,
+      "sha256": "fdf0073ddbc0ebb41aea874d059bc2c7d0dcd3d259c37c4fe90fc40f7a07c0cc"
+    },
+    "retained_as": "final-static/phase-01.resources.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-02.before.json",
+    "original": {
+      "bytes": 892705,
+      "sha256": "08dd412ca5306c51125bd690de73da6d746067f2ead5516a3acdc0953696acae"
+    },
+    "retained_as": "final-static/phase-01.before.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-02.inputs.json",
+    "original": {
+      "bytes": 1807190,
+      "sha256": "9bb47483c653dc66a437d7ab4e64fbe081e874db4da6a82b880aa44a1617f9bb"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. Original external wrapper/hash is preserved; no original wrapper bytes claimed."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-02.log",
+    "original": {
+      "bytes": 49809,
+      "sha256": "e4de16936fccc61f9a7ca736eb1aec7f16c472cd70874acf6aa38be5496c2c82"
+    },
+    "retained_as": "final-static/phase-02.log.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-02.process.json",
+    "original": {
+      "bytes": 331,
+      "sha256": "88ba90ce769f866e82e7f6b65e9f0f53e1aaa949d7e6481325ed840f53fe1311"
+    },
+    "retained_as": "final-static/phase-02.process.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-02.receipt.json",
+    "original": {
+      "bytes": 5093,
+      "sha256": "affa3278755e1f47bdf950b9540fae3e48d2549e282ab8256377148dc8f4fb3e"
+    },
+    "retained_as": "final-static/phase-02.receipt.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-02.resources.json",
+    "original": {
+      "bytes": 6747,
+      "sha256": "b75a6f02f515b81cb58b9b6259b90263d45973ccc4e41e1968a33c2ea6907e99"
+    },
+    "retained_as": "final-static/phase-02.resources.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-03.before.json",
+    "original": {
+      "bytes": 892705,
+      "sha256": "08dd412ca5306c51125bd690de73da6d746067f2ead5516a3acdc0953696acae"
+    },
+    "retained_as": "final-static/phase-01.before.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-03.inputs.json",
+    "original": {
+      "bytes": 1807190,
+      "sha256": "9bb47483c653dc66a437d7ab4e64fbe081e874db4da6a82b880aa44a1617f9bb"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. Original external wrapper/hash is preserved; no original wrapper bytes claimed."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-03.log",
+    "original": {
+      "bytes": 49245,
+      "sha256": "843c767d8063452cd5583323b4486903e2cfe82b3e773611a207b0badfa8fac9"
+    },
+    "retained_as": "final-static/phase-03.log.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-03.process.json",
+    "original": {
+      "bytes": 432,
+      "sha256": "396fbdf867b46a32d4cba34762861cd93e3bb2d45763fa5fce8005b665f64283"
+    },
+    "retained_as": "final-static/phase-03.process.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-03.receipt.json",
+    "original": {
+      "bytes": 5192,
+      "sha256": "af3c9080a963e803415159c4c9f50e3a56adb36efc8cbdaff774241b344d27e2"
+    },
+    "retained_as": "final-static/phase-03.receipt.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-03.resources.json",
+    "original": {
+      "bytes": 11707,
+      "sha256": "364553d6b607f492328581f2fa6a1f2ace263b2eb62b1e3807f6ffe7c1219134"
+    },
+    "retained_as": "final-static/phase-03.resources.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/runner-process.json",
+    "original": {
+      "bytes": 987,
+      "sha256": "66af6c4778a16691d0449e492caddb42c2b2d96245432b8176dd4ff877743099"
+    },
+    "retained_as": "final-static/runner-process.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/structural-map-readback.json",
+    "original": {
+      "bytes": 1440,
+      "sha256": "7214666aafaf0dc988c995bb6e2a7b240b411a2b6a64aa61fa8d2cb6b4b90c8f"
+    },
+    "retained_as": "final-static/structural-map-readback.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/tools-after.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/tools-before.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/active-map-frames.txt",
+    "original": {
+      "bytes": 10455,
+      "sha256": "29471755a1aa70dc7ad748fc178e357152ac85ff13e8f6298411761e5dac8708"
+    },
+    "retained_as": "retained-577b/active-map-frames.txt.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/artifact-readback.json",
+    "original": {
+      "bytes": 4852,
+      "sha256": "a479d4103c4877405edc208a69e68ecb5767862571ae0dfc16a54e08138657ad"
+    },
+    "retained_as": "retained-577b/artifact-readback.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/batch-results.json",
+    "original": {
+      "bytes": 206605,
+      "sha256": "9796f909f2ba27489035a717d10f1b6d64400b8a2d297879533c9d6bfbf96310"
+    },
+    "retained_as": "retained-577b/batch-results.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "90158fb484d60b7c1db93c974773bd0d12e3174035dc7acd3cf55f559e75de67"
+    },
+    "retained_as": null,
+    "omission": "External sampled cache inventory omitted; no peak or hard quota claim."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "b14f4eceb549a3b6ec3793ddfdaa134a871f43ec8a8829fca7f841cd10966132"
+    },
+    "retained_as": null,
+    "omission": "External sampled cache inventory omitted; no peak or hard quota claim."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/execution-manifest.json",
+    "original": {
+      "bytes": 8870,
+      "sha256": "d9124ffaeb67a8c5041a55eac0307eae5b8337e284e1ab07e6bb89340bb8a029"
+    },
+    "retained_as": "retained-577b/execution-manifest.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-01.before.json",
+    "original": {
+      "bytes": 936943,
+      "sha256": "8737a1724ffc836474fab678779a2c77eef0ab73b978ad65e3d5dc04086c3f84"
+    },
+    "retained_as": "retained-577b/phase-01.before.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-01.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-01.log",
+    "original": {
+      "bytes": 153652,
+      "sha256": "22d10af93da44da6b69cc8ef3fee690c0a85ed6f7765cd02ad5e5c439246e345"
+    },
+    "retained_as": "retained-577b/phase-01.log.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-01.process.json",
+    "original": {
+      "bytes": 339,
+      "sha256": "3ff74decfe3df6863236c90c4234ac1c3a78cf4562765298eceea5831a6ae20a"
+    },
+    "retained_as": "retained-577b/phase-01.process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-01.receipt.json",
+    "original": {
+      "bytes": 156648,
+      "sha256": "02fff7521ebc7e8d73887d1285ae559736a0e25fa9050ad26a3e448f8897e5da"
+    },
+    "retained_as": "retained-577b/phase-01.receipt.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-01.resources.json",
+    "original": {
+      "bytes": 10993,
+      "sha256": "a51a6d92e502433955cc2b96e042be95b911e91dc8da03f030da63869d432e5c"
+    },
+    "retained_as": "retained-577b/phase-01.resources.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-02.before.json",
+    "original": {
+      "bytes": 936943,
+      "sha256": "8737a1724ffc836474fab678779a2c77eef0ab73b978ad65e3d5dc04086c3f84"
+    },
+    "retained_as": "retained-577b/phase-01.before.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-02.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-02.log",
+    "original": {
+      "bytes": 49809,
+      "sha256": "a031bd86449bc3136355383437462d935dfeb8f2a46a663c9a3d79ac144b3dc9"
+    },
+    "retained_as": "retained-577b/phase-02.log.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-02.process.json",
+    "original": {
+      "bytes": 330,
+      "sha256": "1aca1b46768e400108a2cac5b14eaa3c4c762427905454c70a46e53cb5bf17a8"
+    },
+    "retained_as": "retained-577b/phase-02.process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-02.receipt.json",
+    "original": {
+      "bytes": 5174,
+      "sha256": "20de2bf0b3890c1c3bce25e4fede57a7dd5bb248d9fae4f086306671b9bec52d"
+    },
+    "retained_as": "retained-577b/phase-02.receipt.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-02.resources.json",
+    "original": {
+      "bytes": 20306,
+      "sha256": "df5d0e93d83952ea57b0c835121d55afae847d99511f440776bf49fbc6924300"
+    },
+    "retained_as": "retained-577b/phase-02.resources.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-03.before.json",
+    "original": {
+      "bytes": 936943,
+      "sha256": "8737a1724ffc836474fab678779a2c77eef0ab73b978ad65e3d5dc04086c3f84"
+    },
+    "retained_as": "retained-577b/phase-01.before.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-03.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-03.log",
+    "original": {
+      "bytes": 49245,
+      "sha256": "087f188ee94422a0ceea03c9995b87af6d9cb801e7f9bc06dd347281032bb79a"
+    },
+    "retained_as": "retained-577b/phase-03.log.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-03.process.json",
+    "original": {
+      "bytes": 432,
+      "sha256": "6cb41460e8c0df86a1d9104426bcc38e08c75d75fbdf6e5665563dc111ee1ce3"
+    },
+    "retained_as": "retained-577b/phase-03.process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-03.receipt.json",
+    "original": {
+      "bytes": 5273,
+      "sha256": "bd5c1770b5de347af77ea78b8de0a978d215637e5d4e0a4ab5a9ed3ac99df3fd"
+    },
+    "retained_as": "retained-577b/phase-03.receipt.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-03.resources.json",
+    "original": {
+      "bytes": 15499,
+      "sha256": "bbf2514d7f132bafe049ecb27ed98ea0d1617948e6b9b88730f105cd904efd18"
+    },
+    "retained_as": "retained-577b/phase-03.resources.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-04.before.json",
+    "original": {
+      "bytes": 936943,
+      "sha256": "8737a1724ffc836474fab678779a2c77eef0ab73b978ad65e3d5dc04086c3f84"
+    },
+    "retained_as": "retained-577b/phase-01.before.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-04.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-04.log",
+    "original": {
+      "bytes": 49776,
+      "sha256": "d72e35b4770cf27b37a0746cb693fd86a651353aa28aa7280972020c0afeffdc"
+    },
+    "retained_as": "retained-577b/phase-04.log.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-04.process.json",
+    "original": {
+      "bytes": 335,
+      "sha256": "fd9c06586c9e4e0944b5b020a24718f726e13e8905e93b9e48b04f65b6a7d10f"
+    },
+    "retained_as": "retained-577b/phase-04.process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-04.receipt.json",
+    "original": {
+      "bytes": 5171,
+      "sha256": "ad7ddecdf885027090c7740354c1a02dc57e1ac63a13fe665b2c3cdb1ca72a2d"
+    },
+    "retained_as": "retained-577b/phase-04.receipt.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-04.resources.json",
+    "original": {
+      "bytes": 776,
+      "sha256": "5c1be059b4d92045bb0d5525820720259b08475962918f03a510aaa42034c5a8"
+    },
+    "retained_as": "retained-577b/phase-04.resources.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-05.before.json",
+    "original": {
+      "bytes": 936943,
+      "sha256": "8737a1724ffc836474fab678779a2c77eef0ab73b978ad65e3d5dc04086c3f84"
+    },
+    "retained_as": "retained-577b/phase-01.before.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-05.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-05.log",
+    "original": {
+      "bytes": 49106,
+      "sha256": "fede86ab03fca1aab2cd2d05927e9460c6cacd49864deff33dedd3695b20dfee"
+    },
+    "retained_as": "retained-577b/phase-05.log.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-05.process.json",
+    "original": {
+      "bytes": 419,
+      "sha256": "cb60c90454e7cf6525e88375aeeacc76e95ba98cfc938ae5c6d7542675f71404"
+    },
+    "retained_as": "retained-577b/phase-05.process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-05.receipt.json",
+    "original": {
+      "bytes": 5255,
+      "sha256": "a8cf516943a113e0dab3c291533c16bbda4e604bc77357d9535d750bba9f2cbc"
+    },
+    "retained_as": "retained-577b/phase-05.receipt.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-05.resources.json",
+    "original": {
+      "bytes": 777,
+      "sha256": "53db3a4c1072b5cd27a71a46c92be5d4eca47b66a811d5ca3efe9dc0a8781532"
+    },
+    "retained_as": "retained-577b/phase-05.resources.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-06.before.json",
+    "original": {
+      "bytes": 936943,
+      "sha256": "8737a1724ffc836474fab678779a2c77eef0ab73b978ad65e3d5dc04086c3f84"
+    },
+    "retained_as": "retained-577b/phase-01.before.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-06.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-06.log",
+    "original": {
+      "bytes": 49096,
+      "sha256": "5dfa08687cf69feb974f395b35acf665ef4d7022515684626af528773df95b88"
+    },
+    "retained_as": "retained-577b/phase-06.log.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-06.process.json",
+    "original": {
+      "bytes": 408,
+      "sha256": "afc1c894f6f35685dd90da243218468abff47f25dcad958e86b3aedc7bf57a51"
+    },
+    "retained_as": "retained-577b/phase-06.process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-06.receipt.json",
+    "original": {
+      "bytes": 5245,
+      "sha256": "aadbbe0c429319ab8a831bb3baa9972e2c222030fbe92ae3965f3e3d7463a68c"
+    },
+    "retained_as": "retained-577b/phase-06.receipt.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-06.resources.json",
+    "original": {
+      "bytes": 778,
+      "sha256": "a822fdc7cd295dc8484c93ba4cbe19afbf1123fc96fba773502c35c78a3b1aa9"
+    },
+    "retained_as": "retained-577b/phase-06.resources.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-07.before.json",
+    "original": {
+      "bytes": 936943,
+      "sha256": "8737a1724ffc836474fab678779a2c77eef0ab73b978ad65e3d5dc04086c3f84"
+    },
+    "retained_as": "retained-577b/phase-01.before.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-07.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-07.log",
+    "original": {
+      "bytes": 49086,
+      "sha256": "347f58c159e25416bfc6d326d66d28b539c0c5570c61e042f9a0ec5b8535cc3c"
+    },
+    "retained_as": "retained-577b/phase-07.log.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-07.process.json",
+    "original": {
+      "bytes": 399,
+      "sha256": "1f6b5e7a3457c2402ecbc8d742f9c47ac73c4a39d22f8b671bbfd95b0a80f352"
+    },
+    "retained_as": "retained-577b/phase-07.process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-07.receipt.json",
+    "original": {
+      "bytes": 5235,
+      "sha256": "e402b19df71572867d210214d00b30d1d6371c56cbb16011a9bdc007cf131d62"
+    },
+    "retained_as": "retained-577b/phase-07.receipt.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-07.resources.json",
+    "original": {
+      "bytes": 778,
+      "sha256": "ab18a84d32142624ce0a46fd551c3008c1a368bc5265d559518a63eb9c2e068d"
+    },
+    "retained_as": "retained-577b/phase-07.resources.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-08.before.json",
+    "original": {
+      "bytes": 936943,
+      "sha256": "8737a1724ffc836474fab678779a2c77eef0ab73b978ad65e3d5dc04086c3f84"
+    },
+    "retained_as": "retained-577b/phase-01.before.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-08.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-08.log",
+    "original": {
+      "bytes": 49980,
+      "sha256": "12864c4ee673f18f7391a8565e307e8d8adbde769bdb35d576305c1d625ccbe8"
+    },
+    "retained_as": "retained-577b/phase-08.log.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-08.process.json",
+    "original": {
+      "bytes": 401,
+      "sha256": "a4345700699b35166ce17b7db6383fd2fd7aef0139e6680e85050b6f8aab3d2b"
+    },
+    "retained_as": "retained-577b/phase-08.process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-08.receipt.json",
+    "original": {
+      "bytes": 6665,
+      "sha256": "e8c8dc361c37dd19d21d713c7812b1b13d648e3433a5b35c48cd4a6c214bcecc"
+    },
+    "retained_as": "retained-577b/phase-08.receipt.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-08.resources.json",
+    "original": {
+      "bytes": 4557,
+      "sha256": "38e650122ea6bfd8417ed455473432da2b8557e79788ad0a9db9950ad2278fdf"
+    },
+    "retained_as": "retained-577b/phase-08.resources.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/runner-process.json",
+    "original": {
+      "bytes": 1008,
+      "sha256": "b8041760b1a7227b950eb64892e7b78ec97d476d8c88533f9c062b0a6bef49dc"
+    },
+    "retained_as": "retained-577b/runner-process.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/structural-map-readback.json",
+    "original": {
+      "bytes": 1195,
+      "sha256": "0938dd226085c05f9de3cc0ecccca8b1a1e4c14247bcb6e62e5c7bc27744f98f"
+    },
+    "retained_as": "retained-577b/structural-map-readback.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/tools-after.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/tools-before.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz"
+  }
+]

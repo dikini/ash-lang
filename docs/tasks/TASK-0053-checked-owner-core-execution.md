@@ -1,7 +1,7 @@
 # TASK-0053: Connected checked owner execution and immutable admission
 
 - ID: `TASK-0053`
-- Status: active for same-build helper/header/ABI provenance; protected activation and connected execution await their gates
+- Status: active for actual root-link provenance; protected activation and connected execution await their gates
 - Related: [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](TASK-0051-checked-ffi-contract-carriers.md),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
@@ -165,10 +165,48 @@ records four initial controls, then Clippy and 34 distinct current-source tests
 passing in PR113. The final static test built the actual checked artifact and
 decoded its receipt before a test-only sidecar path error. Separate post-test
 readback verified artifact/data associations without crediting unexecuted test
-assertions. The repaired static gate and fresh Clippy now pass, giving 35 distinct tests
-with explicit source-transfer qualifications. Final review and retention remain
-pending. No output was executed. This work
+assertions. The repaired static gate and fresh Clippy passed, giving 35 distinct tests
+with explicit source-transfer qualifications. PR113 was retained as `a2f1c938`
+after [final review](https://github.com/dikini/ash-lang/pull/113#pullrequestreview-5625045484),
+[retention](https://github.com/dikini/ash-lang/pull/113#issuecomment-6359546097) and
+[partial PM confirmation](https://github.com/dikini/ash-lang/issues/62#issuecomment-6359613205). No output was executed. This work
 changes no whole acceptance criteria or public execution guards.
+
+## Active actual root-link observations
+
+The step-5 root-link component starts from retained `a2f1c938` and is now
+rebased onto retained comparator fix `577b0c87`. A private checked observer
+captures actual arguments, bounded response-file bytes, GNU/BFD map and resolved
+object/archive/CRT/runtime/script input pins before returning to rustc. Unknown
+forms, missing LOAD paths and unsupported script features refuse. The same
+prepared native archive must appear in the input set. Staging bytes must match
+the observed output before cleanup; owned data binds the existing ReceiptSeed
+configuration chain and final ELF before publication. Legacy linking is unchanged.
+
+Checked Cargo compilation and cleanup use the bounded owned transaction. A
+same-group BFD proxy hashes and delegates one opened tool descriptor. Its
+exclusive marker proves attempted entry; successful cc, exact raw-marker and
+invocation correspondence, map/output equality and cleanup are separately
+required. The [product record](evidence/checked-owner-core-execution/root-link-provenance/README.md)
+preserves earlier cap/selector/map refusals and the lost rejected stdout without
+inventing its format. The narrow documented `-Map=-` repair now passes actual
+canonical verification. Fresh session 8323 on `577b0c87` passes Clippy and 18
+distinct tests: link six, genuine checked static one, receipt seven, three
+non-startup artifact controls and public legacy receipt compile/link one.
+Independent audit confirms the fresh ELF/receipt/native/root/map/marker chain,
+thirteen rebound inner mutations and exact/short/spent/fresh controls. Eleven
+retired transient inputs remain qualified; nine nested warning lines remain.
+The explicit private 2 GiB per-file policy changes no shared default and does
+not establish the public/default profile. No generated output or selected native
+function has run. Final published-head review and retention remain pending.
+
+This addresses transient input correspondence, not full tool/native/runtime
+conformity. All six complete closure fields, independent premises, protected
+context/approval and sealed same-fd launch remain unfulfilled. Next connected
+admission/execution work must use the actual artifacts, independently reviewed
+finite AD16 premises and administrator-established context, rather than another
+query-only observation. Actual initialized-eight-byte acquisition, copy,
+finish/Trace and the root-triggered full F-core gate remain required.
 
 ## Acceptance for this bounded delivery
 

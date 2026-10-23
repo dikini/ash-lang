@@ -701,6 +701,18 @@ pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram
             None => (project.join("target"), true),
         },
     };
+    let mut link_capture = if let Some(native) = &prepared.native_build {
+        Some(
+            super::checked_link::Capture::prepare(
+                &project,
+                native.limits().link,
+                &prepared.configuration.native_inputs,
+            )
+            .map_err(|e| BuildFailure(Failure::Receipt(e)))?,
+        )
+    } else {
+        None
+    };
     let build_log = project.join("native-build.log");
     let log = fs::File::create(&build_log)?;
     let error_log = log.try_clone()?;
@@ -745,6 +757,11 @@ pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram
                 "strip=debuginfo",
             ]);
         }
+        if let Some(capture) = &link_capture {
+            let mut linker = std::ffi::OsString::from("linker=");
+            linker.push(capture.linker());
+            command.arg("-C").arg(linker);
+        }
         for input in &prepared.configuration.native_inputs {
             let mut argument = std::ffi::OsString::from("link-arg=");
             argument.push(input.path().as_os_str());
@@ -756,15 +773,21 @@ pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram
             .verify()
             .map_err(|error| BuildFailure(Failure::Receipt(error)))?;
     }
-    let status = command
+    command
         .env("CARGO_BUILD_JOBS", "1")
-        .env_remove("CARGO_BUILD_TARGET")
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(error_log))
-        .status();
+        .env_remove("CARGO_BUILD_TARGET");
+    let status = if let Some(capture) = &mut link_capture {
+        capture.run_cargo(&mut command, &build_log)
+    } else {
+        command
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(error_log))
+            .status()
+    };
     let receipt_path = project.join("producer-receipt.bin");
     let mut receipt_failure = None;
     let mut receipt_written = false;
+    let mut link_state = (link_capture, Ok(()));
     let finished = GeneratedArtifacts {
         project: &project,
         target_directory: &target_directory,
@@ -773,40 +796,79 @@ pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram
         profile: cargo_profile,
         private_target,
     }
-    .finish_with_observation(
+    .finish_with_state(
         status.as_ref().is_ok_and(|status| status.success()),
         &output,
         &build_log,
-        |linked| {
-            if let Some(mut seed) = prepared.producer_receipt.take() {
-                let observed = seed
-                    .verify_emitted_files(&emission_paths)
-                    .and_then(|()| seed.verify_native_inputs(&prepared.configuration.native_inputs))
-                    .and_then(|()| seed.verify_configuration(&configuration_paths))
-                    .and_then(|()| {
-                        if let Some(native) = &mut prepared.native_build {
-                            let bytes = native.finish(seed.receipt())?;
-                            seed.bind_native_build(&bytes, native.limits())?;
-                            native.validate_receipt(&bytes, seed.receipt())?;
-                            fs::write(project.join("native-provenance.json"), &bytes)
-                                .map_err(|_| super::checked_receipt::ReceiptFailure::Input)?;
+        &mut link_state,
+        (
+            |linked, (capture, result)| {
+                *result = capture
+                    .as_mut()
+                    .map_or(Ok(()), |capture| capture.capture(linked));
+                Ok(())
+            },
+            |artifacts, (capture, _), log| {
+                if let Some(capture) = capture {
+                    artifacts.clean_with(log, |command| capture.run_cargo(command, log))
+                } else {
+                    artifacts.clean(log)
+                }
+            },
+            |linked, (link_capture, captured)| {
+                if let Err(error) = *captured {
+                    receipt_failure = Some(error);
+                    return Err(io::Error::other("root link observation refused"));
+                }
+                if let Some(mut seed) = prepared.producer_receipt.take() {
+                    let mut root_link_observation = None;
+                    let observed = seed
+                        .verify_emitted_files(&emission_paths)
+                        .and_then(|()| {
+                            seed.verify_native_inputs(&prepared.configuration.native_inputs)
+                        })
+                        .and_then(|()| seed.verify_configuration(&configuration_paths))
+                        .and_then(|()| {
+                            if let Some(native) = &mut prepared.native_build {
+                                let bytes = native.finish(seed.receipt())?;
+                                seed.bind_native_build(&bytes, native.limits())?;
+                                native.validate_receipt(&bytes, seed.receipt())?;
+                                fs::write(project.join("native-provenance.json"), &bytes)
+                                    .map_err(|_| super::checked_receipt::ReceiptFailure::Input)?;
+                            }
+                            Ok(())
+                        })
+                        .and_then(|()| {
+                            if let Some(capture) = link_capture.as_mut() {
+                                let bytes = capture.finish(seed.receipt(), linked)?;
+                                seed.bind_root_link(&bytes, capture.limits())?;
+                                fs::write(project.join("link-provenance.json"), &bytes)
+                                    .map_err(|_| super::checked_receipt::ReceiptFailure::Input)?;
+                                root_link_observation = Some((bytes, capture.limits()));
+                            }
+                            Ok(())
+                        })
+                        .and_then(|()| {
+                            if let Some((bytes, limits)) = &root_link_observation {
+                                seed.finalize_with_root_link(linked, Some((bytes, *limits)))
+                            } else {
+                                seed.finalize(linked)
+                            }
+                        });
+                    match observed {
+                        Ok(bytes) => {
+                            fs::write(&receipt_path, bytes)?;
+                            receipt_written = true;
                         }
-                        Ok(())
-                    })
-                    .and_then(|()| seed.finalize(linked));
-                match observed {
-                    Ok(bytes) => {
-                        fs::write(&receipt_path, bytes)?;
-                        receipt_written = true;
-                    }
-                    Err(error) => {
-                        receipt_failure = Some(error);
-                        return Err(io::Error::other("producer receipt refused"));
+                        Err(error) => {
+                            receipt_failure = Some(error);
+                            return Err(io::Error::other("producer receipt refused"));
+                        }
                     }
                 }
-            }
-            Ok(())
-        },
+                Ok(())
+            },
+        ),
     );
     let status = status?;
     if !status.success() {

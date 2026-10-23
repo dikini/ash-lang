@@ -1,0 +1,300 @@
+[
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "bb8b8400f67f7408e772abdbef0b7e0e528be8cd3a0a617a4d965e4047403f5e"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "4ca2be2669556980c8680e794f0af8dfe43bcbe87a5ca29c1a5d7c83d930f8b4"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.inputs.json",
+    "original": {
+      "bytes": 1763308,
+      "sha256": "e3d015e08c7d496fe5ce017b7af71416764a11521b7d7ec96d19c3bbd0215dfd"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.inputs.json",
+    "original": {
+      "bytes": 1763308,
+      "sha256": "e3d015e08c7d496fe5ce017b7af71416764a11521b7d7ec96d19c3bbd0215dfd"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "current",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.inputs.json",
+    "original": {
+      "bytes": 1763308,
+      "sha256": "e3d015e08c7d496fe5ce017b7af71416764a11521b7d7ec96d19c3bbd0215dfd"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "f8ffae2e9d436b690727f32ae7cb3d160ae46f7fb57c2d560f0eba7d5ff25228"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "ac3be945e77ac8099bdd7b8e7177a177ed9f4448779a373f242aba62ab6c7e45"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.inputs.json",
+    "original": {
+      "bytes": 1763096,
+      "sha256": "9faeb8fe74e7d27d4374b37c5ddb972f51bfab9c7e6e3c4f265932f43d449dd5"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "file-policy-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.inputs.json",
+    "original": {
+      "bytes": 1763096,
+      "sha256": "9faeb8fe74e7d27d4374b37c5ddb972f51bfab9c7e6e3c4f265932f43d449dd5"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "7b7b3d4bcdb8e22d009dceb655f34f26ab0a167c66663de4a1d4cd2b3aa877a7"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "8f68b564baf32b171587b3089dcdd88bb9bd6f525e7691f9781bfba2add9dd54"
+    },
+    "retained_as": null,
+    "omission": "Cache inventory omitted from repository; original remains external. No hard peak or quota claim."
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.inputs.json",
+    "original": {
+      "bytes": 1763096,
+      "sha256": "a8d9ba0d8aaceb5e2837e9e3951a4b0bcb53290998c96bf1ebde8c20b129f9a8"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "file-cap-refusal",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.inputs.json",
+    "original": {
+      "bytes": 1763096,
+      "sha256": "a8d9ba0d8aaceb5e2837e9e3951a4b0bcb53290998c96bf1ebde8c20b129f9a8"
+    },
+    "retained_as": null,
+    "omission": "Original paired JSON wrapper not retained; its before/after maps are equal to the retained exact before-map object. Full wrapper remains external; receipt and hashes retained."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "0bc55aea71e5fd5ef572f1f199f971e0952e983b2aa275bdf535321e7161f210"
+    },
+    "retained_as": null,
+    "omission": "External cache inventory omitted; no hard quota or peak claim."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "ad831f0734e1529f0d4b9e06e181382481a6919d408e3864dd4fcfcbf6d26df2"
+    },
+    "retained_as": null,
+    "omission": "External cache inventory omitted; no hard quota or peak claim."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-01.inputs.json",
+    "original": {
+      "bytes": 1807190,
+      "sha256": "9bb47483c653dc66a437d7ab4e64fbe081e874db4da6a82b880aa44a1617f9bb"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. Original external wrapper/hash is preserved; no original wrapper bytes claimed."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-02.inputs.json",
+    "original": {
+      "bytes": 1807190,
+      "sha256": "9bb47483c653dc66a437d7ab4e64fbe081e874db4da6a82b880aa44a1617f9bb"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. Original external wrapper/hash is preserved; no original wrapper bytes claimed."
+  },
+  {
+    "run": "final-static",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-map-stdout/phase-03.inputs.json",
+    "original": {
+      "bytes": 1807190,
+      "sha256": "9bb47483c653dc66a437d7ab4e64fbe081e874db4da6a82b880aa44a1617f9bb"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. Original external wrapper/hash is preserved; no original wrapper bytes claimed."
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-802723-1792747103525940316-0/.ash-build/ash-host-802723-0/checked-link/link.map",
+    "original": {
+      "bytes": 119003881,
+      "sha256": "388363c4da94af86742aa9f2c6c912522d2a8ae0f85f9c72139fc1a02b91f9ab"
+    },
+    "retained_as": null,
+    "omission": "119MB original map remains external. Exact active header/LOAD/OUTPUT derivation plus full digest/readback retained; no reconstruction of other bytes claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/cache-after.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "90158fb484d60b7c1db93c974773bd0d12e3174035dc7acd3cf55f559e75de67"
+    },
+    "retained_as": null,
+    "omission": "External sampled cache inventory omitted; no peak or hard quota claim."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/cache-before.json",
+    "original": {
+      "bytes": 200,
+      "sha256": "b14f4eceb549a3b6ec3793ddfdaa134a871f43ec8a8829fca7f841cd10966132"
+    },
+    "retained_as": null,
+    "omission": "External sampled cache inventory omitted; no peak or hard quota claim."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-01.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-02.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-03.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-04.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-05.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-06.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-07.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "run": "retained-577b",
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-retained-combined/phase-08.inputs.json",
+    "original": {
+      "bytes": 1896598,
+      "sha256": "a1469ec1cbd5283ebcb0490c32ed66a6e943231dd4c1b13b36aecdea1cf11fbd"
+    },
+    "retained_as": null,
+    "omission": "Equal paired wrapper omitted; exact before-map object retained. No wrapper byte reconstruction claimed."
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-868954-1792748896997306930-0/.ash-build/ash-host-868954-0/checked-link/link.map",
+    "original": {
+      "bytes": 116089040,
+      "sha256": "8140772cb62b6906a96143e476b52c55c98f5668a89c1198805ccabcbddf3a1c"
+    },
+    "retained_as": null,
+    "omission": "Full original map stays external. Exact active header/LOAD/OUTPUT derivation and full digest/readback retained; other map bytes cannot be reconstructed from the derivation."
+  }
+]
