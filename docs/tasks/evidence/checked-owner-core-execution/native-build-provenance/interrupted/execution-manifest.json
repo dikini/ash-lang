@@ -1,0 +1,69 @@
+{
+  "files": [
+    {
+      "path": "batch-results.json",
+      "bytes": 2788,
+      "sha256": "59471a1408b0f86fd0e058e13b2ba8d754d5dc11288321dc9283b76da002e2db"
+    },
+    {
+      "path": "cache-after.json",
+      "bytes": 200,
+      "sha256": "74ec8b85461977bb0ffba1fc713db767f1078f298cd6b02d13216e3f087978dd"
+    },
+    {
+      "path": "cache-before.json",
+      "bytes": 200,
+      "sha256": "0e627f6c47797f33f78a419d299969089e594843c55ea5bcbb2d5d8d51652ceb"
+    },
+    {
+      "path": "phase-01.before.json",
+      "bytes": 852223,
+      "sha256": "966e20f6ba1e34baab6ba9cc65c0bf95c5d667d8e806ad5824b790f5dfbad626"
+    },
+    {
+      "path": "phase-01.inputs.json",
+      "bytes": 1725326,
+      "sha256": "1cc664dce72d908d700313eaf749e9c603bcfabbc613e0dbe772bf7add1cc12c"
+    },
+    {
+      "path": "phase-01.log",
+      "bytes": 45713,
+      "sha256": "3693efcf7a5e281e5a6fa92b71237e5acfd3b6bd442664f8e3d00349cc84c4b7"
+    },
+    {
+      "path": "phase-01.process.json",
+      "bytes": 393,
+      "sha256": "387301ab9eac417a80a6a6889dd0fb78131e5bab8250d8ffc0c180df587aac23"
+    },
+    {
+      "path": "phase-01.receipt.json",
+      "bytes": 2618,
+      "sha256": "7fd45f3baff35c2d1ae9b964c2fd1b1dfd07d83bebf3f0a7a49c4c9955366eb4"
+    },
+    {
+      "path": "phase-01.resources.json",
+      "bytes": 7987,
+      "sha256": "6b777ce42be31a70f6c7382c73f186eff71cddb13732ee4f83c852f00df34f5b"
+    },
+    {
+      "path": "runner-process.json",
+      "bytes": 968,
+      "sha256": "0239ef15bb702f4afdd8a4ea64039fb62a5ff23e34a0113aa97942ff4dd54728"
+    },
+    {
+      "path": "scheduling-interruption.json",
+      "bytes": 268,
+      "sha256": "362af84ed848e17029ed36b9bc8f8a3b98146df773c5ef484eccdef3928c2da0"
+    },
+    {
+      "path": "tools-after.json",
+      "bytes": 1123,
+      "sha256": "32382b2522e9a58f4c4a2aa1c27344a3e40b3593e60de8c09ff138e5f22f9adb"
+    },
+    {
+      "path": "tools-before.json",
+      "bytes": 1123,
+      "sha256": "32382b2522e9a58f4c4a2aa1c27344a3e40b3593e60de8c09ff138e5f22f9adb"
+    }
+  ]
+}

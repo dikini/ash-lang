@@ -172,7 +172,15 @@ Public execution remains closed.
    one real public compile/link-only receipt test on base `f4a3a048` plus candidate
    source. No generated output was executed. Missing closure remains explicit; the product
    protected store/context and immutable launcher are later components, and
-   current activation refusals stay closed. Freeze bounded deterministic receipt/plan and policy versions binding the full checked
+   current activation refusals stay closed. PR112 retained the genuine checked
+   producer/static preparation at `8b844436` with all six complete closure fields
+   Missing. The active same-build helper transaction derives ABI assertions from
+   actual bridge originals, discovers/revalidates canonical include inputs,
+   compiles the object/archive and binds partial tool/configuration observations
+   into that same receipt. Its [early evidence](../evidence/checked-owner-core-execution/native-build-provenance/README.md)
+   records four passing controls; current test refinements, actual final sidecar/
+   static association and affected verification remain pending. These observations
+   do not discharge complete closure or protected deployment. Freeze bounded deterministic receipt/plan and policy versions binding the full checked
    required closure, original operation/bridge/payload/facts mappings, native/
    headers/runtime/tool/config hashes, mode/role/target, finite capacities and
    exact premise/context. The separate trusted launcher contains no selected

@@ -1,7 +1,7 @@
 # TASK-0053: Connected checked owner execution and immutable admission
 
 - ID: `TASK-0053`
-- Status: active for checked producer preparation; protected activation and connected execution await their gates
+- Status: active for same-build helper/header/ABI provenance; protected activation and connected execution await their gates
 - Related: [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](TASK-0051-checked-ffi-contract-carriers.md),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
@@ -121,9 +121,9 @@ verification. F3 and F6 use their separately assigned targets; no work limit or
 execution permission changes. Include progress with the product PR, not a
 standalone preparation PR.
 
-## Active checked producer connection
+## Retained checked producer connection — PR112
 
-The next product slice starts from retained `0bbf75cb`. It reuses the complete
+PR112 retained the producer slice as `8b844436`, based on `0bbf75cb`. It reuses the complete
 private image serializer, independent original re-admission and typed bridge
 planner for the genuine initialized-eight-byte source/Core fixture. A paid
 whole-program census must associate every Host, checked foreign request, window
@@ -146,6 +146,28 @@ Clippy, with source qualifications retained in the evidence.
 The helper has been compiled/linked only, with no calls to its functions.
 No generated output startup or protected deployment is assigned by this
 preparation path.
+
+## Active same-build helper provenance
+
+The next product component starts from retained PR112 `8b844436` after its
+[final review](https://github.com/dikini/ash-lang/pull/112#pullrequestreview-5624457448),
+[retention](https://github.com/dikini/ash-lang/pull/112#issuecomment-6358458798) and
+[partial PM confirmation](https://github.com/dikini/ash-lang/issues/62#issuecomment-6358497513).
+A private checked native-build transaction now owns dependency discovery,
+canonical input revalidation, bridge-derived forced-include ABI assertions,
+object/archive creation and bounded compiler/tool/configuration observations.
+Its sidecar is bound to the existing same-image ReceiptSeed configuration;
+prebuilt archives do not inherit this provenance. No complete Header/Tool/Native/
+Runtime closure, reviewed premises, protected context or activation is inferred.
+
+[Early verification](evidence/checked-owner-core-execution/native-build-provenance/README.md)
+records three ordinary units and one genuine helper/header/ABI compile/query/
+object/archive control passing on frozen source. No helper function or generated
+output was executed. The subsequent test-only nonce/canonical-Record refinements
+need fresh verification. The actual same-build static artifact/sidecar gate,
+affected regressions, Clippy and final review remain pending. This product work
+continues in an individual milestone PR; it changes no current Main semantics,
+whole acceptance criteria or public execution guards.
 
 ## Acceptance for this bounded delivery
 
