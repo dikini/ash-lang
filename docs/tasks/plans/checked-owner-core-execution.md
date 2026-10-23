@@ -338,14 +338,14 @@ project, native, protected positive or full F-core claim transfers.
    iterations. Complexity 3; stop on any
    ABI, nominal DATA boundary, identity or incomplete-closure mismatch. Protected
    positive execution remains unrun.
-   Active first gate: compile the canonical `src/lib.rs` as the generated bin,
+   The first discriminator now passes in session 46665: compile the canonical `src/lib.rs` as the generated bin,
    include its private shim and three payloads, settle the actual closed lock,
    observe BFD and independently match the final ELF/receipt/request. Retain
    actual native relocations through private typed function pointers and require
    a coherent missing-release definition to fail at the linker. Candidate
    execution is excluded; actual evaluator adapters remain the immediate next
    connection after compile/link diagnosis, not a claim supplied by the entry's
-   startup refusal. This tranche starts at retained PR118 `2121d126` and reuses
+   startup refusal. The current tranche is based on retained PR119 `a3fc751d` and reuses
    the same owned runner/cache.
 3. Implement the reviewed one-shot trusted child, same-FD execution and
    authenticated one-way report endpoints, with real context/store/refusal
@@ -360,6 +360,10 @@ project, native, protected positive or full F-core claim transfers.
    missing deployment/closure or any required regression keeps whole acceptance
    open. No old executable or source fingerprint substitutes for these gates.
 
-## Generated root compile/link work item
+## Generated root compile/link component
 
-The current [compile/link WIP evidence](../evidence/checked-owner-core-execution/generated-root-compile/README.md) records28740 on retained PR119 `a3fc751d`:12 ordinary controls PASS and actual canonical-root/leaf compilation plus static link, followed by postlink Association. The staging ELF was removed on failure; no physical final-ELF rehash, final receipt/request, missing-release negative or execution credit. All8 maps of8,095 inputs/97 snapshots/tools match; cleanup is complete. This prose follows the tested runtime source. The linked-vs-raw configuration association defect is source-proven, but28740's first failing predicate is unrecorded. Repair/full13 gate, actual evaluator adapters, protected startup/native positive and full F-core remain pending.
+The [current compile/link evidence](../evidence/checked-owner-core-execution/generated-root-compile/README.md) records all 13 controls PASS in session 46665 and targeted Ash Clippy PASS in 12075 on exact runtime source `893fd2ee`, based on retained PR119 `a3fc751d`. All nine maps contain the same 8,382 inputs; 97 snapshots, tools and cleanup match. This prose/evidence assembly follows the tested product bytes.
+
+The genuine generated canonical root and opaque leaf compile/link with all four native references retained. Actual ELF `15141b6b` (1,569,672 bytes), receipt/request, seven physical parts, independent root identity `79271fec` and raw configuration→native→link bindings match. The coherently rebound wrong-original configuration passes both prior chain checks then refuses at the raw-data join; a fresh missing-release definition reaches an actual linker error. No selected native callback or generated application executes. Six closure fields stay Missing and protected activation refuses. Raw ordinary warnings and two glibc possible-loading warnings remain; compatible cached leaf source is byte-equal, not a cold-build claim.
+
+Earlier lock/HOME and postlink failures remain historical evidence. The source-proven linked-vs-raw pin defect is corrected without relaxing full associations or meters; 28740's first failing predicate was not recorded and its removed ELF is not recovered. After this bounded delivery is retained, apply the reviewed PreparedAcquire leaf/shim split and combine the actual evaluator adapter before its real root-cfg compile. Actual provider/current-image admission, protected one-shot launch/reporting, native acquire/copy/Finish/Trace and complete F-core remain pending. Root-owned formatting/check precedes that integration freeze/fresh artifact/approval.
