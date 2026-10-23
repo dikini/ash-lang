@@ -613,6 +613,10 @@ mod tests {
                     );
                     assert_eq!(checked.snapshot().native, before.native);
                     assert_eq!(checked.snapshot().observations, before.observations);
+                    // Invocation discharges K6; recording and source reporting
+                    // remain separate mandatory machine transitions.
+                    assert!(machine.step_source_owner().unwrap());
+                    assert!(machine.step_source_owner().unwrap());
                     let Some(Control::Return(Value::Location(result))) = machine.control.take()
                     else {
                         panic!("matched teardown report");

@@ -1075,9 +1075,26 @@ impl<'runtime> super::Machine<'runtime> {
             if !same_instance(&actual, &effect, &mut self.instantiation_work)? {
                 continue;
             }
+            // Explicit shared denial blocks native entry, but the exact checked
+            // Finish must still reach its request-authenticated synthetic K6.
+            let denied_finish = boundary.blocked
+                && phase == SourceOwnerPhase::Finish
+                && boundary.phase == super::ProviderPhase::Finish
+                && boundary.checked.is_some()
+                && boundary
+                    .owner
+                    .as_ref()
+                    .ok_or(super::RuntimeFailure::ForeignBinding)?
+                    .shared_group_denied(&mut self.instantiation_work)
+                    .map_err(|error| {
+                        crate::foreign::source_bindings::owner_admission_failure(
+                            error,
+                            &self.instantiation_work,
+                        )
+                    })?;
             if expected_phase.is_some_and(|expected| boundary.phase != expected)
                 || boundary.consumed
-                || boundary.blocked
+                || boundary.blocked && !denied_finish
                 || phase == SourceOwnerPhase::Acquire && boundary.owner.is_some()
             {
                 return Err(super::RuntimeFailure::ForeignBinding);
