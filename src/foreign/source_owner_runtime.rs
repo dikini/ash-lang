@@ -49,6 +49,17 @@ impl NativeOwnerDependency {
         Ok(())
     }
 
+    pub(crate) fn shared_group_denied(&self, work: &mut TypeWorkBudget)
+        -> Result<bool, NativeOwnerAdmissionError> {
+        let slots = self.storage.slots.borrow();
+        if let Some(root) = slots[self.slot].checked_group_root {
+            pay(work, 2)?;
+            Ok(slots[root].checked_group_denied)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub(crate) fn same_slot(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.storage, &other.storage) && self.slot == other.slot
     }
@@ -1924,6 +1935,7 @@ mod tests {
         for _ in 0..2 {
             let denial = storage.denial_dependency(1, &parent_state, &mut work).unwrap();
             assert_eq!(denial.slot, parent.slot);
+            assert!(denial.shared_group_denied(&mut work).unwrap());
             assert!(denial.address().is_none(), "denial lookup grants no ordinary/raw access");
             assert!(storage.view(1, &parent_state, super::NativeOwnerViewKind::State, None, &mut work).is_err());
         }
