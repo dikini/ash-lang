@@ -6,7 +6,8 @@ const HEADER: usize = 24;
 // These are the fixed v2 wire profile, bound by the approved code identity.
 const MAX_PAYLOAD: usize = 4096;
 const MAX_FRAMES: usize = 1024;
-const MAX_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const STREAM_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BYTES: usize = STREAM_BYTES;
 
 /// Closed v2 observation channels; no variant conveys admission authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

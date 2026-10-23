@@ -95,7 +95,7 @@ impl PreparedImage {
 /// Default uninstalled builds refuse MissingDeployment. No provisioning or exec.
 pub fn prepare(request_bytes: &[u8], candidate: &Path) -> Result<PreparedImage, Refusal> {
     let mut budget = Budget::new(BOOT_WORK);
-    let installed = bootstrap(&mut budget, false)?;
+    let installed = bootstrap(&mut budget, Ingress::Preparation)?;
     let config = &installed.config;
     let request = ApplicabilityRequest::decode(
         request_bytes,
@@ -189,7 +189,7 @@ impl VerifiedRunning {
 /// unconfigured builds refuse before touching incoming descriptors.
 pub fn verify_running() -> Result<VerifiedRunning, Refusal> {
     let mut budget = Budget::new(BOOT_WORK);
-    let installed = bootstrap(&mut budget, true)?;
+    let installed = bootstrap(&mut budget, Ingress::Root)?;
     let c = &installed.config;
     let parent = crate::running::ParentPipe::inspect(&mut budget)?;
     check_proc_context(c, parent.parent(), &mut budget)?;
@@ -218,6 +218,7 @@ pub fn verify_running() -> Result<VerifiedRunning, Refusal> {
     validate_approval(&parsed, &request, c, &installed.context_pin)?;
     same_metadata(&approval_before, &io(approval.metadata())?)?;
     let current = linux::calling_thread_proc()?;
+    require_command(&current, b"ash-checked-owner-root-v2\0", &mut budget)?;
     let image_pin = request.final_image_pin().ok_or(Refusal::Incomplete)?;
     let limits = PreparationLimits { image_bytes: c.image_bytes, work: c.image_work, program_headers: c.program_headers };
     let mut image_work = Budget::new(c.image_work);
@@ -314,7 +315,9 @@ fn validate_approval(
     }
     Ok(())
 }
-fn bootstrap(budget: &mut Budget, running: bool) -> Result<InstalledContext, Refusal> {
+#[derive(Clone, Copy)]
+enum Ingress { Preparation, Root, LauncherParent, LauncherChild }
+fn bootstrap(budget: &mut Budget, ingress: Ingress) -> Result<InstalledContext, Refusal> {
     let association = crate::bootstrap_association::INSTALLED.as_ref().ok_or(Refusal::MissingDeployment)?;
     let path = association.path;
     let expected = association.sha256;
@@ -327,8 +330,13 @@ fn bootstrap(budget: &mut Budget, running: bool) -> Result<InstalledContext, Ref
     }
     budget.pay(256 * 8192 + 8192)?;
     linux::standard_fds()?;
-    if running { linux::inherited_fds_for(&[0, 1, 2, 3, 4])?; }
-    else { linux::inherited_fds()?; }
+    match ingress {
+        Ingress::Preparation => linux::inherited_fds()?,
+        Ingress::Root => linux::inherited_fds_for(&[0, 1, 2, 3, 4])?,
+        Ingress::LauncherParent => { linux::inherited_fds_for(&[0, 1, 2, 4, 5])?;
+            if !linux::role_absent(3)? { return Err(Refusal::Context); } },
+        Ingress::LauncherChild => linux::inherited_fds_for(&[0, 1, 2, 3, 4, 5])?,
+    }
     let mut file = walk(Path::new(path), false, budget)?;
     let metadata = protected_metadata(&file, false)?;
     let bytes = bounded_read(&mut file, BOOT_BYTES, budget)?;
@@ -340,9 +348,10 @@ fn bootstrap(budget: &mut Budget, running: bool) -> Result<InstalledContext, Ref
     budget.pay(bytes.len().checked_mul(4).ok_or(Refusal::Resource)?)?;
     let config: Config = serde_json::from_slice(&bytes).map_err(|_| Refusal::Malformed)?;
     validate_config(&config)?;
-    if running != (config.version == 2) { return Err(Refusal::Context); }
+    if !matches!(ingress, Ingress::Preparation) != (config.version == 2) { return Err(Refusal::Context); }
     check_context(&config, budget)?;
-    let store = walk(Path::new(&config.store), true, budget)?;
+    let file = linux::high(file)?;
+    let store = linux::high(walk(Path::new(&config.store), true, budget)?)?;
     let store_meta = protected_metadata(&store, true)?;
     if store_meta.dev() != config.store_identity.device
         || store_meta.ino() != config.store_identity.inode
@@ -816,5 +825,292 @@ mod artifact_data_tests {
                 Refusal::MissingDeployment
             );
         }
+    }
+}
+
+/// Bounded output from one freshly verified child. Frames are observations, not
+/// provider authority. Inspect the result/Trace/closing channels independently.
+pub struct LaunchOutcome {
+    bytes: Vec<u8>,
+    success: bool,
+    complete: bool,
+    reaped: bool,
+    exit_code: Option<i32>,
+    signal: Option<i32>,
+    eof: bool,
+    loss: u8,
+    observed_bytes: usize,
+}
+impl LaunchOutcome {
+    /// Complete raw frames retained even when EOF, framing or the child fails.
+    pub fn frames(&self) -> &[u8] { &self.bytes }
+    /// Actual child exit status; alone this proves no source/native outcome.
+    pub fn child_succeeded(&self) -> bool { self.success }
+    /// Sequence, exact consumed length, Terminal and actual EOF were observed.
+    pub fn stream_complete(&self) -> bool { self.complete }
+}
+
+/// Fixed one-shot launcher entry. Ingress roles4/5 are sealed request DATA and
+/// candidate image DATA, not caller-created applicability. Phase comes from the
+/// actual executable seals and the actual pipe-role census, never argv/env.
+pub fn launch_fixed() -> Result<LaunchOutcome, Refusal> {
+    if crate::bootstrap_association::INSTALLED.is_none() { return Err(Refusal::MissingDeployment); }
+    let child = !linux::role_absent(3)?;
+    let mut budget = Budget::new(BOOT_WORK);
+    let installed = bootstrap(&mut budget, if child { Ingress::LauncherChild } else { Ingress::LauncherParent })?;
+    let c = &installed.config;
+    let current = linux::high(linux::calling_thread_proc()?)?;
+    let mut executable = linux::high(linux::proc_magic(&current, c"exe", false)?)?;
+    let limits = PreparationLimits { image_bytes: c.image_bytes, work: c.image_work, program_headers: c.program_headers };
+    let mut image_work = Budget::new(c.image_work);
+    let bundle = launch_bundle(&installed, &mut budget)?;
+    let launcher_pin = bundle.launcher;
+    let state = linux::seals_or_regular(&executable)?;
+    let sink = launcher_command(&current, state == Some(15), child, &mut budget)?;
+    match state {
+        None if !child => {
+            // Normal installed-file invocation becomes the verified sealed
+            // parent by replacing THIS process with the same opened bytes.
+            protected_metadata(&executable, false)?;
+            let sealed = SealedData::copy_metered(&mut executable, launcher_pin, limits, &mut image_work)?;
+            check_context(c, &mut budget)?;
+            same_metadata(&installed.config_metadata, &io(installed.config_file.metadata())?)?;
+            drop(bundle); drop(current); drop(executable); drop(installed);
+            return match linux::exec_fixed(sealed.file(), false, sink.as_deref())? {};
+        }
+        Some(15) => {}
+        _ => return Err(Refusal::Association),
+    }
+    let executable = SealedData::observe_existing(executable, launcher_pin, limits, &mut image_work)?;
+    let (flags, descriptor) = linux::role_flags(5)?;
+    if flags & !0x8000 != 0 || descriptor != 0 { return Err(Refusal::Context); }
+    let image = {
+        let mut candidate = linux::duplicate_role(5)?;
+        if child { SealedData::observe_existing(candidate, bundle.image, limits, &mut image_work)? }
+        else { SealedData::copy_metered(&mut candidate, bundle.image, limits, &mut image_work)? }
+    }.high()?;
+    if child {
+        let parent = crate::running::ParentPipe::inspect(&mut budget)?;
+        check_proc_context(c, parent.parent(), &mut budget)?;
+        let parent_image = SealedData::observe_existing(linux::proc_magic(parent.parent(), c"exe", false)?,
+            launcher_pin, limits, &mut image_work)?;
+        parent_image.same_object(&linux::proc_magic(parent.parent(), c"exe", false)?)?;
+        parent.recheck(&mut budget)?;
+        check_context(c, &mut budget)?;
+        executable.same_object(&linux::proc_magic(&current, c"exe", false)?)?;
+        same_metadata(&installed.config_metadata, &io(installed.config_file.metadata())?)?;
+        // FD5 must not survive into the root census; all managed handles are
+        // CLOEXEC. Root independently checks role3/4 and its actual sealed exe.
+        linux::close_role(5)?;
+        drop(parent); drop(parent_image); drop(bundle); drop(current); drop(executable); drop(installed);
+        return match linux::exec_fixed(image.file(), true, None)? {};
+    }
+    // Reserve bounded output storage before starting any child. This separate
+    // fixed wire-profile capacity is not source work or a request-meter reset.
+    let mut output_work = Budget::new(crate::outcome::STREAM_BYTES);
+    output_work.pay(crate::outcome::STREAM_BYTES)?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(crate::outcome::STREAM_BYTES).map_err(|_|Refusal::Resource)?;
+    let request = linux::duplicate_role(4)?;
+    let application = linux::readonly(image.file())?;
+    let (reader, writer) = linux::report_pipe()?;
+    let reader = linux::occupy_reader(&reader)?;
+    check_context(c, &mut budget)?;
+    executable.same_object(&linux::proc_magic(&current, c"exe", false)?)?;
+    same_metadata(&installed.config_metadata, &io(installed.config_file.metadata())?)?;
+    let pins = [bundle.request, bundle.image, bundle.launcher];
+    let mut process = linux::spawn_launcher(executable.file(), &writer, &request, &application)?;
+    // Never retain a writer in the parent: EOF means all child writers closed.
+    drop(writer); drop(request); drop(application); drop(image); drop(bundle); drop(current); drop(executable); drop(installed);
+    let observation = collect_child(&reader, &mut process, &mut output);
+    // Reader's actual FD3 remains unchanged until process.wait has reaped child.
+    drop(reader);
+    let outcome = LaunchOutcome { bytes: output, success: observation.success, complete: observation.complete,
+        reaped: observation.reaped, exit_code: observation.exit_code, signal: observation.signal,
+        eof: observation.eof, loss: observation.loss, observed_bytes: observation.observed_bytes };
+    if let Some(path) = sink { publish_observation(&path, &pins, &outcome)?; }
+    Ok(outcome)
+}
+
+struct LaunchBundle { request: ArtifactPin, image: ArtifactPin, launcher: ArtifactPin }
+fn launch_bundle(installed: &InstalledContext, budget: &mut Budget) -> Result<LaunchBundle, Refusal> {
+    let c = &installed.config;
+    let (flags, descriptor) = linux::role_flags(4)?;
+    if flags & !0x8000 != 0 || descriptor != 0 { return Err(Refusal::Context); }
+    let mut request_file = linux::duplicate_role(4)?;
+    let mut request_work = Budget::new(c.request_work);
+    let bytes = read_sealed_request(&mut request_file, c.request_bytes, &mut request_work)?;
+    let request = ApplicabilityRequest::decode(&bytes, RequestLimits { bytes: c.request_bytes, work: request_work.remaining })
+        .map_err(|error| match error { ash::build::ReceiptFailure::Resource => Refusal::Resource, _ => Refusal::Malformed })?;
+    request.check_complete().map_err(|_|Refusal::Incomplete)?;
+    if request.context_pin() != Some(ArtifactPin { bytes: installed.config_metadata.len(), sha256: installed.context_pin }) {
+        return Err(Refusal::Association);
+    }
+    budget.pay(65)?;
+    let name = CString::new(hex(&request.request_pin().sha256)).map_err(|_|Refusal::Malformed)?;
+    let mut approval = linux::open_child(&installed.store, &name, false)?;
+    let before = protected_metadata(&approval, false)?;
+    let raw = bounded_read(&mut approval, BOOT_BYTES, budget)?;
+    budget.pay(raw.len().checked_mul(4).ok_or(Refusal::Resource)?)?;
+    let approval_data: Approval = serde_json::from_slice(&raw).map_err(|_|Refusal::Malformed)?;
+    validate_approval(&approval_data, &request, c, &installed.context_pin)?;
+    same_metadata(&before, &io(approval.metadata())?)?;
+    let mut descriptor = linux::open_child(&installed.store, c"checked-launcher-v2.json", false)?;
+    let before = protected_metadata(&descriptor, false)?;
+    let raw = bounded_read(&mut descriptor, BOOT_BYTES, budget)?;
+    budget.pay(raw.len().checked_mul(4).ok_or(Refusal::Resource)?)?;
+    let data: LauncherDescriptor = serde_json::from_slice(&raw).map_err(|_|Refusal::Malformed)?;
+    if data.version != 2 || data.target != "x86_64-unknown-linux-gnu" || data.context_sha256 != hex(&installed.context_pin)
+        || data.image.bytes == 0 || data.image.bytes > c.image_bytes as u64 || !valid_hash(&data.image.sha256)
+        || approval_data.launcher.as_ref().is_none_or(|pin| pin.bytes != data.image.bytes || pin.sha256 != data.image.sha256) {
+        return Err(Refusal::Association);
+    }
+    same_metadata(&before, &io(descriptor.metadata())?)?;
+    budget.pay(64)?;
+    let mut digest = [0;32];
+    for (pair, byte) in data.image.sha256.as_bytes().chunks_exact(2).zip(&mut digest) {
+        let digit = |b:u8| if b.is_ascii_digit() { b-b'0' } else { b-b'a'+10 };
+        *byte = digit(pair[0])*16 + digit(pair[1]);
+    }
+    Ok(LaunchBundle { request: request.request_pin(), image: request.final_image_pin().ok_or(Refusal::Incomplete)?,
+        launcher: ArtifactPin { bytes:data.image.bytes, sha256:digest } })
+}
+fn require_command(proc: &File, expected: &[u8], budget: &mut Budget) -> Result<(), Refusal> {
+    let mut command = linux::proc_child(proc, c"cmdline", false)?;
+    let bytes = bounded_read(&mut command, 256, budget)?;
+    if bytes != expected { return Err(Refusal::Context); }
+    Ok(())
+}
+fn launcher_command(proc: &File, sealed: bool, child: bool, budget: &mut Budget) -> Result<Option<CString>, Refusal> {
+    let mut file = linux::proc_child(proc, c"cmdline", false)?;
+    let bytes = bounded_read(&mut file, 8194, budget)?;
+    let mut args = bytes.split(|byte| *byte == 0);
+    let first = args.next().ok_or(Refusal::Context)?;
+    if first.is_empty() || first.len() > 4096 || (sealed && first != b"ash-checked-launcher-v2") { return Err(Refusal::Context); }
+    let next = args.next().ok_or(Refusal::Context)?;
+    if next.is_empty() && args.next().is_none() { return Ok(None); }
+    if child || next.is_empty() || next.len() > 4096 || args.next() != Some(b"".as_slice()) || args.next().is_some() {
+        return Err(Refusal::Context);
+    }
+    budget.pay(next.len().checked_add(1).ok_or(Refusal::Resource)?)?;
+    Ok(Some(CString::new(next).map_err(|_|Refusal::Malformed)?))
+}
+fn publish_observation(path: &std::ffi::CStr, pins: &[ArtifactPin;3], outcome: &LaunchOutcome) -> Result<(), Refusal> {
+    use std::{io::Write, os::unix::{ffi::OsStrExt, fs::OpenOptionsExt}};
+    if !outcome.reaped || outcome.bytes.len() > crate::outcome::STREAM_BYTES { return Err(Refusal::Input); }
+    // Fixed256-byte envelope, no additional heap allocation. All variable bytes
+    // were reserved before the child; this write happens only after actual reap.
+    let mut header = [0u8;256];
+    header[..8].copy_from_slice(b"ASHOBS02");
+    header[8..16].copy_from_slice(&(crate::outcome::STREAM_BYTES as u64).to_le_bytes());
+    header[16..24].copy_from_slice(&(outcome.bytes.len() as u64).to_le_bytes());
+    header[24..32].copy_from_slice(&(outcome.observed_bytes as u64).to_le_bytes());
+    header[32] = u8::from(outcome.success); header[33] = u8::from(outcome.complete);
+    header[34] = u8::from(outcome.eof); header[35] = outcome.loss;
+    header[36] = u8::from(outcome.exit_code.is_some()); header[37..41].copy_from_slice(&outcome.exit_code.unwrap_or(0).to_le_bytes());
+    header[41] = u8::from(outcome.signal.is_some()); header[42..46].copy_from_slice(&outcome.signal.unwrap_or(0).to_le_bytes());
+    for (slot, pin) in header[48..168].chunks_exact_mut(40).zip(pins) {
+        slot[..8].copy_from_slice(&pin.bytes.to_le_bytes()); slot[8..].copy_from_slice(&pin.sha256);
+    }
+    header[168..172].copy_from_slice(&4096u32.to_le_bytes());
+    header[172..176].copy_from_slice(&1024u32.to_le_bytes());
+    // A DATA path is never an approval/store selector. Exclusive final-component
+    // nofollow creation prevents clobber/retry; a failed write never reruns work.
+    let mut file = io(std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .custom_flags(0x20000 | 0x80000).open(std::ffi::OsStr::from_bytes(path.to_bytes())))?;
+    let mut calls = 0usize;
+    for mut bytes in [header.as_slice(), outcome.bytes.as_slice()] {
+        while !bytes.is_empty() {
+            calls += 1;
+            if calls > crate::outcome::STREAM_BYTES + header.len() { return Err(Refusal::Resource); }
+            let n = io(file.write(bytes))?;
+            if n == 0 { return Err(Refusal::Input); }
+            bytes = &bytes[n..];
+        }
+    }
+    Ok(())
+}
+struct ChildObservation { success: bool, complete: bool, reaped: bool, exit_code: Option<i32>, signal: Option<i32>,
+    eof: bool, loss: u8, observed_bytes: usize }
+fn validate_stream(bytes: &[u8]) -> (usize, bool) {
+    let mut parser = crate::outcome::FrameReader::new();
+    let mut consumed = 0;
+    while consumed < bytes.len() {
+        match parser.next(&bytes[consumed..]) {
+            Ok((_,_,n)) => consumed += n,
+            Err(_) => return (consumed, false),
+        }
+    }
+    (consumed, parser.finish().is_ok())
+}
+fn collect_child(reader: &File, process: &mut std::process::Child, bytes: &mut Vec<u8>) -> ChildObservation {
+    use std::{io::Read, os::unix::process::ExitStatusExt, time::{Duration, Instant}};
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut source = reader;
+    let mut scratch = [0;4096];
+    let mut eof = false;
+    let mut status = None;
+    let mut loss = 0;
+    while Instant::now() < deadline {
+        match source.read(&mut scratch) {
+            Ok(0) => eof = true,
+            Ok(n) => {
+                if n > crate::outcome::STREAM_BYTES.saturating_sub(bytes.len()) { loss = 1; break; }
+                bytes.extend_from_slice(&scratch[..n]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {},
+            Err(_) => { loss = 2; break; }
+        }
+        match process.try_wait() {
+            Ok(Some(result)) => status = Some(result), Ok(None) => {}, Err(_) => { loss = 3; break; }
+        }
+        if eof && status.is_some() { break; }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    if status.is_none() {
+        if loss == 0 { loss = 4; }
+        if process.kill().is_err() { loss = 5; }
+    }
+    let waited = process.wait();
+    let reaped = waited.is_ok();
+    if !reaped { loss = 6; }
+    let exit_code = waited.as_ref().ok().and_then(|status| status.code());
+    let signal = waited.as_ref().ok().and_then(|status| status.signal());
+    let success = waited.is_ok_and(|status| status.success());
+    let (consumed, framed) = validate_stream(bytes);
+    if !framed && loss == 0 { loss = 7; }
+    if !eof && loss == 0 { loss = 8; }
+    let complete = loss == 0 && eof && reaped && consumed == bytes.len() && framed;
+    let observed_bytes = bytes.len();
+    // Only complete frames survive a torn/malformed suffix. No report is
+    // reconstructed from process status, and a Terminal without EOF fails.
+    bytes.truncate(consumed);
+    ChildObservation { success, complete, reaped, exit_code, signal, eof, loss, observed_bytes }
+}
+
+#[cfg(test)]
+mod launcher_tests {
+    use super::*;
+    fn frame(seq: u64, kind: u32, bytes: &[u8]) -> Vec<u8> {
+        let mut raw = b"ASHOUT02".to_vec(); raw.extend_from_slice(&seq.to_le_bytes());
+        raw.extend_from_slice(&kind.to_le_bytes()); raw.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        raw.extend_from_slice(bytes); raw
+    }
+    #[test]
+    fn parent_stream_requires_terminal_exact_length_and_retains_complete_prefix() {
+        let first = frame(0, 3, b"facts"); let mut raw = first.clone();
+        assert_eq!(validate_stream(&raw), (raw.len(),false));
+        let terminal = frame(1,5,b""); raw.extend_from_slice(&terminal);
+        assert_eq!(validate_stream(&raw), (raw.len(),true));
+        for cut in first.len()..raw.len() { assert_eq!(validate_stream(&raw[..cut]), (first.len(),false)); }
+        raw.push(0); assert_eq!(validate_stream(&raw), (raw.len()-1,false));
+        let mut wrong = first.clone(); wrong.extend_from_slice(&frame(3,5,b""));
+        assert_eq!(validate_stream(&wrong), (first.len(),false));
+        for _ in 0..2 { assert_eq!(validate_stream(&first), (first.len(),false)); }
+    }
+    #[test]
+    fn unconfigured_launcher_refuses_without_consulting_inherited_roles() {
+        assert!(crate::bootstrap_association::INSTALLED.is_none());
+        assert!(matches!(launch_fixed(), Err(Refusal::MissingDeployment)));
     }
 }

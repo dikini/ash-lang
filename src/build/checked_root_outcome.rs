@@ -54,7 +54,7 @@ impl RootReportPlan {
         let mut p = Payload::new(&mut self.scratch);
         let mut represented = true;
         match outcome.result() {
-            Err(error) => { p.byte(0)?; p.byte(u8::from(trace_complete))?; p.blob(error.reason_code().as_bytes())?; }
+            Err(error) => { p.byte(0)?; p.byte(u8::from(trace_complete))?; p.failure(error)?; }
             Ok(evaluation) => {
                 p.byte(1)?; p.byte(u8::from(trace_complete))?;
                 if p.value(&evaluation.value, modules).is_err() {
@@ -93,6 +93,28 @@ impl<'a> Payload<'a> {
     fn u32(&mut self, value: u32) -> Result<(), RootRefusal> { self.raw(&value.to_le_bytes()) }
     fn blob(&mut self, bytes: &[u8]) -> Result<(), RootRefusal> {
         self.u32(u32::try_from(bytes.len()).map_err(|_| RootRefusal::Resource)?)?; self.raw(bytes)
+    }
+    fn failure(&mut self, error: crate::eval::RuntimeFailure) -> Result<(), RootRefusal> {
+        self.blob(error.reason_code().as_bytes())?;
+        if let crate::eval::RuntimeFailure::Report(report) = error {
+            self.byte(1)?;
+            self.resource(report.primary.resource())?;
+            self.resource(report.teardown)?;
+            self.blob(report.cleanup.label().as_bytes())
+        } else { self.byte(0) }
+    }
+    fn resource(&mut self, value: Option<crate::eval::ResourceFailure>) -> Result<(), RootRefusal> {
+        self.byte(u8::from(value.is_some()))?;
+        if let Some(value) = value {
+            self.blob(value.cause.reason_code().as_bytes())?;
+            self.blob(value.phase.label().as_bytes())?;
+            self.blob(value.resource.label().as_bytes())?;
+            for count in [value.requested, value.available] {
+                self.byte(u8::from(count.is_some()))?;
+                self.raw(&u64::try_from(count.unwrap_or(0)).map_err(|_|RootRefusal::Resource)?.to_le_bytes())?;
+            }
+        }
+        Ok(())
     }
     fn native(&mut self, fact: ResourceNativeFact) -> Result<(), RootRefusal> {
         self.byte(match fact { ResourceNativeFact::NoOwner=>0, ResourceNativeFact::Owned=>1,

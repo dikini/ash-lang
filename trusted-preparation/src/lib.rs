@@ -1,4 +1,4 @@
-//! Fixed-context applicability and sealed-image preparation. No exec operation.
+//! Fixed-context applicability, sealed images and fixed one-shot FD launch.
 //! This crate has no selected provider/foreign-adapter dependency. Producer data
 //! and low-level sealed bytes are not protected approval.
 #![cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
@@ -9,7 +9,7 @@ mod outcome;
 pub use outcome::OutcomeFrameKind;
 mod running;
 mod sealed;
-pub use protected::{PreparedImage, VerifiedRunning, prepare, verify_running};
+pub use protected::{LaunchOutcome, PreparedImage, VerifiedRunning, launch_fixed, prepare, verify_running};
 pub use sealed::{PreparationLimits, SealedData};
 
 /// A refusal before any candidate startup. No variant permits fallback.

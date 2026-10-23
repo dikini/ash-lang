@@ -1,4 +1,4 @@
-//! Small Linux x86-64 GNU syscall boundary; no exec interface is declared.
+//! Fixed Linux x86-64 GNU syscall boundary; execution helpers are crate-private.
 use crate::{Refusal, io};
 use std::{
     ffi::{c_char, c_int, c_long, c_void},
@@ -257,6 +257,90 @@ pub(crate) fn proc_magic(dir: &File, name: &std::ffi::CStr, path_only: bool) -> 
     owned(unsafe { openat(dir.as_raw_fd(), name.as_ptr(), flags) })
 }
 
+/// Inspect only the fixed launcher ingress slot. A closed slot is not authority.
+pub(crate) fn role_absent(fd: i32) -> Result<bool, Refusal> {
+    // SAFETY: F_GETFD takes no pointer; only a fixed role is queried.
+    let result = unsafe { fcntl(fd, 1) };
+    if result >= 0 { return Ok(false); }
+    if std::io::Error::last_os_error().raw_os_error() == Some(9) { Ok(true) }
+    else { Err(Refusal::Input) }
+}
+pub(crate) fn seals_or_regular(file: &File) -> Result<Option<i32>, Refusal> {
+    // SAFETY: F_GET_SEALS is an integer-only inspection of the owned executable.
+    let result = unsafe { fcntl(file.as_raw_fd(), 1034) };
+    if result >= 0 { return Ok(Some(result)); }
+    if std::io::Error::last_os_error().raw_os_error() == Some(22) { Ok(None) }
+    else { Err(Refusal::Input) }
+}
+pub(crate) fn high(file: File) -> Result<File, Refusal> { duplicate_high(&file) }
+pub(crate) fn duplicate_high(file: &File) -> Result<File, Refusal> {
+    // SAFETY: Fresh CLOEXEC duplicate above all fixed ingress roles.
+    owned(unsafe { fcntl(file.as_raw_fd(), 1030, 10) })
+}
+pub(crate) fn readonly(file: &File) -> Result<File, Refusal> {
+    let proc = calling_thread_proc()?;
+    let directory = proc_child(&proc, c"fd", true)?;
+    // Fixed i32 descriptor rendering into stack storage, no caller path input.
+    let mut name = [0u8; 12]; let mut at = 10; let mut value = file.as_raw_fd() as u32;
+    loop { name[at] = b'0' + (value % 10) as u8; value /= 10;
+        if value == 0 { break; } at -= 1; }
+    let name = std::ffi::CStr::from_bytes_with_nul(&name[at..12]).map_err(|_|Refusal::Malformed)?;
+    // SAFETY: Fixed decimal live descriptor under this verified procfs fd
+    // directory; open read-only/CLOEXEC without the pipe helper's NONBLOCK bit.
+    owned(unsafe { openat(directory.as_raw_fd(), name.as_ptr(), 0x80000) })
+}
+pub(crate) fn report_pipe() -> Result<(File, File), Refusal> {
+    let mut slots = [-1; 2];
+    // SAFETY: SYS_pipe2=293 writes two descriptors to the valid array.
+    if unsafe { syscall(293, slots.as_mut_ptr(), 0x80000 | 0x800) } != 0 { return Err(Refusal::Input); }
+    let reader = owned(slots[0])?; let writer = owned(slots[1])?;
+    Ok((duplicate_high(&reader)?, duplicate_high(&writer)?))
+}
+/// Called in an ordinary single-threaded process, never a post-fork Rust path.
+pub(crate) fn occupy_reader(file: &File) -> Result<File, Refusal> {
+    if !role_absent(3)? { return Err(Refusal::Context); }
+    // SAFETY: dup3 atomically installs this owned reader at the pre-vacant role.
+    // Its CLOEXEC bit keeps it out of the child; the parent holds it until reap.
+    if unsafe { syscall(292, file.as_raw_fd(), 3, 0x80000) } != 3 { return Err(Refusal::Input); }
+    // SAFETY: Only this File owns the newly installed fixed reader descriptor.
+    Ok(unsafe { File::from_raw_fd(3) })
+}
+fn fd_exec_error(file: &File, root: bool, sink: Option<&std::ffi::CStr>) -> std::io::Error {
+    let name = if root { c"ash-checked-owner-root-v2" } else { c"ash-checked-launcher-v2" };
+    let argv = [name.as_ptr(), sink.map_or(std::ptr::null(), |s| s.as_ptr()), std::ptr::null()];
+    let env: [*const c_char; 1] = [std::ptr::null()];
+    // SAFETY: SYS_execveat=322 with AT_EMPTY_PATH executes the actual owned FD.
+    // All pointer arrays and literals live until syscall replacement/return.
+    unsafe { syscall(322, file.as_raw_fd(), c"".as_ptr(), argv.as_ptr(), env.as_ptr(), 0x1000) };
+    std::io::Error::last_os_error()
+}
+pub(crate) fn exec_fixed(file: &File, root: bool, sink: Option<&std::ffi::CStr>) -> Result<std::convert::Infallible, Refusal> {
+    let _error = fd_exec_error(file, root, sink);
+    Err(Refusal::Input)
+}
+/// std::process owns fork/error-pipe/reaping. The child hook contains only fixed
+/// dup3/execveat syscalls and errno capture; it never allocates or returns Ok.
+pub(crate) fn spawn_launcher(executable: &File, writer: &File, request: &File, image: &File)
+    -> Result<std::process::Child, Refusal> {
+    use std::os::unix::process::CommandExt;
+    let exe = duplicate_high(executable)?;
+    let sources = [duplicate_high(writer)?, duplicate_high(request)?, duplicate_high(image)?];
+    let mut command = std::process::Command::new("/ash-no-path-exec-fallback");
+    command.env_clear();
+    // SAFETY: Every captured source is owned, immutable and above roles3..5.
+    // The hook performs only async-signal-safe syscalls; every return is Err,
+    // so Command can never fall through to its sentinel pathname exec.
+    unsafe { command.pre_exec(move || {
+        for (source, target) in sources.iter().zip([3, 4, 5]) {
+            if syscall(292, source.as_raw_fd(), target, 0) != target as c_long {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        Err(fd_exec_error(&exe, false, None))
+    }); }
+    io(command.spawn())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +353,36 @@ mod tests {
             "substituted" => assert_eq!(standard_fds(), Err(Refusal::Context)),
             _ => panic!("unknown probe"),
         }
+    }
+    #[test]
+    fn readonly_image_and_high_management_handles_preserve_exact_flags() {
+        use std::io::Write;
+        let directory = crate::test_directory("readonly-image");
+        let path = directory.join("data");
+        let mut original = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path).unwrap();
+        original.write_all(b"not executable DATA").unwrap();
+        let high = high(original).unwrap();
+        assert!(high.as_raw_fd() >= 10);
+        let readonly = readonly(&high).unwrap();
+        let (flags, descriptor) = role_flags(readonly.as_raw_fd()).unwrap();
+        assert_eq!(flags & !0x8000, 0);
+        assert_eq!(descriptor, 1);
+        use std::os::unix::fs::MetadataExt;
+        let before = high.metadata().unwrap(); let after = readonly.metadata().unwrap();
+        assert_eq!((before.dev(), before.ino(), before.len()), (after.dev(), after.ino(), after.len()));
+        drop(readonly); drop(high); std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn fresh_report_pipe_has_fixed_direction_flags_and_high_owned_endpoints() {
+        let (reader, writer) = report_pipe().unwrap();
+        assert!(reader.as_raw_fd() >= 10 && writer.as_raw_fd() >= 10);
+        assert_eq!(role_flags(reader.as_raw_fd()).unwrap(), (0x800,1));
+        assert_eq!(role_flags(writer.as_raw_fd()).unwrap(), (0x801,1));
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let a = reader.metadata().unwrap(); let b = writer.metadata().unwrap();
+        assert!(a.file_type().is_fifo() && b.file_type().is_fifo());
+        assert_eq!((a.dev(),a.ino()),(b.dev(),b.ino()));
+        filesystem(&reader, 0x50495045).unwrap();
     }
     #[test]
     fn calling_thread_proc_namespace_and_acl_checks_are_kernel_data_only() {

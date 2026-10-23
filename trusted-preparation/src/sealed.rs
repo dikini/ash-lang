@@ -35,7 +35,7 @@ impl SealedData {
     ) -> Result<Self, Refusal> {
         Self::copy_metered(source, expected, limits, &mut Budget::new(limits.work))
     }
-    fn copy_metered(
+    pub(crate) fn copy_metered(
         source: &mut File,
         expected: ArtifactPin,
         limits: PreparationLimits,
@@ -171,6 +171,8 @@ impl SealedData {
         }
         Ok(())
     }
+    pub(crate) fn high(mut self) -> Result<Self, Refusal> { self.file = linux::high(self.file)?; Ok(self) }
+    pub(crate) fn file(&self) -> &File { &self.file }
     /// Exact immutable data pin, not protected approval.
     pub fn pin(&self) -> ArtifactPin {
         self.pin
