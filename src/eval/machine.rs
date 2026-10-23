@@ -395,6 +395,9 @@ pub struct Evaluation {
 }
 
 impl Evaluation {
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    pub(crate) fn retained_effect_trace(&self) -> Option<&[EffectTraceEvent]> { self.effect_trace.as_deref() }
+
     pub(crate) fn into_observation_parts(self) -> (Value, Arc<ObservedHeap>) {
         (self.value, self.heap)
     }
@@ -1020,6 +1023,8 @@ type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
 /// The retained explicit evaluator machine shared by pure and effect Core.
 #[derive(Debug)]
 pub struct Machine<'runtime> {
+    #[cfg(ash_checked_owner_root = "v1")]
+    root_admission: Option<&'runtime crate::build::checked_root_admission::RootAdmission<'runtime>>,
     foreign_runtime: Option<&'runtime mut crate::foreign::runtime::ForeignRuntime>,
     source_bindings: Option<&'runtime crate::foreign::source_bindings::SourceNativeBindings>,
     source_errors:
@@ -1053,6 +1058,8 @@ pub struct Machine<'runtime> {
 impl<'runtime> Machine<'runtime> {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
+            #[cfg(ash_checked_owner_root = "v1")]
+            root_admission: None,
             foreign_runtime: None,
             source_bindings: None,
             source_errors: None,
@@ -1092,6 +1099,8 @@ impl<'runtime> Machine<'runtime> {
         capture_limit: usize,
     ) -> Self {
         Self {
+            #[cfg(ash_checked_owner_root = "v1")]
+            root_admission: None,
             foreign_runtime: None,
             source_bindings: None,
             source_errors: None,
@@ -1128,10 +1137,14 @@ impl<'runtime> Machine<'runtime> {
         self.run_with_reports().into_parts().0
     }
 
-    fn run_with_reports(mut self) -> super::CheckedEvaluation {
+    fn run_with_reports(self) -> super::CheckedEvaluation {
+        self.run_with_reports_and_work().0
+    }
+
+    fn run_with_reports_and_work(mut self) -> (super::CheckedEvaluation, TypeWorkBudget) {
         let scope = disposal::Scope::enter();
         let result = self.run_loop();
-        let result = match result {
+        let mut result = match result {
             Err(primary) => match self.quarantine_abandoned_providers() {
                 Ok(()) => Err(primary),
                 Err(secondary) => {
@@ -1151,9 +1164,47 @@ impl<'runtime> Machine<'runtime> {
             .take()
             .map(super::checked_reports::ResourceReports::into_inspections)
             .unwrap_or_default();
+        // Keep the actual Err prefix without cloning or allocating. Ok already
+        // moved its complete trace into Evaluation; absence remains explicit.
+        let mut failure_effect_trace = self.effect_trace.take();
+        let work = std::mem::replace(&mut self.instantiation_work, TypeWorkBudget::with_limit(0));
         // Disposal remains within the observation scope on both paths.
         drop(self);
-        super::CheckedEvaluation::with_inspections(scope.finish(result), reports, unpublished)
+        if disposal::failure().is_some() && let Ok(evaluation) = &mut result {
+            // finish will discard an otherwise completed value. Preserve that
+            // actual full prefix too; Box-to-Vec moves its allocation intact.
+            failure_effect_trace = evaluation.effect_trace.take().map(|trace| trace.into_vec());
+        }
+        (super::CheckedEvaluation::with_inspections_and_trace(scope.finish(result), reports, unpublished, failure_effect_trace), work)
+    }
+
+    #[cfg(ash_checked_owner_root = "v1")]
+    fn dispatch_root_entry(&mut self, node: NodeId, environment: Environment) -> Result<Transition, RuntimeFailure> {
+        if let Some(ExecutableNode::Effect(expression)) = self.program.node(node)
+            && let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) = &expression.kind
+            && boundary.host().is_some()
+        {
+            let root = self.root_admission.ok_or(RuntimeFailure::ForeignBinding)?;
+            if !root.authorizes_host(boundary, &mut self.instantiation_work)? {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            return Ok(Transition::suspend(Control::Evaluate(boundary.body(), environment.clone()),
+                Frame::NativeInterpretBoundary { node, environment }));
+        }
+        if let Some(ExecutableNode::Effect(expression)) = self.program.node(node)
+            && let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &expression.kind
+            && matches!(scope.header().codec.report,
+                crate::core::source_resource::SourceResourceReportCodec::CheckedScope { .. })
+        {
+            let root = self.root_admission.ok_or(RuntimeFailure::ForeignBinding)?;
+            if self.checked_owner_limits.is_none() || self.checked_reports.is_none()
+                || self.source_bindings.is_none() || self.source_errors.is_none()
+                || !root.authorizes_scope(scope, &mut self.instantiation_work)?
+            { return Err(RuntimeFailure::ForeignBinding); }
+            return Ok(Transition::suspend(Control::Evaluate(scope.initializer, environment.clone()),
+                Frame::SourceResourceInitializer { node, environment }));
+        }
+        dispatch_entry(&self.program, node, environment, &mut self.heap)
     }
 
     fn quarantine_abandoned_providers(&mut self) -> Result<(), ResourceFailure> {
@@ -1296,8 +1347,10 @@ impl<'runtime> Machine<'runtime> {
                             RuntimePhase::Evaluation,
                         )?;
                     }
-                    let transition =
-                        dispatch_entry(&self.program, node, environment, &mut self.heap)?;
+                    #[cfg(ash_checked_owner_root = "v1")]
+                    let transition = self.dispatch_root_entry(node, environment)?;
+                    #[cfg(not(ash_checked_owner_root = "v1"))]
+                    let transition = dispatch_entry(&self.program, node, environment, &mut self.heap)?;
                     if matches!(
                         &transition.frame,
                         Some(Frame::NativeInterpretBoundary { .. })
@@ -4318,6 +4371,28 @@ pub fn evaluate_effect_with_source_native_program(
     machine.source_bindings = Some(bindings);
     machine.source_errors = Some(&errors);
     machine.run()
+}
+
+/// Private protected-root entry: only pre-Machine refusals escape as outer Err.
+#[cfg(ash_checked_owner_root = "v1")]
+pub(crate) fn evaluate_checked_root_program(
+    root: &crate::build::checked_root_admission::RootAdmission<'_>,
+    bindings: &mut crate::foreign::source_bindings::SourceNativeBindings,
+    work: &mut TypeWorkBudget,
+) -> Result<super::CheckedEvaluation, RuntimeFailure> {
+    let reports = super::checked_reports::ResourceReports::reserve(root.report_capacity(), work)?;
+    let admitted = crate::foreign::source_bindings::admit_root_source_native_program(root, bindings, work)?;
+    let (program, bindings, errors) = admitted.into_parts();
+    let mut machine = Machine::new_effect(program);
+    machine.root_admission = Some(root);
+    machine.source_bindings = Some(bindings);
+    machine.source_errors = Some(&errors);
+    machine.checked_owner_limits = Some(root.limits());
+    machine.checked_reports = Some(reports);
+    machine.instantiation_work = std::mem::replace(work, TypeWorkBudget::with_limit(0));
+    let (outcome, remaining_work) = machine.run_with_reports_and_work();
+    *work = remaining_work;
+    Ok(outcome)
 }
 
 /// Evaluates validated Effect Core using identity-bound executable host bindings.
@@ -7646,13 +7721,28 @@ mod tests {
             // Untrusted observation DATA only: no checked owner, host activation,
             // native callback, protected context, or new authority is constructed.
             machine.checked_reports = Some(reports);
-            if fail { machine.control = None; }
-            let outcome = machine.run_with_reports();
+            if fail {
+                machine.control = None;
+                // Preexisting untrusted trace DATA distinguishes retained prefix
+                // from unavailable; it is no proof of native/source Trace entry.
+                machine.effect_trace = Some(vec![EffectTraceEvent::ResourceAcquired(37)]);
+            }
+            let mut work = TypeWorkBudget::with_limit(100);
+            work.charge(7).unwrap();
+            machine.instantiation_work = work;
+            let (outcome, work) = machine.run_with_reports_and_work();
+            assert_eq!(work.limit(), 100);
+            assert!(work.used() >= 7);
             assert_eq!(outcome.resource_reports().len(), 1);
             assert_eq!(outcome.resource_reports()[0].closing(), ResourceClosing::Transferred);
             assert!(outcome.resource_reports()[0].unresolved());
-            if fail { assert!(outcome.result().is_err()); }
-            else { assert_eq!(outcome.result().unwrap().value.to_string(), "42"); }
+            if fail {
+                assert!(outcome.result().is_err());
+                assert_eq!(outcome.effect_trace(), Some(&[EffectTraceEvent::ResourceAcquired(37)][..]));
+            } else {
+                assert_eq!(outcome.result().unwrap().value.to_string(), "42");
+                assert_eq!(outcome.effect_trace(), None);
+            }
         }
         // This proves envelope preservation, not settlement of an actual pending
         // owner on drop; that discriminating connected control remains required.

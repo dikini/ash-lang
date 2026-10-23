@@ -35,7 +35,7 @@ impl SealedData {
     ) -> Result<Self, Refusal> {
         Self::copy_metered(source, expected, limits, &mut Budget::new(limits.work))
     }
-    fn copy_metered(
+    pub(crate) fn copy_metered(
         source: &mut File,
         expected: ArtifactPin,
         limits: PreparationLimits,
@@ -121,6 +121,58 @@ impl SealedData {
         }
         Ok(Self { file, pin: actual })
     }
+    /// Inspect an already sealed owned object; never copy a mutable pathname
+    /// and never treat a matching data pin as protected applicability.
+    pub(crate) fn observe_existing(
+        mut file: File,
+        expected: ArtifactPin,
+        limits: PreparationLimits,
+        budget: &mut Budget,
+    ) -> Result<Self, Refusal> {
+        if limits.work == 0 || limits.work > 16 * 1024 * 1024 * 1024
+            || limits.image_bytes == 0 || limits.image_bytes > 2usize.pow(31)
+            || limits.program_headers == 0 || limits.program_headers > 4096 {
+            return Err(Refusal::Resource);
+        }
+        let before = io(file.metadata())?;
+        if !before.is_file() || before.len() != expected.bytes
+            || expected.bytes > limits.image_bytes as u64 || linux::seals(&file)? != 15 {
+            return Err(Refusal::Association);
+        }
+        io(file.seek(SeekFrom::Start(0)))?;
+        let mut hash = Sha256::new();
+        let mut buffer = [0; 65536];
+        let mut total = 0;
+        while total < expected.bytes {
+            let count = usize::try_from((expected.bytes - total).min(buffer.len() as u64))
+                .map_err(|_| Refusal::Resource)?;
+            budget.pay(count)?;
+            io(file.read_exact(&mut buffer[..count]))?;
+            hash.update(&buffer[..count]);
+            total += count as u64;
+        }
+        if <[u8; 32]>::from(hash.finalize()) != expected.sha256 {
+            return Err(Refusal::Association);
+        }
+        inspect(&mut file, total, limits.program_headers, budget)?;
+        let after = io(file.metadata())?;
+        if (before.dev(), before.ino(), before.len(), before.ctime(), before.ctime_nsec(), before.mtime(), before.mtime_nsec())
+            != (after.dev(), after.ino(), after.len(), after.ctime(), after.ctime_nsec(), after.mtime(), after.mtime_nsec())
+            || linux::seals(&file)? != 15 {
+            return Err(Refusal::Association);
+        }
+        Ok(Self { file, pin: expected })
+    }
+    pub(crate) fn same_object(&self, file: &File) -> Result<(), Refusal> {
+        let a = io(self.file.metadata())?;
+        let b = io(file.metadata())?;
+        if (a.dev(), a.ino(), a.len()) != (b.dev(), b.ino(), b.len()) || linux::seals(file)? != 15 {
+            return Err(Refusal::Association);
+        }
+        Ok(())
+    }
+    pub(crate) fn high(mut self) -> Result<Self, Refusal> { self.file = linux::high(self.file)?; Ok(self) }
+    pub(crate) fn file(&self) -> &File { &self.file }
     /// Exact immutable data pin, not protected approval.
     pub fn pin(&self) -> ArtifactPin {
         self.pin

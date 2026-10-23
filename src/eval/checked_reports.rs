@@ -187,16 +187,25 @@ pub struct CheckedEvaluation {
     result: Result<Evaluation, RuntimeFailure>,
     reports: Vec<ResourceReport>,
     unpublished: Vec<UnpublishedGuardInspection>,
+    failure_effect_trace: Option<Vec<super::EffectTraceEvent>>,
 }
 impl CheckedEvaluation {
     pub(crate) fn from_parts(
         result: Result<Evaluation, RuntimeFailure>,
         reports: Vec<ResourceReport>,
     ) -> Self {
-        Self { result, reports, unpublished: Vec::new() }
+        Self { result, reports, unpublished: Vec::new(), failure_effect_trace: None }
     }
-    pub(crate) fn with_inspections(result: Result<Evaluation, RuntimeFailure>, reports: Vec<ResourceReport>, unpublished: Vec<UnpublishedGuardInspection>) -> Self {
-        Self { result, reports, unpublished }
+    pub(crate) fn with_inspections_and_trace(result: Result<Evaluation, RuntimeFailure>, reports: Vec<ResourceReport>, unpublished: Vec<UnpublishedGuardInspection>, failure_effect_trace: Option<Vec<super::EffectTraceEvent>>) -> Self {
+        Self { result, reports, unpublished, failure_effect_trace }
+    }
+    /// Actual machine trace or its terminal prefix; None means unavailable.
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    pub(crate) fn effect_trace(&self) -> Option<&[super::EffectTraceEvent]> {
+        match &self.result {
+            Ok(evaluation) => evaluation.retained_effect_trace(),
+            Err(_) => self.failure_effect_trace.as_deref(),
+        }
     }
     /// Ordinary evaluation outcome, unchanged by resource inspection.
     pub fn result(&self) -> Result<&Evaluation, RuntimeFailure> {

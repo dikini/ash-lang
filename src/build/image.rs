@@ -13080,6 +13080,13 @@ impl RestoredEffectImage {
         self.program
     }
 
+    /// Retain existing original module coordinates for bounded root outcome
+    /// DATA. This moves the already funded table; it grants no dispatch rights.
+    #[cfg(ash_checked_owner_root = "v1")]
+    pub(crate) fn into_program_and_modules(self) -> (crate::core::ValidatedEffectProgram, Vec<ModuleId>) {
+        (self.program, self.modules)
+    }
+
     pub(crate) fn relocate_library(
         &self,
         module: u32,

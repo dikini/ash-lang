@@ -401,3 +401,49 @@ is involved.
 These checks grant no activation: protected provider construction, same-FD
 launch/reporting, native execution, authored Finish/Trace and full F-core remain
 pending. Type availability never substitutes for current-image admission.
+
+### Active protected-provider and parent observation slice
+
+After retained PR121 (`d8145b19`), connect the consumed actual running-image
+verification to root-local original restoration, private source/evaluator
+admission and prepaid independent reporting. Keep ordinary public activation
+fences intact. Initial installed launcher bytes are authenticated against the
+separate protected post-build descriptor, copied/sealed from that same opened
+object and FD-executed in place. The sealed parent freshly bootstraps, retains
+its actual pipe reader at FD3 through child reap, and FD-executes a fresh trusted
+child. The child independently verifies context, approval, parent and sealed
+application before same-FD application exec. Actual seals and descriptor roles
+select phases; argv and environment never grant admission.
+
+The parent retains framing-valid complete-prefix bytes and genuine EOF,
+exit-code/signal and loss observations. `observed_bytes` is the buffered prefix
+before framing truncation; a discarded over-cap read is not included. Framing
+validity does not prove source semantic success. An optional bounded output
+pathname crosses only initial-to-parent argv as DATA. After actual termination
+and reap, exclusive/no-follow/CLOEXEC mode-0600 creation writes a bounded envelope
+containing request/image/launcher pins, protocol/caps and the retained prefix.
+The fixed header adds 256 bytes to the existing 4MiB stream bound. This output
+never selects protected approval/config/store, adds no application FD and never
+replays native work on publication failure. The eventual exact deployment
+command names the DATA destination for independent inspection.
+
+This post-reap file is the selected small extension of the existing collector
+(complexity 1). A third observer or inherited role would add unnecessary
+lifetime/authentication obligations (complexity 4); exit status alone loses
+required evidence. Pure framing/cut/loss, reservation/poison and ordinary
+exclusive-creation/non-overwrite controls accompany actual source review of
+wait/reap and descriptor ownership. The next finite gate compiles/checks the
+coherent verifier/ingress/provider/hooks and actual generated root/leaf, without
+installing or executing that artifact. All six closure fields, administrator
+installation, exact per-image approval and selected native execution remain
+separate prerequisites. Root owns formatting/full F-core verification before
+fresh final artifact and deployment approval. No whole F4/F6 acceptance closes
+from this source slice.
+
+## Protected provider and one-shot ingress verification
+
+The [provider evidence](../evidence/checked-owner-core-execution/protected-root-provider/README.md) records fresh session 6822: both-package all-target Clippy and the actual generated root/leaf canonical, receipt/request, chain/donor and missing-release linker control PASS on `be49b367`, based on retained PR121 `d8145b19`. All 8,756 inputs and 23 snapshots match. The 29 ordinary controls remain prior session 84835 evidence, transferred only with unchanged production bytes and a single cfg(test) map selection; they were not rerun. This prose/evidence assembly follows the tested source.
+
+The connected source consumes actual verification into private root admission, restores exact originals, reserves mandatory reports before Machine entry and preserves runtime-error closings/trace. Fixed parent/child same-FD ingress and bounded post-reap DATA publication are implemented. The measured 157,968,330-byte BFD map justifies the fixture's supported 256 MiB selection (41.15% headroom); original 128 MiB failure and separate passive measurement remain qualified. Product maxima/defaults and meters are unchanged. Ordinary warnings and two glibc loading warnings remain.
+
+No launcher/application/native callback executed. Default bootstrap association remains None and all six conformity fields remain Missing. Next is administrator-established store identity, configured source/artifact freshness, a separately closed static launcher build/descriptor, complete finite approvals and the exact one-shot deployment/run handoff. Actual acquire/copy/Finish/Trace and independent reports, root-owned formatting/full F-core verification and whole F4/F6 acceptance remain open.

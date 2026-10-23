@@ -1724,14 +1724,47 @@ pub(crate) fn admit_source_native_program<'program, 'bindings>(
     bindings: &'bindings mut SourceNativeBindings,
     work: &mut TypeWorkBudget,
 ) -> Result<AdmittedSourceNativeProgram<'program, 'bindings>, RuntimeFailure> {
+    admit_source_native_program_inner(program, bindings, work,
+        #[cfg(ash_checked_owner_root = "v1")] None,
+    )
+}
+
+#[cfg(ash_checked_owner_root = "v1")]
+pub(crate) fn admit_root_source_native_program<'program, 'bindings>(
+    root: &crate::build::checked_root_admission::RootAdmission<'program>,
+    bindings: &'bindings mut SourceNativeBindings,
+    work: &mut TypeWorkBudget,
+) -> Result<AdmittedSourceNativeProgram<'program, 'bindings>, RuntimeFailure> {
+    admit_source_native_program_inner(root.program(), bindings, work, Some(root))
+}
+
+fn admit_source_native_program_inner<'program, 'bindings>(
+    program: &'program ValidatedEffectProgram,
+    bindings: &'bindings mut SourceNativeBindings,
+    work: &mut TypeWorkBudget,
+    #[cfg(ash_checked_owner_root = "v1")]
+    root: Option<&crate::build::checked_root_admission::RootAdmission<'program>>,
+) -> Result<AdmittedSourceNativeProgram<'program, 'bindings>, RuntimeFailure> {
     let mut errors = HashMap::new();
     for node in program.nodes() {
         paid(work, 1)?;
-        if matches!(&node.kind, EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) if boundary.host().is_some())
+        if let EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) = &node.kind
+            && boundary.host().is_some()
         {
-            return Err(RuntimeFailure::ForeignBinding);
+            #[cfg(ash_checked_owner_root = "v1")]
+            let authorized = match root {
+                Some(root) => root.authorizes_host(boundary, work)?,
+                None => false,
+            };
+            #[cfg(not(ash_checked_owner_root = "v1"))]
+            let authorized = false;
+            if !authorized { return Err(RuntimeFailure::ForeignBinding); }
         }
         if let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &node.kind {
+            #[cfg(ash_checked_owner_root = "v1")]
+            if let Some(root) = root && !root.authorizes_scope(scope, work)? {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
             if !cfg!(all(
                 target_arch = "x86_64",
                 target_os = "linux",
