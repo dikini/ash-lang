@@ -57,6 +57,32 @@ Follow the [task-owned implementation plan](plans/checked-ffi-contract-carriers.
 
 ## Progress
 
+Issue [#114](https://github.com/dikini/ash-lang/issues/114) tracks a separate
+current-specification correctness defect discovered during PR110 review. Mixed
+pure, explicitly empty-effectful and nonempty-effectful function arguments can
+form a comparison cycle. A genuine test-only baseline on retained `a2f1c938`
+passes the raw-representation and pure/empty equality/hash prerequisites, then
+fails when normalizing the same effect row twice. Later permutation and
+duplicate assertions were not reached. This violates the existing unordered,
+idempotent row rule; it requires no new language proposal.
+
+The repair compares every function representation through its existing semantic
+view, in domain, result-value and latent-row order. The iterative paid work queue
+defers the latent-row distinction until the earlier components have been
+compared. Full Type/Row arguments and independent Core admission remain
+unchanged. The final batch passed 341 distinct selected units across 351 outer
+test occurrences and Clippy with warnings denied. These include raw comparison
+laws, work/storage/deep controls, affected type/Core/private-image cases and all
+three unchanged default startup controls (327335, 320427 and 324976 against
+327680). Three older exact-work expectations now explicitly account for existing
+reserved-source scans and empty-table scalar authentication; fresh independent
+phase measurements and exact/short/retry controls pass. The
+[reconstructible evidence](evidence/effect-row-comparator/README.md) preserves the
+baseline red, partial failures, corrected attribution and final frozen results.
+Independent delivery review and retention remain required. This separate fix
+does not accept the pending PR110 dependency images or any whole-F3 criterion;
+the connected F-core gate remains scheduled by PM and run by the developer.
+
 - [x] Explicit checked declaration boundary and safe incomplete-path refusal.
 - [ ] Original assumptions, exact H and source/wrapper dependency carriers.
 - [ ] Host introduction/elimination and checked owner effect correspondence.

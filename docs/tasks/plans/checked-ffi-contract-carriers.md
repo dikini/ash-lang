@@ -849,3 +849,24 @@ Startup remains 2/3: nested cleanup uses 320640 and dependent discard uses
 324967; two-owner still reports Resource at 327680. Measure its current actual
 prefix and failure phase before choosing another repair. No full regression,
 PR101 completion or runtime activation is claimed.
+
+Issue [#114](https://github.com/dikini/ash-lang/issues/114) interrupts the next
+performance change with a current-specification row-equality repair. Preserve
+PR110 and its unmerged candidates; do not bundle comparator semantics into that
+ownership change. The genuine test-only baseline already demonstrates failed
+idempotence with raw function representations. Compare normalized function
+components consistently through the existing paid iterative queue, then verify
+set/permutation/duplicate laws, pure/empty equality and hash correspondence,
+complete Type/Row vectors, deep bounded work and storage failures. Refresh
+affected type/Core/private-image tests and the three unchanged default startup
+controls, with Clippy and independent current-head review. No full-workspace
+baseline or per-PR full gate replaces the connected F-core checkpoint.
+
+The #114 final fixed-04 batch is complete: 341 distinct selected units, 351 outer
+test occurrences, all three unchanged startup-budget controls and Clippy with
+warnings denied pass on one frozen source map. Fresh per-phase accounting
+corrects the earlier scan-only attribution without changing product validation or
+global limits. [Original and final evidence](../evidence/effect-row-comparator/README.md)
+retains the genuine baseline red and both failed fixed attempts. Proceed to the
+separate unsigned delivery checkpoint and independent review; preserve PR110
+until this comparator correction is retained. Whole F3/F-core remains pending.

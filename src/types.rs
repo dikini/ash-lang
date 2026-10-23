@@ -1492,6 +1492,7 @@ fn compare_structural_with_charge<B: TypeWorkMeter>(
         Kinds(&'a Kind, &'a Kind),
         Rows(&'a EffectRow, &'a EffectRow),
         Instances(&'a EffectInstance, &'a EffectInstance),
+        KnownOrdering(Ordering),
     }
 
     fn type_tag(ty: &Type) -> u8 {
@@ -1558,6 +1559,7 @@ fn compare_structural_with_charge<B: TypeWorkMeter>(
     }
     while let Some(task) = work.pop() {
         let ordering = match task {
+            Task::KnownOrdering(ordering) => ordering,
             Task::Arguments(left, right) => match (left, right) {
                 (KindedArgument::TypeArg(left), KindedArgument::TypeArg(right)) => {
                     schedule!(Task::Types(left, right));
@@ -1654,46 +1656,26 @@ fn compare_structural_with_charge<B: TypeWorkMeter>(
                             lengths
                         }
                         (
-                            Type::Function(left_domain, left_value),
-                            Type::Function(right_domain, right_value),
+                            Type::Function(_, _) | Type::EffectfulFunction(_, _),
+                            Type::Function(_, _) | Type::EffectfulFunction(_, _),
                         ) => {
-                            schedule!(Task::Types(left_value, right_value));
-                            schedule!(Task::Types(left_domain, right_domain));
+                            let left = left.function_view().expect("matched function family");
+                            let right = right.function_view().expect("matched function family");
+                            // Compare semantic function components in the same
+                            // order for every representation. The latent-row
+                            // decision must wait until domain and value work.
+                            match (left.effects(), right.effects()) {
+                                (Some(left), Some(right)) => schedule!(Task::Rows(left, right)),
+                                (None, Some(_)) => schedule!(Task::KnownOrdering(Ordering::Less)),
+                                (Some(_), None) => {
+                                    schedule!(Task::KnownOrdering(Ordering::Greater))
+                                }
+                                (None, None) => {}
+                            }
+                            schedule!(Task::Types(left.value(), right.value()));
+                            schedule!(Task::Types(left.domain(), right.domain()));
                             Ordering::Equal
                         }
-                        (
-                            Type::EffectfulFunction(left_domain, left_computation),
-                            Type::EffectfulFunction(right_domain, right_computation),
-                        ) => {
-                            schedule!(Task::Rows(
-                                &left_computation.effects,
-                                &right_computation.effects,
-                            ));
-                            schedule!(Task::Types(
-                                &left_computation.value,
-                                &right_computation.value,
-                            ));
-                            schedule!(Task::Types(left_domain, right_domain));
-                            Ordering::Equal
-                        }
-                        (
-                            Type::Function(left_domain, left_value),
-                            Type::EffectfulFunction(right_domain, right_computation),
-                        ) if right_computation.effects.is_empty() => {
-                            schedule!(Task::Types(left_value, &right_computation.value));
-                            schedule!(Task::Types(left_domain, right_domain));
-                            Ordering::Equal
-                        }
-                        (
-                            Type::EffectfulFunction(left_domain, left_computation),
-                            Type::Function(right_domain, right_value),
-                        ) if left_computation.effects.is_empty() => {
-                            schedule!(Task::Types(&left_computation.value, right_value));
-                            schedule!(Task::Types(left_domain, right_domain));
-                            Ordering::Equal
-                        }
-                        (Type::Function(_, _), Type::EffectfulFunction(_, _)) => Ordering::Less,
-                        (Type::EffectfulFunction(_, _), Type::Function(_, _)) => Ordering::Greater,
                         _ => unreachable!("equal type tags have one structural family"),
                     }
                 }
@@ -4672,6 +4654,9 @@ impl Drop for Kind {
         }
     }
 }
+
+#[cfg(test)]
+mod row_comparator_tests;
 
 #[cfg(test)]
 mod tests {
