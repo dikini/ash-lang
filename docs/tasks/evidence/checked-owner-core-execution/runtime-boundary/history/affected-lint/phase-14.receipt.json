@@ -1,0 +1,84 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--offline",
+    "--locked",
+    "--message-format=json",
+    "--lib",
+    "--tests",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "exit_code": 101,
+  "seconds": 54.188,
+  "expected_selected": null,
+  "actual_selected": null,
+  "timed_out": false,
+  "stop_reason": null,
+  "output_limit": false,
+  "source_count": 4868,
+  "inputs_equal": true,
+  "source_aggregate_sha256": "4928f5d20c5b316105471e6735725c63b9bb41727711e2d1aac6fb8af687c17f",
+  "log": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-final-units/phase-14.log",
+    "bytes": 59702,
+    "sha256": "d8577366dc986dafbd470f25fdfc26d54e3fd90409b2b3ebe8cbefe6c06d30ec"
+  },
+  "artifacts": [
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "custom-build"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "build-script-build",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/build.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/build/ash-cc67b3c14eeaf5f5/build-script-build"
+        ],
+        "executable": null,
+        "fresh": true
+      }
+    }
+  ],
+  "child_reaped": true,
+  "processes_before_namespace": [],
+  "owned_group_after": [],
+  "environment": {
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  },
+  "resource_observations": {
+    "sample_count": 13,
+    "min_available_memory_bytes": 14033784832,
+    "max_sampled_owned_group_rss_sum_bytes": 2426032128,
+    "min_project_free_bytes": 188304822272,
+    "min_tmp_free_bytes": 12371329024
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "pid": 775,
+  "pgid": 775,
+  "argv": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--message-format=json-render-diagnostics",
+    "--test",
+    "source_resource_execution",
+    "generated_scalar_destruction_captures_shared_library_keeps_original_snapshot",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "started_unix": 1792728269.7020326
+}

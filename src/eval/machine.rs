@@ -726,6 +726,7 @@ struct ProviderBoundary {
 /// carry only `key`; this slot is the sole owner of its native guard.
 #[derive(Debug)]
 struct SourceResourceBoundary {
+    checked: Option<crate::foreign::source_runtime::NativeOwnerBoundary>,
     node: NodeId,
     key: ActivationKey,
     environment: Environment,
@@ -1018,6 +1019,7 @@ pub struct Machine<'runtime> {
         Option<&'runtime std::collections::HashMap<crate::module::ModuleId, ConstructorId>>,
     pending_source_call: Option<source_scalar_phases::ScalarCallProgress<'runtime>>,
     pending_source_owner_call: Option<source_owner_phases::SourceOwnerCallProgress<'runtime>>,
+    checked_owner_limits: Option<crate::foreign::source_runtime::CheckedOwnerLimits>,
     cleanup_limit: usize,
     live_cleanups: usize,
     program: ExecutableProgram,
@@ -1048,6 +1050,7 @@ impl<'runtime> Machine<'runtime> {
             source_errors: None,
             pending_source_call: None,
             pending_source_owner_call: None,
+            checked_owner_limits: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
             live_cleanups: 0,
@@ -1085,6 +1088,7 @@ impl<'runtime> Machine<'runtime> {
             source_errors: None,
             pending_source_call: None,
             pending_source_owner_call: None,
+            checked_owner_limits: None,
             program: ExecutableProgram::Effect(program.shared()),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
             live_cleanups: 0,

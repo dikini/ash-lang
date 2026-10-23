@@ -1,0 +1,21 @@
+{
+  "pid": 2,
+  "pgid": 1,
+  "namespace": "pid:[4026534712]",
+  "script": {
+    "path": "/tmp/ash-checked-owner-runtime-boundary-review/c510-real-copy-tuple/verify-run.py",
+    "bytes": 10206,
+    "sha256": "1874294ff04d6368dcbb99e3976d4d33e9fd6d4d8905de646bcfbc6eeccd7f34"
+  },
+  "proposal": {
+    "path": "/tmp/ash-checked-owner-runtime-boundary-review/c510-real-copy-tuple/first-run.proposal.json",
+    "bytes": 5308,
+    "sha256": "e09eb0978767dfaf64049cb528233ad2536456423b4e6134ffe1a4deb60756ef"
+  },
+  "manifest": {
+    "path": "/tmp/ash-checked-owner-runtime-boundary-review/c510-real-copy-tuple/manifest.json",
+    "bytes": 6307,
+    "sha256": "14fa5ae7422ad3fcac009bb6aa083492eb4f9fd7914f1911c01d040eca9f5b1b"
+  },
+  "resource_scope": "namespace-local sampled process RSS sums; not unique physical memory, hard quota or complete peak proof"
+}

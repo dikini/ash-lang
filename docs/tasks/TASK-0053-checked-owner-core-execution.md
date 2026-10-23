@@ -84,23 +84,43 @@ from actual test outcomes. This independent passive slice can be delivered
 without importing PR101's candidate changes.
 
 This is passive unit/model and admission-data evidence, not native consumption,
-protected activation or execution acceptance. The complete byte-copy/runtime
-F-core path still awaits PR101 and protected deployment. The next active product
-increment adds opt-in producer receipt emission and
-independent bounded applicability decoding from the retained image/emission/build
-seams. [Receipt verification](evidence/checked-owner-core-execution/producer-receipts/README.md)
-passed the initial exact test and seven-test module, then a final frozen refresh
-of seven receipt controls, 17 affected regressions, Clippy with warnings denied,
-and one real public compile/link-only receipt observation. All 25 final tests
-passed on retained base `f4a3a048` plus the candidate source; no generated output
-was started. Receipt records keep
-unavailable checked/native/header/tool/premise/context closure explicit and do
-not grant protected approval or activation. The passive receipt/control result
-above remains the retained baseline; the new receipt-unit results are candidate
-evidence, not native execution or protected activation. F3 verification now uses
-a separately assigned `parallel-f3` target while F6 retains the existing shared
-target; this changes neither semantic/work limits nor execution permission. Include these task/plan documents with the
-product PR, not a standalone preparation PR.
+protected activation or execution acceptance. PR109 retained opt-in producer
+receipt emission and independent bounded applicability decoding at
+`e9177c502371e8bb9a4be80156a56b9c30eda5d4`.
+[Receipt verification](evidence/checked-owner-core-execution/producer-receipts/README.md)
+records seven refreshed receipt controls, 17 affected regressions, Clippy, and
+one public compile/link-only receipt observation: 25 distinct tests on base
+`f4a3a048` plus the exact subsequently retained source. No generated output was
+started. Missing checked/native/header/tool/premise/context closure stays explicit;
+producer claims and observations grant no protected approval or activation.
+
+The active source candidate connects those records to physical owner slots and
+evaluator boundaries on retained PR101 `c51089c8b6de76384361283f671d1f2dbf3ad58e`.
+It reserves finite policy data before entry and journals the genuine source/Core
+sequence Allocate, QueryBytes, ByteLength, checked-copy primitive, and Free.
+The primitive retains its own scope/window/function/application identity, not a
+Borrow-symbol identity. Capacity checks preserve the mandatory Finish record;
+native disposition and K commit precede fallible source delivery. Required source
+continuation remains independent of native consumption and terminal failure.
+
+[Focused boundary verification](evidence/checked-owner-core-execution/runtime-boundary/README.md)
+passed all eleven exact units on the frozen current-base candidate, including the
+real private evaluator copy phase with initialized Rust storage. The earlier
+compile and inventory failures remain separate. After mechanical lint repairs,
+all eleven connected controls, 55 affected unit tests and Clippy passed on one
+frozen source map. Three separately authorized existing legacy native regressions
+also passed, covering static/shared destruction captures and byte mutation refusal.
+Independent audits verified both batches; final published-head review remains
+pending. The genuine initialized-eight-byte source/Core preparation uses explicitly
+injected native returns and copy completion. The C helper remains unbuilt and unexecuted;
+the private evaluator phase additionally copies initialized Rust test storage
+through the actual checked-copy code. That is injected-phase evidence, not C
+initialization, native freeing, authored Trace or deployed execution evidence. Existing public build, binding, initializer and report
+guards remain closed. The complete connected runtime path still needs actual
+checked closure, protected approval/context, immutable same-fd launch and deployed
+verification. F3 and F6 use their separately assigned targets; no work limit or
+execution permission changes. Include progress with the product PR, not a
+standalone preparation PR.
 
 ## Acceptance for this bounded delivery
 

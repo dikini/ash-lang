@@ -989,9 +989,27 @@ pub(crate) fn checked_owner_passive_program() -> (
     crate::core::ValidatedEffectProgram,
     Vec<(crate::module::ModuleId, Arc<crate::source::SourceFile>)>,
 ) {
-    let graph = graph(PRODUCER, true);
+    checked_owner_passive_program_for_source(
+        PRODUCER,
+        "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n",
+    )
+}
+
+pub(crate) fn checked_owner_passive_program_for_source(
+    source: &str,
+    entry: &str,
+) -> (
+    crate::core::ValidatedEffectProgram,
+    Vec<(crate::module::ModuleId, Arc<crate::source::SourceFile>)>,
+) {
+    let graph = graph_with_entry(source, Some(entry));
     let checked = check_graph(&graph).expect("genuine checked source and body-free summaries");
-    assert_producer_originals(&checked);
+    // The existing opaque fixture's spelling/description assertions do not
+    // describe other genuine checked producers. All sources still undergo the
+    // same summary authentication, link, evidence and independent Core checks.
+    if source == PRODUCER {
+        assert_producer_originals(&checked);
+    }
     let linked = link_modules(checked, graph.entry()).expect("genuine checked module link");
     let linked = crate::evidence_validation::validate_interface_evidence(linked)
         .expect("genuine checked module evidence");

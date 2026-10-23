@@ -14,9 +14,10 @@ mod view;
 pub use view::{NativeViewCallback, NativeViewReadCallback, NativeViewReturned};
 
 pub(crate) use owner::{
-    NativeByteAccess, NativeByteCallbacks, NativeOwnerAdmissionError, NativeOwnerDependency,
-    NativeOwnerDestruction, NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerStatus,
-    NativeOwnerStorage, NativeOwnerViewKind,
+    NativeByteAccess, NativeByteCallbacks, NativeOwnerAdmissionError, NativeOwnerBorrowRecord,
+    NativeOwnerBoundary, NativeOwnerCopyRecord, NativeOwnerDependency, NativeOwnerDestruction,
+    NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerStatus, NativeOwnerStorage,
+    NativeOwnerViewKind,
 };
 #[doc(hidden)]
 pub use owner::{
@@ -327,6 +328,11 @@ pub(crate) fn widen_gnu_reply(
 
 pub(crate) use super::source_bindings::admit_source_native_program;
 pub use super::source_bindings::{AdmittedSourceNativeProgram, SourceNativeBindings};
+
+pub(crate) use super::checked_control::BoundaryLimits as CheckedOwnerLimits;
+
+#[cfg(test)]
+pub(crate) use super::checked_control::Continuation as CheckedOwnerContinuation;
 
 #[cfg(test)]
 mod declared_constant_tests {

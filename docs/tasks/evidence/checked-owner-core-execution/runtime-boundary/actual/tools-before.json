@@ -1,0 +1,22 @@
+{
+  "cargo": {
+    "path": "/home/dikini/.cargo/bin/rustup",
+    "bytes": 20838840,
+    "sha256": "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
+  },
+  "rustc": {
+    "path": "/home/dikini/.cargo/bin/rustup",
+    "bytes": 20838840,
+    "sha256": "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
+  },
+  "selected-toolchain-cargo": {
+    "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "bytes": 42839824,
+    "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953"
+  },
+  "selected-toolchain-rustc": {
+    "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+    "bytes": 645000,
+    "sha256": "d3a664c970a9fd8361b64194861bebc1ae37b9054e5ee3400dc1c9e691797eea"
+  }
+}

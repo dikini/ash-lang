@@ -1,0 +1,16 @@
+{
+  "pid": 1567,
+  "pgid": 1567,
+  "argv": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--message-format=json-render-diagnostics",
+    "--lib",
+    "eval::machine::source_owner_phases::inherited_row_tests::",
+    "--"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "started_unix": 1792728036.5802898
+}

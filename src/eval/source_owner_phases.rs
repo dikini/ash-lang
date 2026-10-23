@@ -72,7 +72,7 @@ impl<'binding> OwnerBorrowReady<'binding> {
         self
     }
     fn invoke_and_report(self, heap: &mut [HeapCell]) -> Result<Value, OwnerPhaseFailure> {
-        let (_recorded_authority, raw) = self
+        let (recorded_authority, raw) = self
             .invocation
             .invoke(&self.operands)
             .map_err(OwnerPhaseFailure::Wrapper)?;
@@ -81,19 +81,25 @@ impl<'binding> OwnerBorrowReady<'binding> {
         drop(self.input_storage);
         // Bare raw status is retained before extraction. Post-call failure is
         // terminal; neither this ticket nor a guard can be recovered for replay.
-        let integer = crate::foreign::source_runtime::widen_gnu_reply(raw, self.report)
-            .map_err(|_| OwnerPhaseFailure::Authority)?;
-        let cell = heap
-            .get_mut(self.location)
-            .ok_or(OwnerPhaseFailure::HeapSlotInvariant)?;
-        if !matches!(cell, HeapCell::Uninitialized) {
-            return Err(OwnerPhaseFailure::HeapSlotInvariant);
+        let result = (|| {
+            let integer = crate::foreign::source_runtime::widen_gnu_reply(raw, self.report)
+                .map_err(|_| OwnerPhaseFailure::Authority)?;
+            let cell = heap
+                .get_mut(self.location)
+                .ok_or(OwnerPhaseFailure::HeapSlotInvariant)?;
+            if !matches!(cell, HeapCell::Uninitialized) {
+                return Err(OwnerPhaseFailure::HeapSlotInvariant);
+            }
+            *cell = HeapCell::Constructor(
+                self.returned,
+                Some(integer.map_or(Value::Unit, Value::Integer)),
+            );
+            Ok(Value::Location(self.location))
+        })();
+        if result.is_err() {
+            recorded_authority.output_failed();
         }
-        *cell = HeapCell::Constructor(
-            self.returned,
-            Some(integer.map_or(Value::Unit, Value::Integer)),
-        );
-        Ok(Value::Location(self.location))
+        result
     }
 }
 
@@ -102,6 +108,7 @@ struct PrepaidOwnerRecord;
 
 #[derive(Debug)]
 struct AcquireReportSlots {
+    checked: Option<crate::foreign::source_runtime::NativeOwnerBoundary>,
     boundary: usize,
     nullable: Location,
     output: Location,
@@ -165,6 +172,7 @@ pub(super) struct OwnerAcquireRecorded<'binding> {
 
 #[derive(Debug)]
 pub(super) struct OwnerAcquireReported {
+    checked: Option<crate::foreign::source_runtime::NativeOwnerBoundary>,
     boundary: usize,
     activation: ActivationKey,
     value: Value,
@@ -173,6 +181,7 @@ pub(super) struct OwnerAcquireReported {
 
 #[derive(Debug)]
 struct TeardownReportSlots {
+    checked: Option<crate::foreign::source_runtime::NativeOwnerBoundary>,
     boundary: usize,
     activation: ActivationKey,
     disposition: Location,
@@ -298,6 +307,13 @@ impl<'binding> OwnerAcquireReady<'binding> {
                     OwnerPhaseFailure::Authority
                 }
             })?;
+        let checked = invocation.checked_boundary(work).map_err(|error| {
+            if matches!(error, super::RuntimeFailure::Report(_)) {
+                OwnerPhaseFailure::WorkReservation
+            } else {
+                OwnerPhaseFailure::Authority
+            }
+        })?;
         let nullable = invocation.nullable_constructors();
         let readable = invocation.readable_constructor();
         let returned_constructor = invocation.returned_constructor();
@@ -385,6 +401,7 @@ impl<'binding> OwnerAcquireReady<'binding> {
             operands,
             recording: PrepaidOwnerRecord,
             slots: AcquireReportSlots {
+                checked,
                 boundary,
                 nullable: first,
                 output: first + 1,
@@ -516,6 +533,22 @@ impl OwnerAcquireRecorded<'_> {
     /// reserved exact scope boundary before exposing this nonowning Ash token.
     /// Failure keeps the unpublished guard owned here until safe destruction.
     pub(super) fn report(
+        mut self,
+        heap: &mut [HeapCell],
+    ) -> Result<OwnerAcquireReported, OwnerPhaseFailure> {
+        let checked = self.slots.checked.take();
+        let mut result = self.report_inner(heap);
+        if result.is_err()
+            && let Some(checked) = &checked
+        {
+            checked.output_failed();
+        }
+        if let Ok(reported) = &mut result {
+            reported.checked = checked;
+        }
+        result
+    }
+    fn report_inner(
         self,
         heap: &mut [HeapCell],
     ) -> Result<OwnerAcquireReported, OwnerPhaseFailure> {
@@ -608,6 +641,7 @@ impl OwnerAcquireRecorded<'_> {
         // Stable input scratch outlives owner recording and output extraction.
         drop(self.input_storage);
         Ok(OwnerAcquireReported {
+            checked: None,
             boundary: self.slots.boundary,
             activation: self.slots.activation,
             value: Value::Location(self.slots.returned),
@@ -623,8 +657,14 @@ impl OwnerAcquireReported {
     pub(super) fn activation(&self) -> ActivationKey {
         self.activation
     }
-    pub(super) fn into_parts(self) -> (Value, Option<NativeOwnerGuard>) {
-        (self.value, self.guard)
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        Value,
+        Option<NativeOwnerGuard>,
+        Option<crate::foreign::source_runtime::NativeOwnerBoundary>,
+    ) {
+        (self.value, self.guard, self.checked)
     }
 }
 
@@ -671,10 +711,26 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
             None
         };
         let first = reserve_slots(heap, work, 2)?;
+        let checked = guard.checked_boundary(work).map_err(|error| match error {
+            crate::foreign::source_runtime::NativeOwnerAdmissionError::Work => {
+                OwnerPhaseFailure::WorkReservation
+            }
+            _ => OwnerPhaseFailure::Authority,
+        })?;
+        invocation
+            .prepare_checked_finish(guard, activation.0 as usize, has_dependents, work)
+            .map_err(|error| {
+                if matches!(error, super::RuntimeFailure::Report(_)) {
+                    OwnerPhaseFailure::WorkReservation
+                } else {
+                    OwnerPhaseFailure::Authority
+                }
+            })?;
         Ok(Self {
             invocation,
             recording: PrepaidOwnerRecord,
             slots: TeardownReportSlots {
+                checked,
                 boundary,
                 activation,
                 disposition: first,
@@ -751,6 +807,19 @@ impl<'binding> OwnerTeardownReturned<'binding> {
 
 impl OwnerTeardownRecorded<'_> {
     pub(super) fn report(
+        mut self,
+        heap: &mut [HeapCell],
+    ) -> Result<OwnerTeardownReported, OwnerPhaseFailure> {
+        let checked = self.slots.checked.take();
+        let result = self.report_inner(heap);
+        if result.is_err()
+            && let Some(checked) = checked
+        {
+            checked.output_failed();
+        }
+        result
+    }
+    fn report_inner(
         self,
         heap: &mut [HeapCell],
     ) -> Result<OwnerTeardownReported, OwnerPhaseFailure> {
@@ -1192,6 +1261,17 @@ impl<'runtime> super::Machine<'runtime> {
                     };
                     operands.push(native);
                 }
+                let super::Frame::SourceResourceBoundary(boundary) = &self.frames[index] else {
+                    return Err(super::RuntimeFailure::InvalidControlState);
+                };
+                let invocation = invocation.prepare_checked_boundary(
+                    boundary
+                        .owner
+                        .as_ref()
+                        .ok_or(super::RuntimeFailure::ForeignBinding)?,
+                    key.0 as usize,
+                    &mut self.instantiation_work,
+                )?;
                 let ready = OwnerBorrowReady::admit(
                     invocation,
                     operands,
@@ -1433,6 +1513,7 @@ impl<'runtime> super::Machine<'runtime> {
                 let dependencies = std::mem::take(&mut boundary.dependencies);
                 let invocation = invocation.prepare_owner_authority(
                     key.0 as usize,
+                    self.checked_owner_limits,
                     state,
                     access,
                     dependencies,
@@ -1746,7 +1827,7 @@ impl<'runtime> super::Machine<'runtime> {
                     reported.map_err(|error| phase_failure(error, &self.instantiation_work))?;
                 let key = reported.activation();
                 let boundary_index = reported.boundary();
-                let (value, guard) = reported.into_parts();
+                let (value, guard, checked) = reported.into_parts();
                 let Some(super::Frame::SourceResourceBoundary(boundary)) =
                     self.frames.get_mut(boundary_index)
                 else {
@@ -1761,6 +1842,7 @@ impl<'runtime> super::Machine<'runtime> {
                 }
                 // No charge or allocation can intervene between ownership
                 // placement and publication of its nonowning state token.
+                boundary.checked = checked;
                 boundary.owner = guard;
                 self.control = Some(super::Control::Return(value));
             }
