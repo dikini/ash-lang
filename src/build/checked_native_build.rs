@@ -26,6 +26,7 @@ pub(super) struct Limits {
     pub record_bytes: usize,
     pub command_seconds: u32,
     pub work: usize,
+    pub link: super::checked_link::Limits,
 }
 
 pub(super) struct Request<'a> {
@@ -496,6 +497,122 @@ fn run(
     ))
 }
 
+// The same owned-group and strictly bounded pipe implementation also covers
+// checked Cargo before the root linker wrapper is ever entered. Legacy Cargo
+// retains its existing behavior and does not pay this opt-in transaction work.
+pub(super) fn run_root_cargo(
+    command: &mut Command,
+    directory: &Path,
+    log: &Path,
+    limits: super::checked_link::Limits,
+    work: &mut TypeWorkBudget,
+) -> Result<std::process::ExitStatus, ReceiptFailure> {
+    let argument_bytes = command
+        .get_args()
+        .try_fold(0usize, |n, a| n.checked_add(a.len() + 1))
+        .ok_or(ReceiptFailure::Resource)?;
+    let reserve = limits
+        .cargo_bytes
+        .checked_mul(6)
+        .and_then(|n| n.checked_add(limits.cargo_seconds as usize * 400 + 16384))
+        .and_then(|n| n.checked_add(argument_bytes))
+        .ok_or(ReceiptFailure::Resource)?;
+    pay(work, reserve)?;
+    let out = directory.join("cargo.stdout");
+    let err = directory.join("cargo.stderr");
+    let out_file = io(fs::File::create(&out))?;
+    let err_file = io(fs::File::create(&err))?;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let child = io(command.spawn())?;
+    let mut owned = OwnedCommand {
+        group: child.id(),
+        child,
+        settled: false,
+    };
+    let stdout = owned.child.stdout.take().ok_or(ReceiptFailure::Input)?;
+    let stderr = owned.child.stderr.take().ok_or(ReceiptFailure::Input)?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut workers = Vec::new();
+    workers
+        .try_reserve_exact(2)
+        .map_err(|_| ReceiptFailure::Resource)?;
+    let cap = limits.cargo_bytes;
+    let first = sender.clone();
+    workers.push(io(std::thread::Builder::new()
+        .name("ash-root-cargo-stdout".into())
+        .spawn(move || {
+            let r = capture(stdout, out_file, cap);
+            let _ = first.send(r);
+            r
+        }))?);
+    match std::thread::Builder::new()
+        .name("ash-root-cargo-stderr".into())
+        .spawn(move || {
+            let r = capture(stderr, err_file, cap);
+            let _ = sender.send(r);
+            r
+        }) {
+        Ok(worker) => workers.push(worker),
+        Err(_) => {
+            let _ = owned.finish(true);
+            for w in workers {
+                let _ = w.join();
+            }
+            return Err(ReceiptFailure::Input);
+        }
+    }
+    let started = Instant::now();
+    let status = (|| {
+        loop {
+            for result in receiver.try_iter() {
+                result?;
+            }
+            if started.elapsed() > Duration::from_secs(limits.cargo_seconds as u64) {
+                return Err(ReceiptFailure::Resource);
+            }
+            if let Some(status) = io(owned.child.try_wait())? {
+                return Ok(status);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    })();
+    let cleanup = owned.finish(status.is_err());
+    let mut captured = Ok(());
+    for worker in workers {
+        match worker.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => captured = Err(e),
+            Err(_) => captured = Err(ReceiptFailure::Input),
+        }
+    }
+    let settled = cleanup.and(captured).and(status);
+    let lifecycle=serde_json::to_vec(&serde_json::json!({"group":owned.group,"child_reaped":owned.child.try_wait().ok().flatten().is_some(),"owned_group_empty":owned.settled,"result":format!("{settled:?}")})).map_err(|_|ReceiptFailure::Resource)?;
+    io(fs::write(directory.join("cargo.lifecycle.json"), lifecycle))?;
+    // Read/write only after all descendants and pipe owners have settled.
+    let stdout = read(&out, limits.cargo_bytes, work)?;
+    let stderr = read(&err, limits.cargo_bytes, work)?;
+    pay(
+        work,
+        stdout
+            .len()
+            .checked_add(stderr.len())
+            .ok_or(ReceiptFailure::Resource)?,
+    )?;
+    use std::io::Write;
+    let mut output = io(fs::OpenOptions::new().create(true).append(true).open(log))?;
+    io(output.write_all(&stdout))?;
+    io(output.write_all(&stderr))?;
+    settled
+}
+
 static IDS: AtomicU64 = AtomicU64::new(0);
 impl NativeBuild {
     pub(super) fn build(
@@ -503,6 +620,7 @@ impl NativeBuild {
         request: Request<'_>,
     ) -> Result<Self, ReceiptFailure> {
         let limits = request.limits;
+        limits.link.validate()?;
         if limits.file_bytes == 0
             || limits.total_bytes == 0
             || limits.output_bytes == 0
@@ -960,6 +1078,19 @@ mod tests {
             record_bytes: 128 * 1024,
             command_seconds: 30,
             work: 2 * 1024 * 1024 * 1024,
+            link: super::super::checked_link::Limits {
+                file_bytes: 1024 * 1024 * 1024,
+                total_bytes: 4 * 1024 * 1024 * 1024,
+                map_bytes: 128 * 1024 * 1024,
+                output_bytes: 1024 * 1024,
+                record_bytes: 1024 * 1024,
+                paths: 2048,
+                arguments: 65536,
+                seconds: 120,
+                cargo_bytes: 16 * 1024 * 1024,
+                cargo_seconds: 1800,
+                work: 16 * 1024 * 1024 * 1024,
+            },
         }
     }
     fn genuine() -> (
@@ -1238,6 +1369,10 @@ mod tests {
             history: 6,
             continuations: 1,
         };
+        // Explicit observation policy for this debug-profile canonical artifact.
+        // Full archive bytes are streamed; this data grants no execution authority.
+        let mut native_limits = limits();
+        native_limits.link.file_bytes = 2 * 1024 * 1024 * 1024;
         let prepared = super::super::host::prepare_checked_native_program(
             &program,
             &sources,
@@ -1247,7 +1382,7 @@ mod tests {
                 source: &dir.join("owner.c"),
                 header: &dir.join("owner.h"),
                 directory: &dir.join("inputs"),
-                limits: limits(),
+                limits: native_limits,
             },
         )
         .unwrap();
@@ -1262,6 +1397,38 @@ mod tests {
             },
         )
         .unwrap();
+        let project = built.producer_receipt().unwrap().parent().unwrap();
+        assert!(!project.join("linked-program").exists());
+        for phase in 0..2 {
+            let lifecycle: serde_json::Value = serde_json::from_slice(
+                &fs::read(project.join(format!("checked-link/cargo-{phase}/cargo.lifecycle.json")))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(lifecycle["child_reaped"], true);
+            assert_eq!(lifecycle["owned_group_empty"], true);
+        }
+        let link_bytes = fs::read(
+            built
+                .producer_receipt()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("link-provenance.json"),
+        )
+        .unwrap();
+        super::super::checked_link::exercise_independent_controls(
+            &link_bytes,
+            &receipt,
+            native_limits.link,
+        );
+        let receipt = receipt
+            .before_root_link(
+                &link_bytes,
+                native_limits.link,
+                &mut TypeWorkBudget::with_limit(native_limits.link.work),
+            )
+            .unwrap();
         let provenance = fs::read(
             built
                 .producer_receipt()
@@ -1274,8 +1441,8 @@ mod tests {
         matches(
             &provenance,
             &receipt,
-            limits(),
-            &mut TypeWorkBudget::with_limit(limits().work),
+            native_limits,
+            &mut TypeWorkBudget::with_limit(native_limits.work),
         )
         .unwrap();
         let record: Record = serde_json::from_slice(&provenance).unwrap();
@@ -1285,7 +1452,7 @@ mod tests {
             .chain(std::iter::once(&record.archive))
             .map(|i| i.pin.bytes)
             .sum::<u64>();
-        let mut exact = limits();
+        let mut exact = native_limits;
         exact.total_bytes = total as usize;
         binding(
             &provenance,
@@ -1304,31 +1471,31 @@ mod tests {
             Err(ReceiptFailure::Resource)
         );
         let mut over: Record = serde_json::from_slice(&provenance).unwrap();
-        over.inputs[0].pin.bytes = limits().total_bytes as u64;
+        over.inputs[0].pin.bytes = native_limits.total_bytes as u64;
         assert_eq!(
             binding(
                 &serde_json::to_vec(&over).unwrap(),
-                limits(),
-                &mut TypeWorkBudget::with_limit(limits().work)
+                native_limits,
+                &mut TypeWorkBudget::with_limit(native_limits.work)
             ),
             Err(ReceiptFailure::Resource)
         );
-        let mut measured = TypeWorkBudget::with_limit(limits().work);
-        binding(&provenance, limits(), &mut measured).unwrap();
+        let mut measured = TypeWorkBudget::with_limit(native_limits.work);
+        binding(&provenance, native_limits, &mut measured).unwrap();
         let cost = measured.used();
         for prefix in [0, 7] {
             let mut exact = TypeWorkBudget::with_limit(prefix + cost);
             exact.charge(prefix).unwrap();
-            binding(&provenance, limits(), &mut exact).unwrap();
+            binding(&provenance, native_limits, &mut exact).unwrap();
             assert_eq!(exact.used(), prefix + cost);
             let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
             short.charge(prefix).unwrap();
             assert_eq!(
-                binding(&provenance, limits(), &mut short),
+                binding(&provenance, native_limits, &mut short),
                 Err(ReceiptFailure::Resource)
             );
-            assert!(binding(&provenance, limits(), &mut short).is_err());
-            binding(&provenance, limits(), &mut TypeWorkBudget::with_limit(cost)).unwrap();
+            assert!(binding(&provenance, native_limits, &mut short).is_err());
+            binding(&provenance, native_limits, &mut TypeWorkBudget::with_limit(cost)).unwrap();
         }
         for field in [
             ReceiptField::RuntimeClosure,
@@ -1352,8 +1519,8 @@ mod tests {
             matches(
                 &serde_json::to_vec(&changed).unwrap(),
                 &receipt,
-                limits(),
-                &mut TypeWorkBudget::with_limit(limits().work)
+                native_limits,
+                &mut TypeWorkBudget::with_limit(native_limits.work)
             ),
             Err(ReceiptFailure::Association)
         );
@@ -1363,8 +1530,8 @@ mod tests {
             matches(
                 &serde_json::to_vec(&changed).unwrap(),
                 &receipt,
-                limits(),
-                &mut TypeWorkBudget::with_limit(limits().work)
+                native_limits,
+                &mut TypeWorkBudget::with_limit(native_limits.work)
             ),
             Err(ReceiptFailure::Association)
         );
@@ -1374,8 +1541,8 @@ mod tests {
             matches(
                 &serde_json::to_vec(&changed).unwrap(),
                 &receipt,
-                limits(),
-                &mut TypeWorkBudget::with_limit(limits().work)
+                native_limits,
+                &mut TypeWorkBudget::with_limit(native_limits.work)
             ),
             Err(ReceiptFailure::Association)
         );
@@ -1386,8 +1553,8 @@ mod tests {
             matches(
                 &serde_json::to_vec(&changed).unwrap(),
                 &receipt,
-                limits(),
-                &mut TypeWorkBudget::with_limit(limits().work)
+                native_limits,
+                &mut TypeWorkBudget::with_limit(native_limits.work)
             ),
             Err(ReceiptFailure::Association)
         );
@@ -1396,8 +1563,8 @@ mod tests {
         assert_eq!(
             binding(
                 &serde_json::to_vec(&changed).unwrap(),
-                limits(),
-                &mut TypeWorkBudget::with_limit(limits().work)
+                native_limits,
+                &mut TypeWorkBudget::with_limit(native_limits.work)
             ),
             Err(ReceiptFailure::Malformed)
         );
@@ -1406,8 +1573,8 @@ mod tests {
         assert_eq!(
             binding(
                 &serde_json::to_vec(&changed).unwrap(),
-                limits(),
-                &mut TypeWorkBudget::with_limit(limits().work)
+                native_limits,
+                &mut TypeWorkBudget::with_limit(native_limits.work)
             ),
             Err(ReceiptFailure::Association)
         );
@@ -1418,8 +1585,8 @@ mod tests {
             assert_eq!(
                 binding(
                     bytes,
-                    limits(),
-                    &mut TypeWorkBudget::with_limit(limits().work)
+                    native_limits,
+                    &mut TypeWorkBudget::with_limit(native_limits.work)
                 ),
                 Err(ReceiptFailure::Malformed)
             );

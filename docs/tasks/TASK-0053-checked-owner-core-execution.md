@@ -1,7 +1,7 @@
 # TASK-0053: Connected checked owner execution and immutable admission
 
 - ID: `TASK-0053`
-- Status: active for same-build helper/header/ABI provenance; protected activation and connected execution await their gates
+- Status: active for actual root-link provenance; protected activation and connected execution await their gates
 - Related: [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](TASK-0051-checked-ffi-contract-carriers.md),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
@@ -165,10 +165,47 @@ records four initial controls, then Clippy and 34 distinct current-source tests
 passing in PR113. The final static test built the actual checked artifact and
 decoded its receipt before a test-only sidecar path error. Separate post-test
 readback verified artifact/data associations without crediting unexecuted test
-assertions. The repaired static gate and fresh Clippy now pass, giving 35 distinct tests
-with explicit source-transfer qualifications. Final review and retention remain
-pending. No output was executed. This work
+assertions. The repaired static gate and fresh Clippy passed, giving 35 distinct tests
+with explicit source-transfer qualifications. PR113 was retained as `a2f1c938`
+after [final review](https://github.com/dikini/ash-lang/pull/113#pullrequestreview-5625045484),
+[retention](https://github.com/dikini/ash-lang/pull/113#issuecomment-6359546097) and
+[partial PM confirmation](https://github.com/dikini/ash-lang/issues/62#issuecomment-6359613205). No output was executed. This work
 changes no whole acceptance criteria or public execution guards.
+
+## Active actual root-link observations
+
+The next step-5 component starts from retained `a2f1c938`. A private checked
+root-link observer captures actual arguments, bounded response-file bytes and
+expansion, GNU/BFD map and resolved object/archive/CRT/runtime/script input pins
+before returning to rustc. Unknown forms, missing LOAD paths, unsupported script
+features and nested script groups refuse. The same prepared native archive must
+appear in the actual input set. The copied staging ELF must match the observed
+linker output before cleanup. Owned data crosses cleanup and binds the existing
+ReceiptSeed configuration chain before publication; legacy linking is unchanged.
+
+Checked Cargo compilation and cleanup now use the bounded owned transaction.
+A private same-group BFD proxy checks and delegates an opened tool descriptor;
+its exclusive entry marker proves an attempt, with successful cc/map/output and
+cleanup correspondence separately required. The independent decoder compares
+raw marker bytes, digest and the complete invocation. The [partial product
+record](evidence/checked-owner-core-execution/root-link-provenance/README.md)
+records Clippy and six bounded controls passing on frozen `6260b756`, followed
+by the genuine static test failing `Unsupported: BFD map`. Nested stderr reports
+that the map destination is not a regular file. Rejected bounded stdout was not
+retained, so its bytes/format cannot be inferred. No valid map, accepted record,
+final artifact association or inner record-mutant credit follows. A narrow paid
+raw-map retention repair and actual canonical verification remain required.
+The chosen 2 GiB per-file canonical observation policy is explicit test data,
+not a raised default or complete supported-profile result. No generated output
+or selected native function has run.
+
+This addresses transient input correspondence, not full tool/native/runtime
+conformity. All six complete closure fields, independent premises, protected
+context/approval and sealed same-fd launch remain unfulfilled. Next connected
+admission/execution work must use the actual artifacts, independently reviewed
+finite AD16 premises and administrator-established context, rather than another
+query-only observation. Actual initialized-eight-byte acquisition, copy,
+finish/Trace and the root-triggered full F-core gate remain required.
 
 ## Acceptance for this bounded delivery
 

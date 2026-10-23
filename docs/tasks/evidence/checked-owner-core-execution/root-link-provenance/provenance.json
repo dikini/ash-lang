@@ -1,0 +1,1462 @@
+[
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/batch-results.json",
+    "original": {
+      "bytes": 177126,
+      "sha256": "debf72b4199f52a036e7ffd8378ed5cd7b7b023b0751d813c412650e19fe0506"
+    },
+    "retained_as": "current/batch-results.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.before.json",
+    "original": {
+      "bytes": 871000,
+      "sha256": "c518379e4440a2b88b309a4d81b11a3b0af9d67377de79f623d5a35bf5c2b97a"
+    },
+    "retained_as": "current/phase-01.before.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.log",
+    "original": {
+      "bytes": 153652,
+      "sha256": "e10425ecd71cab69eb42d300fa6792cbff13e1103923b64c245e85c68b6f01de"
+    },
+    "retained_as": "current/phase-01.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.process.json",
+    "original": {
+      "bytes": 339,
+      "sha256": "17a63c65846b4108c4c37758597bd2a332d6f1fec85d06b611124ce7ac90a4de"
+    },
+    "retained_as": "current/phase-01.process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.receipt.json",
+    "original": {
+      "bytes": 156574,
+      "sha256": "9fccbb6b13fc8faba6b449a33fb3d00cd8b3a1e0b3c35be3f85ad79662618edf"
+    },
+    "retained_as": "current/phase-01.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-01.resources.json",
+    "original": {
+      "bytes": 14198,
+      "sha256": "4c92d9dac3fe2c1c53f0390ab1009f469f45ac885bf9711689b74d901958cbd7"
+    },
+    "retained_as": "current/phase-01.resources.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.before.json",
+    "original": {
+      "bytes": 871000,
+      "sha256": "c518379e4440a2b88b309a4d81b11a3b0af9d67377de79f623d5a35bf5c2b97a"
+    },
+    "retained_as": "current/phase-01.before.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.log",
+    "original": {
+      "bytes": 49809,
+      "sha256": "3af332da709636586ab205a6affb34d2b6f8f79c50f832c3a5e53fa1c04b3c86"
+    },
+    "retained_as": "current/phase-02.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.process.json",
+    "original": {
+      "bytes": 332,
+      "sha256": "619664ae6681533c55c6c2494f368361e74824da8016203c815ba97ae8cb6c6e"
+    },
+    "retained_as": "current/phase-02.process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.receipt.json",
+    "original": {
+      "bytes": 5099,
+      "sha256": "8a9adaf9d883d7ab54fc15f639c53512f6ba28b42d44dfd2c0614a40f978ebb8"
+    },
+    "retained_as": "current/phase-02.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-02.resources.json",
+    "original": {
+      "bytes": 20180,
+      "sha256": "d256943aacd716f8da291475207bab8c064f5274e070f53d72fe49d6f261e480"
+    },
+    "retained_as": "current/phase-02.resources.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.before.json",
+    "original": {
+      "bytes": 871000,
+      "sha256": "c518379e4440a2b88b309a4d81b11a3b0af9d67377de79f623d5a35bf5c2b97a"
+    },
+    "retained_as": "current/phase-01.before.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.log",
+    "original": {
+      "bytes": 50017,
+      "sha256": "269a9d33524a1d2e54c96fdc729d8d5da14e3e91736db864f936e2b84877b423"
+    },
+    "retained_as": "current/phase-03.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.process.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "5fd2f873384cda981a0348ab93f34d58205f49abd1684b1a9e7e6678e4ddae3c"
+    },
+    "retained_as": "current/phase-03.process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.receipt.json",
+    "original": {
+      "bytes": 5199,
+      "sha256": "0b0ab17db0fb3d68f66b3fa4532a3ce8b336533d915c88ff7f0dbf1725d28d1b"
+    },
+    "retained_as": "current/phase-03.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/phase-03.resources.json",
+    "original": {
+      "bytes": 10748,
+      "sha256": "5e7852a65f2cdc44fd6168f036190b2816df7a3483f235aa5900644acf2070a8"
+    },
+    "retained_as": "current/phase-03.resources.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/runner-process.json",
+    "original": {
+      "bytes": 1005,
+      "sha256": "e95025eac1a711568232fff3fae40d0ae974987c1cfdd9cef5bb170c3bb67d81"
+    },
+    "retained_as": "current/runner-process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/tools-after.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker/tools-before.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/batch-results.json",
+    "original": {
+      "bytes": 171728,
+      "sha256": "94f8e0d2e9ee97f84e2bca9987d21ecde9e9a5d43c27669612b94fa43e9b9532"
+    },
+    "retained_as": "file-policy-refusal/batch-results.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.before.json",
+    "original": {
+      "bytes": 870896,
+      "sha256": "c9c2bd5387c9524b69849d081e27d88b5bdb1b4287f665d2f8eecac7eaf84b13"
+    },
+    "retained_as": "file-policy-refusal/phase-01.before.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.log",
+    "original": {
+      "bytes": 153652,
+      "sha256": "b2477cfdb8ee6cece85d74474012c5e78d9ca7c5619ca614d82e342ceabf4d60"
+    },
+    "retained_as": "file-policy-refusal/phase-01.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.process.json",
+    "original": {
+      "bytes": 339,
+      "sha256": "5d8117705770725f237608b0589c06025d5cd4740e2e2bd6566b290b24dd16c4"
+    },
+    "retained_as": "file-policy-refusal/phase-01.process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.receipt.json",
+    "original": {
+      "bytes": 156579,
+      "sha256": "253aa08032163e27c63c23adeb30fea2a73b631bac118f8dda408b05d06675d4"
+    },
+    "retained_as": "file-policy-refusal/phase-01.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-01.resources.json",
+    "original": {
+      "bytes": 10727,
+      "sha256": "b8946141b959092f1cec51e21f2dd3826724006bb15a5640259dfe8584fc16a0"
+    },
+    "retained_as": "file-policy-refusal/phase-01.resources.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.before.json",
+    "original": {
+      "bytes": 870896,
+      "sha256": "c9c2bd5387c9524b69849d081e27d88b5bdb1b4287f665d2f8eecac7eaf84b13"
+    },
+    "retained_as": "file-policy-refusal/phase-01.before.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.log",
+    "original": {
+      "bytes": 50090,
+      "sha256": "4f3617e50f3d0db20e5d26983a1fae2102a19f6f3c30533eacc1d19110ca8cf7"
+    },
+    "retained_as": "file-policy-refusal/phase-02.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.process.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "0a5d23851d181bca83a956aae8aab60e1e8f73b26942ba14ffd87972d18de8d7"
+    },
+    "retained_as": "file-policy-refusal/phase-02.process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.receipt.json",
+    "original": {
+      "bytes": 5208,
+      "sha256": "a3d7f652a107daaae9d2def076e67de4d02684e1b4129e5ea1aa93c837419875"
+    },
+    "retained_as": "file-policy-refusal/phase-02.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/phase-02.resources.json",
+    "original": {
+      "bytes": 11963,
+      "sha256": "7e3363bbb1868feae24ef97aeb5fedde4c1011851386414871895463b3600d5e"
+    },
+    "retained_as": "file-policy-refusal/phase-02.resources.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/runner-process.json",
+    "original": {
+      "bytes": 1023,
+      "sha256": "824d83d63b5a12716d74b70e62b0c971f1d7220b10c4aa5d267669d85a523b26"
+    },
+    "retained_as": "file-policy-refusal/runner-process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/tools-after.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent/tools-before.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/batch-results.json",
+    "original": {
+      "bytes": 171702,
+      "sha256": "2c33f1c602d5d23ed1018e565c9b5f0a7a519aa222ed8808aa7926f832a858d4"
+    },
+    "retained_as": "file-cap-refusal/batch-results.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/cap-cause-readback.json",
+    "original": {
+      "bytes": 819,
+      "sha256": "92e35fd3d82d65fd786e7bef370cfd7a6c581c57f74f72ed54e3ce556fffd71d"
+    },
+    "retained_as": "file-cap-refusal/cap-cause-readback.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.before.json",
+    "original": {
+      "bytes": 870896,
+      "sha256": "b7811fc6b2b24805fbb600e229d2aee76cf4b743e92f75a9907aa7fb5f9d4595"
+    },
+    "retained_as": "file-cap-refusal/phase-01.before.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.log",
+    "original": {
+      "bytes": 153652,
+      "sha256": "84bc23aea3a776ef8b7dd59f28ae60fdae48d7db8c93dbceea3ed5fd57c88782"
+    },
+    "retained_as": "file-cap-refusal/phase-01.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.process.json",
+    "original": {
+      "bytes": 338,
+      "sha256": "ae86abcdc8802a829aaab5134302cac9eded08f585e2d18c9a43cefd9f5d0446"
+    },
+    "retained_as": "file-cap-refusal/phase-01.process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.receipt.json",
+    "original": {
+      "bytes": 156566,
+      "sha256": "9429886463a3e0f3b9f6188de497349694c55f661837c08bc7a2e8de8bddf541"
+    },
+    "retained_as": "file-cap-refusal/phase-01.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-01.resources.json",
+    "original": {
+      "bytes": 12280,
+      "sha256": "f319849c092f5922a4aefeb2490c1318726808a669d9e95e03c1000f4d23b07b"
+    },
+    "retained_as": "file-cap-refusal/phase-01.resources.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.before.json",
+    "original": {
+      "bytes": 870896,
+      "sha256": "b7811fc6b2b24805fbb600e229d2aee76cf4b743e92f75a9907aa7fb5f9d4595"
+    },
+    "retained_as": "file-cap-refusal/phase-01.before.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.log",
+    "original": {
+      "bytes": 50231,
+      "sha256": "44c5fb28eb88f27a5ef93a0d39e1190f6c80c80f8fe304166403745be9e644d4"
+    },
+    "retained_as": "file-cap-refusal/phase-02.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.process.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "e96526b9cf1bc7ec5316683c583856e15cde6deb1a37675c6af5c0cd903fa7bd"
+    },
+    "retained_as": "file-cap-refusal/phase-02.process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.receipt.json",
+    "original": {
+      "bytes": 5195,
+      "sha256": "51532742235eec66dc2393eac7d7d5f17f5d7031d00e7565277ed17bc0ac5284"
+    },
+    "retained_as": "file-cap-refusal/phase-02.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/phase-02.resources.json",
+    "original": {
+      "bytes": 29850,
+      "sha256": "a356b3bf1d2298b04357388c20cbc4649759f2e99d3e67c8803ed6cce30e75b7"
+    },
+    "retained_as": "file-cap-refusal/phase-02.resources.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/runner-process.json",
+    "original": {
+      "bytes": 984,
+      "sha256": "e3a734ebff281047cd92a7659d54325bd0c6155ab8047225e083e1f8a3fef0ed"
+    },
+    "retained_as": "file-cap-refusal/runner-process.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/tools-after.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical/tools-before.json",
+    "original": {
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d"
+    },
+    "retained_as": "current/tools-after.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-1.receipt.json",
+    "original": {
+      "bytes": 524,
+      "sha256": "c2e86a9f34689532b2f66e23499c5846426d320c0cc0b08a672e214db795cd76"
+    },
+    "retained_as": "driver-queries/query-1.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-1.stderr",
+    "original": {
+      "bytes": 6149,
+      "sha256": "afb4fff5468cee567f5462645a7d823545f410b0004107a093d0b18d8e8d1275"
+    },
+    "retained_as": "driver-queries/query-1.stderr.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-1.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-2.receipt.json",
+    "original": {
+      "bytes": 524,
+      "sha256": "27a52f09b8f8fbb9c548ce3fd1f3c15a79356122818958e574b2b4ffeb8cfa30"
+    },
+    "retained_as": "driver-queries/query-2.receipt.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-2.stderr",
+    "original": {
+      "bytes": 6149,
+      "sha256": "b5782b323de67a6f861e39fbee883dbd87ebf381ab1a9ac00858cafc9696d5bc"
+    },
+    "retained_as": "driver-queries/query-2.stderr.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/query-2.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/results.json",
+    "original": {
+      "bytes": 1137,
+      "sha256": "80c46fa7119e73f3f077e0e869f3b3731dc67f412d1307e50ceb2edd47b46ec4"
+    },
+    "retained_as": "driver-queries/results.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/tools-after.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "9b75d6d9a37421bfe1f8874372f1553658a41a2bf1dac0f4ed799df6b3887434"
+    },
+    "retained_as": "driver-queries/tools-after.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query/tools-before.json",
+    "original": {
+      "bytes": 433,
+      "sha256": "9b75d6d9a37421bfe1f8874372f1553658a41a2bf1dac0f4ed799df6b3887434"
+    },
+    "retained_as": "driver-queries/tools-after.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker-preparation/manifest.json",
+    "original": {
+      "bytes": 2651,
+      "sha256": "0421e0e5dd53d122720ae608443441f33fa73d059f5ec7a0dc217965c02e75aa"
+    },
+    "retained_as": "current/preparation/manifest.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker-preparation/proposal.json",
+    "original": {
+      "bytes": 3177,
+      "sha256": "25f351e7593851e4254435bbea2c540392f81d007a3672b8912b4a65c0a382cf"
+    },
+    "retained_as": "current/preparation/proposal.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker-preparation/run.py",
+    "original": {
+      "bytes": 10502,
+      "sha256": "a07ecfbc54a49e3910508625cd8bfb9dc28f0d2b53770e50bd0bae7e39b6273e"
+    },
+    "retained_as": "current/preparation/run.py.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker-preparation/candidate.patch",
+    "original": {
+      "bytes": 122916,
+      "sha256": "6260b756d640836d8a29ccf26b999e5fba820c3cbf0b32659004ccbeecfcd6e5"
+    },
+    "retained_as": "current/preparation/candidate.patch.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-owned-bfd-marker-preparation/repair.delta",
+    "original": {
+      "bytes": 3599,
+      "sha256": "a095317eac80d323ba74293b1998bb2d89188daa3a9a39a713938a965124b928"
+    },
+    "retained_as": "current/preparation/repair.delta.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent-preparation/manifest.json",
+    "original": {
+      "bytes": 2457,
+      "sha256": "7fb40a3dbb1f5728dae8f173b96ff6fcb2bcdea6f646c6e28ba7bba80f9f5644"
+    },
+    "retained_as": "file-policy-refusal/preparation/manifest.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent-preparation/proposal.json",
+    "original": {
+      "bytes": 2696,
+      "sha256": "f2829474eb5a2e7bc511e30ebc4a96ff756e06584b0b2e56a8d9ec1d17afe863"
+    },
+    "retained_as": "file-policy-refusal/preparation/proposal.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent-preparation/run.py",
+    "original": {
+      "bytes": 10520,
+      "sha256": "5edf100f6d9a9da795abe51eb370d42e04667d08cdca4cbaad272e39bc316e8d"
+    },
+    "retained_as": "file-policy-refusal/preparation/run.py.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent-preparation/candidate.patch",
+    "original": {
+      "bytes": 97488,
+      "sha256": "c1874bbcf2fe098506f8ca6e72bd5e07a751397ee9aec67d46aecb7fa56023d6"
+    },
+    "retained_as": "file-policy-refusal/preparation/candidate.patch.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-file-policy-consistent-preparation/repair.delta",
+    "original": {
+      "bytes": 6456,
+      "sha256": "67f8aacbfcb0937493c6df109a6a4863655aadc366bafd6d3265d0ea4171dc08"
+    },
+    "retained_as": "file-policy-refusal/preparation/repair.delta.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical-preparation/manifest.json",
+    "original": {
+      "bytes": 2457,
+      "sha256": "c633a86456ae418a8407b3e7a314452657b6b7f18c6996952bdd08628ea5bf8c"
+    },
+    "retained_as": "file-cap-refusal/preparation/manifest.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical-preparation/proposal.json",
+    "original": {
+      "bytes": 2382,
+      "sha256": "f8a71278c7740b40fcc27418659f99761742d0e2c257b3a8155ce8fb9b855a66"
+    },
+    "retained_as": "file-cap-refusal/preparation/proposal.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical-preparation/run.py",
+    "original": {
+      "bytes": 10481,
+      "sha256": "88bfe067edcc76f9e2919e592009d7ec3f99497b4742bdea3fb1dd80bc6cc83c"
+    },
+    "retained_as": "file-cap-refusal/preparation/run.py.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-canonical-preparation/candidate.patch",
+    "original": {
+      "bytes": 90957,
+      "sha256": "8507a415c11503d60147fcfc84eff09baba356c159dfb79a27ecdbfac60e144c"
+    },
+    "retained_as": "file-cap-refusal/preparation/candidate.patch.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query-preparation/proposal.json",
+    "original": {
+      "bytes": 1153,
+      "sha256": "afc839ed8fc1a0a6fc067dafa594ac360c81e13556d37214e98cdf68224b2221"
+    },
+    "retained_as": "driver-queries/preparation/proposal.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-link-provenance-driver-query-preparation/run.py",
+    "original": {
+      "bytes": 3114,
+      "sha256": "88cdec668a3749e192cd2b5c63846fdfc8189e7d02016d618c07138de1fd7181"
+    },
+    "retained_as": "driver-queries/preparation/run.py.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/Cargo.lock",
+    "original": {
+      "bytes": 10126,
+      "sha256": "fd65e0f12b86e720b139301479df17e21d47463a51003d0e891083226f1b9fa7"
+    },
+    "retained_as": "current/transaction/Cargo.lock.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/Cargo.toml",
+    "original": {
+      "bytes": 268,
+      "sha256": "54b1e8c110b9a0e7d85c7ac47b05b4efc528aff713f4045bb485de101a7d7948"
+    },
+    "retained_as": "current/transaction/Cargo.toml.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/cargo-0/cargo.lifecycle.json",
+    "original": {
+      "bytes": 112,
+      "sha256": "ed03fb35f1d2d5bf45a0472a715f0eed42e3ced826f163144c61967ef6aaf778"
+    },
+    "retained_as": "current/transaction/checked-link/cargo-0/cargo.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/cargo-0/cargo.stderr",
+    "original": {
+      "bytes": 22785,
+      "sha256": "b432aef57a2232205711cde08d0dd590224c934226c1806c011cf5a6306aac83"
+    },
+    "retained_as": "current/transaction/checked-link/cargo-0/cargo.stderr.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/cargo-0/cargo.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/cargo-1/cargo.lifecycle.json",
+    "original": {
+      "bytes": 108,
+      "sha256": "1c25c146715cdf051f67400c55424765665c06e7a4ba846d272f7c6ab4c4c43d"
+    },
+    "retained_as": "current/transaction/checked-link/cargo-1/cargo.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/cargo-1/cargo.stderr",
+    "original": {
+      "bytes": 37,
+      "sha256": "fe0d5e7fd82dd21f7b213390c6e6fe49ebf8c548d25eac90739756a277a17e6a"
+    },
+    "retained_as": "current/transaction/checked-link/cargo-1/cargo.stderr.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/cargo-1/cargo.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/invocation.json",
+    "original": {
+      "bytes": 19841,
+      "sha256": "0f55301f975a328646663808f4de48de6f43b98ba79d436c1b96476395354c36"
+    },
+    "retained_as": "current/transaction/checked-link/invocation.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/limits.json",
+    "original": {
+      "bytes": 226,
+      "sha256": "93575168186a8de8024b978a3026d0aec4969390e17989ee9802661059c20ad2"
+    },
+    "retained_as": "current/transaction/checked-link/limits.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/link.stderr",
+    "original": {
+      "bytes": 16638,
+      "sha256": "4168d3ed23b5f2179cf89b368585fe1ac938875fc54f2c8c40114ec5b44cf769"
+    },
+    "retained_as": "current/transaction/checked-link/link.stderr.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/output.json",
+    "original": {
+      "bytes": 145,
+      "sha256": "3bf5515c4dd9ff5576ff05a32c5ea62dc99ba6c37cb8a67de1319322192d8544"
+    },
+    "retained_as": "current/transaction/checked-link/output.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/selected-bfd/invocation.json",
+    "original": {
+      "bytes": 11913,
+      "sha256": "da989f5ff6d0fb7fa4785bda2ff7c5b298a9de94ed96cce321708ce824850d86"
+    },
+    "retained_as": "current/transaction/checked-link/selected-bfd/invocation.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/checked-link/selected-bfd/tool.json",
+    "original": {
+      "bytes": 834,
+      "sha256": "f80d0f28fc33346b1e2d30f293884b659ccd31cc54d36dde29644b40a4829ca5"
+    },
+    "retained_as": "current/transaction/checked-link/selected-bfd/tool.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/native-build.log",
+    "original": {
+      "bytes": 22874,
+      "sha256": "8ab69094419935404fd5f0d0edae04f0d26101419d2ab0ad7c07aa6ba4f1c4b3"
+    },
+    "retained_as": "current/transaction/native-build.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/rust-toolchain.toml",
+    "original": {
+      "bytes": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89"
+    },
+    "retained_as": "current/transaction/rust-toolchain.toml.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/src/checked-policy.bin",
+    "original": {
+      "bytes": 156,
+      "sha256": "1627e12867cd6a0dfbcc0f6888ae2e1e0f9e87ad6c02ebfbf96a727847671656"
+    },
+    "retained_as": "current/transaction/src/checked-policy.bin.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/src/expected-facts.bin",
+    "original": {
+      "bytes": 18423,
+      "sha256": "c32c36aec98159db4f8d9d5ef5ec994351031e3603cf00afaa91c07435902335"
+    },
+    "retained_as": "current/transaction/src/expected-facts.bin.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/src/main.rs",
+    "original": {
+      "bytes": 9237,
+      "sha256": "060e6a59f240c3f762de142efeb457c9a52fe31eb8808bb191b4b0d96ed55d7a"
+    },
+    "retained_as": "current/transaction/src/main.rs.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/.ash-build/ash-host-770133-0/src/program-image.bin",
+    "original": {
+      "bytes": 28803,
+      "sha256": "c09ab8c936dd876b1d8e4a0d11c96dff0353ea28cb8d15cb8dcec781d546a4bc"
+    },
+    "retained_as": "current/transaction/src/program-image.bin.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/abi.c",
+    "original": {
+      "bytes": 802,
+      "sha256": "109df7581c2dffeae7738f2cc6583c291fe100abdf9582e8c7924a23ae4fd91c"
+    },
+    "retained_as": "current/helper/abi.c.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/actual-0.d",
+    "original": {
+      "bytes": 1534,
+      "sha256": "965e0aff45306c456c93fb3e5155edc9b54f3967fa9309348f6e19234177206f"
+    },
+    "retained_as": "current/helper/actual-0.d.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/actual-1.d",
+    "original": {
+      "bytes": 1387,
+      "sha256": "992893e4dda1686f6c692ee1cc63790c8b1ff4332ca8f48fb8c84b49b6b74d27"
+    },
+    "retained_as": "current/helper/actual-1.d.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-0.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "31eb2c85dda8ee90707dd431f2718cd39a5c526355c2bf8fe4fb8de15c2d2862"
+    },
+    "retained_as": "current/helper/command-0.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-0.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-0.stdout",
+    "original": {
+      "bytes": 17,
+      "sha256": "08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989"
+    },
+    "retained_as": "current/helper/command-0.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-1.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "4cb7d072068cb16c0af975449b8481eea1d7892ca1f5ba3ea11b289923e60d4b"
+    },
+    "retained_as": "current/helper/command-1.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-1.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-1.stdout",
+    "original": {
+      "bytes": 7,
+      "sha256": "a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9"
+    },
+    "retained_as": "current/helper/command-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-10.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "779f6231e4b4f55fdc4242d34d90ae7ffdf973e982c8e4ed8ea441a08d6aafd6"
+    },
+    "retained_as": "current/helper/command-10.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-10.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-10.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-11.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "4bfaf396fd717a335711758b5be986b963e2dc7f5bd9f5145ff8178e2e038160"
+    },
+    "retained_as": "current/helper/command-11.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-11.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-11.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-2.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "6eb6e4075887e3ed60d44513f33bdf1d59a28d72521150b5c36b9a3869f99fad"
+    },
+    "retained_as": "current/helper/command-2.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-2.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-2.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-3.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "8318533e79d2b30533590519086e293591947d1e568c8c99e871a1c0ace19cf0"
+    },
+    "retained_as": "current/helper/command-3.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-3.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-3.stdout",
+    "original": {
+      "bytes": 1194,
+      "sha256": "46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462"
+    },
+    "retained_as": "current/helper/command-3.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-4.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "3b79c01cf681954e46b1e0408deb12b9e640a85fc82739686c70a3a3a11b318c"
+    },
+    "retained_as": "current/helper/command-4.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-4.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-4.stdout",
+    "original": {
+      "bytes": 11345,
+      "sha256": "f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70"
+    },
+    "retained_as": "current/helper/command-4.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-5.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "b688e977115dbc481d055e1b1c4a7abf309b75fa26039462f825951711ffcc00"
+    },
+    "retained_as": "current/helper/command-5.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-5.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-5.stdout",
+    "original": {
+      "bytes": 41,
+      "sha256": "2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67"
+    },
+    "retained_as": "current/helper/command-5.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-6.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "f642e1f73821acd0b4d83bccff9a4ef4f0289b8f222e078500d59789c6cc1f25"
+    },
+    "retained_as": "current/helper/command-6.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-6.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-6.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-7.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "efc8362ff0c2302aa8bae705aba8e75b8cf2bafbe342f81d4633896dbfaf4b96"
+    },
+    "retained_as": "current/helper/command-7.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-7.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-7.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-8.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "3b475f792a2a56c4ac5d7f9a0409daa9679919801d8cbb189e65cbe068698074"
+    },
+    "retained_as": "current/helper/command-8.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-8.stderr",
+    "original": {
+      "bytes": 4277,
+      "sha256": "6d76fbc99786386650460d386d87398be23d6da1c4cff8eac3bc7cf0335d649b"
+    },
+    "retained_as": "current/helper/command-8.stderr.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-8.stdout",
+    "original": {
+      "bytes": 28630,
+      "sha256": "08996ce5edb32d9ee396c830780e26fa507b16617c2689e71013dfa8ef0d8393"
+    },
+    "retained_as": "current/helper/command-8.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-9.lifecycle.json",
+    "original": {
+      "bytes": 87,
+      "sha256": "fe24fa764934266aec0f49b249adde7d94713e0e1d3c634bfe84a8783801fd40"
+    },
+    "retained_as": "current/helper/command-9.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-9.stderr",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/command-9.stdout",
+    "original": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retained_as": "driver-queries/query-1.stdout.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/discover-0.d",
+    "original": {
+      "bytes": 1534,
+      "sha256": "965e0aff45306c456c93fb3e5155edc9b54f3967fa9309348f6e19234177206f"
+    },
+    "retained_as": "current/helper/actual-0.d.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/discover-1.d",
+    "original": {
+      "bytes": 1387,
+      "sha256": "992893e4dda1686f6c692ee1cc63790c8b1ff4332ca8f48fb8c84b49b6b74d27"
+    },
+    "retained_as": "current/helper/actual-1.d.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/helper.c",
+    "original": {
+      "bytes": 851,
+      "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac"
+    },
+    "retained_as": "current/helper/helper.c.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-770133-1792746159802187283-0/inputs/native-770133-1/owner.h",
+    "original": {
+      "bytes": 333,
+      "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3"
+    },
+    "retained_as": "current/helper/owner.h.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-711679-1792744390893141027-0/.ash-build/ash-host-711679-0/native-build.log",
+    "original": {
+      "bytes": 6049,
+      "sha256": "1cbf25a3ed8acb84eb75a3581c0ce859ba0b7e6eda39fd08e771c969f05eceeb"
+    },
+    "retained_as": "file-policy-refusal/transaction/native-build.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-711679-1792744390893141027-0/.ash-build/ash-host-711679-0/checked-link/invocation.json",
+    "original": {
+      "bytes": 19841,
+      "sha256": "69000861eaea0e04253099df77a1ceef9f6efa454e6fe607d912d0409a5fe6d9"
+    },
+    "retained_as": "file-policy-refusal/transaction/checked-link/invocation.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-711679-1792744390893141027-0/.ash-build/ash-host-711679-0/checked-link/limits.json",
+    "original": {
+      "bytes": 226,
+      "sha256": "93575168186a8de8024b978a3026d0aec4969390e17989ee9802661059c20ad2"
+    },
+    "retained_as": "current/transaction/checked-link/limits.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-711679-1792744390893141027-0/.ash-build/ash-host-711679-0/checked-link/cargo-0/cargo.lifecycle.json",
+    "original": {
+      "bytes": 112,
+      "sha256": "9c9d118a30f0affb41224aa1f7674ca4c8ec922716af21691b3c1b6066e0334d"
+    },
+    "retained_as": "file-policy-refusal/transaction/checked-link/cargo-0/cargo.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-711679-1792744390893141027-0/.ash-build/ash-host-711679-0/checked-link/cargo-1/cargo.lifecycle.json",
+    "original": {
+      "bytes": 108,
+      "sha256": "a833f1240f44baa2e75d09f8d650ec2cae9fc9f07f7836c9ed82d805c7728290"
+    },
+    "retained_as": "file-policy-refusal/transaction/checked-link/cargo-1/cargo.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-669657-1792743523526422768-0/.ash-build/ash-host-669657-0/native-build.log",
+    "original": {
+      "bytes": 6029,
+      "sha256": "e7905419f5256e29a4d1a71252f093d011a687abe19c127aa1b8f23030a5ca06"
+    },
+    "retained_as": "file-cap-refusal/transaction/native-build.log.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-669657-1792743523526422768-0/.ash-build/ash-host-669657-0/checked-link/invocation.json",
+    "original": {
+      "bytes": 19841,
+      "sha256": "5e9640b7a267b520295936e32a26c4d9d0a0e8feeb8812a6f27e57d313e79e02"
+    },
+    "retained_as": "file-cap-refusal/transaction/checked-link/invocation.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-669657-1792743523526422768-0/.ash-build/ash-host-669657-0/checked-link/limits.json",
+    "original": {
+      "bytes": 226,
+      "sha256": "11790a9cadb51a9dafcd5d9a64c7c70c8fe62c1aad5f2af72325f6bbdffdd98a"
+    },
+    "retained_as": "file-cap-refusal/transaction/checked-link/limits.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-669657-1792743523526422768-0/.ash-build/ash-host-669657-0/checked-link/cargo-0/cargo.lifecycle.json",
+    "original": {
+      "bytes": 112,
+      "sha256": "91e17fd2eb68ad90c397cdfc0b00c47b637f7654e76303b8a0b0d53bc79b779e"
+    },
+    "retained_as": "file-cap-refusal/transaction/checked-link/cargo-0/cargo.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  },
+  {
+    "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-native-build-669657-1792743523526422768-0/.ash-build/ash-host-669657-0/checked-link/cargo-1/cargo.lifecycle.json",
+    "original": {
+      "bytes": 108,
+      "sha256": "7188623cbe402a3383ca8a8dce85ca68fb8248bfddb384082034f0113acc2b7d"
+    },
+    "retained_as": "file-cap-refusal/transaction/checked-link/cargo-1/cargo.lifecycle.json.gz",
+    "encoding": "gzip",
+    "decoded_equal": true
+  }
+]

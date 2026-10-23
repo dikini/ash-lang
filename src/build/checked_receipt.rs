@@ -90,6 +90,26 @@ pub(super) fn pin(bytes: &[u8], work: &mut TypeWorkBudget) -> Result<ArtifactPin
 }
 
 impl ProducerReceipt {
+    #[cfg(test)]
+    pub(super) fn substituted_configuration_data_for_test(&self, pin: ArtifactPin) -> Self {
+        let mut data = self.clone();
+        data.fields[ReceiptField::BuildConfiguration as usize] = Some(pin);
+        data
+    }
+    // Independently match the final observation chain before comparing its
+    // earlier native sidecar. This cloned data grants no applicability/authority.
+    pub(super) fn before_root_link(
+        &self,
+        bytes: &[u8],
+        limits: super::checked_link::Limits,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ReceiptFailure> {
+        let prior = super::checked_link::matches(bytes, limits, self, work)?;
+        let mut receipt = self.clone();
+        receipt.fields[ReceiptField::BuildConfiguration as usize] = Some(prior);
+        Ok(receipt)
+    }
+
     pub fn role(&self) -> ProducerRole {
         self.role
     }
@@ -783,7 +803,29 @@ impl ReceiptSeed {
         );
         Ok(())
     }
-    pub(super) fn finalize(mut self, file: &Path) -> Result<Vec<u8>, ReceiptFailure> {
+    pub(super) fn bind_root_link(
+        &mut self,
+        bytes: &[u8],
+        limits: super::checked_link::Limits,
+    ) -> Result<(), ReceiptFailure> {
+        if self.receipt.role != ProducerRole::CheckedPreparation {
+            return Err(ReceiptFailure::Association);
+        }
+        let (before, record) =
+            super::checked_link::binding(bytes, limits, &self.receipt, &mut self.work)?;
+        self.receipt.fields[ReceiptField::BuildConfiguration as usize] = Some(
+            super::checked_link::configuration_binding(before, record, &mut self.work)?,
+        );
+        Ok(())
+    }
+    pub(super) fn finalize(self, file: &Path) -> Result<Vec<u8>, ReceiptFailure> {
+        self.finalize_with_root_link(file, None)
+    }
+    pub(super) fn finalize_with_root_link(
+        mut self,
+        file: &Path,
+        root_link: Option<(&[u8], super::checked_link::Limits)>,
+    ) -> Result<Vec<u8>, ReceiptFailure> {
         if self.configuration.is_none()
             || self
                 .receipt
@@ -798,6 +840,10 @@ impl ReceiptSeed {
             } else {
                 observe_elf(file, self.limits.artifact_bytes, &mut self.work)?
             });
+        if let Some((bytes, limits)) = root_link {
+            self.receipt
+                .before_root_link(bytes, limits, &mut self.work)?;
+        }
         self.receipt.encode(&mut self.work, self.limits)
     }
 }

@@ -8,8 +8,9 @@
 mod artifacts;
 mod bridge;
 mod checked_admission;
-mod checked_producer;
+mod checked_link;
 mod checked_native_build;
+mod checked_producer;
 mod checked_receipt;
 mod emit;
 mod gas;

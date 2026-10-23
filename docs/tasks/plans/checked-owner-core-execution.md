@@ -181,8 +181,16 @@ Public execution remains closed.
    records four initial controls, then 34 distinct tests and Clippy passing. The
    final static test built the artifact before a test-only sidecar path failure;
    its narrow repair now passes the fresh static association test and Clippy,
-   yielding 35 distinct passing tests with source qualifications. Final review
-   and retention remain pending. These observations
+   yielding 35 distinct passing tests with source qualifications. PR113 is retained
+   at `a2f1c938`; review/retention/PM links are in the task. The next slice captures
+   actual root-link argv/response/map and transient inputs before cleanup, with
+   bounded checked Cargo and the same receipt/final-ELF association. The current
+   private BFD descriptor proxy and independent raw-marker checks pass Clippy
+   and six bounded controls; the actual static gate still refuses BFD map framing
+   after a nonregular-map-destination diagnostic. Rejected stdout was not retained.
+   The [partial product record](../evidence/checked-owner-core-execution/root-link-provenance/README.md)
+   preserves that blocker; canonical map/artifact/mutant verification is pending.
+   These observations
    do not discharge complete closure or protected deployment. Freeze bounded deterministic receipt/plan and policy versions binding the full checked
    required closure, original operation/bridge/payload/facts mappings, native/
    headers/runtime/tool/config hashes, mode/role/target, finite capacities and
