@@ -915,3 +915,9 @@ not establish the new caller or deficit. Keep complete original associations,
 fresh independent admission and the existing runtime dependency refusal. Final
 static specification, matrix/bounds/startup refresh, affected checks and current
 PR review remain required; PM schedules the subsequent connected F-core gate.
+
+The [fresh two-case observation](../evidence/checked-owner-dependencies/row-reuse-current-paths/README.md)
+now locates the tested failure paths without measuring their total deficit.
+Any further structural-data reuse needs demonstrated repetition and exact
+context/depth ownership. Rebase onto the actual retained producer tip before
+next verification or product repair, preserving all current partial evidence.

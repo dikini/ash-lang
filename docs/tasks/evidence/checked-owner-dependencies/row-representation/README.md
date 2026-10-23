@@ -34,7 +34,7 @@ Core admission remain independent. This record grants no execution permission.
   stops. Its base image completes at 261284 with exact/prefix/short/spent/fresh
   and coherent parameter/Host controls. This is a measured base-case reduction,
   not required Row-image fit.
-- Root assigns the distinct still-unrun Access case separately as `22995` on the
+- After the stopped batch, root assigns the distinct Access case separately as `22995` on the
   same already-built artifact. It selects one test and returns direct
   `ImageFailure::Resource`; the static coherent-erasure helper and independent
   Core descriptor refusal precede it. This differs from the earlier conversion

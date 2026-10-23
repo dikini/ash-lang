@@ -520,3 +520,12 @@ Resource. Their current failure paths remain unlocalized after the change.
 Both canonical images, subsequent image bounds/hostiles, startups, final spec,
 regressions, Clippy and current-head review remain delivery gates. All whole-F3
 criteria stay open; this checkpoint does not authorize native activation.
+
+The [current Row-reuse failure paths](evidence/checked-owner-dependencies/row-reuse-current-paths/README.md)
+are now observed on the tested artifact: Row reaches final independent handler
+signature substitution, while Access exhausts the actual root meter during a
+nested Row rebuild in final Type reconstruction. Both remain genuine canonical
+failures; no total deficit or repeated subtree is inferred. A nested-Row reuse
+extension still needs actual repetition and complete subtree-depth evidence.
+Preserve this checkpoint before rebasing onto the next retained producer slice;
+no old result transfers to that newer source context.
