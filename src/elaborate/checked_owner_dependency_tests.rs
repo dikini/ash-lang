@@ -42,6 +42,13 @@ fn checked_owner_dependency_canonical_source_retains_exact_parent() {
             .any(|header| Arc::ptr_eq(header, &child.original))
     );
     validate_latest_payload_core(&graph);
+    let parent = producer
+        .source_resource_code()
+        .unwrap()
+        .headers()
+        .find(|header| header.original.spelling == "Parent")
+        .expect("actual independent parent header from the same checked source");
+    crate::foreign::assert_dependent_header_refused_before_entry(parent, child);
 }
 
 fn linked_core(
@@ -362,7 +369,76 @@ fn checked_owner_dependency_retained_access_borrow_requires_exact_window() {
     );
     let source = access_borrow_source();
     linked_core(&source, CONSUMER);
-    linked_core(&row_source_from(&source), CONSUMER);
+    let row_source = row_source_from(&source);
+    let (row_core, row_provenance) = linked_core(&row_source, CONSUMER);
+    let window = row_core
+        .nodes()
+        .iter()
+        .find_map(|node| match &node.kind {
+            crate::core::EffectExprKind::Operation(
+                crate::core::EffectOperation::SourceCopyWindow(window),
+            ) => Some(window),
+            _ => None,
+        })
+        .expect("actual copied checked access window");
+    assert_eq!(window.family().declaration().window_parameter(), 1);
+    let access_span = window.family().declaration().origin().primary_span();
+    let parameters = crate::foreign::source_owner::row_foreign_parameters(
+        window.family().nominal(),
+        row_core.registry(),
+        access_span,
+        &mut TypeWorkBudget::default(),
+    )
+    .unwrap();
+    assert_eq!(parameters.len(), window.arguments().len());
+    match crate::foreign::source_owner::row_owner_parameters(
+        window.family().nominal(),
+        row_core.registry(),
+        access_span,
+        &mut TypeWorkBudget::default(),
+    ) {
+        Err(error) => assert!(
+            !error.is_resource_exhaustion(),
+            "Access kind is not State authority"
+        ),
+        Ok(_) => panic!("an original Access must not acquire Owner role"),
+    }
+
+    assert_eq!(window.arguments().iter().filter(|argument| matches!(argument, crate::types::KindedArgument::RowArg(row) if !row.known().is_empty())).count(), 2);
+    let view = crate::types::IterativeTypeOwner::new(crate::types::Type::ForeignOwnerApply(
+        window.family().nominal(),
+        crate::types::clone_kinded_arguments_with_budget(
+            window.arguments().iter(),
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap(),
+    ));
+    assert!(
+        crate::core::source_window::matches_static_view_type(
+            window.family(),
+            window.arguments(),
+            &view,
+            &mut TypeWorkBudget::default()
+        )
+        .unwrap()
+    );
+    assert!(
+        !crate::core::source_window::matches_view_type(
+            window.family(),
+            window.arguments(),
+            &view,
+            &mut TypeWorkBudget::default()
+        )
+        .unwrap(),
+        "existing executable matcher remains Type-only"
+    );
+    let row_request = "perform QueryChild<{| Before}, W, H, C, S, {| After}>";
+    assert_eq!(row_source.matches(row_request).count(), 1);
+    source_refuses(&row_source.replace(
+        row_request,
+        "perform QueryChild<{| After}, W, H, C, S, {| Before}>",
+    ));
+    crate::build::checked_owner_dependency_image_controls(&row_core, &row_provenance);
     for (before, after) in [
         (
             "copy_window ChildView<W, H, C, S>",

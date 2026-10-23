@@ -12,6 +12,8 @@
 //! ```
 mod arena;
 mod checked_control;
+#[cfg(test)]
+pub(crate) use checked_control::assert_dependent_header_refused_before_entry;
 // Historical manifest data is needed by generic registration unit tests only.
 // Production SQLite interfaces come from passive Ash source declarations.
 #[cfg(test)]

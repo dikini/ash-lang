@@ -217,12 +217,52 @@ pub(crate) fn row_owner_parameters<'a>(
     span: Span,
     work: &mut TypeWorkBudget,
 ) -> Result<&'a [ResolvedTypeVariable], ForeignAdmissionError> {
+    row_foreign_parameters_inner(nominal, registry, span, false, work)
+}
+
+/// Complete kind vectors do not confer Owner/State authority on an Access.
+pub(crate) fn row_foreign_parameters<'a>(
+    nominal: NominalTypeId,
+    registry: &'a ResolvedRegistry,
+    span: Span,
+    work: &mut TypeWorkBudget,
+) -> Result<&'a [ResolvedTypeVariable], ForeignAdmissionError> {
+    row_foreign_parameters_inner(nominal, registry, span, true, work)
+}
+
+fn row_foreign_parameters_inner<'a>(
+    nominal: NominalTypeId,
+    registry: &'a ResolvedRegistry,
+    span: Span,
+    checked_access: bool,
+    work: &mut TypeWorkBudget,
+) -> Result<&'a [ResolvedTypeVariable], ForeignAdmissionError> {
     charge(work, registry.source_owner_candidate_count(), span)?;
-    let (prepared, index, _, parameters) = registry
+    let parameters = if let Some((prepared, index, _, parameters)) = registry
         .source_owner_candidates()
         .find(|(_, _, candidate, _)| *candidate == nominal)
-        .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
-    authenticate_source_owner_candidate(prepared, index, nominal, parameters, registry, work)?;
+    {
+        authenticate_source_owner_candidate(prepared, index, nominal, parameters, registry, work)?;
+        parameters
+    } else if checked_access {
+        charge(work, registry.source_foreign_nominal_count(), span)?;
+        let (prepared, role, _, parameters) = registry
+            .source_foreign_nominal_candidates()
+            .find(|(_, _, candidate, _)| *candidate == nominal)
+            .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, span))?;
+        let super::source_contract::PreparedForeignNominalRole::Access(_) = role else {
+            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+        };
+        if prepared.checked_contract().is_none() {
+            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+        }
+        super::source_access::authenticate_source_foreign_nominal_candidate(
+            prepared, role, nominal, parameters, registry, work,
+        )?;
+        parameters
+    } else {
+        return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+    };
     charge(work, parameters.len(), span)?;
     if !parameters
         .iter()

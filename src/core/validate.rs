@@ -11540,7 +11540,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let mut owner_work = TypeWorkBudget::with_limit(
                     self.type_work_limit.saturating_sub(self.type_work.get()),
                 );
-                let result = crate::foreign::source_owner::row_owner_parameters(
+                let result = crate::foreign::source_owner::row_foreign_parameters(
                     *nominal,
                     registry,
                     span,

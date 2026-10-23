@@ -8421,21 +8421,26 @@ impl Resolver {
                     self.source_access_window_positions
                         .insert(id, prepared.accesses()[index].window_parameter());
                 }
-                if let crate::foreign::source_contract::PreparedForeignNominalRole::Owner(index) =
-                    role
-                {
-                    let original = &prepared.owners()[index];
-                    self.type_work
-                        .charge(original.parameters().len())
-                        .map_err(|_| {
-                            error(
-                                ResolveReason::TypeResourceExhausted,
-                                written_span,
-                                "source owner kind selection exceeded its budget",
-                            )
-                        })?;
-                    if original
-                        .parameters()
+                let row_parameters = match role {
+                    crate::foreign::source_contract::PreparedForeignNominalRole::Owner(index) => {
+                        Some(prepared.owners()[index].parameters())
+                    }
+                    crate::foreign::source_contract::PreparedForeignNominalRole::Access(index)
+                        if prepared.checked_contract().is_some() =>
+                    {
+                        Some(prepared.accesses()[index].parameters())
+                    }
+                    _ => None,
+                };
+                if let Some(parameters) = row_parameters {
+                    self.type_work.charge(parameters.len()).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            written_span,
+                            "source owner kind selection exceeded its budget",
+                        )
+                    })?;
+                    if parameters
                         .iter()
                         .any(|parameter| parameter.kind() == &Kind::EffectRow)
                     {
@@ -10587,19 +10592,28 @@ impl Resolver {
                                         "source owner selection exceeded its budget",
                                     )
                                 })?;
+                                let imported_parameters = self
+                                    .imported
+                                    .source_owner(family)
+                                    .map(|owner| owner.parameters().as_ref())
+                                    .or_else(|| {
+                                        self.imported
+                                            .source_access(family)
+                                            .filter(|access| {
+                                                access.prepared().checked_contract().is_some()
+                                            })
+                                            .map(|access| access.parameters().as_ref())
+                                    });
                                 let imported_row_owner =
-                                    if let Some(owner) = self.imported.source_owner(family) {
-                                        self.type_work.charge(owner.parameters().len()).map_err(
-                                        |_| {
+                                    if let Some(parameters) = imported_parameters {
+                                        self.type_work.charge(parameters.len()).map_err(|_| {
                                             error(
                                                 ResolveReason::TypeResourceExhausted,
                                                 current.span,
-                                                "source owner kind selection exceeded its budget",
+                                                "source foreign kind selection exceeded its budget",
                                             )
-                                        },
-                                    )?;
-                                        owner
-                                            .parameters()
+                                        })?;
+                                        parameters
                                             .iter()
                                             .any(|parameter| parameter.kind == Kind::EffectRow)
                                     } else {

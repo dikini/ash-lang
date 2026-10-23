@@ -2543,7 +2543,7 @@ impl<'a> KindEnvironments<'a> {
         {
             let original = if let Some(registry) = self.owner_registry {
                 budget
-                    .charge(registry.source_owner_candidate_count())
+                    .charge(registry.source_foreign_nominal_count())
                     .map_err(|_| {
                         KindFailure::resource(
                             origin,
@@ -2551,11 +2551,11 @@ impl<'a> KindEnvironments<'a> {
                         )
                     })?;
                 if registry
-                    .source_owner_candidates()
+                    .source_foreign_nominal_candidates()
                     .any(|(_, _, nominal, _)| nominal == identity)
                 {
                     Some(
-                        crate::foreign::source_owner::row_owner_parameters(
+                        crate::foreign::source_owner::row_foreign_parameters(
                             identity, registry, origin, budget,
                         )
                         .map_err(|error| {
@@ -2582,6 +2582,12 @@ impl<'a> KindEnvironments<'a> {
                 self.imported_resource_owners
                     .and_then(|imported| imported.source_owner(identity))
                     .map(|owner| owner.parameters().as_ref())
+                    .or_else(|| {
+                        self.imported_resource_owners
+                            .and_then(|imported| imported.source_access(identity))
+                            .filter(|access| access.prepared().checked_contract().is_some())
+                            .map(|access| access.parameters().as_ref())
+                    })
             });
             if let Some(original) = original {
                 if original.len() != parameters.len() {
@@ -2628,7 +2634,47 @@ impl<'a> KindEnvironments<'a> {
         origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
-        let original = owner.parameters().as_ref();
+        self.insert_source_foreign_nominal(
+            owner.nominal(),
+            owner.parameters().as_ref(),
+            parameters,
+            origin,
+            budget,
+        )
+    }
+
+    /// The summary has authenticated this checked Access and its original kind
+    /// vector. Retaining its row kind does not grant native Owner authority.
+    pub(crate) fn insert_source_access_nominal(
+        &mut self,
+        access: &'a crate::foreign::source_access::CheckedForeignAccess,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        if access.prepared().checked_contract().is_none() {
+            return Err(KindFailure::internal_cause(
+                origin,
+                KindInternalCause::LinkedValueType,
+            ));
+        }
+        self.insert_source_foreign_nominal(
+            access.nominal(),
+            access.parameters().as_ref(),
+            parameters,
+            origin,
+            budget,
+        )
+    }
+
+    fn insert_source_foreign_nominal(
+        &mut self,
+        nominal: NominalTypeId,
+        original: &'a [crate::resolved::ResolvedTypeVariable],
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        origin: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
         budget.charge(original.len()).map_err(|_| {
             KindFailure::resource(origin, "owner kind selection exceeded its work budget")
         })?;
@@ -2653,7 +2699,7 @@ impl<'a> KindEnvironments<'a> {
                 ));
             }
         }
-        self.insert_nominal(owner.nominal(), parameters, origin, budget)?;
+        self.insert_nominal(nominal, parameters, origin, budget)?;
         if original
             .iter()
             .any(|parameter| parameter.kind == Kind::EffectRow)
@@ -2661,11 +2707,11 @@ impl<'a> KindEnvironments<'a> {
             budget.charge(1).map_err(|_| {
                 KindFailure::resource(origin, "owner kind retention exceeded its work budget")
             })?;
-            if !self.row_foreign_owners.contains_key(&owner.nominal()) {
+            if !self.row_foreign_owners.contains_key(&nominal) {
                 self.row_foreign_owners.try_reserve(1).map_err(|_| {
                     KindFailure::resource(origin, "owner kind storage could not be reserved")
                 })?;
-                self.row_foreign_owners.insert(owner.nominal(), original);
+                self.row_foreign_owners.insert(nominal, original);
             }
         }
         Ok(())
@@ -5851,7 +5897,7 @@ pub(crate) fn canonical_body_free_environments<'a>(
                 )?;
             }
             Type::ForeignOwnerApply(nominal, arguments) => {
-                let parameters = crate::foreign::source_owner::row_owner_parameters(
+                let parameters = crate::foreign::source_owner::row_foreign_parameters(
                     *nominal,
                     registry,
                     _span,

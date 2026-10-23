@@ -476,6 +476,27 @@ pub(in crate::core) fn specialize_source_projection(
     )
 }
 
+/// Borrows only unchanged original provenance for this immediate comparison.
+/// Substitution, fresh identities and all target comparisons remain fresh.
+pub(in crate::core) fn specialize_source_projection_borrowing_origins<'a>(
+    original: &'a impl super::projection::ProjectionView,
+    copied: &std::collections::HashMap<NodeId, NodeId>,
+    fresh: &SourceScopeFreshening<'_, '_>,
+    substitution: &ProviderTemplateSubstitution<'_>,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<super::projection::BorrowedOriginProjection<'a>, ValidationError> {
+    let projection = specialize_projection_parts_with_atom(
+        original,
+        copied,
+        |atom, work| fresh.atom(atom, work),
+        substitution,
+        renaming,
+        work,
+    )?;
+    super::projection::BorrowedOriginProjection::new(projection, original, work)
+}
+
 pub(in crate::core) fn specialize_projection(
     original: &super::projection::NodeProjection,
     copied: &std::collections::HashMap<NodeId, NodeId>,
@@ -495,6 +516,37 @@ pub(in crate::core) fn specialize_projection(
 }
 
 fn specialize_projection_with_atom(
+    original: &impl super::projection::ProjectionView,
+    copied: &std::collections::HashMap<NodeId, NodeId>,
+    atom: impl FnMut(
+        &super::projection::Atom,
+        &mut TypeWorkBudget,
+    ) -> Result<super::projection::Atom, ValidationError>,
+    substitution: &ProviderTemplateSubstitution<'_>,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<super::projection::NodeProjection, ValidationError> {
+    let mut result = specialize_projection_parts_with_atom(
+        original,
+        copied,
+        atom,
+        substitution,
+        renaming,
+        work,
+    )?;
+    result
+        .origins
+        .try_reserve_exact(original.origins().len())
+        .map_err(|_| super::resource())?;
+    for origin in original.origins() {
+        result
+            .origins
+            .push(super::RetainedHandlerOrigin::copy(origin, work)?);
+    }
+    Ok(result)
+}
+
+fn specialize_projection_parts_with_atom(
     original: &impl super::projection::ProjectionView,
     copied: &std::collections::HashMap<NodeId, NodeId>,
     mut atom: impl FnMut(
@@ -541,10 +593,6 @@ fn specialize_projection_with_atom(
         .metadata
         .try_reserve_exact(original.metadata().len())
         .map_err(|_| super::resource())?;
-    result
-        .origins
-        .try_reserve_exact(original.origins().len())
-        .map_err(|_| super::resource())?;
     for child in original.children() {
         result.children.push(mapped(*child)?);
     }
@@ -555,11 +603,6 @@ fn specialize_projection_with_atom(
         result
             .metadata
             .push(substitution.metadata(metadata, renaming, work)?);
-    }
-    for origin in original.origins() {
-        result
-            .origins
-            .push(super::RetainedHandlerOrigin::copy(origin, work)?);
     }
     Ok(result)
 }

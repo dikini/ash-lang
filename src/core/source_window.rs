@@ -65,7 +65,7 @@ impl SourceCopyWindowNode {
         ty: &Type,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, ()> {
-        matches_view_type(self.family(), self.arguments(), ty, work)
+        matches_static_view_type(self.family(), self.arguments(), ty, work)
     }
     pub(crate) fn arguments(&self) -> &[KindedArgument] {
         &self.descriptor.arguments
@@ -156,4 +156,46 @@ pub(crate) fn matches_view_type(
         head = function;
     }
     Ok(*head == Type::Nominal(family.nominal()))
+}
+
+/// Checked static descriptors retain complete kind tags. Executable callers
+/// keep using the separate Type-only matcher above.
+pub(crate) fn matches_static_view_type(
+    family: &CheckedForeignAccess,
+    arguments: &[KindedArgument],
+    ty: &Type,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    let Type::ForeignOwnerApply(nominal, actuals) = ty else {
+        return matches_view_type(family, arguments, ty, work);
+    };
+    work.charge(arguments.len())?;
+    if family.prepared().checked_contract().is_none()
+        || !arguments
+            .iter()
+            .any(|argument| matches!(argument, KindedArgument::RowArg(_)))
+    {
+        return Ok(false);
+    }
+    if *nominal != family.nominal()
+        || actuals.len() != arguments.len()
+        || arguments.len() != family.parameters().len()
+    {
+        return Ok(false);
+    }
+    for ((expected, actual), formal) in arguments
+        .iter()
+        .zip(actuals)
+        .zip(family.parameters().iter())
+    {
+        if !matches!(
+            (&formal.kind, actual),
+            (crate::types::Kind::Type, KindedArgument::TypeArg(_))
+                | (crate::types::Kind::EffectRow, KindedArgument::RowArg(_))
+        ) || !crate::types::same_kinded_argument_with_budget(expected, actual, work)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

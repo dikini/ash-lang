@@ -487,3 +487,15 @@ validation. The access Borrow base passes, while its exact-line Row fixture
 correction remains uncompiled. This is pending repair, not a partial-budget waiver
 or completed dependency delivery. The source-only correction and all old failures
 remain qualified separately; no native activation or F3/F-core completion follows.
+
+
+The [carrier and reconstruction checkpoint](evidence/checked-owner-dependencies/carrier-and-reconstruction/README.md)
+records the rejected conditional-row hypothesis and the current checked Access
+full-kinded carrier progress. The latest frozen batch passes seven focused
+controls and eight of ten dependency tests. Genuine Access now reaches
+independent Core, and genuine dependent headers still refuse runtime entry
+before owner/callback activity. Both required full-Row private images remain
+work failures; later image hostiles, startups, final specification wording,
+affected regressions, Clippy and current-head review remain pending. The
+consuming-row implementation has semantic parity evidence but no demonstrated
+required-image budget fit. No broader F3, runtime or F-core criterion is closed.

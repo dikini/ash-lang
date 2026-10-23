@@ -91,6 +91,80 @@ pub(in crate::core) struct NodeProjection {
     pub(super) origins: Vec<RetainedHandlerOrigin>,
 }
 
+/// Temporary specialized metadata with exact original, unchanged provenance.
+/// It cannot outlive its original projection or escape as retained evidence.
+pub(in crate::core) struct BorrowedOriginProjection<'a> {
+    projection: NodeProjection,
+    origins: Vec<&'a Origin>,
+}
+impl<'a> BorrowedOriginProjection<'a> {
+    pub(super) fn new(
+        projection: NodeProjection,
+        original: &'a impl ProjectionView,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        let mut origins = Vec::new();
+        // The shared projection construction already prices each retained slot.
+        origins
+            .try_reserve_exact(original.origins().len())
+            .map_err(|_| resource())?;
+        for origin in original.origins() {
+            let mut current = origin;
+            let mut admitted = false;
+            for _ in 0..=crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
+                // Visit the original chain without allocating a duplicate.
+                charge(work, 1)?;
+                match current {
+                    Origin::Source(_) => {
+                        admitted = true;
+                        break;
+                    }
+                    Origin::Generated { cause, .. } => current = cause,
+                    Origin::Related { primary, .. } => current = primary,
+                }
+            }
+            if !admitted {
+                return Err(resource());
+            }
+            origins.push(origin);
+        }
+        Ok(Self {
+            projection,
+            origins,
+        })
+    }
+    pub(in crate::core) fn replace_effects(
+        &mut self,
+        row: EffectRow,
+    ) -> Result<(), ValidationError> {
+        self.projection.replace_effects(row)
+    }
+    pub(in crate::core) fn same_borrowed(
+        &self,
+        other: &BorrowedNodeProjection<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        same_projection(self, other, work)
+    }
+}
+impl ProjectionView for BorrowedOriginProjection<'_> {
+    fn node(&self) -> NodeId {
+        self.projection.node
+    }
+    fn children(&self) -> &[NodeId] {
+        &self.projection.children
+    }
+    fn atoms(&self) -> &[Atom] {
+        &self.projection.atoms
+    }
+    fn metadata(&self) -> impl ExactSizeIterator<Item = MetadataView<'_>> {
+        self.projection.metadata.iter().map(Metadata::view)
+    }
+    fn origins(&self) -> impl ExactSizeIterator<Item = &Origin> {
+        self.origins.iter().copied()
+    }
+}
+
 fn invalid() -> ValidationError {
     ValidationError::new(crate::core::ValidationReason::NodeType, None)
 }
@@ -782,6 +856,7 @@ impl NodeProjection {
     ) -> Result<bool, ValidationError> {
         same_projection(self, other, work)
     }
+    #[cfg(test)]
     pub(in crate::core) fn same_borrowed(
         &self,
         other: &BorrowedNodeProjection<'_>,
@@ -849,4 +924,172 @@ fn same_projection(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod borrowed_origin_tests {
+    use super::*;
+    use crate::core::provider::specialization::{
+        ProviderFreshening, ProviderTemplateSubstitution, SourceScopeFreshening,
+        specialize_source_projection, specialize_source_projection_borrowing_origins,
+    };
+
+    #[test]
+    fn borrowed_original_origins_keep_donors_depth_and_exact_work() {
+        let source = crate::source::SourceFile::new("origin.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let origin = Origin::Related {
+            primary: Box::new(Origin::Generated {
+                cause: Box::new(Origin::Source(span)),
+                reason: crate::source::GeneratedReason::TypeChecking,
+            }),
+            related: vec![span, span],
+        };
+        let node = NodeId::new(crate::core::dialect::ArenaId::new(1), 0);
+        let unit = Type::Unit;
+        let row = EffectRow::empty();
+        let original = BorrowedNodeProjection {
+            node,
+            children: vec![],
+            atoms: vec![],
+            metadata: vec![MetadataView::Type(&unit), MetadataView::Row(&row)],
+            origins: vec![&origin],
+        };
+        let copied = std::collections::HashMap::from([(node, node)]);
+        let types = std::collections::HashMap::new();
+        let rows = std::collections::HashMap::new();
+        let pending = std::collections::HashMap::new();
+        let variables = std::collections::HashMap::new();
+        let nominals = std::collections::HashMap::new();
+        let sigma = ProviderTemplateSubstitution {
+            types: &types,
+            rows: &rows,
+            pending: &pending,
+        };
+        let renaming = crate::types::TemplateIdentityRenaming {
+            variables: &variables,
+            nominals: &nominals,
+        };
+        let fresh = ProviderFreshening {
+            binders: &[],
+            types: &[],
+            handlers: &[],
+            resumes: &[],
+            nominals: &[],
+            lexicals: &[],
+        };
+        let lookup =
+            SourceScopeFreshening::new(&fresh, &variables, &mut TypeWorkBudget::default()).unwrap();
+        let make = |work: &mut TypeWorkBudget| {
+            let value = specialize_source_projection_borrowing_origins(
+                &original, &copied, &lookup, &sigma, &renaming, work,
+            )?;
+            assert!(value.same_borrowed(&original, work)?);
+            Ok::<_, ValidationError>(())
+        };
+        let mut measured = TypeWorkBudget::default();
+        make(&mut measured).unwrap();
+        let cost = measured.used();
+        let mut retained_work = TypeWorkBudget::default();
+        let owned = specialize_source_projection(
+            &original,
+            &copied,
+            &lookup,
+            &sigma,
+            &renaming,
+            &mut retained_work,
+        )
+        .unwrap();
+        assert!(owned.same_borrowed(&original, &mut retained_work).unwrap());
+        assert!(cost < retained_work.used());
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                make(&mut short).unwrap_err().reason(),
+                crate::core::ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                make(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+                assert_eq!(
+                    make(&mut exact).unwrap_err().reason(),
+                    crate::core::ValidationReason::Resource
+                );
+            }
+        }
+        let donor = crate::source::SourceFile::new("donor.ash", "x").unwrap();
+        let mut target = BorrowedNodeProjection {
+            node,
+            children: vec![],
+            atoms: vec![],
+            metadata: vec![MetadataView::Type(&unit), MetadataView::Row(&row)],
+            origins: vec![&origin],
+        };
+        let donor_origin = Origin::Related {
+            primary: Box::new(Origin::Generated {
+                cause: Box::new(Origin::Source(
+                    donor
+                        .span(crate::source::ByteRange::new(0, 1).unwrap())
+                        .unwrap(),
+                )),
+                reason: crate::source::GeneratedReason::TypeChecking,
+            }),
+            related: vec![span, span],
+        };
+        target.origins[0] = &donor_origin;
+        let value = specialize_source_projection_borrowing_origins(
+            &original,
+            &copied,
+            &lookup,
+            &sigma,
+            &renaming,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert!(
+            !value
+                .same_borrowed(&target, &mut TypeWorkBudget::default())
+                .unwrap()
+        );
+        for depth in [
+            crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT,
+            crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT + 1,
+        ] {
+            let mut depth_origin = Origin::Source(span);
+            for _ in 0..depth {
+                depth_origin = Origin::Generated {
+                    cause: Box::new(depth_origin),
+                    reason: crate::source::GeneratedReason::TypeChecking,
+                };
+            }
+            let view = BorrowedNodeProjection {
+                node,
+                children: vec![],
+                atoms: vec![],
+                metadata: vec![],
+                origins: vec![&depth_origin],
+            };
+            let result = specialize_source_projection_borrowing_origins(
+                &view,
+                &copied,
+                &lookup,
+                &sigma,
+                &renaming,
+                &mut TypeWorkBudget::default(),
+            );
+            if depth == crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
+                assert!(result.is_ok());
+            } else {
+                match result {
+                    Err(e) => assert_eq!(e.reason(), crate::core::ValidationReason::Resource),
+                    Ok(_) => panic!("overdeep original must refuse"),
+                };
+            }
+        }
+    }
 }

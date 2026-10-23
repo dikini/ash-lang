@@ -564,11 +564,56 @@ fn check_view_application(
     nominal: NominalTypeId,
     application: &super::source_contract::PreparedAccessApplication,
     effect: &crate::resolved::ResolvedEffectDeclaration,
+    checked: bool,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ForeignAdmissionError> {
     use super::source_contract::PreparedOwnerArgument;
     use crate::types::Type;
     let span = application.span();
+    if let Type::ForeignOwnerApply(head, actuals) = ty {
+        if !checked {
+            return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+        }
+        charge(work, actuals.len(), span)?;
+        if *head != nominal || actuals.len() != application.arguments().len() {
+            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
+        }
+        let mut has_row = false;
+        for (actual, argument) in actuals.iter().zip(application.arguments()) {
+            charge(work, 1, span)?;
+            let formal = effect
+                .parameters
+                .get(argument.parameter())
+                .ok_or_else(|| failure(ForeignAdmissionReason::InvalidParameters, span))?;
+            let matches = match (argument, actual, &formal.kind) {
+                (
+                    PreparedOwnerArgument::Type(_),
+                    crate::types::KindedArgument::TypeArg(Type::Variable(id)),
+                    Kind::Type,
+                ) => *id == formal.id,
+                (
+                    PreparedOwnerArgument::EffectRow(_),
+                    crate::types::KindedArgument::RowArg(row),
+                    Kind::EffectRow,
+                ) => {
+                    has_row = true;
+                    row.known().is_empty()
+                        && row.tail().is_some_and(|tail| {
+                            tail.variable() == crate::types::EffectRowVariable::rigid(formal.id)
+                                && tail.lacks().is_empty()
+                        })
+                }
+                _ => false,
+            };
+            if !matches {
+                return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+            }
+        }
+        if !has_row {
+            return Err(failure(ForeignAdmissionReason::InvalidParameters, span));
+        }
+        return Ok(());
+    }
     let mut head = ty;
     for argument in application.arguments().iter().rev() {
         charge(work, 2, span)?;
@@ -719,7 +764,14 @@ pub(super) fn validate_result_signature<'a>(
                 span,
                 work,
             )?;
-            check_view_application(view, nominal, application, effect, work)?;
+            check_view_application(
+                view,
+                nominal,
+                application,
+                effect,
+                prepared.checked_contract().is_some(),
+                work,
+            )?;
             (None, keys)
         }
         PreparedAccessResult::Extent { view, keys, .. } => {
@@ -729,10 +781,18 @@ pub(super) fn validate_result_signature<'a>(
                 nominal,
                 application,
                 effect,
+                prepared.checked_contract().is_some(),
                 work,
             )?;
             let view = source_leaf(domain, view, span, work)?;
-            check_view_application(view, nominal, application, effect, work)?;
+            check_view_application(
+                view,
+                nominal,
+                application,
+                effect,
+                prepared.checked_contract().is_some(),
+                work,
+            )?;
             (Some(view), keys)
         }
     };

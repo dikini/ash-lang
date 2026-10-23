@@ -435,17 +435,26 @@ fn dependency_state_identity(
                 invalid()
             }
         };
+        charge(work, registry.source_owner_candidate_count())?;
+        let owner = registry
+            .source_owner_candidates()
+            .find(|(_, _, id, _)| id == nominal);
+        let Some((prepared, index, _, _)) = owner else {
+            // Complete Access kind tags never turn a view into native State.
+            let parameters = crate::foreign::source_owner::row_foreign_parameters(
+                *nominal, registry, span, work,
+            )
+            .map_err(map)?;
+            crate::foreign::source_owner::state_arguments(ty, *nominal, parameters, span, work)
+                .map_err(map)?;
+            return Ok(None);
+        };
         let parameters =
             crate::foreign::source_owner::row_owner_parameters(*nominal, registry, span, work)
                 .map_err(map)?;
         let arguments =
             crate::foreign::source_owner::state_arguments(ty, *nominal, parameters, span, work)
                 .map_err(map)?;
-        charge(work, registry.source_owner_candidate_count())?;
-        let (prepared, index, _, _) = registry
-            .source_owner_candidates()
-            .find(|(_, _, id, _)| id == nominal)
-            .ok_or_else(invalid)?;
         let Some(crate::foreign::source_owner::StateArgument::Type(Type::Variable(identity))) =
             arguments.get(prepared.owners()[index].owned_parameter())
         else {
@@ -5331,7 +5340,7 @@ impl SourceResourceScopeNode {
             )?;
             for (source, target) in &copy.nodes {
                 let expected = originals.get(source).ok_or_else(invalid)?;
-                let mut expected = super::provider::specialization::specialize_source_projection(
+                let mut expected = super::provider::specialization::specialize_source_projection_borrowing_origins(
                     expected,
                     &mappings,
                     &fresh_lookup,
