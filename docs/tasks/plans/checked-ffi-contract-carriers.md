@@ -1036,3 +1036,25 @@ facade import span with the existing missing-resource label. The fresh intact
 retry was unreached. Preserve that failed receipt and independent audit
 `9b845a1e`; correct only the test premise, then refresh the exact control on
 retained PR118 `2121d126c746300992e1cefccec87d24ec1414f4`.
+
+Refreshed exact control 49479 on retained PR118 passes canonical body-free
+admission, the precise missing-family refusal and fresh intact retry. Preserve
+its tested source/artifact/receipt independently of the next extension. The same
+fixture now retains original checked dependency bodies only for linking: it
+restores every temporarily moved completed export, replaces the entry with the
+fresh body-free checked consumer, then requires linking, independent Core and
+identity/fold validation. No incomplete module enters a product API. This closes
+the renamed-global cross-phase risk in this one work item, without new mutants,
+private-image machinery or runtime activation. Final scope is that extended
+control, three directly affected existing wrapper/helper controls and targeted
+Ash Clippy; whole-F3/F-core verification remains separate.
+
+Final local session 40997 passes the extended canonical/refusal/refill/link/Core/
+identity/fold control and the three named direct wrapper/helper regressions,
+with targeted `clippy::all` denied. Independent audit `ce5f2bec` confirms the
+five valid receipts, source/tool equality and owned cleanup. Ordinary inherited
+Rust warnings remain visible. The compact
+[facade evidence](../evidence/checked-owner-dependencies/body-free-facade/README.md)
+retains the prior wrong-context red and the separate source-only pass. Assemble
+one unsigned facade PR on retained PR118; no new static matrix, image machinery
+or runtime execution is selected. Original whole-F3 and F-core gates remain open.

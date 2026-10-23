@@ -69,11 +69,14 @@ fn resolve_consumer(
 
 pub(super) fn assert_body_free_dependent_facade(source: &str) {
     let graph = facade_graph(source);
-    let checked = super::checked_hidden_provider_interface_tests::check_graph(&graph)
+    let mut checked = super::checked_hidden_provider_interface_tests::check_graph(&graph)
         .expect("real dependent producer, renamed facade and consumer check canonically");
+    // Keep original checked bodies for linking, while only completed summaries
+    // participate in body-free consumer admission and the local mutation.
+    // No product API receives these temporarily incomplete modules.
     let mut summaries = checked
-        .into_iter()
-        .map(CheckedModule::into_exports)
+        .iter_mut()
+        .map(|module| std::mem::replace(&mut module.exports, ExportSummary::empty(module.module)))
         .collect::<Vec<_>>();
     let module = |name: &str| {
         graph
@@ -235,6 +238,43 @@ pub(super) fn assert_body_free_dependent_facade(source: &str) {
             .insert(child.id, removed)
             .is_none()
     );
-    crate::elaborate::check_module(resolve_consumer(&graph, &summaries).unwrap())
-        .expect("fresh intact retry after local erasure must still admit");
+    let fresh_consumer =
+        crate::elaborate::check_module(resolve_consumer(&graph, &summaries).unwrap())
+            .expect("fresh intact retry after local erasure must still admit");
+    for (module, summary) in checked.iter_mut().zip(summaries) {
+        assert_eq!(module.module(), summary.module);
+        module.exports = summary;
+    }
+    let consumer = checked
+        .iter_mut()
+        .find(|module| module.module() == graph.entry())
+        .unwrap();
+    *consumer = fresh_consumer;
+    let linked = crate::elaborate::link_modules(checked, graph.entry())
+        .expect("the body-free renamed facade closure must link");
+    let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+    let mut elaborator = crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+    let typed = elaborator
+        .synthesize_effect_module_program(&linked)
+        .unwrap();
+    let program = elaborator.finish(typed.node).unwrap();
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let core = crate::core::validate_effect_modules(program, &sources, &modules)
+        .expect("the renamed facade preserves independent Core correspondence");
+    for transformed in [
+        crate::core::transform::identity_effect_traversal(&core).unwrap(),
+        crate::core::transform::fold_effect_literal_primitives(&core).unwrap(),
+    ] {
+        crate::core::validate_effect_modules(transformed, &sources, &modules)
+            .expect("facade correspondence survives identity and literal fold");
+    }
 }
