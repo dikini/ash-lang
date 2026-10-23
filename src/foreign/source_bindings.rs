@@ -1888,4 +1888,6 @@ mod boundary_tests;
 #[cfg(test)]
 pub(crate) use boundary_tests::{
     with_eight_byte_boundary_for_test, with_recorded_boundary_for_test,
+    ClosingStage, with_eight_byte_closing_for_test,
+    with_eight_byte_body_pair_for_test,
 };

@@ -1160,6 +1160,9 @@ impl RuntimeBoundary {
         if activation != self.activation || scope != self.scope_node {
             return Err(Failure::Original);
         }
+        if !self.finish_claimed || self.finish_prepared.is_some() || self.pending.is_some() {
+            return Err(Failure::State);
+        }
         let witness = self.ledger.finish_witness(self.owner, &mut self.prepaid)?;
         self.ledger
             .source_continued(self.owner, witness, &mut self.prepaid)

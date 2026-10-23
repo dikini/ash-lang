@@ -213,8 +213,8 @@ Public execution remains closed.
    four seals precede final hash/ELF inspection. The
    [candidate record](../evidence/checked-owner-core-execution/protected-preparation/README.md)
    qualifies historical failures, the private 2 GiB observation profile, nine
-   native warning lines and absent protected positive/output execution. This
-   candidate is unretained; all six complete fields remain Missing/proposed.
+   native warning lines and absent protected positive/output execution. PR117 retained this
+   component at `4e995067`; all six complete fields remain Missing/proposed.
    An extra read-only workspace formatter check returns 1; no formatter/full
    gate is claimed. Root owns formatting cleanup/check at the next F-core freeze
    before the full gate, final native artifact and approval.
@@ -291,3 +291,23 @@ program work. Native truth/no-loading/source correspondence stays a reviewed
 trust premise, never established by one successful output. Concrete semantic
 ambiguity returns to CP/design; none is currently established for this strict
 path. The architecture and task do not relax completion or authority semantics.
+
+## Current connected implementation
+
+Draft PR118 starts from retained `4e995067`. Its unsigned `14b1b148` checkpoint
+passes session 33968's 25 intermediate Rust controls; nine ordinary-library
+warnings remain and no Clippy/generated/native/full-runtime pass is claimed.
+The same product draft must complete structural terminal/drop/transfer reports,
+CheckedScope Finish/required source continuation, opaque leaf transport with
+immediate owner arming, independent root code/config identity, and the reviewed
+one-shot same-FD child/report handoff. Do not replace these paths with another
+passive observation increment or a caller-created admission token. Verify actual
+root/leaf code and configuration, current request/final ELF and affected behavior
+before considering the separately gated protected native positive. Preserve the
+root-owned format-before-F-core/full-gate/final-artifact trigger above.
+
+### Connected settlement checkpoint (post-test record)
+
+Session 23592 passes 37 ordinary Rust controls with nine equal before/after maps of 6,404 input files, 57 source snapshots and matching tools and all children reaped/groups absent. The [compact settlement evidence](../evidence/checked-owner-core-execution/connected-runtime-settlement/README.md) preserves exact source and historical 99447's 35-pass/envelope-setup failure. Runtime blobs remain tested; this record/evidence is post-test. Raw logs have 13 ordinary-library warnings plus summary, not Clippy success.
+
+Next fix the Err-wrapper observation-point P2 in the same connected tranche, then implement actual generated safe-root/leaf connection, immediate vacant-slot arming, independently recomputed root identity and protected child/FD/report handoff. Keep sixMissing/proposed, actual installed approval and native/output execution separate; no authority token/caller path replaces bootstrap. Root-owned fmt/check and full F-core gate precede final native artifact/approval. No standalone evidence completion or merge verdict.

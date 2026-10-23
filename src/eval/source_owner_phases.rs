@@ -722,7 +722,7 @@ impl<'binding> OwnerTeardownPrepared<'binding> {
         // Independent fixed-size native facts/status are copied after return;
         // fund that recording before ownership is detached or C can be entered.
         if checked.is_some() {
-            work.charge(12).map_err(|()| OwnerPhaseFailure::WorkReservation)?;
+            work.charge(13).map_err(|()| OwnerPhaseFailure::WorkReservation)?;
         }
         let local_report = if checked.is_some() {
             Some(super::checked_reporting::LocalBoundaryReport::admit(
@@ -824,35 +824,13 @@ impl<'binding> OwnerTeardownReturned<'binding> {
 
 impl OwnerTeardownRecorded<'_> {
     fn independent_record(&self) -> Result<Option<super::super::ResourceReport>, OwnerPhaseFailure> {
-        use crate::foreign::source_runtime::{CheckedCompletion as Completion, CheckedLocalCompletion as K, CheckedNativeFact as Native};
-        use super::super::{ResourceClosing, ResourceDiagnostic, ResourceNativeFact, ResourceReport};
         let Some(checked) = &self.slots.checked else { return Ok(None); };
         let (completion, k, native, unresolved) = checked.closing_record()
             .map_err(|_| OwnerPhaseFailure::Authority)?;
-        let closing = match (completion, k) {
-            (_, K::Transferred) => ResourceClosing::Transferred,
-            (Some(Completion::Observed(Native::Consumed)), K::Discharged) => ResourceClosing::NativeConsumed,
-            (Some(Completion::Observed(Native::Owned)), K::Discharged) => ResourceClosing::NativeRetained,
-            (Some(Completion::SessionLost), K::Discharged) => ResourceClosing::SessionLost,
-            (Some(Completion::DependencyBlocked), K::Discharged) => ResourceClosing::DependencyBlocked,
-            (Some(Completion::Quarantined), K::Discharged) => ResourceClosing::Quarantined,
-            _ => return Err(OwnerPhaseFailure::Authority),
-        };
-        let native = match native { Native::NoOwner => ResourceNativeFact::NoOwner, Native::Owned => ResourceNativeFact::Owned, Native::Consumed => ResourceNativeFact::Consumed };
-        let status = self.status.filter(|raw| raw.readable && raw.valid).and_then(|raw| match raw.reply {
-            crate::foreign::source_runtime::NativeScalarReply::Void => None,
-            crate::foreign::source_runtime::NativeScalarReply::Scalar(value) => match value {
-                NativeScalarValue::I8(value) => Some(i128::from(value)),
-                NativeScalarValue::U8(value) => Some(i128::from(value)),
-                NativeScalarValue::I32(value) => Some(i128::from(value)),
-                NativeScalarValue::U32(value) => Some(i128::from(value)),
-                NativeScalarValue::I64(value) => Some(i128::from(value)),
-                NativeScalarValue::U64(value) => Some(i128::from(value)),
-                NativeScalarValue::USize(value) => Some(value as i128),
-                NativeScalarValue::FunctionAddressAllBitsOne => None,
-            },
-        });
-        Ok(Some(ResourceReport::observed(closing, native, unresolved, status, ResourceDiagnostic::NotRequested)))
+        let status = checked.closing_status();
+        super::super::ResourceReport::closing_facts(completion, k, native, unresolved, status)
+            .map(Some)
+            .ok_or(OwnerPhaseFailure::Authority)
     }
     pub(super) fn report(
         mut self,
@@ -1591,6 +1569,23 @@ impl<'runtime> super::Machine<'runtime> {
                 let ready = ready
                     .with_inputs(input_storage, &mut self.instantiation_work)
                     .map_err(|error| phase_failure(error, &self.instantiation_work))?;
+                // Retain the prepaid nonowning ledger observer before C entry.
+                // If returned-owner publication later refuses, terminal settlement
+                // must still see the armed owner and its exact unresolved fact.
+                if let Some(checked) = &ready.slots.checked {
+                    self.instantiation_work.charge(1).map_err(|()|
+                        super::effect_work_failure(&self.instantiation_work, None, super::RuntimePhase::Acquisition))?;
+                    let Some(super::Frame::SourceResourceBoundary(boundary)) = self.frames.get_mut(index) else {
+                        return Err(super::RuntimeFailure::InvalidControlState);
+                    };
+                    if boundary.checked.is_some() || boundary.report_slot.is_some() {
+                        return Err(super::RuntimeFailure::InvalidControlState);
+                    }
+                    let report_slot = self.checked_reports.as_mut().ok_or(super::RuntimeFailure::ForeignBinding)?
+                        .reserve_owner(&mut self.instantiation_work)?;
+                    boundary.checked = Some(checked.prepaid_scope_observer());
+                    boundary.report_slot = Some(report_slot);
+                }
                 self.pending_source_owner_call = Some(SourceOwnerCallProgress::AcquireReady(ready));
             }
             AdmittedSourceOwnerInvocation::Teardown(invocation) => {
@@ -1709,7 +1704,10 @@ impl<'runtime> super::Machine<'runtime> {
                 #[cfg(test)]
                 post_record_test::teardown_preflight(&mut self.instantiation_work);
                 if boundary.checked.is_some() {
-                    let _ = self.checked_reports.as_mut().ok_or(super::RuntimeFailure::ForeignBinding)?.ready()?;
+                    let reports = self.checked_reports.as_ref().ok_or(super::RuntimeFailure::ForeignBinding)?;
+                    if !reports.owns_pending(boundary.report_slot.as_ref().ok_or(super::RuntimeFailure::ForeignBinding)?) {
+                        return Err(super::RuntimeFailure::ForeignBinding);
+                    }
                 }
                 let prepared = OwnerTeardownPrepared::admit(
                     invocation,
@@ -1916,8 +1914,13 @@ impl<'runtime> super::Machine<'runtime> {
                 if let Some(report) = recorded.independent_record()
                     .map_err(|error| phase_failure(error, &self.instantiation_work))?
                 {
+                    let Some(super::Frame::SourceResourceBoundary(boundary)) =
+                        self.frames.get_mut(recorded.slots.boundary) else {
+                        return Err(super::RuntimeFailure::InvalidControlState);
+                    };
+                    let slot = boundary.report_slot.as_ref().ok_or(super::RuntimeFailure::InvalidControlState)?;
                     self.checked_reports.as_mut().ok_or(super::RuntimeFailure::ForeignBinding)?
-                        .ready()?.commit(report);
+                        .commit_owner(slot, report);
                 }
                 super::disposal::check()?;
                 let reported = recorded.report(&mut self.heap);

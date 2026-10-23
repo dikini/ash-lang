@@ -24,6 +24,8 @@ pub(super) mod source_window_phases;
 
 #[path = "checked_reporting.rs"]
 mod checked_reporting;
+#[path = "checked_scope_finish.rs"]
+mod checked_scope_finish;
 
 #[path = "source_owner_phases.rs"]
 mod source_owner_phases;
@@ -730,6 +732,8 @@ struct ProviderBoundary {
 #[derive(Debug)]
 struct SourceResourceBoundary {
     checked: Option<crate::foreign::source_runtime::NativeOwnerBoundary>,
+    // Independent publication is separate from native K and source Finish.
+    report_slot: Option<super::checked_reports::ResourceReportSlot>,
     node: NodeId,
     key: ActivationKey,
     environment: Environment,
@@ -1138,18 +1142,18 @@ impl<'runtime> Machine<'runtime> {
         };
         // Move already funded report storage before disposing the machine. No
         // source result, failure, or host cleanup overwrites these observations.
-        let reports = self
+        let (reports, unpublished) = self
             .checked_reports
             .take()
-            .map(super::checked_reports::ResourceReports::into_records)
+            .map(super::checked_reports::ResourceReports::into_inspections)
             .unwrap_or_default();
         // Disposal remains within the observation scope on both paths.
         drop(self);
-        super::CheckedEvaluation::from_parts(scope.finish(result), reports)
+        super::CheckedEvaluation::with_inspections(scope.finish(result), reports, unpublished)
     }
 
     fn quarantine_abandoned_providers(&mut self) -> Result<(), ResourceFailure> {
-        if self.foreign_runtime.is_none() {
+        if self.foreign_runtime.is_none() && self.checked_reports.is_none() {
             return Ok(());
         }
         // Captured-cell accounting already includes every nested continuation.
@@ -1179,6 +1183,21 @@ impl<'runtime> Machine<'runtime> {
         }
         while let Some(mut frame) = self.frames.pop() {
             match &mut frame {
+                Frame::SourceResourceBoundary(boundary) => {
+                    // Inner structural frames are popped before enclosing
+                    // frames, including those flattened from captured clauses.
+                    // Commit before taking/dropping the physical owner.
+                    if let Some(checked) = &boundary.checked {
+                        if self.checked_reports.is_some() {
+                            self.settle_checked_observer(checked, boundary.report_slot.as_ref());
+                        } else {
+                            checked.output_failed();
+                        }
+                    }
+                    if let Some(owner) = &mut boundary.owner {
+                        owner.quarantine();
+                    }
+                }
                 Frame::ProviderBoundary(boundary) => {
                     if let Some(owner) = boundary.owner.take() {
                         if boundary.phase == ProviderPhase::Acquire {
@@ -1225,6 +1244,10 @@ impl<'runtime> Machine<'runtime> {
             if self.step_source_owner()? {
                 continue;
             }
+            // Generic dispatch can add at most the single optional Transition
+            // frame. Keep enough already allocated capacity to flatten every
+            // captured forest on terminal failure without another reservation.
+            self.reserve_checked_terminal_spare(1, RuntimePhase::Evaluation)?;
             disposal::check()?;
             let control = self
                 .control
@@ -1329,6 +1352,16 @@ impl<'runtime> Machine<'runtime> {
                 Control::Discard(handler, owner) => self.discard(handler, owner)?,
             }
         }
+    }
+
+    fn reserve_checked_terminal_spare(&mut self, additional: usize, phase: RuntimePhase) -> Result<(), RuntimeFailure> {
+        if self.checked_reports.is_none() { return Ok(()); }
+        let required = self.captured_cells.checked_add(additional).ok_or_else(||
+            resource_failure(ResourceFailureCause::ConfiguredCapacity, phase,
+                RuntimeResource::FrameStorage, Some(additional), None))?;
+        self.frames.try_reserve(required).map_err(|_| resource_failure(
+            ResourceFailureCause::StorageReservationFailed, phase,
+            RuntimeResource::FrameStorage, Some(required), None))
     }
 
     fn apply(&mut self, transition: Transition) {
@@ -1789,6 +1822,7 @@ impl<'runtime> Machine<'runtime> {
                 Some(0),
             )
         })?;
+        self.reserve_checked_terminal_spare(2, RuntimePhase::Acquisition)?;
         self.frames.try_reserve(2).map_err(|_| {
             legacy_failure(
                 RuntimeFailure::ResourceCapacity,
@@ -7599,7 +7633,7 @@ mod tests {
         let program = validate(builder.finish(root).unwrap(), &[&source]).unwrap();
         for fail in [false, true] {
             let mut machine = Machine::new(&program);
-            let mut reports = ResourceReports::reserve(1, &mut TypeWorkBudget::with_limit(1)).unwrap();
+            let mut reports = ResourceReports::reserve(1, &mut TypeWorkBudget::with_limit(2)).unwrap();
             reports.ready().unwrap().commit(ResourceReport::observed(
                 ResourceClosing::Transferred, ResourceNativeFact::Owned, true,
                 None, ResourceDiagnostic::Lost,

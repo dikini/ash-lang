@@ -1,7 +1,7 @@
 # TASK-0053: Connected checked owner execution and immutable admission
 
 - ID: `TASK-0053`
-- Status: active for protected applicability-request and sealed-image preparation; connected execution awaits its gates
+- Status: active for connected evaluator, generated safe-root/leaf and one-shot protected-launcher implementation; native execution remains gated
 - Related: [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](TASK-0051-checked-ffi-contract-carriers.md),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
@@ -216,7 +216,7 @@ finite AD16 premises and administrator-established context, rather than another
 query-only observation. Actual initialized-eight-byte acquisition, copy,
 finish/Trace and the root-triggered full F-core gate remain required.
 
-## Active protected preparation component
+## Retained protected preparation component
 
 The current step-5 candidate connects ReceiptSeed/native/root records and full
 image/facts/original/policy re-admission to bounded applicability-request data.
@@ -258,14 +258,42 @@ cadence keeps this tested fingerprint and requires formatting cleanup/check at
 the next root-owned F-core integration freeze before its fresh full gate, final
 artifact and approval.
 
-This candidate is not yet retained. All six complete closure fields remain
+PR117 retained this component at `4e995067`, with [independent review](https://github.com/dikini/ash-lang/pull/117#pullrequestreview-5629158133)
+and [retention receipt](https://github.com/dikini/ash-lang/pull/117#issuecomment-6366477568).
+The guarded [partial acceptance](https://github.com/dikini/ash-lang/issues/62)
+keeps all four whole F6 criteria unchecked. All six complete closure fields remain
 Missing and premises proposed. Genuine protected positives require external
 administrator-established installation and independent applicable per-image
-approval; no test token substitutes for them. Implementable work remaining after
-retention is the reviewed approval/launcher-to-runtime transfer for actual owner
+approval; no test token substitutes for them. The active connected component implements the reviewed approval/launcher-to-runtime transfer for actual owner
 acquire, copy, finish and Trace, plus refreshed required F3 images on this codec.
 Protected deployment and any generated output execution require their separate
 gates; the connected F-core and whole acceptance remain open.
+
+## Active connected runtime component
+
+[Draft PR118](https://github.com/dikini/ash-lang/pull/118) carries the connected
+implementation on retained `4e995067`. Unsigned checkpoint `14b1b148` preserves
+session 33968's 25 distinct Rust tests across eight commands: genuine request
+DATA, ledger/native-versus-synthetic Finish, private checked dispatch, real copy
+phase, authenticated leaf rendering, report preflight and Machine result/report
+preservation. All 6,403 input maps and tools match; every child is reaped with
+its owned group absent. The raw logs retain nine ordinary-library dead-code
+warnings plus their summary. These are intermediate controls, not Clippy,
+generated-template compilation, terminal settlement or native execution proof.
+The earlier 73724 and 98719 snapshots remain compile failures with zero selected
+tests, separately preserved in their bounded runner output.
+
+The guard inspection boundary follows CP-0024's never-published acquisition
+rule and its adopted [O6/L9/K1 evidence](../design/foreign-authoring/checked-ffi-evidence-map.md):
+K remains absent and no source Finish, witness or scope-closing record is created.
+A separate unpublished-guard inspection retains actual native/status/unresolved
+facts and observed retained backing without claiming protected retention or
+later disposal. Only structural K3–6 owner closings enter the independent scope
+report channel. Shared pre-entry storage does not merge these categories.
+
+The next tested settlement checkpoint passes session 23592's 37 distinct ordinary Rust controls across nine commands. It implements cumulative pre-entry report tickets, actual terminal/captured settlement, separate successful-refusal/discard guard inspection, and checked Finish admission before optional output failure. [Compact evidence](evidence/checked-owner-core-execution/connected-runtime-settlement/README.md) preserves all tested inputs, actual results and historical 99447's 35-pass/setup-failure outcome. The current raw logs retain 13 ordinary-library dead-code warnings plus their summary. This paragraph and evidence were assembled after tests; runtime blobs remain exact.
+
+The return-failure observation point still has a P2 label mismatch: its inner boundary has already been disposed, whereas the label says terminal-before-quarantine. The next connected tranche must distinguish these points. Actual generated safe-root/leaf connection and compilation, pre-vacant infallible arming, root code/config identity and the one-shot protected launcher/report transport remain pending. Serialized data never grants admission. Concrete verifier/syscall source requires critical review before generated/native verification; protected installation, applicable independent approval and selected native/application execution remain separate gates. Root owns format cleanup/check at the F-core integration freeze before `cargo xtask verify`, the fresh final artifact and per-image approval. This WIP checkpoint has no Clippy or whole F3/F4/F6 verdict.
 
 ## Acceptance for this bounded delivery
 

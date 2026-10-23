@@ -113,6 +113,26 @@ pub(crate) struct NativeOwnerStatus {
     pub(crate) readable: bool,
     pub(crate) valid: bool,
 }
+impl NativeOwnerStatus {
+    /// Fixed-size observation only; unreadable or invalid output is absence,
+    /// never a fabricated numeric status. No allocation or narrowing occurs.
+    pub(crate) fn independent(self) -> Option<i128> {
+        if !self.readable || !self.valid { return None; }
+        match self.reply {
+            NativeScalarReply::Void => None,
+            NativeScalarReply::Scalar(value) => match value {
+                NativeScalarValue::I8(value) => Some(i128::from(value)),
+                NativeScalarValue::U8(value) => Some(i128::from(value)),
+                NativeScalarValue::I32(value) => Some(i128::from(value)),
+                NativeScalarValue::U32(value) => Some(i128::from(value)),
+                NativeScalarValue::I64(value) => Some(i128::from(value)),
+                NativeScalarValue::U64(value) => Some(i128::from(value)),
+                NativeScalarValue::USize(value) => Some(value as i128),
+                NativeScalarValue::FunctionAddressAllBitsOne => None,
+            },
+        }
+    }
+}
 
 impl NativeOwnerDestruction {
     // This exact descriptor and its finite traversal were admitted before C.
@@ -331,6 +351,7 @@ struct NativeOwnerSlot {
     closure: Box<[usize]>,
     live_dependents: usize,
     checked: Option<crate::foreign::checked_control::RuntimeBoundary>,
+    closing_status: Option<i128>,
 }
 
 impl NativeOwnerStorage {
@@ -352,6 +373,7 @@ impl NativeOwnerStorage {
             closure: Box::new([]),
             live_dependents: 0,
             checked: None,
+            closing_status: None,
         });
         Ok(index)
     }
@@ -657,6 +679,9 @@ impl NativeOwnerGuard {
             let slot = &mut slots[self.slot];
             let _address = slot.raw.address.expect("admitted live owner");
             (consumes, status) = plan.invoke(operands);
+            // Preserve the actual primitive status alongside the native fact,
+            // before any later source-output/report-capacity refusal.
+            slot.closing_status = status.and_then(NativeOwnerStatus::independent);
             if consumes {
                 NativeOwnerStorage::record_consumed(&mut slots, self.slot);
             }
@@ -693,6 +718,14 @@ pub(crate) struct NativeOwnerBoundary {
     slot: usize,
 }
 impl NativeOwnerBoundary {
+    /// Same-slot backing inspection only. Presence proves neither native
+    /// permission nor protected retention; absence does not prove disposal.
+    pub(crate) fn retains_backing(&self) -> bool {
+        self.storage.slots.borrow()[self.slot].raw.address.is_some()
+    }
+    pub(crate) fn closing_status(&self) -> Option<i128> {
+        self.storage.slots.borrow()[self.slot].closing_status
+    }
     pub(crate) fn closing_record(&self) -> Result<(
         Option<crate::foreign::checked_control::Completion>,
         crate::foreign::checked_control::K,

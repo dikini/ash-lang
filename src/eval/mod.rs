@@ -5,6 +5,7 @@ pub(crate) mod disposal;
 mod failure;
 pub use checked_reports::{
     CheckedEvaluation, ResourceClosing, ResourceDiagnostic, ResourceNativeFact, ResourceReport,
+    GuardBackingObservation, GuardInspectionPoint, UnpublishedGuardInspection,
 };
 mod machine;
 mod value;

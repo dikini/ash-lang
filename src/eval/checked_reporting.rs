@@ -10,6 +10,64 @@ use crate::{
     types::{ConstructorId, EffectId, NominalTypeId, TypeWorkBudget},
 };
 
+impl super::Machine<'_> {
+    /// Transfer the actual ledger obligation before its structural frame is
+    /// destroyed. A previously published closing observation stays unchanged;
+    /// this cannot complete the separately owned source continuation.
+    pub(super) fn settle_checked_observer(
+        &mut self,
+        checked: &crate::foreign::source_runtime::NativeOwnerBoundary,
+        slot: Option<&super::super::checked_reports::ResourceReportSlot>,
+    ) -> Option<usize> {
+        use crate::foreign::source_runtime::{CheckedLocalCompletion as K, CheckedNativeFact as Native};
+        checked.output_failed();
+        if slot.is_some_and(|slot| slot.settled()) { return slot.and_then(|slot| slot.published()); }
+        let (completion, k, native, unresolved) = checked.closing_record()
+            .expect("checked source frame retains its reserved ledger slot");
+        // A pre-entry or observed-null acquisition created no owner K. There
+        // is no structural owner closing record to manufacture in that case.
+        if k == K::Absent && native == Native::NoOwner && !unresolved {
+            if let Some(slot) = slot { slot.cancel_unacquired(); }
+            return None;
+        }
+        if k == K::Absent {
+            self.inspect_unpublished_guard(checked, slot, super::super::GuardInspectionPoint::TerminalBeforeQuarantine);
+            return None;
+        }
+        let record = super::super::ResourceReport::closing_facts(
+            completion, k, native, unresolved, checked.closing_status(),
+        ).expect("terminal checked owner has transferred or discharged K");
+        let reports = self.checked_reports.as_mut().expect("checked entry reserved report storage");
+        Some(reports.commit_owner(slot.expect("armed owner retained its funded report slot"), record))
+    }
+    /// Observe only the guard category. Successful source refusal/discard is
+    /// not an output failure and cannot create a source closing transition.
+    pub(super) fn inspect_unpublished_guard(
+        &mut self,
+        checked: &crate::foreign::source_runtime::NativeOwnerBoundary,
+        slot: Option<&super::super::checked_reports::ResourceReportSlot>,
+        point: super::super::GuardInspectionPoint,
+    ) {
+        use crate::foreign::source_runtime::{CheckedLocalCompletion as K, CheckedNativeFact as Native};
+        use super::super::{GuardBackingObservation, ResourceNativeFact, UnpublishedGuardInspection};
+        if slot.is_some_and(|slot| slot.settled()) { return; }
+        let (_, k, native, unresolved) = checked.closing_record().expect("funded unpublished guard ledger");
+        assert_eq!(k, K::Absent, "guard inspection cannot enter the scope-closing channel");
+        if native == Native::NoOwner && !unresolved {
+            if let Some(slot) = slot { slot.cancel_unacquired(); }
+            return;
+        }
+        let native = match native { Native::NoOwner => ResourceNativeFact::NoOwner,
+            Native::Owned => ResourceNativeFact::Owned, Native::Consumed => ResourceNativeFact::Consumed };
+        let backing = if checked.retains_backing() { GuardBackingObservation::Retained }
+            else { GuardBackingObservation::Unknown };
+        let observation = UnpublishedGuardInspection::observed(native, unresolved, checked.closing_status(), backing, point);
+        self.checked_reports.as_mut().expect("checked entry reserved observation storage")
+            .commit_guard(slot.expect("armed guard retained its funded inspection slot"), observation);
+    }
+
+}
+
 /// These constructor identities are reconstructed from the original builtin
 /// inventory before entry. No spelling or source-created constructor approves it.
 #[derive(Debug)]
