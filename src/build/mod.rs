@@ -528,3 +528,6 @@ pub(crate) use image::checked_window_static_image_controls;
 
 #[cfg(test)]
 pub(crate) use image::checked_zero_assumption_scalar_image_controls;
+
+#[cfg(test)]
+pub(crate) use image::checked_owner_dependency_image_controls;

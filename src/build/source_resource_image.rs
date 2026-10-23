@@ -2544,6 +2544,13 @@ pub(super) fn checked_window_static_image_controls(
     assert!(PureImage::decode_bytes(&old, &mut TypeWorkBudget::default()).is_err(), "old wire version must not reinterpret the new header layout");
 }
 
+
+#[cfg(test)]
+#[path = "checked_owner_dependency_image_tests.rs"]
+mod checked_owner_dependency_image_tests;
+#[cfg(test)]
+pub(super) use checked_owner_dependency_image_tests::controls as checked_owner_dependency_image_controls;
+
 #[cfg(test)]
 mod tests {
     use super::super::{ImageFailure, PureImage, Slice, get};

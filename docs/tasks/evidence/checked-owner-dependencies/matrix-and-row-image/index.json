@@ -1,0 +1,446 @@
+{
+  "records": [
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/access-row-exact-line.rs",
+      "sha256": "fbd34d0240bfa1ef613b06a1e4f68aedbccb42a33ef49c0bdd67c42ecfe059ee",
+      "size": 18345,
+      "encoding": "raw-gzip",
+      "blob": "fbd34d0240bfa1ef613b06a1e4f68aedbccb42a33ef49c0bdd67c42ecfe059ee"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01/freeze.json",
+      "sha256": "675c7c68035dc31b061b17b31d953fc2d6d8b3eac2a7d79f2a4afe2de880f86d",
+      "size": 880526,
+      "encoding": "json-map-template-v1",
+      "blob": "d61be7d72cc35c3d23501687d352d8b6ef1f4d64bf9d2619d702ab2988367c66"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01/pins.json",
+      "sha256": "54b314d387984fa43a6fddf7d53bc2aa5442eba6a96a264f6c1efe58a47f43d5",
+      "size": 868910,
+      "encoding": "json-map-template-v1",
+      "blob": "03f090b2faccbf1f5cc1262b75920cb508d3097fa5ac6179422328de0b607e20"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01/process.json",
+      "sha256": "f451b518b4d8aba5e4fde1e619a55237caadb6b9a89e5229f3e7443b5e115f36",
+      "size": 312,
+      "encoding": "json-map-template-v1",
+      "blob": "f451b518b4d8aba5e4fde1e619a55237caadb6b9a89e5229f3e7443b5e115f36"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01/raw.log",
+      "sha256": "3d3f81e78c26e736acc9d92189163e47c5da1f554cf5a83eae79ae3f9340516a",
+      "size": 79,
+      "encoding": "raw-gzip",
+      "blob": "3d3f81e78c26e736acc9d92189163e47c5da1f554cf5a83eae79ae3f9340516a"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01/recovery-observation.json",
+      "sha256": "f4cec4be9268cc9a9ad8560a6bc7dabb6a01943392529e87d813db7f8e2520bc",
+      "size": 791,
+      "encoding": "json-map-template-v1",
+      "blob": "f4cec4be9268cc9a9ad8560a6bc7dabb6a01943392529e87d813db7f8e2520bc"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01/resources.json",
+      "sha256": "0646c4b81c418adcd07de111ce83ab395bd908d3055e5ca85ee0c609e562270e",
+      "size": 976,
+      "encoding": "json-map-template-v1",
+      "blob": "0646c4b81c418adcd07de111ce83ab395bd908d3055e5ca85ee0c609e562270e"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01/run.py",
+      "sha256": "414920292a30f001155344f6324651bce837379d53478a81c6278df7c3033811",
+      "size": 5041,
+      "encoding": "raw-gzip",
+      "blob": "414920292a30f001155344f6324651bce837379d53478a81c6278df7c3033811"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01/source.patch",
+      "sha256": "167fb82f3c0acec10f9ee15555c62c10815ffd5f0d3153627c8b26f6904034ac",
+      "size": 30480,
+      "encoding": "raw-gzip",
+      "blob": "167fb82f3c0acec10f9ee15555c62c10815ffd5f0d3153627c8b26f6904034ac"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-01-reboot-interruption.json",
+      "sha256": "6144a814a2b9d588deedb5c28ac428b759ebc841ad26fc710d11f63045f85358",
+      "size": 1477,
+      "encoding": "json-map-template-v1",
+      "blob": "6144a814a2b9d588deedb5c28ac428b759ebc841ad26fc710d11f63045f85358"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-02/pins.json",
+      "sha256": "54b314d387984fa43a6fddf7d53bc2aa5442eba6a96a264f6c1efe58a47f43d5",
+      "size": 868910,
+      "encoding": "json-map-template-v1",
+      "blob": "03f090b2faccbf1f5cc1262b75920cb508d3097fa5ac6179422328de0b607e20"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-02/run.py",
+      "sha256": "414920292a30f001155344f6324651bce837379d53478a81c6278df7c3033811",
+      "size": 5041,
+      "encoding": "raw-gzip",
+      "blob": "414920292a30f001155344f6324651bce837379d53478a81c6278df7c3033811"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-02/setup-failure.json",
+      "sha256": "151940fdd9a067d96ad1983ae5e3b0ac67ccccae7a471ac5a3466a259d04beed",
+      "size": 414,
+      "encoding": "json-map-template-v1",
+      "blob": "151940fdd9a067d96ad1983ae5e3b0ac67ccccae7a471ac5a3466a259d04beed"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-02/source.patch",
+      "sha256": "167fb82f3c0acec10f9ee15555c62c10815ffd5f0d3153627c8b26f6904034ac",
+      "size": 30480,
+      "encoding": "raw-gzip",
+      "blob": "167fb82f3c0acec10f9ee15555c62c10815ffd5f0d3153627c8b26f6904034ac"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/freeze.json",
+      "sha256": "2a30ab284853630b76d64bc18c6e7c3f594298a6a15fc25d62b383f20a41a2b8",
+      "size": 880526,
+      "encoding": "json-map-template-v1",
+      "blob": "f4b6809cc93e09b1039647881fe29c0f8abfe04d4687abacf9d8686b0f619d91"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/inputs.json",
+      "sha256": "ef5067ad45a22e28074a62b0d599f42f6f0caaafb86ea3620c77e603196aa772",
+      "size": 1754800,
+      "encoding": "json-map-template-v1",
+      "blob": "6c5a67ed481b26e3bfe292519554933e99d0c814623e47df642f8d8ff82eae70"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/operator-environment.json",
+      "sha256": "f207dc01f8be6636d02662e305572ddd5a942cbc426cd7bab774b680e15a13d6",
+      "size": 2854,
+      "encoding": "json-map-template-v1",
+      "blob": "f207dc01f8be6636d02662e305572ddd5a942cbc426cd7bab774b680e15a13d6"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/pins.json",
+      "sha256": "54b314d387984fa43a6fddf7d53bc2aa5442eba6a96a264f6c1efe58a47f43d5",
+      "size": 868910,
+      "encoding": "json-map-template-v1",
+      "blob": "03f090b2faccbf1f5cc1262b75920cb508d3097fa5ac6179422328de0b607e20"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/process.json",
+      "sha256": "3d5cd5600c8ebc5a704dc917fb2309b91da186537b4cfed052b8195b434e3d90",
+      "size": 311,
+      "encoding": "json-map-template-v1",
+      "blob": "3d5cd5600c8ebc5a704dc917fb2309b91da186537b4cfed052b8195b434e3d90"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/raw.log",
+      "sha256": "f9f43b16d644d46f5fc1f32fc0c2da53e421ed98858415f49ab659e51be13067",
+      "size": 930,
+      "encoding": "raw-gzip",
+      "blob": "f9f43b16d644d46f5fc1f32fc0c2da53e421ed98858415f49ab659e51be13067"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/receipt.json",
+      "sha256": "17f82618104362103b9c12f2d0b70cde1f4d2c52dd1624f9902ca42edfe3b92e",
+      "size": 887,
+      "encoding": "json-map-template-v1",
+      "blob": "17f82618104362103b9c12f2d0b70cde1f4d2c52dd1624f9902ca42edfe3b92e"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/resources.json",
+      "sha256": "b2b08f23d1a7f03ca21b211d23d1d1ac710c872b92b37f53a6b118733c7d2b22",
+      "size": 2681,
+      "encoding": "json-map-template-v1",
+      "blob": "b2b08f23d1a7f03ca21b211d23d1d1ac710c872b92b37f53a6b118733c7d2b22"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/run.py",
+      "sha256": "414920292a30f001155344f6324651bce837379d53478a81c6278df7c3033811",
+      "size": 5041,
+      "encoding": "raw-gzip",
+      "blob": "414920292a30f001155344f6324651bce837379d53478a81c6278df7c3033811"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-03/source.patch",
+      "sha256": "167fb82f3c0acec10f9ee15555c62c10815ffd5f0d3153627c8b26f6904034ac",
+      "size": 30480,
+      "encoding": "raw-gzip",
+      "blob": "167fb82f3c0acec10f9ee15555c62c10815ffd5f0d3153627c8b26f6904034ac"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/freeze.json",
+      "sha256": "2963d1bf6285afb598f81b9533a0135b8fe3704228bc62079fa28dc955b18267",
+      "size": 880445,
+      "encoding": "json-map-template-v1",
+      "blob": "247f1ca896056c8ce9e8af02ecec386adc6791c9af40757d493c65f18d4a7bd5"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/inputs.json",
+      "sha256": "39bac6393d6f7996d4c3fb49be2bfc455114e3beac69e7f635af437d12addd70",
+      "size": 1754800,
+      "encoding": "json-map-template-v1",
+      "blob": "1de9a477a9e75fd7473570882886332c4920d76eb12f9e3a6c659a4c6a070c8c"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/operator-environment.json",
+      "sha256": "eee0ee7ea3fa12d53bcb738ec61170b48b5e168c6f94ec405c3d94b175b50ac1",
+      "size": 4728,
+      "encoding": "json-map-template-v1",
+      "blob": "eee0ee7ea3fa12d53bcb738ec61170b48b5e168c6f94ec405c3d94b175b50ac1"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/pins.json",
+      "sha256": "a27c55e65e8b3a739eeea7288dd26720dfbe652adf41a591648b0d931b6930ac",
+      "size": 868660,
+      "encoding": "json-map-template-v1",
+      "blob": "dfdc046eef3c95a04aad1b09e7f42a45aea5af3de391bb1b2b5ddaf55784a8da"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/process.json",
+      "sha256": "a78c0ce4d7e79ea0953ba68be22b6ab50d3dbd0a5ac2cff56c093e29e9de5b86",
+      "size": 312,
+      "encoding": "json-map-template-v1",
+      "blob": "a78c0ce4d7e79ea0953ba68be22b6ab50d3dbd0a5ac2cff56c093e29e9de5b86"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/raw.log",
+      "sha256": "fd068a1d9d6a47b3f932e9209e1c80d9f690a94b8edce1bc89ad2a249927b6ce",
+      "size": 18438,
+      "encoding": "raw-gzip",
+      "blob": "fd068a1d9d6a47b3f932e9209e1c80d9f690a94b8edce1bc89ad2a249927b6ce"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/receipt.json",
+      "sha256": "e786467b713b54f0c12c093800aca6e17203f1aa474a220fbb45430e1d7d5c07",
+      "size": 1131,
+      "encoding": "json-map-template-v1",
+      "blob": "e786467b713b54f0c12c093800aca6e17203f1aa474a220fbb45430e1d7d5c07"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/resources.json",
+      "sha256": "2540af8df3b910d78e63248d44196e9d232412a05da1a2c330ea43e5535a2b18",
+      "size": 5110,
+      "encoding": "json-map-template-v1",
+      "blob": "2540af8df3b910d78e63248d44196e9d232412a05da1a2c330ea43e5535a2b18"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/run.py",
+      "sha256": "8b7114ceb73ca825aa5125a13565fd5976afdbc6e340a8efb5914256431fc21f",
+      "size": 4960,
+      "encoding": "raw-gzip",
+      "blob": "8b7114ceb73ca825aa5125a13565fd5976afdbc6e340a8efb5914256431fc21f"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-04/source.patch",
+      "sha256": "ba777a04de6570a04118cf59f295b36996c46c77453c9d89e60ab62cd3715fe5",
+      "size": 32083,
+      "encoding": "raw-gzip",
+      "blob": "ba777a04de6570a04118cf59f295b36996c46c77453c9d89e60ab62cd3715fe5"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/freeze.json",
+      "sha256": "056a94dab910d9ce9951d62b637a7931f113d9b774885527e9d3a4d6bc08db76",
+      "size": 880445,
+      "encoding": "json-map-template-v1",
+      "blob": "02dde95c898b284273dfe350e6f2747952575b6a27cadb0bcf6c54786e8f66b9"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/inputs.json",
+      "sha256": "05be6e5976333861192ad3d925e2a6e49eddeda03b4700eb7b7be626754bf3ab",
+      "size": 1754800,
+      "encoding": "json-map-template-v1",
+      "blob": "4a5d0cf6a0dd62fd9126f23494f80357f06a14cae1820f373d6ceea8fc513935"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/operator-environment.json",
+      "sha256": "eee0ee7ea3fa12d53bcb738ec61170b48b5e168c6f94ec405c3d94b175b50ac1",
+      "size": 4728,
+      "encoding": "json-map-template-v1",
+      "blob": "eee0ee7ea3fa12d53bcb738ec61170b48b5e168c6f94ec405c3d94b175b50ac1"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/pins.json",
+      "sha256": "104e569af956f8a9893c3f8c07fd2a93bf8810b629a9fae04220d2da2e8084bc",
+      "size": 868718,
+      "encoding": "json-map-template-v1",
+      "blob": "74159477f0e6b17457615cd47d418b8ec02a6626bae9270f8c2eef29431b6ce1"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/process.json",
+      "sha256": "495dbccebbeabd24f6011ff77eeb9c560761a956d30a3640aee2fa8dd4e16a80",
+      "size": 312,
+      "encoding": "json-map-template-v1",
+      "blob": "495dbccebbeabd24f6011ff77eeb9c560761a956d30a3640aee2fa8dd4e16a80"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/raw.log",
+      "sha256": "9b659986f286b2daad21af2b2e006385d98c9b73d2a71a55f5fc38b126fb2340",
+      "size": 3660,
+      "encoding": "raw-gzip",
+      "blob": "9b659986f286b2daad21af2b2e006385d98c9b73d2a71a55f5fc38b126fb2340"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/receipt.json",
+      "sha256": "05188916acd94fdeec2b8b158e608fccbc0bc902d0c2ac8df9c89e4911b10070",
+      "size": 1132,
+      "encoding": "json-map-template-v1",
+      "blob": "05188916acd94fdeec2b8b158e608fccbc0bc902d0c2ac8df9c89e4911b10070"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/resources.json",
+      "sha256": "af14e1341368788d402a600bfbc8f58aada90886f5e0c346967bf790fbb574a6",
+      "size": 5113,
+      "encoding": "json-map-template-v1",
+      "blob": "af14e1341368788d402a600bfbc8f58aada90886f5e0c346967bf790fbb574a6"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/run.py",
+      "sha256": "8b7114ceb73ca825aa5125a13565fd5976afdbc6e340a8efb5914256431fc21f",
+      "size": 4960,
+      "encoding": "raw-gzip",
+      "blob": "8b7114ceb73ca825aa5125a13565fd5976afdbc6e340a8efb5914256431fc21f"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/matrix-05/source.patch",
+      "sha256": "ef4702e67b51b66bf81e34fb492f1842348dcdb740375e156e0535cf886172b1",
+      "size": 33433,
+      "encoding": "raw-gzip",
+      "blob": "ef4702e67b51b66bf81e34fb492f1842348dcdb740375e156e0535cf886172b1"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/after.json",
+      "sha256": "67db8b3471b401eb5937becf4125660edf3dede4c26b4261b27c18b4770fac02",
+      "size": 877895,
+      "encoding": "json-map-template-v1",
+      "blob": "e747c6f3506085fd4f2ac1354eb500a90c6f21f33febdba81215048fb024ec28"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/before.json",
+      "sha256": "19e70cbac06499bd69046257f2821fe7d5df21672913243e2723b16123734555",
+      "size": 878147,
+      "encoding": "json-map-template-v1",
+      "blob": "255314f950edbfb2f62729e0414a69233388df4a0390be7b9abf5f454e646969"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/probe.py",
+      "sha256": "f36a572ff5833f25238a766b58d827d8239e0cbad5f2377d7980860d83ac6380",
+      "size": 4644,
+      "encoding": "raw-gzip",
+      "blob": "f36a572ff5833f25238a766b58d827d8239e0cbad5f2377d7980860d83ac6380"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/process.json",
+      "sha256": "725d22beefff27ab3c56b737912f3351d3ec8745d8fb5b977339a7b94117196b",
+      "size": 780,
+      "encoding": "json-map-template-v1",
+      "blob": "725d22beefff27ab3c56b737912f3351d3ec8745d8fb5b977339a7b94117196b"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/proposal.json",
+      "sha256": "775320e437538ff972774582f86769767bebd81e8467e51dc0bbd398609959a2",
+      "size": 3990,
+      "encoding": "json-map-template-v1",
+      "blob": "775320e437538ff972774582f86769767bebd81e8467e51dc0bbd398609959a2"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/raw.log",
+      "sha256": "e582687dcc49cd5b14302383d981603c15108076a878b0b58d438607aa02ddc2",
+      "size": 763,
+      "encoding": "raw-gzip",
+      "blob": "e582687dcc49cd5b14302383d981603c15108076a878b0b58d438607aa02ddc2"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/receipt.json",
+      "sha256": "9aeb8ae40dba2f635c13a87c6a9ae85aa1ca6c37253412722cb80edf44bfb8ca",
+      "size": 502,
+      "encoding": "json-map-template-v1",
+      "blob": "9aeb8ae40dba2f635c13a87c6a9ae85aa1ca6c37253412722cb80edf44bfb8ca"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/rows.json",
+      "sha256": "d8f7911ed0fd98a805da0bedc7a2300c4811d9a29889131cc21bd8c9cbdbfd69",
+      "size": 403,
+      "encoding": "json-map-template-v1",
+      "blob": "d8f7911ed0fd98a805da0bedc7a2300c4811d9a29889131cc21bd8c9cbdbfd69"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe/run.py",
+      "sha256": "dc5a8f181b957051c00a2fd7af88a716c61ac4a80bb640ee7e786e141cb43285",
+      "size": 3568,
+      "encoding": "raw-gzip",
+      "blob": "dc5a8f181b957051c00a2fd7af88a716c61ac4a80bb640ee7e786e141cb43285"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe-host/after.json",
+      "sha256": "67db8b3471b401eb5937becf4125660edf3dede4c26b4261b27c18b4770fac02",
+      "size": 877895,
+      "encoding": "json-map-template-v1",
+      "blob": "e747c6f3506085fd4f2ac1354eb500a90c6f21f33febdba81215048fb024ec28"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe-host/before.json",
+      "sha256": "0278d59c78d4d5d2aa59c9646c6141bdcd2b19071d6d6a237ef13b3e7151b4a2",
+      "size": 878157,
+      "encoding": "json-map-template-v1",
+      "blob": "77c9c3fd8cdd9de94f8a7917362fbef2f1d450ad9859a58fbac3d1c833ee0011"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe-host/process.json",
+      "sha256": "3fbdbd433e832f9f46f5d41b6083f0773488b415657c2f09e403a3719203d6f2",
+      "size": 790,
+      "encoding": "json-map-template-v1",
+      "blob": "3fbdbd433e832f9f46f5d41b6083f0773488b415657c2f09e403a3719203d6f2"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe-host/proposal.json",
+      "sha256": "775320e437538ff972774582f86769767bebd81e8467e51dc0bbd398609959a2",
+      "size": 3990,
+      "encoding": "json-map-template-v1",
+      "blob": "775320e437538ff972774582f86769767bebd81e8467e51dc0bbd398609959a2"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe-host/raw.log",
+      "sha256": "a917300f995248f61e5db404b12d1d991a598250bca53cfa8cb364c1d0f246d8",
+      "size": 8038,
+      "encoding": "raw-gzip",
+      "blob": "a917300f995248f61e5db404b12d1d991a598250bca53cfa8cb364c1d0f246d8"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe-host/receipt.json",
+      "sha256": "dfe44cffcf59db92be81f40f878f045e62cad798de35c4c4d9133e5ab7834fea",
+      "size": 507,
+      "encoding": "json-map-template-v1",
+      "blob": "dfe44cffcf59db92be81f40f878f045e62cad798de35c4c4d9133e5ab7834fea"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe-host/rows.json",
+      "sha256": "bbcacf314fc1f3ed483d9fd256d30d9511351865eef5e8772d2692accaf40440",
+      "size": 7911,
+      "encoding": "json-map-template-v1",
+      "blob": "bbcacf314fc1f3ed483d9fd256d30d9511351865eef5e8772d2692accaf40440"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/row-image-probe-host/run.py",
+      "sha256": "dc5a8f181b957051c00a2fd7af88a716c61ac4a80bb640ee7e786e141cb43285",
+      "size": 3568,
+      "encoding": "raw-gzip",
+      "blob": "dc5a8f181b957051c00a2fd7af88a716c61ac4a80bb640ee7e786e141cb43285"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/tasks/TASK-0051-checked-ffi-contract-carriers.md",
+      "sha256": "e8cfaad408b396ec76005d89a8ece66aa0d86d7d783ede270d9082cc1209a672",
+      "size": 30865,
+      "encoding": "raw-gzip",
+      "blob": "e8cfaad408b396ec76005d89a8ece66aa0d86d7d783ede270d9082cc1209a672"
+    }
+  ],
+  "maps": {
+    "4ec148ca68bed7dfa93de8946b3f85b8e80fa9b3eee28edee0262050467bce47": 4825,
+    "23baa4e09a04f697f8ef2299c073d73d4ce120d70482861ef04aea65d832a21e": 604,
+    "72e91250903c380cb0afb009d63ad9d4e01b6964217d0740b6d7a0c926645c00": 4825,
+    "376e579fac4b251964b852fbe9b79a4c75e7700eeb29b0cb46f6e0dd9909335f": 604,
+    "23f9dfbcc5a2955c9ddd5e76314c7fc02e21c776dbc6aa77fa281b566a174da0": 4825,
+    "b249b53df530d8a4c2720df006cbf1b08d9c8144c0966d05b882621c6cb08f3f": 604
+  }
+}

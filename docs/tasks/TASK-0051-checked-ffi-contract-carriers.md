@@ -477,3 +477,13 @@ and identity/fold positive. This is an early candidate, not whole F3 acceptance.
 Hostile H/C/donor/full-vector/private-data controls, private image reconstruction,
 work bounds, affected regressions and independent current-head review remain
 pending. No runtime/native activation or general helper transport is added.
+
+The [declared dependency matrix and Row-image observation](evidence/checked-owner-dependencies/matrix-and-row-image/README.md)
+retains interrupted/setup attempts and the latest eight-of-ten matrix result.
+Complete nonempty-Row Core and retained scalar Borrow controls now pass; the base
+private image passes with hostile and work-bound controls. The required full-Row
+private image still exhausts the unchanged restore budget during final independent
+validation. The access Borrow base passes, while its exact-line Row fixture
+correction remains uncompiled. This is pending repair, not a partial-budget waiver
+or completed dependency delivery. The source-only correction and all old failures
+remain qualified separately; no native activation or F3/F-core completion follows.

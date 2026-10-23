@@ -8838,3 +8838,6 @@ pub(crate) mod checked_byte_window_core_tests;
 #[cfg(test)]
 #[path = "source_resource/coordinate_reuse_tests.rs"]
 pub(crate) mod coordinate_reuse_tests;
+
+#[cfg(test)]
+pub(crate) mod checked_dependency_tests;
