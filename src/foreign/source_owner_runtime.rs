@@ -709,6 +709,14 @@ impl NativeOwnerGuard {
         Ok(())
     }
 
+    pub(crate) fn shared_group_denied(&self, work: &mut TypeWorkBudget)
+        -> Result<bool, NativeOwnerAdmissionError> {
+        let slots = self.storage.slots.borrow();
+        if let Some(root) = slots[self.slot].checked_group_root {
+            pay(work, 2)?;
+            Ok(slots[root].checked_group_denied)
+        } else { Ok(false) }
+    }
     pub(crate) fn owner(&self) -> &Arc<CheckedForeignOwner> {
         &self.owner
     }

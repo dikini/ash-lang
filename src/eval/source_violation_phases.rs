@@ -343,7 +343,8 @@ impl Machine<'_> {
                     .owner
                     .as_ref()
                     .ok_or(RuntimeFailure::ForeignBinding)?;
-                owner.pay_group_checks(1, &mut self.instantiation_work)
+                owner
+                    .pay_group_checks(1, &mut self.instantiation_work)
                     .map_err(|error| owner_admission_failure(error, &self.instantiation_work))?;
                 if !owner.ordinary_live() {
                     return Err(RuntimeFailure::ForeignBinding);
@@ -568,9 +569,72 @@ mod tests {
                         .as_ref()
                         .is_some_and(|owner| owner.ordinary_live())
                 );
-                assert!(checked.retains_backing() == present);
-                // The ordinary result carries no source-Finish witness; actual
-                // structural finish, if reached, must request its own K6.
+                assert_eq!(checked.retains_backing(), present);
+                // Exercise the actual source-request preparation/operand loop,
+                // including the Rust-backed route whose denied raw address may
+                // not be fetched. Only that matched request produces K6.
+                if !reject {
+                    machine.source_bindings = Some(&fixture.bindings);
+                    let mut setup = TypeWorkBudget::default();
+                    let mut reports =
+                        crate::eval::checked_reports::ResourceReports::reserve(1, &mut setup)
+                            .unwrap();
+                    let slot = reports.reserve_owner(&mut setup).unwrap();
+                    machine.checked_reports = Some(reports);
+                    machine.live_resources = 1;
+                    let Frame::SourceResourceBoundary(boundary) = &mut machine.frames[0] else {
+                        unreachable!();
+                    };
+                    boundary.report_slot = Some(slot);
+                    boundary.phase = ProviderPhase::Finish;
+                    boundary.saved = Some(Value::Integer(crate::integer::Integer::from_i64(42)));
+                    checked.closing(111, fixture.scope, &mut setup).unwrap();
+                    machine.control = None;
+                    machine
+                        .prepare_source_owner_request(
+                            fixture.finish_node,
+                            fixture.finish_symbol.operation(),
+                            fixture.finish_instance.clone(),
+                            Value::NativeStateView(super::super::ActivationKey(111)),
+                            &fixture.finish_symbol,
+                        )
+                        .unwrap();
+                    assert!(machine.step_source_owner().unwrap());
+                    assert_eq!(
+                        checked.snapshot().k,
+                        crate::foreign::checked_control::K::Discharged
+                    );
+                    assert_eq!(checked.snapshot().native, before.native);
+                    assert_eq!(checked.snapshot().observations, before.observations);
+                    let Some(Control::Return(Value::Location(result))) = machine.control.take()
+                    else {
+                        panic!("matched teardown report");
+                    };
+                    let Some(HeapCell::Constructor(id, Some(Value::Location(reason)))) =
+                        machine.heap.get(result)
+                    else {
+                        panic!("private synthetic failure");
+                    };
+                    assert_eq!(*id, constructor(module, Nominal::CheckedCall, 2));
+                    let reason = *reason;
+                    let finish = machine
+                        .foreign_constructor(
+                            constructor(module, Nominal::CheckedFinish, 2),
+                            Some(Value::Location(reason)),
+                            RuntimePhase::Cleanup,
+                        )
+                        .unwrap();
+                    let Some(Frame::SourceResourceBoundary(boundary)) = machine.frames.pop() else {
+                        unreachable!();
+                    };
+                    machine.return_source_resource(boundary, finish).unwrap();
+                    assert_eq!(
+                        checked.snapshot().continuation,
+                        crate::foreign::source_runtime::CheckedOwnerContinuation::Completed
+                    );
+                    assert_eq!(machine.checked_reports.as_ref().unwrap().record_count(), 1);
+                    assert!(checked.retains_backing());
+                }
             });
         }
     }

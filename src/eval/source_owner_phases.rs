@@ -1607,6 +1607,12 @@ impl<'runtime> super::Machine<'runtime> {
                 else {
                     return Err(super::RuntimeFailure::ForeignBinding);
                 };
+                let super::Frame::SourceResourceBoundary(boundary) = &self.frames[index] else {
+                    return Err(super::RuntimeFailure::InvalidControlState);
+                };
+                let non_native = boundary.owner.as_ref().ok_or(super::RuntimeFailure::ForeignBinding)?
+                    .shared_group_denied(&mut self.instantiation_work)
+                    .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
                 let mut operands = Vec::new();
                 super::charge_effect_work(
                     &mut self.instantiation_work,
@@ -1647,7 +1653,7 @@ impl<'runtime> super::Machine<'runtime> {
                             else {
                                 return Err(super::RuntimeFailure::InvalidControlState);
                             };
-                            if invocation.uses_checked_leaf() {
+                            if invocation.uses_checked_leaf() || non_native {
                                 if !boundary.owner.as_ref().is_some_and(NativeOwnerGuard::physically_live) {
                                     return Err(super::RuntimeFailure::ForeignBinding);
                                 }
@@ -1665,6 +1671,12 @@ impl<'runtime> super::Machine<'runtime> {
                             )
                         }
                         PreparedOperandSource::Enclosing(path) => {
+                            if non_native {
+                                // Authenticate the exact typed retained edge,
+                                // but form no native address for a K6 request.
+                                let _dependency = self.enclosing_owner_dependency(index, request, &value, path, true)?;
+                                continue;
+                            }
                             self.enclosing_owner_operand(index, request, &value, path, true)?
                         }
                         PreparedOperandSource::Source(path) => {
@@ -1765,6 +1777,16 @@ impl<'runtime> super::Machine<'runtime> {
         path: &[usize],
         finishing: bool,
     ) -> Result<NativeOwnerOperand, super::RuntimeFailure> {
+        let dependency = self.enclosing_owner_dependency(boundary_index, request, value, path, finishing)?;
+        dependency.pay_group_checks(1, &mut self.instantiation_work)
+            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
+        Ok(NativeOwnerOperand::Address(dependency.address().ok_or(super::RuntimeFailure::ForeignBinding)?))
+    }
+
+    fn enclosing_owner_dependency(
+        &mut self, boundary_index: usize, request: crate::core::NodeId,
+        value: &Value, path: &[usize], finishing: bool,
+    ) -> Result<crate::foreign::source_runtime::NativeOwnerDependency, super::RuntimeFailure> {
         let key = current_key(&self.heap, value, path, &mut self.instantiation_work)?;
         let program = self.program.clone();
         let Some(super::ExecutableNode::Effect(expression)) = program.node(request) else {
@@ -1836,13 +1858,7 @@ impl<'runtime> super::Machine<'runtime> {
         if !permitted {
             return Err(super::RuntimeFailure::ForeignBinding);
         }
-        dependency.pay_group_checks(1, &mut self.instantiation_work)
-            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
-        Ok(NativeOwnerOperand::Address(
-            dependency
-                .address()
-                .ok_or(super::RuntimeFailure::ForeignBinding)?,
-        ))
+        Ok(dependency)
     }
 
     /// Returned transitions run before every disposal check. Postnative

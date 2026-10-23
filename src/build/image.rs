@@ -13577,7 +13577,10 @@ mod checked_violation_image_tests {
             record.role = donor;
             let mut work = crate::build::gas::startup(bytes.len(), facts.len()).unwrap();
             let error = match changed.restore_effect(&mut work) { Err(error) => error, Ok(_) => panic!("role donor accepted") };
-            assert!(!matches!(error, ImageFailure::Resource), "donor must fail semantically: {error:?}");
+            assert!(!matches!(&error, ImageFailure::Resource)
+                && !matches!(&error, ImageFailure::Validation(error) if error.reason() == crate::core::ValidationReason::Resource)
+                && !matches!(&error, ImageFailure::CoreAdmission(crate::core::BuildError::TypeWorkExceeded)),
+                "donor must fail semantically: {error:?}");
         }
     }
 }

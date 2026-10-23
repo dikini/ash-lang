@@ -77,7 +77,7 @@ fn with_program_context(
 ) {
     let executable = crate::eval::ExecutableProgram::Effect(program.shared());
     let mut work = TypeWorkBudget::default();
-    let ids = nodes(&program);
+    let ids = nodes(program);
     for node_id in ids.iter().copied() {
         let node = program.node(node_id).unwrap();
         let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &node.kind
@@ -1372,6 +1372,10 @@ pub(crate) struct ViolationBoundaryForTest<'p> {
     pub(crate) scope: crate::core::NodeId,
     pub(crate) call: crate::core::source_resource::SourceByteCall,
     pub(crate) finish: SourceOwnerScopeRequest,
+    pub(crate) finish_node: crate::core::NodeId,
+    pub(crate) finish_instance: EffectInstance,
+    pub(crate) finish_symbol: Arc<CheckedForeignSymbol>,
+    pub(crate) bindings: SourceNativeBindings,
     pub(crate) guard: Option<crate::foreign::source_runtime::NativeOwnerGuard>,
     pub(crate) boundary: crate::foreign::source_runtime::NativeOwnerBoundary,
 }
@@ -1389,13 +1393,20 @@ pub(crate) fn with_violation_boundary_for_test(
                 && call.apply.is_some() { selected = Some(call); }
             Ok(())
         }, &mut work).unwrap();
-        let (ready, _storage) = ready(&acquire, 111, &mut work);
+        let (ready, storage) = ready(&acquire, 111, &mut work);
         let boundary = ready.checked_boundary(&mut work).unwrap().unwrap();
         let guard = ready.returned(if present { std::ptr::NonNull::<u8>::dangling().as_ptr().cast() }
             else { std::ptr::null_mut() }).record().into_guard();
         if !reject { boundary.publish(111, acquire._scope_node, &mut work).unwrap(); }
+        let symbol = Arc::clone(&finish._scope.header().teardown);
+        let mut bindings = SourceNativeBindings { owner_storage: storage, ..SourceNativeBindings::default() };
+        bindings.owners.insert(symbol.operation(), SourceOwnerBinding {
+            symbol: Arc::clone(&symbol), target: "x86_64-unknown-linux-gnu", callback: SourceOwnerCallback::Teardown(dispose),
+        });
         test(ViolationBoundaryForTest { program, scope: acquire._scope_node,
-            call: selected.expect("actual original denial call"), finish: finish.receipt, guard, boundary });
+            call: selected.expect("actual original denial call"), finish_node: finish._request,
+            finish_instance: finish._instance.clone(), finish_symbol: symbol, bindings,
+            finish: finish.receipt, guard, boundary });
     });
 }
 

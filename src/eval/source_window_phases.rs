@@ -175,6 +175,10 @@ impl Machine<'_> {
                 .owner
                 .as_ref()
                 .ok_or(RuntimeFailure::ForeignBinding)?;
+            if boundary.phase == ProviderPhase::Body {
+                guard.pay_group_checks(1, &mut self.instantiation_work)
+                    .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
+            }
             if !Arc::ptr_eq(guard.owner(), &original_owner)
                 || !guard.physically_live()
                 || boundary.phase == ProviderPhase::Body && !guard.ordinary_live()
@@ -1100,6 +1104,10 @@ impl Machine<'_> {
                 continue;
             }
             let guard = owner.owner.as_ref().ok_or(RuntimeFailure::ForeignBinding)?;
+            if boundary.phase == ProviderPhase::Body {
+                guard.pay_group_checks(1, &mut self.instantiation_work)
+                    .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
+            }
             if live
                 || owner.consumed
                 || owner.blocked
