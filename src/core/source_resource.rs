@@ -4575,7 +4575,7 @@ impl SourceResourceScopeNode {
     /// Exposes only original window requests mapped through this scope's
     /// independently authenticated specialization forest. It is representation
     /// lineage for capture analysis, not permission to execute a native call.
-    pub(in crate::core) fn visit_window_calls(
+    pub(crate) fn visit_window_calls(
         &self,
         mut visit: impl FnMut(
             NodeId,

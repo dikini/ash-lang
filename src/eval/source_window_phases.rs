@@ -843,8 +843,9 @@ impl Machine<'_> {
             .registry()
             .scalar_preflight(function)
             .ok_or(RuntimeFailure::ForeignBinding)?;
+        let checked_copy = fact.role() == Role::CheckedCopyBytes && role == Role::CopyBytes;
         if fact.function() != function
-            || fact.role() != role
+            || (fact.role() != role && !checked_copy)
             || fact.module() != callable.intrinsic.module()
         {
             return Err(RuntimeFailure::ForeignBinding);
@@ -943,8 +944,53 @@ impl Machine<'_> {
         else {
             return Err(RuntimeFailure::ForeignBinding);
         };
-        if application.arguments().len() != 1 || !application.row_arguments().is_empty() {
+        let offset = usize::from(checked_copy);
+        if application.arguments().len() != 1 + offset || !application.row_arguments().is_empty() {
             return Err(RuntimeFailure::ForeignBinding);
+        }
+        if checked_copy {
+            let selector = scope
+                .header()
+                .original
+                .host
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            let selected = scope
+                .arguments()
+                .get(selector.position)
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            let expected = boundary
+                .environment
+                .instantiation
+                .argument(selected, &mut self.instantiation_work)?;
+            let crate::types::KindedArgument::TypeArg(expected) = &*expected else {
+                return Err(RuntimeFailure::ForeignBinding);
+            };
+            let applied = IterativeTypeOwner::new(
+                callable
+                    .caller
+                    .ty(&application.arguments()[0], &mut self.instantiation_work)?,
+            );
+            let formal = fact
+                .role()
+                .host_parameter(fact.module())
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            let defining = IterativeTypeOwner::new(
+                callable
+                    .defining
+                    .ty(&Type::Variable(formal), &mut self.instantiation_work)?,
+            );
+            for actual in [&applied, &defining] {
+                if !crate::types::same_type_with_budget(
+                    expected,
+                    actual,
+                    &mut self.instantiation_work,
+                )
+                .map_err(|()| {
+                    super::effect_work_failure(&self.instantiation_work, None, RuntimePhase::Access)
+                })? {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+            }
         }
         let PureExprKind::Computation(PureComputation::Apply(call)) =
             super::pure_expression(&program, apply)?
@@ -983,12 +1029,12 @@ impl Machine<'_> {
         };
         let operand_view =
             IterativeTypeOwner::new(caller.ty(operand_view, &mut self.instantiation_work)?);
-        let applied_view = IterativeTypeOwner::new(
-            callable
-                .caller
-                .ty(&application.arguments()[0], &mut self.instantiation_work)?,
-        );
-        let formal = role
+        let applied_view = IterativeTypeOwner::new(callable.caller.ty(
+            &application.arguments()[offset],
+            &mut self.instantiation_work,
+        )?);
+        let formal = fact
+            .role()
             .view_parameter(fact.module())
             .ok_or(RuntimeFailure::ForeignBinding)?;
         let defining_view = IterativeTypeOwner::new(
@@ -1058,6 +1104,9 @@ impl Machine<'_> {
             return Err(RuntimeFailure::ForeignBinding);
         }
         if extent.is_some_and(|extent| extent.view != view_key) {
+            if checked_copy {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
             let error = fact
                 .conversion_error_constructor()
                 .ok_or(RuntimeFailure::ForeignBinding)?;
@@ -1085,6 +1134,44 @@ impl Machine<'_> {
             )));
             return Ok(());
         }
+        let mut copy_record: Option<crate::foreign::source_runtime::NativeOwnerCopyRecord> =
+            if checked_copy {
+                // The supported independent owner must be this window's physical
+                // provider. Dependency-owner windows remain explicitly unsupported.
+                if boundary.key != window.owner {
+                    return Err(RuntimeFailure::ForeignBinding);
+                }
+                let receipt = crate::foreign::source_bindings::SourceOwnerCopyRequest::admit(
+                    &program,
+                    boundary.node,
+                    window.node,
+                    apply,
+                    callable.application,
+                    function,
+                    phase(boundary.phase),
+                    &mut self.instantiation_work,
+                )?;
+                Some(
+                    boundary
+                        .owner
+                        .as_ref()
+                        .ok_or(RuntimeFailure::ForeignBinding)?
+                        .prepare_checked_copy(
+                            &receipt,
+                            usize::try_from(boundary.key.0)
+                                .map_err(|_| RuntimeFailure::ForeignBinding)?,
+                            &mut self.instantiation_work,
+                        )
+                        .map_err(|error| {
+                            crate::foreign::source_bindings::owner_admission_failure(
+                                error,
+                                &self.instantiation_work,
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
         let returned = fact.call_codec().ids().returned;
         let ready = if role == Role::CopyBytes {
             CopyReplyReady::admit(
@@ -1147,11 +1234,34 @@ impl Machine<'_> {
             unreachable!("prepaid window remains selected")
         };
         let view = &window.views[view_key.slot];
-        self.control = Some(Control::Return(ready.copy(
+        if let Some(record) = &mut copy_record {
+            record.begin().map_err(|error| {
+                crate::foreign::source_bindings::owner_admission_failure(
+                    error,
+                    &self.instantiation_work,
+                )
+            })?;
+        }
+        let copied = ready.copy(
             AdmittedWindowRead { raw: &view.raw },
             &mut self.heap,
             &mut self.instantiation_work,
-        )?));
+        );
+        let copied = match copied {
+            Ok(value) => {
+                if let Some(record) = copy_record {
+                    let _observed = record.returned();
+                }
+                value
+            }
+            Err(error) => {
+                if let Some(record) = copy_record {
+                    record.output_failed();
+                }
+                return Err(error);
+            }
+        };
+        self.control = Some(Control::Return(copied));
         Ok(())
     }
 }
@@ -1613,3 +1723,7 @@ mod tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "checked_copy_boundary_tests.rs"]
+mod checked_copy_boundary_tests;

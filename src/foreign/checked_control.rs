@@ -1,5 +1,6 @@
 //! CP-0024 O/X/K bookkeeping connected to existing physical owner slots.
-//! Checked activation remains closed; the checked-copy event is not wired yet.
+//! Checked activation remains closed; source-bound copy observations are distinct
+//! from injected or trusted native return facts.
 //!
 //! A native observation is an input from a future trusted bridge, not evidence
 //! manufactured by this ledger. Source E and native addresses never enter it.
@@ -43,6 +44,7 @@ pub(super) enum CallKind {
     Acquire,
     Borrow,
     Finish,
+    CopyBytes(super::source_bindings::SourceOwnerCopyIdentity),
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Native {
@@ -120,6 +122,7 @@ pub(super) enum Close {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Observed {
+    Copied,
     Acquired,
     Null,
     Borrowed,
@@ -348,6 +351,15 @@ impl<'p> Ledger<'p> {
         // Pay all fixed observation/commit work BEFORE marking native entry.
         pay(work, 12)?;
         let index = self.index(owner)?;
+        if matches!(kind, CallKind::Borrow)
+            && self
+                .observed_calls
+                .checked_add(self.in_flight)
+                .and_then(|n| n.checked_add(1))
+                .is_none_or(|n| n >= self.call_limit)
+        {
+            return Err(Failure::Resource);
+        }
         if self
             .observed_calls
             .checked_add(self.in_flight)
@@ -407,6 +419,47 @@ impl<'p> Ledger<'p> {
         Ok(call)
     }
 
+    fn enter_copy(
+        &mut self,
+        owner: Owner,
+        identity: super::source_bindings::SourceOwnerCopyIdentity,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Call, Failure> {
+        pay(work, 12)?;
+        let index = self.index(owner)?;
+        if self
+            .observed_calls
+            .checked_add(self.in_flight)
+            .and_then(|n| n.checked_add(1))
+            .is_none_or(|n| n >= self.call_limit)
+        {
+            return Err(Failure::Resource);
+        }
+        let record = &mut self.records[index];
+        let group = &self.groups[record.group.index];
+        if self.terminal
+            || group.lost
+            || group.quarantined
+            || record.pending.is_some()
+            || record.unresolved
+            || record.native != Native::Owned
+            || !matches!(record.k, K::Pending | K::Closing)
+        {
+            return Err(Failure::State);
+        }
+        let serial = record.serial.checked_add(1).ok_or(Failure::Resource)?;
+        let call = Call {
+            owner,
+            serial,
+            kind: CallKind::CopyBytes(identity),
+        };
+        record.serial = serial;
+        self.in_flight += 1;
+        record.pending = Some(call);
+        record.unresolved = true;
+        Ok(call)
+    }
+
     pub(super) fn observed(&mut self, call: Call, observation: Observed) -> Result<(), Failure> {
         let index = self.index(call.owner)?;
         let record = &mut self.records[index];
@@ -422,6 +475,9 @@ impl<'p> Ledger<'p> {
         let native = match (call.kind, observation) {
             (CallKind::Acquire, Observed::Acquired) => Native::Owned,
             (CallKind::Acquire, Observed::Null) => Native::NoOwner,
+            (CallKind::CopyBytes(_), Observed::Copied) if record.native == Native::Owned => {
+                Native::Owned
+            }
             (CallKind::Borrow, Observed::Borrowed) if record.native == Native::Owned => {
                 Native::Owned
             }
@@ -702,6 +758,27 @@ pub(crate) struct BoundarySnapshot {
     pub(crate) terminal: bool,
     pub(crate) observations: usize,
     pub(crate) history: usize,
+    pub(super) last_copy: Option<super::source_bindings::SourceOwnerCopyIdentity>,
+}
+#[cfg(test)]
+impl BoundarySnapshot {
+    pub(crate) fn last_copy_coordinates(
+        self,
+    ) -> Option<(
+        crate::core::NodeId,
+        crate::core::NodeId,
+        crate::core::NodeId,
+        crate::resolved::BinderId,
+    )> {
+        self.last_copy.map(|identity| {
+            (
+                identity.window,
+                identity.apply,
+                identity.application,
+                identity.function,
+            )
+        })
+    }
 }
 impl RuntimeBoundary {
     pub(super) fn reserve(
@@ -711,10 +788,20 @@ impl RuntimeBoundary {
         work: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         pay(work, 6)?;
+        let minimum = receipt
+            ._scope
+            .header()
+            .original
+            .interpreted
+            .len()
+            .max(2)
+            .checked_add(receipt._copy_calls.ok_or(Failure::Unsupported)?)
+            .and_then(|n| n.checked_add(receipt._window_calls))
+            .ok_or(Failure::Resource)?;
         if limits.groups != 1
             || limits.owners != 1
             || limits.pending < 1
-            || limits.observations < receipt._scope.header().original.interpreted.len().max(2)
+            || limits.observations < minimum
             || limits.continuations < 1
             || limits.history
                 < limits
@@ -836,11 +923,64 @@ impl RuntimeBoundary {
             .ledger
             .observed_calls
             .checked_add(self.ledger.in_flight)
+            .and_then(|n| n.checked_add(1))
             .is_none_or(|n| n >= self.ledger.call_limit)
         {
             return Err(Failure::Resource);
         }
         Ok(())
+    }
+    pub(super) fn copy_request(
+        &self,
+        receipt: &super::source_bindings::SourceOwnerCopyRequest,
+        activation: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        pay(work, 5)?;
+        if activation != self.activation
+            || receipt.scope_node != self.scope_node
+            || !std::sync::Arc::ptr_eq(&receipt.scope, &self.scope)
+            || !matches!(
+                receipt.phase,
+                crate::core::source_resource::SourceResourcePhase::Handler
+                    | crate::core::source_resource::SourceResourcePhase::Finish
+            )
+        {
+            return Err(Failure::Original);
+        }
+        let record = &self.ledger.records[self.owner.index];
+        if self.ledger.terminal
+            || record.unresolved
+            || record.pending.is_some()
+            || record.native != Native::Owned
+            || !matches!(record.k, K::Pending | K::Closing)
+        {
+            return Err(Failure::State);
+        }
+        if self
+            .ledger
+            .observed_calls
+            .checked_add(self.ledger.in_flight)
+            .and_then(|n| n.checked_add(1))
+            .is_none_or(|n| n >= self.ledger.call_limit)
+        {
+            return Err(Failure::Resource);
+        }
+        Ok(())
+    }
+    pub(super) fn begin_copy(
+        &mut self,
+        identity: super::source_bindings::SourceOwnerCopyIdentity,
+        entry_work: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        self.pending = Some(self.ledger.enter_copy(self.owner, identity, entry_work)?);
+        Ok(())
+    }
+    pub(super) fn copied(&mut self) {
+        let call = self.pending.take().expect("single entered primitive copy");
+        self.ledger
+            .observed(call, Observed::Copied)
+            .expect("reserved copy observation");
     }
     pub(super) fn begin_borrow(
         &mut self,
@@ -960,6 +1100,22 @@ impl RuntimeBoundary {
     pub(super) fn snapshot(&self) -> BoundarySnapshot {
         let record = &self.ledger.records[self.owner.index];
         BoundarySnapshot {
+            last_copy: self
+                .ledger
+                .history
+                .iter()
+                .rev()
+                .find_map(|history| match history {
+                    History::Native(Outcome {
+                        call:
+                            Call {
+                                kind: CallKind::CopyBytes(identity),
+                                ..
+                            },
+                        observed: Observed::Copied,
+                    }) => Some(*identity),
+                    _ => None,
+                }),
             identity: self.ledger.identity,
             native: record.native,
             k: record.k,

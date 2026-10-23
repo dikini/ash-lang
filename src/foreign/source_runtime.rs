@@ -15,8 +15,9 @@ pub use view::{NativeViewCallback, NativeViewReadCallback, NativeViewReturned};
 
 pub(crate) use owner::{
     NativeByteAccess, NativeByteCallbacks, NativeOwnerAdmissionError, NativeOwnerBorrowRecord,
-    NativeOwnerBoundary, NativeOwnerDependency, NativeOwnerDestruction, NativeOwnerDisposition,
-    NativeOwnerGuard, NativeOwnerStatus, NativeOwnerStorage, NativeOwnerViewKind,
+    NativeOwnerBoundary, NativeOwnerCopyRecord, NativeOwnerDependency, NativeOwnerDestruction,
+    NativeOwnerDisposition, NativeOwnerGuard, NativeOwnerStatus, NativeOwnerStorage,
+    NativeOwnerViewKind,
 };
 #[doc(hidden)]
 pub use owner::{

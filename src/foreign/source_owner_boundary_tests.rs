@@ -457,14 +457,58 @@ fn checked_owner_boundary_null_return_and_closed_public_admission_are_distinct()
     // Still no initializer, callback, protected context or executable approval.
 }
 
-/// Required after PR101 retention. This is genuine checked byte/Core PREPARATION;
-/// the four returns below are injected bookkeeping, not native memory evidence.
-#[test]
-fn checked_owner_boundary_initialized_eight_byte_full_request_preparation() {
-    let (program, _) = crate::elaborate::checked_owner_passive_program_for_source(
+fn eight_byte_program() -> crate::core::ValidatedEffectProgram {
+    crate::elaborate::checked_owner_passive_program_for_source(
         include_str!("../../tests/fixtures/checked-owner-runtime/owner.ash"),
         "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Producer.CopyProbe, Unit, Unit>\nmain () = Producer.run ()\n",
-    );
+    ).0
+}
+fn eight_byte_copy_request(
+    program: &crate::core::ValidatedEffectProgram,
+    work: &mut TypeWorkBudget,
+) -> SourceOwnerCopyRequest {
+    let executable = crate::eval::ExecutableProgram::Effect(program.shared());
+    let ids = nodes(program);
+    for scope_id in ids.iter().copied() {
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &program.node(scope_id).unwrap().kind
+        else {
+            continue;
+        };
+        let mut copied = None;
+        scope.visit_byte_calls(|call, _| {
+            if call.apply.is_some() && program.registry().scalar_preflight(call.function).is_some_and(|fact| fact.role() == super::super::scalar_preflight::ForeignScalarPreflightRole::CheckedCopyBytes) { copied = Some(call); }
+            Ok(())
+        }, work).unwrap();
+        let Some(call) = copied else {
+            continue;
+        };
+        for window in ids.iter().copied() {
+            if let Ok(receipt) = SourceOwnerCopyRequest::admit(
+                &executable,
+                scope_id,
+                window,
+                call.apply.unwrap(),
+                call.application,
+                call.function,
+                crate::core::source_resource::SourceResourcePhase::Handler,
+                work,
+            ) {
+                return receipt;
+            }
+        }
+    }
+    panic!("genuine checked-copy original in its exact source window");
+}
+
+fn eight_byte_fixture() -> (
+    crate::core::ValidatedEffectProgram,
+    FixtureRequest,
+    SourceOwnerScopeRequest,
+    Vec<(SourceOwnerScopeRequest, Arc<CheckedForeignSymbol>)>,
+    SourceOwnerCopyRequest,
+) {
+    let program = eight_byte_program();
     let executable = crate::eval::ExecutableProgram::Effect(program.shared());
     let ids = nodes(&program);
     let mut work = TypeWorkBudget::default();
@@ -562,9 +606,30 @@ fn checked_owner_boundary_initialized_eight_byte_full_request_preparation() {
         queries[1].1.symbol().access_result(),
         Some(crate::foreign::source_contract::PreparedAccessResult::Extent { .. })
     ));
-    assert_eq!(acquire._scope.header().original.interpreted.len(), 4);
-    let mut one_short = limits();
-    one_short.observations = 3;
+    assert_eq!(acquire._scope.header().original.interpreted.len(), 2);
+    assert_eq!(acquire._window_calls, 2);
+    assert_eq!(acquire._copy_calls, Some(1));
+    let copy = eight_byte_copy_request(&program, &mut work);
+    assert!(Arc::ptr_eq(&copy.scope, &acquire._scope));
+    (program, acquire, finish, queries, copy)
+}
+
+/// Retained PR101 supplies genuine checked byte/Core PREPARATION. Native
+/// returns and the copy completion below are injected, not native memory evidence.
+#[test]
+fn checked_owner_boundary_initialized_eight_byte_full_request_preparation() {
+    let (program, acquire, finish, queries, copy) = eight_byte_fixture();
+    let executable = crate::eval::ExecutableProgram::Effect(program.shared());
+    let mut work = TypeWorkBudget::default();
+    let donor_program = eight_byte_program();
+    let donor = eight_byte_copy_request(&donor_program, &mut TypeWorkBudget::default());
+    let policy = crate::foreign::source_runtime::CheckedOwnerLimits {
+        observations: 5,
+        history: 6,
+        ..limits()
+    };
+    let mut one_short = policy;
+    one_short.observations = 4;
     let (mut refused, _) = authority_guard(&acquire, 91, &mut work);
     assert!(
         refused
@@ -572,7 +637,11 @@ fn checked_owner_boundary_initialized_eight_byte_full_request_preparation() {
             .is_err()
     );
     assert!(refused.checked_boundary(&mut work).unwrap().is_none());
-    let (ready, _storage) = ready(&acquire, 91, &mut work);
+    let (mut ready, _storage) = authority_guard(&acquire, 91, &mut work);
+    ready
+        .prepare_checked_boundary(&acquire, 91, Some(policy), &mut work)
+        .unwrap();
+    ready.begin_checked_acquire().unwrap();
     let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
     let guard = ready
         .returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
@@ -602,6 +671,67 @@ fn checked_owner_boundary_initialized_eight_byte_full_request_preparation() {
         );
         assert!(!returned.snapshot().unresolved);
     }
+    assert!(guard.prepare_checked_copy(&donor, 91, &mut work).is_err());
+    assert!(guard.prepare_checked_copy(&copy, 92, &mut work).is_err());
+    // Admission starts from the canonical receipt, then changes one actual
+    // coordinate. No synthetic token or copied passive role record is admitted.
+    assert!(
+        SourceOwnerCopyRequest::admit(
+            &executable,
+            copy.scope_node,
+            copy.identity.window,
+            copy.identity.application,
+            copy.identity.application,
+            copy.identity.function,
+            copy.phase,
+            &mut work
+        )
+        .is_err()
+    );
+    assert!(
+        SourceOwnerCopyRequest::admit(
+            &executable,
+            copy.scope_node,
+            copy.scope_node,
+            copy.identity.apply,
+            copy.identity.application,
+            copy.identity.function,
+            copy.phase,
+            &mut work
+        )
+        .is_err()
+    );
+    let before_copy = handle.snapshot();
+    let mut measured = TypeWorkBudget::default();
+    let _prepared = guard
+        .prepare_checked_copy(&copy, 91, &mut measured)
+        .unwrap();
+    let required = measured.used();
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + required);
+        exact.charge(prefix).unwrap();
+        let _exact = guard.prepare_checked_copy(&copy, 91, &mut exact).unwrap();
+        assert_eq!(exact.used(), prefix + required);
+        let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+        short.charge(prefix).unwrap();
+        assert!(guard.prepare_checked_copy(&copy, 91, &mut short).is_err());
+        assert!(guard.prepare_checked_copy(&copy, 91, &mut short).is_err());
+        let mut fresh = TypeWorkBudget::with_limit(required);
+        let _fresh = guard.prepare_checked_copy(&copy, 91, &mut fresh).unwrap();
+        assert_eq!(fresh.used(), required);
+    }
+    assert_eq!(handle.snapshot(), before_copy);
+    let mut stale = guard.prepare_checked_copy(&copy, 91, &mut work).unwrap();
+    let mut ticket = guard.prepare_checked_copy(&copy, 91, &mut work).unwrap();
+    ticket.begin().unwrap();
+    assert!(handle.snapshot().unresolved);
+    let observed = ticket.returned(); // UNIT-INJECTED observation, no memory read
+    assert_eq!(observed.snapshot().last_copy, Some(copy.identity));
+    assert_eq!(observed.snapshot().observations, 4);
+    // A repeated source occurrence cannot spend the final mandatory Finish cell.
+    assert!(guard.prepare_checked_copy(&copy, 91, &mut work).is_err());
+    assert!(stale.begin().is_err());
+    assert_eq!(observed.snapshot().observations, 4);
     handle.closing(91, acquire._scope_node, &mut work).unwrap();
     guard
         .prepare_checked_finish(&finish, 91, false, &mut work)
@@ -615,8 +745,8 @@ fn checked_owner_boundary_initialized_eight_byte_full_request_preparation() {
         )],
         false,
     );
-    assert_eq!(handle.snapshot().observations, 4);
-    assert_eq!(handle.snapshot().history, 5);
+    assert_eq!(handle.snapshot().observations, 5);
+    assert_eq!(handle.snapshot().history, 6);
     assert_eq!(
         handle.snapshot().continuation,
         super::super::checked_control::Continuation::Required
@@ -754,5 +884,90 @@ pub(crate) fn with_recorded_boundary_for_test(
             false,
         );
         test(program, acquire._scope_node, handle);
+    });
+}
+
+/// Genuine source/Core coordinates plus unit-injected physical observations.
+/// This contains no executable admission, binding table or protected context.
+pub(crate) struct EightByteBoundary<'p> {
+    pub(crate) program: &'p crate::core::ValidatedEffectProgram,
+    pub(crate) scope: crate::core::NodeId,
+    pub(crate) window: crate::core::NodeId,
+    pub(crate) apply: crate::core::NodeId,
+    pub(crate) application: crate::core::NodeId,
+    pub(crate) function: crate::resolved::BinderId,
+    pub(crate) view_symbol: Arc<CheckedForeignSymbol>,
+    pub(crate) guard: crate::foreign::source_runtime::NativeOwnerGuard,
+    pub(crate) boundary: crate::foreign::source_runtime::NativeOwnerBoundary,
+}
+
+pub(crate) fn with_eight_byte_boundary_for_test(
+    prepare: impl FnOnce(
+        &crate::core::ValidatedEffectProgram,
+        crate::core::NodeId,
+        &crate::types::Type,
+        &crate::types::Type,
+        NativeOwnerGuardReady,
+    ) -> NativeOwnerGuardReady,
+    test: impl FnOnce(EightByteBoundary<'_>),
+) {
+    let (program, acquire, _finish, queries, copy) = eight_byte_fixture();
+    let mut work = TypeWorkBudget::default();
+    let storage = Rc::new(NativeOwnerStorage::default());
+    let ready = NativeOwnerGuardReady::in_storage(
+        Arc::clone(&acquire._scope.header().owner),
+        dispose,
+        true,
+        1,
+        0,
+        Rc::clone(&storage),
+    )
+    .unwrap();
+    let mut ready = prepare(
+        &program,
+        acquire._scope_node,
+        &acquire.state,
+        &acquire.access,
+        ready,
+    );
+    // Injected producer contract observation for this unit, not a C allocation.
+    ready.prepare_initialized_bytes(Some(8));
+    let policy = crate::foreign::source_runtime::CheckedOwnerLimits {
+        observations: 5,
+        history: 6,
+        ..limits()
+    };
+    ready
+        .prepare_checked_boundary(&acquire, 111, Some(policy), &mut work)
+        .unwrap();
+    ready.begin_checked_acquire().unwrap();
+    let boundary = ready.checked_boundary(&mut work).unwrap().unwrap();
+    let guard = ready
+        .returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
+        .record()
+        .into_guard()
+        .unwrap();
+    boundary
+        .publish(111, acquire._scope_node, &mut work)
+        .unwrap();
+    let view_symbol = Arc::clone(&queries[0].1);
+    for (receipt, symbol) in queries {
+        let ticket = guard
+            .prepare_checked_borrow(&receipt, &symbol, 111, &mut work)
+            .unwrap()
+            .unwrap();
+        ticket.begin().unwrap();
+        let _injected = ticket.returned();
+    }
+    test(EightByteBoundary {
+        program: &program,
+        scope: acquire._scope_node,
+        window: copy.identity.window,
+        apply: copy.identity.apply,
+        application: copy.identity.application,
+        function: copy.identity.function,
+        view_symbol,
+        guard,
+        boundary,
     });
 }

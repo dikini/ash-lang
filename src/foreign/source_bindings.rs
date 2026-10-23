@@ -791,6 +791,215 @@ pub(crate) enum SourceOwnerPhase {
     Borrow(crate::core::source_resource::SourceResourcePhase),
 }
 
+/// Original primitive coordinates, not a native symbol or execution permit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct SourceOwnerCopyIdentity {
+    pub(super) window: crate::core::NodeId,
+    pub(super) apply: crate::core::NodeId,
+    pub(super) application: crate::core::NodeId,
+    pub(super) function: crate::resolved::BinderId,
+}
+#[derive(Debug)]
+pub(crate) struct SourceOwnerCopyRequest {
+    pub(super) scope: Arc<crate::core::source_resource::CheckedSourceResourceTemplate>,
+    pub(super) scope_node: crate::core::NodeId,
+    pub(super) identity: SourceOwnerCopyIdentity,
+    pub(super) phase: crate::core::source_resource::SourceResourcePhase,
+}
+impl SourceOwnerCopyRequest {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit(
+        executable: &crate::eval::ExecutableProgram,
+        scope_node: crate::core::NodeId,
+        window_node: crate::core::NodeId,
+        apply: crate::core::NodeId,
+        application: crate::core::NodeId,
+        function: crate::resolved::BinderId,
+        phase: crate::core::source_resource::SourceResourcePhase,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        use super::scalar_preflight::ForeignScalarPreflightRole as Role;
+        use crate::core::{PureComputation, PureExprKind};
+        paid(work, 8)?;
+        let crate::eval::ExecutableProgram::Effect(program) = executable else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let Some(EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope))) =
+            program.node(scope_node).map(|node| &node.kind)
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let Some(EffectExprKind::Operation(EffectOperation::SourceCopyWindow(window))) =
+            program.node(window_node).map(|node| &node.kind)
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        let fact = program
+            .registry()
+            .scalar_preflight(function)
+            .ok_or(RuntimeFailure::ForeignBinding)?;
+        if fact.function() != function
+            || fact.role() != Role::CheckedCopyBytes
+            || Some(fact.module()) != function.module()
+            || scope.header().original.host.is_none()
+            || window.family().declaration().extent()
+                != super::source_contract::PreparedForeignExtent::Bytes
+            || !scope
+                .contains_phase_window(phase, window_node, work)
+                .map_err(|error| core_admission_failure(error, work))?
+            || !scope
+                .contains_byte_call(phase, apply, application, function, work)
+                .map_err(|error| core_admission_failure(error, work))?
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        let Some(EffectExprKind::Pure(PureExprKind::Computation(
+            PureComputation::TypeApplication(actual),
+        ))) = program.node(application).map(|node| &node.kind)
+        else {
+            return Err(RuntimeFailure::ForeignBinding);
+        };
+        if actual.arguments().len() != 2 || !actual.row_arguments().is_empty() {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        // Both copied occurrences must be inside this very window, not merely
+        // members of the same scope/family. Do not borrow a nested window's calls.
+        let mut pending = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        paid(work, 1)?;
+        pending.try_reserve(1).map_err(|_| storage(1))?;
+        pending.push(window.body);
+        let (mut found_apply, mut found_application) = (false, false);
+        while let Some(node) = pending.pop() {
+            paid(work, 2)?;
+            if seen.contains(&node) {
+                continue;
+            }
+            seen.try_reserve(1).map_err(|_| storage(1))?;
+            seen.insert(node);
+            found_apply |= node == apply;
+            found_application |= node == application;
+            let current = program.node(node).ok_or(RuntimeFailure::ForeignBinding)?;
+            if matches!(
+                &current.kind,
+                EffectExprKind::Operation(EffectOperation::SourceCopyWindow(_))
+            ) {
+                continue;
+            }
+            let count = current.kind.child_count();
+            paid(work, count)?;
+            pending.try_reserve(count).map_err(|_| storage(count))?;
+            for index in 0..count {
+                pending.push(
+                    current
+                        .kind
+                        .child_at(index)
+                        .ok_or(RuntimeFailure::ForeignBinding)?,
+                );
+            }
+        }
+        if !found_apply || !found_application {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        paid(work, 1)?;
+        Ok(Self {
+            scope: Arc::clone(scope.original()),
+            scope_node,
+            identity: SourceOwnerCopyIdentity {
+                window: window_node,
+                apply,
+                application,
+                function,
+            },
+            phase,
+        })
+    }
+}
+
+fn checked_copy_count(
+    scope: &crate::core::source_resource::SourceResourceScopeNode,
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<(Option<usize>, usize), RuntimeFailure> {
+    if scope.header().original.host.is_none() {
+        return Ok((Some(0), 0));
+    }
+    use super::scalar_preflight::ForeignScalarPreflightRole as Role;
+    let mut count = Some(0usize);
+    let mut failure = None;
+    scope
+        .visit_byte_calls(
+            |call, work| {
+                if failure.is_some() {
+                    return Ok(());
+                }
+                if let Err(error) = paid(work, 2) {
+                    failure = Some(error);
+                    return Ok(());
+                }
+                if call.apply.is_some() {
+                    match registry
+                        .scalar_preflight(call.function)
+                        .map(|fact| fact.role())
+                    {
+                        Some(Role::CheckedCopyBytes) => {
+                            if let Some(current) = count {
+                                match current.checked_add(1) {
+                                    Some(next) => count = Some(next),
+                                    None => failure = Some(storage(usize::MAX)),
+                                }
+                            }
+                        }
+                        Some(
+                            Role::CheckedByteRead | Role::CheckedByteWrite | Role::CheckedCopyNul,
+                        ) => count = None,
+                        _ => {}
+                    }
+                }
+                Ok(())
+            },
+            work,
+        )
+        .map_err(|error| core_admission_failure(error, work))?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    let mut window_calls = 0usize;
+    scope
+        .visit_window_calls(
+            |_, _, symbol, work| {
+                if failure.is_some() {
+                    return Ok(());
+                }
+                if let Err(error) = paid(work, 3) {
+                    failure = Some(error);
+                    return Ok(());
+                }
+                if !symbol
+                    .owner()
+                    .is_some_and(|owner| Arc::ptr_eq(owner, &scope.header().owner))
+                    || !matches!(
+                        symbol.owner_role(),
+                        Some(super::source_contract::PreparedOwnerCall::Borrow { .. })
+                    )
+                {
+                    count = None;
+                }
+                match window_calls.checked_add(1) {
+                    Some(next) => window_calls = next,
+                    None => failure = Some(storage(usize::MAX)),
+                }
+                Ok(())
+            },
+            work,
+        )
+        .map_err(|error| core_admission_failure(error, work))?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok((count, window_calls))
+}
+
 /// Per-request scope authority retains the final checked template and full
 /// runtime instance. Only exact final-program scope/request admission creates it.
 #[derive(Debug)]
@@ -801,6 +1010,8 @@ pub(super) struct SourceOwnerScopeRequest {
     pub(super) _request: crate::core::NodeId,
     pub(super) _phase: SourceOwnerPhase,
     _instance: EffectInstance,
+    pub(super) _copy_calls: Option<usize>,
+    pub(super) _window_calls: usize,
 }
 
 impl SourceOwnerScopeRequest {
@@ -866,7 +1077,10 @@ impl SourceOwnerScopeRequest {
         let instance = crate::types::clone_effect_instance_with_budget(instance, work)
             .map_err(|()| effect_work_refusal(work))?;
         paid(work, 1)?;
+        let (_copy_calls, _window_calls) = checked_copy_count(scope, program.registry(), work)?;
         Ok(Self {
+            _copy_calls,
+            _window_calls,
             _scope: Arc::clone(scope.original()),
             _scope_node: scope_node,
             _window: Some(window_node),
@@ -962,7 +1176,10 @@ impl SourceOwnerScopeRequest {
         let instance = crate::types::clone_effect_instance_with_budget(instance, work)
             .map_err(|()| effect_work_refusal(work))?;
         paid(work, 1)?;
+        let (_copy_calls, _window_calls) = checked_copy_count(scope, program.registry(), work)?;
         Ok(SourceOwnerScopeRequest {
+            _copy_calls,
+            _window_calls,
             _scope: Arc::clone(scope.original()),
             _scope_node: scope_node,
             _window: None,
@@ -1668,4 +1885,6 @@ fn storage(units: usize) -> RuntimeFailure {
 mod boundary_tests;
 
 #[cfg(test)]
-pub(crate) use boundary_tests::with_recorded_boundary_for_test;
+pub(crate) use boundary_tests::{
+    with_eight_byte_boundary_for_test, with_recorded_boundary_for_test,
+};

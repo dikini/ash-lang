@@ -45,7 +45,7 @@ remains open.
 
 | Current seam | Required connected replacement |
 | --- | --- |
-| Retained bd725c97 rejects private checked-header encoding and public checked Host build; PR101 candidate supplies private static reconstruction | Keep these retained guards for the passive slice. The connected byte/image path requires PR101 reconstruction and all independent original authentication before public checked activation can connect. |
+| Retained PR101 c51089c8 supplies private checked-header/window reconstruction; public checked Host build remains refused | Reuse actual reconstructed originals and independent validation; private static reconstruction supplies no runtime activation or protected approval. |
 | foreign/source_bindings.rs: admit_source_native_program rejects NativeInterpret host | Admit only the exact checked boundary selected by completed F6 artifact admission, with authentic prepared symbols/bridges and F4 activation/group state; never a caller boolean or raw function pointer grant. |
 | eval/machine.rs: SourceResourceScope refuses CheckedScope before initializer | Install reserved checked control and exact header/host/owner mappings before any initializer/native entry; unsupported/unfunded paths still refuse. |
 | eval/source_resource_phases.rs: checked report assembly refuses | Commit native/synthetic outcome and K at structural closing once, then retain and complete authored finish/Trace before constructing fallible CheckedScope output. |
@@ -55,14 +55,15 @@ remains open.
 Line numbers are current inspection hints; the assigned author rechecks exact
 file/range ownership at launch. No changes are assigned by this table.
 
-## Retained passive increment and active receipts
+## Retained passive records and receipts
 
 PR108 retained passive F4 record types/transitions, passive F6 applicability and
 refusal tests at `f4a3a048`, after fresh retained-base verification and review.
-The active next increment adds bounded producer receipts and independent
-applicability decoding under the root assignment. AD-0016 retention is recorded above. PR101, the
-minimal initialized native helper and checked image roundtrip remain connected
-prerequisites for actual activation. These
+PR109 retained bounded producer receipts and independent applicability decoding
+at `e9177c50`. AD-0016 retention is recorded above; retained PR101 `c51089c8`
+supplies static checked header/window reconstruction. The initialized native
+helper, complete checked closure and protected deployment remain prerequisites
+for actual activation. These
 are usable incremental product changes without a native activation permission.
 Keep all four existing execution guards until their complete replacement gates
 are met. Actual protected deployment and generated execution are later gates;
@@ -87,10 +88,10 @@ Clippy with warnings denied. The
 preserves exact input maps and post-test documentation qualifications. Historical
 candidate results were not counted as new-base verification.
 
-This private passive increment is independent of PR101 delivery. Producer
-receipt emission and bounded independent applicability decoding remain the next
-phase; actual activation, native consumption and the connected F-core path still
-require PR101, the initialized source/native helper and protected deployment.
+The private passive increment and producer receipts are retained independently
+of PR101. PR101 is now retained at `c51089c8`; actual activation, native consumption
+and the connected F-core path still require the initialized source/native helper,
+complete checked closure and protected deployment.
 Keep every broad acceptance criterion unchecked. Do not publish this plan as a
 separate preparation delivery.
 
@@ -99,9 +100,9 @@ separate preparation delivery.
 1. Freeze the minimal real source/helper and first discriminating reds. Establish
    prepare/bind/source/summary/body-free/Core positives first, then show actual
    checked image refusal and public startup refusal. Reuse normal driver
-   source_work/rewrite funding and fresh default image/Core budgets. The PR101 candidate's
+   source_work/rewrite funding and fresh default image/Core budgets. Retained PR101's
    static controls do not turn the passive fourteen-role image fixture
-   into checked_scope/window evidence. Existing startup Resource reds remain
+   into checked_scope/window evidence. New startup failures remain
    separate; if the minimal fixture exhausts, localize actual work and repair
    measured repeated work or split a prerequisite. Never raise defaults, use
    unbounded work or weaken an authority check to obtain the positive.
@@ -115,12 +116,21 @@ separate preparation delivery.
    carriers: implement any needed by this supported closure, otherwise reject
    them explicitly and leave their F3 acceptance open. Runtime conservative
    quarantine/loss transitions remain mandatory for supported violations.
-The active boundary source candidate implements steps 3–4 incrementally on
-retained `e9177c50`. Its current tests are authored, not run. Exact private
-resource-policy limits are data only, and public execution remains closed.
-The initialized-eight-byte preparation and PR101 checked-copy boundary event
-must be verified on retained PR101 before this component is delivered; injected
-returns do not establish native initialization, copying, freeing or authored Trace.
+The active boundary source candidate implements steps 3–4 on retained
+`c51089c8`. Its eleven focused tests passed on the frozen candidate, including the real
+private evaluator phase over initialized Rust storage. The
+[focused receipts](../evidence/checked-owner-core-execution/runtime-boundary/README.md)
+retain exact inputs and scope. Affected regressions, Clippy and final review remain
+pending on the early draft. The genuine source/Core
+fixture selects Acquire, QueryView, Extent, checked-copy and Finish: five distinct
+observations. The primitive keeps its actual scope/window/type-application/function
+association, and repeated calls cannot spend mandatory Finish capacity. Finite
+private policy data supplies resource bounds, never approval. Injected outcomes
+are model controls, not native initialization/copy/free or authored Trace evidence.
+A separate private evaluator-phase control uses actual Core/Instantiation and
+physical slot data with initialized safe Rust storage, never a public execution
+capability. Prior compile-only and inventory-assertion failures remain recorded.
+Public execution remains closed.
 
 3. Add F4 control using the existing flat owner storage and evaluator boundary
    frames. Before irreversible native entry reserve the configured mandatory
@@ -147,10 +157,10 @@ returns do not establish native initialization, copying, freeing or authored Tra
    authored E is available only after actual finish/result admission. Expose the
    bounded ordered records through read-only execution inspection, without
    changing the source host result into an aggregate.
-5. Connect F6 before enabling the real public native positive. The active next
-   increment implements opt-in producer observations and independent bounded
-   receipt decoding from existing native image/emission/build seams. Source
-   tests passed seven controls on the first frozen source. The final frozen
+5. Connect F6 before enabling the real public native positive. PR109 retained
+   opt-in producer observations and independent bounded receipt decoding from
+   existing native image/emission/build seams at `e9177c50`. Source tests passed
+   seven controls on the first frozen source. The final frozen
    [verification](../evidence/checked-owner-core-execution/producer-receipts/README.md)
    passed seven refreshed receipt controls, 17 affected regressions, Clippy and
    one real public compile/link-only receipt test on base `f4a3a048` plus candidate

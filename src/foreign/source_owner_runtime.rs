@@ -748,6 +748,35 @@ impl NativeOwnerBorrowRecord {
         self.boundary.output_failed();
     }
 }
+/// Single-use bookkeeping for an authenticated primitive, never a callback or
+/// protected approval. Physical read admission remains in the evaluator.
+#[derive(Debug)]
+pub(crate) struct NativeOwnerCopyRecord {
+    boundary: NativeOwnerBoundary,
+    identity: super::super::source_bindings::SourceOwnerCopyIdentity,
+    entry_work: TypeWorkBudget,
+}
+impl NativeOwnerCopyRecord {
+    pub(crate) fn begin(&mut self) -> Result<(), NativeOwnerAdmissionError> {
+        self.boundary.storage.slots.borrow_mut()[self.boundary.slot]
+            .checked
+            .as_mut()
+            .ok_or(NativeOwnerAdmissionError::Authority)?
+            .begin_copy(self.identity, &mut self.entry_work)
+            .map_err(control_error)
+    }
+    pub(crate) fn returned(self) -> NativeOwnerBoundary {
+        self.boundary.storage.slots.borrow_mut()[self.boundary.slot]
+            .checked
+            .as_mut()
+            .expect("prepared primitive copy record")
+            .copied();
+        self.boundary
+    }
+    pub(crate) fn output_failed(&self) {
+        self.boundary.output_failed();
+    }
+}
 fn control_error(error: super::super::checked_control::Failure) -> NativeOwnerAdmissionError {
     if error == super::super::checked_control::Failure::Resource {
         NativeOwnerAdmissionError::Work
@@ -769,7 +798,7 @@ impl NativeOwnerGuard {
             slot: self.slot,
         }))
     }
-    pub(crate) fn prepare_checked_borrow(
+    pub(in crate::foreign) fn prepare_checked_borrow(
         &self,
         receipt: &super::super::source_bindings::SourceOwnerScopeRequest,
         original: &Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
@@ -797,7 +826,35 @@ impl NativeOwnerGuard {
             original: Arc::clone(original),
         }))
     }
-    pub(crate) fn prepare_checked_finish(
+    pub(crate) fn prepare_checked_copy(
+        &self,
+        receipt: &super::super::source_bindings::SourceOwnerCopyRequest,
+        activation: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<NativeOwnerCopyRecord, NativeOwnerAdmissionError> {
+        {
+            let slots = self.storage.slots.borrow();
+            slots[self.slot]
+                .checked
+                .as_ref()
+                .ok_or(NativeOwnerAdmissionError::Authority)?
+                .copy_request(receipt, activation, work)
+                .map_err(control_error)?;
+        }
+        // Every attempted primitive entry pays its own fixed check/commit
+        // work now. A stale/capacity-refused attempt cannot drain the mandatory
+        // native Finish reserve. Observation storage was reserved up front.
+        pay(work, 12)?;
+        let boundary = self
+            .checked_boundary(work)?
+            .ok_or(NativeOwnerAdmissionError::Authority)?;
+        Ok(NativeOwnerCopyRecord {
+            boundary,
+            identity: receipt.identity,
+            entry_work: TypeWorkBudget::with_limit(12),
+        })
+    }
+    pub(in crate::foreign) fn prepare_checked_finish(
         &self,
         receipt: &super::super::source_bindings::SourceOwnerScopeRequest,
         activation: usize,
@@ -918,7 +975,7 @@ impl NativeOwnerGuardReady {
         })
     }
 
-    pub(crate) fn prepare_checked_boundary(
+    pub(in crate::foreign) fn prepare_checked_boundary(
         &mut self,
         receipt: &super::super::source_bindings::SourceOwnerScopeRequest,
         activation: usize,

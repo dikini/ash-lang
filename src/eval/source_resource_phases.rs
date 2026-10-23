@@ -789,6 +789,73 @@ pub(super) fn visit_typed_source_values(
     Ok(())
 }
 
+/// An injected legacy-shaped return exercises the existing phase branch. It is
+/// NOT a well-typed CheckedFinish result, authored Trace or checked activation.
+#[cfg(test)]
+#[test]
+fn checked_owner_boundary_discarded_finish_continuation_model() {
+    use crate::foreign::source_runtime::CheckedOwnerContinuation;
+    for failure in [false, true] {
+        crate::foreign::source_bindings::with_recorded_boundary_for_test(
+            |program, node, checked| {
+                let mut machine = Machine::new_effect(program);
+                machine.instantiation_work = crate::types::TypeWorkBudget::default();
+                machine.live_resources = 1;
+                machine.control = None;
+                let codec = machine.source_resource_scope(node).unwrap().header().codec;
+                let observed = checked.prepaid_scope_observer();
+                assert_eq!(
+                    observed.snapshot().continuation,
+                    CheckedOwnerContinuation::Required
+                );
+                // Deliberately injected legacy-shaped data, not checked report admission.
+                let value = machine
+                    .foreign_constructor(
+                        codec.finish[usize::from(failure)],
+                        failure.then_some(Value::Unit),
+                        RuntimePhase::Cleanup,
+                    )
+                    .unwrap();
+                let boundary = Box::new(SourceResourceBoundary {
+                    checked: Some(checked),
+                    node,
+                    key: ActivationKey(111),
+                    environment: Environment::new(),
+                    owner: None,
+                    dependencies: Vec::new(),
+                    phase: ProviderPhase::Finish,
+                    payload: None,
+                    saved: None,
+                    consumed: true,
+                    blocked: false,
+                    discarded: true,
+                });
+                let result = machine.return_source_resource(boundary, value);
+                if failure {
+                    assert!(result.is_err());
+                    assert_eq!(
+                        observed.snapshot().continuation,
+                        CheckedOwnerContinuation::Required
+                    );
+                    assert!(observed.snapshot().terminal);
+                } else {
+                    result.unwrap();
+                    assert!(matches!(
+                        machine.control,
+                        Some(Control::Return(Value::Unit))
+                    ));
+                    assert_eq!(
+                        observed.snapshot().continuation,
+                        CheckedOwnerContinuation::Completed
+                    );
+                    assert!(observed.source_continued(111, node).is_err());
+                }
+                assert!(machine.source_bindings.is_none()); // no evaluator native callback
+            },
+        );
+    }
+}
+
 #[cfg(test)]
 mod typed_access_tests {
     // These tests call the typed predicate directly. They do not exercise
@@ -2418,72 +2485,5 @@ mod source_handler_entry_tests {
         drop(machine);
         drop(held_guard);
         assert_eq!(DESTROYED.get(), 1);
-    }
-}
-
-/// An injected legacy-shaped return exercises the existing phase branch. It is
-/// NOT a well-typed CheckedFinish result, authored Trace or checked activation.
-#[cfg(test)]
-#[test]
-fn checked_owner_boundary_discarded_finish_continuation_model() {
-    use crate::foreign::source_runtime::CheckedOwnerContinuation;
-    for failure in [false, true] {
-        crate::foreign::source_bindings::with_recorded_boundary_for_test(
-            |program, node, checked| {
-                let mut machine = Machine::new_effect(program);
-                machine.instantiation_work = crate::types::TypeWorkBudget::default();
-                machine.live_resources = 1;
-                machine.control = None;
-                let codec = machine.source_resource_scope(node).unwrap().header().codec;
-                let observed = checked.prepaid_scope_observer();
-                assert_eq!(
-                    observed.snapshot().continuation,
-                    CheckedOwnerContinuation::Required
-                );
-                // Deliberately injected legacy-shaped data, not checked report admission.
-                let value = machine
-                    .foreign_constructor(
-                        codec.finish[usize::from(failure)],
-                        failure.then_some(Value::Unit),
-                        RuntimePhase::Cleanup,
-                    )
-                    .unwrap();
-                let boundary = Box::new(SourceResourceBoundary {
-                    checked: Some(checked),
-                    node,
-                    key: ActivationKey(111),
-                    environment: Environment::new(),
-                    owner: None,
-                    dependencies: Vec::new(),
-                    phase: ProviderPhase::Finish,
-                    payload: None,
-                    saved: None,
-                    consumed: true,
-                    blocked: false,
-                    discarded: true,
-                });
-                let result = machine.return_source_resource(boundary, value);
-                if failure {
-                    assert!(result.is_err());
-                    assert_eq!(
-                        observed.snapshot().continuation,
-                        CheckedOwnerContinuation::Required
-                    );
-                    assert!(observed.snapshot().terminal);
-                } else {
-                    result.unwrap();
-                    assert!(matches!(
-                        machine.control,
-                        Some(Control::Return(Value::Unit))
-                    ));
-                    assert_eq!(
-                        observed.snapshot().continuation,
-                        CheckedOwnerContinuation::Completed
-                    );
-                    assert!(observed.source_continued(111, node).is_err());
-                }
-                assert!(machine.source_bindings.is_none()); // no evaluator native callback
-            },
-        );
     }
 }

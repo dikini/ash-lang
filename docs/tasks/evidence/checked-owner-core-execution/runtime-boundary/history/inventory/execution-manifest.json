@@ -1,0 +1,65 @@
+{
+  "scope": "compile passes; first genuine Core fixture reaches incorrect inventory assertion2vs4, no5event success; later9unrun;3private_interfaces warnings",
+  "files": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/batch-results.json",
+      "bytes": 5512,
+      "sha256": "8f882ce65ebef438ef79421d410a3cedc7a709785f4ec54e6389fb3d2f007c63"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/cache-after.json",
+      "bytes": 200,
+      "sha256": "b2f082de9471fc870f8e76ffb276d09ab415b1fae014e8e71741febc1a1152a3"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/cache-before.json",
+      "bytes": 200,
+      "sha256": "bd386ea9f01b086dcd6251d6f274d8860ed6b26bff6302d2bc7f0a6a8717adfe"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/phase-01.before.json",
+      "bytes": 780944,
+      "sha256": "9a344018e0cf9b1bdecc876b0b690d5d5091d269edc6466768c33997f11bb7f8"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/phase-01.inputs.json",
+      "bytes": 1581108,
+      "sha256": "7b584b6f27701c59c823df415a039d2c478df3e8bce19565e507ab1721d034d9"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/phase-01.log",
+      "bytes": 56653,
+      "sha256": "9cc91e5752483c32d65bc5f64d362a796daf41c89777956cea78a09643988c18"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/phase-01.process.json",
+      "bytes": 423,
+      "sha256": "33c2f977b867dfb41d519f41189a9c2d3ef99243ef20f37b93ed9a72923bcd9d"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/phase-01.receipt.json",
+      "bytes": 5194,
+      "sha256": "40ba7c5e25fb57c55b31183c20cee1789e1c40df63b12f8a52155117dba4267a"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/phase-01.resources.json",
+      "bytes": 43054,
+      "sha256": "122c114568a0758b1a88eca814a0cc78e4d3f42277bea4903a1e51a0a5ecf970"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/runner-process.json",
+      "bytes": 850,
+      "sha256": "01cf99009740bc4e02e178d6cac07646bb8bf1ea5cd647dbfe0b0da59e023fe6"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/tools-after.json",
+      "bytes": 797,
+      "sha256": "ba8a4f875cad2ee0de628b7391bff8e394bce3e752c1f5cc1e4b950b490d58b5"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-c510-repair/tools-before.json",
+      "bytes": 797,
+      "sha256": "ba8a4f875cad2ee0de628b7391bff8e394bce3e752c1f5cc1e4b950b490d58b5"
+    }
+  ]
+}
