@@ -396,7 +396,7 @@ impl Machine<'_> {
                 if boundary.discarded {
                     // Acquisition has not published state or private data. Its
                     // pending native guard is revoked without fabricating either.
-                    if let Some(owner) = &mut boundary.owner {
+                    if boundary.checked.is_some() && let Some(owner) = &mut boundary.owner {
                         owner.dispose_unpublished(key.0 as usize, boundary.node, boundary.blocked)
                             .map_err(|_| RuntimeFailure::ForeignBinding)?;
                     }
@@ -415,20 +415,25 @@ impl Machine<'_> {
                 // Inspect only the fixed constructor handle before deciding
                 // unpublished disposition. Copying arbitrary refusal payloads
                 // may fail and must happen after that one-shot disposition.
-                let Value::Location(location) = &value else {
-                    return Err(RuntimeFailure::ForeignBinding);
+                let (constructor, payload, checked_location) = if boundary.checked.is_some() {
+                    let Value::Location(location) = &value else {
+                        return Err(RuntimeFailure::ForeignBinding);
+                    };
+                    let location = resolve_location_with_work(
+                        &self.heap, *location, &mut self.instantiation_work,
+                    )?;
+                    let Some(HeapCell::Constructor(constructor, _)) = self.heap.get(location) else {
+                        return Err(RuntimeFailure::ForeignBinding);
+                    };
+                    (*constructor, None, Some(location))
+                } else {
+                    let (constructor, payload) = self.foreign_report(&value, RuntimePhase::Acquisition)?;
+                    (constructor, payload, None)
                 };
-                let location = resolve_location_with_work(
-                    &self.heap, *location, &mut self.instantiation_work,
-                )?;
-                let Some(HeapCell::Constructor(constructor, _)) = self.heap.get(location) else {
-                    return Err(RuntimeFailure::ForeignBinding);
-                };
-                let constructor = *constructor;
                 if constructor == protocol.acquire[1] {
                     // Refusal revokes a pending unpublished guard before reporting.
                     // An acquired native object may be refused by source policy.
-                    if let Some(owner) = &mut boundary.owner {
+                    if boundary.checked.is_some() && let Some(owner) = &mut boundary.owner {
                         owner.dispose_unpublished(key.0 as usize, boundary.node, boundary.blocked)
                             .map_err(|_| RuntimeFailure::ForeignBinding)?;
                     }
@@ -437,7 +442,7 @@ impl Machine<'_> {
                         self.inspect_unpublished_guard(checked, boundary.report_slot.as_ref(),
                             super::super::GuardInspectionPoint::AfterUnpublishedDisposal);
                     }
-                    let error = if boundary.checked.is_some() {
+                    let error = if let Some(location) = checked_location {
                         let Some(HeapCell::Constructor(_, Some(error))) = self.heap.get(location) else {
                             return Err(RuntimeFailure::ForeignBinding);
                         };
@@ -446,8 +451,7 @@ impl Machine<'_> {
                         // committed, rather than cloning an unbounded value.
                         super::copy_generic_cell_value(error, &mut self.instantiation_work)?
                     } else {
-                        self.foreign_report(&value, RuntimePhase::Acquisition)?.1
-                            .ok_or(RuntimeFailure::ForeignBinding)?
+                        payload.ok_or(RuntimeFailure::ForeignBinding)?
                     };
                     self.live_resources = self
                         .live_resources
@@ -464,7 +468,9 @@ impl Machine<'_> {
                 if constructor != protocol.acquire[0] || boundary.owner.is_none() {
                     return Err(RuntimeFailure::ForeignBinding);
                 }
-                let (_, payload) = self.foreign_report(&value, RuntimePhase::Acquisition)?;
+                let payload = if checked_location.is_some() {
+                    self.foreign_report(&value, RuntimePhase::Acquisition)?.1
+                } else { payload };
                 let [state, data] = self.source_pair(
                     payload.ok_or(RuntimeFailure::ForeignBinding)?,
                     RuntimePhase::Acquisition,

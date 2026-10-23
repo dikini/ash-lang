@@ -891,12 +891,14 @@ impl NativeOwnerGuard {
         if slot.live_dependents != 0 || !slot.dependencies.is_empty() {
             return Ok(());
         }
-        NativeOwnerStorage::validated_group_root(&slots, self.slot)?;
-        let denied = NativeOwnerStorage::denied(&slots, self.slot);
         // Use the common entry barrier under this same held borrow. Its fixed
         // query debit is prepaid with every final native-attempt slot.
-        if let Err(error) = NativeOwnerStorage::entry_allowed(&mut slots, self.slot, true) {
-            return if denied { Ok(()) } else { Err(error) };
+        match NativeOwnerStorage::entry_allowed(&mut slots, self.slot, true) {
+            Ok(()) => {}
+            // A denied entry supplies no disposal fact. Keep the backing for
+            // inspection; a capacity/work error is still a distinct failure.
+            Err(NativeOwnerAdmissionError::Authority) => return Ok(()),
+            Err(error) => return Err(error),
         }
         let slot = &mut slots[self.slot];
         #[cfg(any(test, ash_checked_owner_root = "v1"))]
