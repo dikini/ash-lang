@@ -500,14 +500,16 @@ fn checked_owner_dependency_body_free_facade_requires_exact_hidden_child() {
 #[test]
 fn checked_quarantine_requires_declared_enclosing_state_and_exact_host() {
     let before = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => Refused ()";
-    let after = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n                let denied = Foreign.checked_quarantine<H, ParentState<H, C>> (dependency, Foreign.UnexpectedNull)\n                let repeated = Foreign.checked_quarantine<H, ParentState<H, C>> (dependency, Foreign.UnexpectedNull)\n                Refused ()\n            }";
+    let after = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n                let quarantine : (ParentState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                let denied = quarantine (dependency, Foreign.UnexpectedNull)\n                let repeated = quarantine (dependency, Foreign.UnexpectedNull)\n                Refused ()\n            }";
     // Only the child acquire has the exact declared Enclosing dependency in
     // scope. Parent remains the unchanged independent original owner.
     let start = DEPENDENT.find("resource Child<").unwrap();
     let source = format!("{}{}", &DEPENDENT[..start], DEPENDENT[start..].replacen(before, after, 1));
     linked_core(&source, CONSUMER);
-    source_refuses(&source.replace("Foreign.checked_quarantine<H, ParentState<H, C>>",
-        "Foreign.checked_quarantine<C, ParentState<H, C>>"));
+    assert!(source.contains("! {Foreign.NativeHost<H>} = Foreign.checked_quarantine"));
+    source_refuses(&source.replace("! {Foreign.NativeHost<H>} = Foreign.checked_quarantine",
+        "! {Foreign.NativeHost<C>} = Foreign.checked_quarantine"));
     // A merely ordinary parent handle is not the descriptor-witnessed State.
+    assert!(source.contains("(dependency, Foreign.UnexpectedNull)"));
     source_refuses(&source.replace("(dependency, Foreign.UnexpectedNull)", "(parent, Foreign.UnexpectedNull)"));
 }

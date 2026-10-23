@@ -1054,9 +1054,9 @@ pub(crate) fn checked_owner_violation_program() -> (
 ) {
     let source = PRODUCER
         .replace("Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => Refused ()",
-            "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n            let denied = Foreign.checked_reject_acquisition<H> Foreign.UnexpectedNull\n            Refused ()\n        }")
+            "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n            let reject : Foreign.ViolationCause -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_reject_acquisition\n            let denied = reject Foreign.UnexpectedNull\n            Refused ()\n        }")
         .replace("read access => resume 42",
-            "read access => {\n            let denied = Foreign.checked_quarantine<H, State<H, R>> (state, Foreign.UnexpectedStatus(999))\n            resume 42\n        }");
+            "read access => {\n            let quarantine : (State<H, R>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n            let denied = quarantine (state, Foreign.UnexpectedStatus(999))\n            resume 42\n        }");
     checked_owner_passive_program_for_source(&source,
         "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n")
 }

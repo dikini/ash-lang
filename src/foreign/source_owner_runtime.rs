@@ -732,6 +732,15 @@ impl NativeOwnerGuard {
         Ok(())
     }
 
+    /// Private unit model of another member's irreversible shared-root store.
+    /// Supplies no source request, native observation or admission permission.
+    #[cfg(test)]
+    pub(crate) fn install_shared_denial_for_test(&self) {
+        let mut slots = self.storage.slots.borrow_mut();
+        let root = NativeOwnerStorage::validated_group_root(&slots, self.slot).unwrap().unwrap();
+        slots[root].checked_group_denied = true;
+    }
+
     pub(crate) fn shared_group_denied(&self, work: &mut TypeWorkBudget)
         -> Result<bool, NativeOwnerAdmissionError> {
         let slots = self.storage.slots.borrow();

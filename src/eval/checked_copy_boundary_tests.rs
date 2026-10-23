@@ -242,6 +242,39 @@ fn copied_bytes<'m>(machine: &'m Machine<'_>) -> &'m [u8] {
 
 #[test]
 fn checked_copy_real_phase_admission_observation_and_output_failure() {
+    // The cached-access barrier is independent of this frame's local state.
+    // This private injection models a related member denying the shared root;
+    // source occurrence admission itself is not bypassed or claimed here.
+    with_case(|machine, _apply, _callable, _caller, _operand, observed| {
+        let before = observed.snapshot();
+        let Frame::SourceResourceBoundary(owner) = &mut machine.frames[0] else {
+            unreachable!()
+        };
+        owner.phase = ProviderPhase::Finish;
+        assert!(!owner.blocked);
+        require_cached_window_owner(&machine.frames, ActivationKey(111), ProviderPhase::Finish, &mut machine.instantiation_work).unwrap();
+        let Frame::SourceResourceBoundary(owner) = &machine.frames[0] else {
+            unreachable!()
+        };
+        owner.owner.as_ref().unwrap().install_shared_denial_for_test();
+        for phase in [ProviderPhase::Body, ProviderPhase::Finish] {
+            assert!(matches!(require_cached_window_owner(&machine.frames, ActivationKey(111), phase, &mut machine.instantiation_work),
+                Err(RuntimeFailure::ForeignBinding)));
+        }
+        let Frame::SourceResourceBoundary(owner) = &machine.frames[0] else {
+            unreachable!()
+        };
+        assert!(!owner.blocked);
+        assert_eq!(READS.get(), 0);
+        assert_eq!(observed.snapshot().observations, before.observations);
+        assert_eq!(observed.snapshot().native, before.native);
+        // A separate root under the same declared H is still usable.
+        with_case(|independent, _, _, _, _, independent_observed| {
+            require_cached_window_owner(&independent.frames, ActivationKey(111), ProviderPhase::Finish, &mut independent.instantiation_work).unwrap();
+            assert_eq!(independent_observed.snapshot().observations, before.observations);
+            assert_eq!(READS.get(), 0);
+        });
+    });
     // Canonical real phase first, before any authority/metadata mutation.
     let mut required = 0;
     with_case(|machine, apply, callable, caller, operand, observed| {
