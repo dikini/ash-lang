@@ -921,3 +921,9 @@ now locates the tested failure paths without measuring their total deficit.
 Any further structural-data reuse needs demonstrated repetition and exact
 context/depth ownership. Rebase onto the actual retained producer tip before
 next verification or product repair, preserving all current partial evidence.
+
+The [fresh signature ownership controls](../evidence/checked-owner-dependencies/signature-borrow/README.md)
+pass on the retained producer base, but both required canonical images remain
+work failures. Preserve their distinct outcomes and localize applicable repeated
+construction before extending Decoder representation reuse. No acceptance
+result, pending-row context or earlier failure path may be reused as proof.

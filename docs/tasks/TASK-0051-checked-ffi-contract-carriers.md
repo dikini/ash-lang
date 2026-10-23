@@ -529,3 +529,11 @@ failures; no total deficit or repeated subtree is inferred. A nested-Row reuse
 extension still needs actual repetition and complete subtree-depth evidence.
 Preserve this checkpoint before rebasing onto the next retained producer slice;
 no old result transfers to that newer source context.
+
+The [borrowed signature checkpoint](evidence/checked-owner-dependencies/signature-borrow/README.md)
+now records fresh verification on the retained producer base. Six focused
+ownership, error and work controls pass with a local borrowed Type replacement
+map and independently owned signature output. Both required canonical images
+were attempted separately and still fail their unchanged default work limits;
+their current callers and total deficits are not inferred from earlier traces.
+This is partial static progress, with all final image and delivery gates open.

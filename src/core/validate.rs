@@ -3,6 +3,8 @@
 #[cfg(test)]
 mod declaration_closure_tests;
 #[cfg(test)]
+mod effect_signature_borrow_tests;
+#[cfg(test)]
 mod foreign_host_tests;
 #[cfg(test)]
 mod selected_evidence_tests;
@@ -16720,7 +16722,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 Some(node),
             ));
         };
-        let mut replacements = TypeReplacementMap::new();
+        // The validated instance outlives this local substitution. Borrow its
+        // Type arguments rather than cloning a map that is immediately dropped;
+        // substitution still constructs the complete owned output signature.
+        let mut replacements = HashMap::new();
         let mut rows = HashMap::new();
         self.charge_type_work(declaration.parameters.len())?;
         let type_count = instance
@@ -16738,7 +16743,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
             match argument {
                 crate::types::KindedArgument::TypeArg(ty) => {
-                    replacements.insert_replacing(parameter.id, self.clone_type_charged(ty)?)
+                    self.charge_type_work(1)?;
+                    replacements.insert(parameter.id, ty);
                 }
                 crate::types::KindedArgument::RowArg(row) => {
                     if rows
@@ -16750,9 +16756,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 }
             }
         }
-        let signature = substitute_type_and_row_variables_with(
+        let signature = crate::types::substitute_type_and_row_variables_borrowed_with(
             &operation.annotation.ty,
-            replacements.as_map(),
+            &replacements,
             &rows,
             |cells| self.charge_type_work(cells),
             || ValidationError::new(ValidationReason::Resource, Some(node)),
