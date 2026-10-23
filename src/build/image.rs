@@ -128,6 +128,16 @@ struct SourceRecord {
     text: Slice,
 }
 
+/// One complete original arena and its occurrence root, separate from the
+/// shared wire allocation. Every node and edge is retained, including nonroot
+/// nodes; restoring a view never substitutes another annotation's arena.
+#[derive(Clone, Copy, Debug)]
+struct ProvenanceViewRecord {
+    nodes: Slice,
+    children: Slice,
+    root: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct SpanRecord {
     source: u32,
@@ -142,7 +152,7 @@ enum OriginRecord {
     Related { primary: u32, related: Slice },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct NominalId {
     module: u32,
     local: u32,
@@ -154,7 +164,7 @@ struct ConstructorIdentity {
     local: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum BinderIdentity {
     Resolved { module: u32, local: u32 },
     Generated(u32),
@@ -515,6 +525,7 @@ pub(crate) struct PureImage {
     abstract_nominals: Vec<AbstractNominalRecord>,
     provenance: Vec<ProvenanceRecord>,
     provenance_children: Vec<u32>,
+    provenance_views: Vec<ProvenanceViewRecord>,
     effects: Vec<EffectDeclarationRecord>,
     operations: Vec<EffectOperationRecord>,
     prepared_representations: Vec<PreparedRepresentationRecord>,
@@ -631,6 +642,48 @@ fn append<T: Copy>(
         .map_err(|_| ImageFailure::Resource)?;
     records.extend_from_slice(values);
     Slice::of(records, start)
+}
+
+/// Paid merge passes over retained portable keys; values are borrowed or flat
+/// records. Key comparison cannot walk Type/Row/provenance trees.
+fn sort_image_records<T: Copy, K: Ord>(
+    items: &mut [T],
+    key: impl Fn(&T) -> K,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ImageFailure> {
+    let count = items.len();
+    charge(work, count)?;
+    if count < 2 {
+        return Ok(());
+    }
+    let mut scratch = Vec::new();
+    scratch
+        .try_reserve_exact(count)
+        .map_err(|_| ImageFailure::Resource)?;
+    scratch.resize(count, items[0]);
+    let mut width = 1usize;
+    while width < count {
+        charge(work, count.checked_mul(3).ok_or(ImageFailure::Resource)?)?;
+        let mut start = 0usize;
+        while start < count {
+            let middle = start.saturating_add(width).min(count);
+            let end = middle.saturating_add(width).min(count);
+            let (mut left, mut right) = (start, middle);
+            for output in &mut scratch[start..end] {
+                if left < middle && (right == end || key(&items[left]) <= key(&items[right])) {
+                    *output = items[left];
+                    left += 1;
+                } else {
+                    *output = items[right];
+                    right += 1;
+                }
+            }
+            start = end;
+        }
+        items.copy_from_slice(&scratch);
+        width = width.checked_mul(2).unwrap_or(count);
+    }
+    Ok(())
 }
 
 fn get<T>(records: &[T], slot: u32) -> Result<&T, ImageFailure> {
@@ -1573,7 +1626,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x13";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x14";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -1841,6 +1894,7 @@ wire_struct!(
     call_codecs
 );
 wire_struct!(SourceRecord, role, path, text);
+wire_struct!(ProvenanceViewRecord, nodes, children, root);
 wire_struct!(SpanRecord, source, start, end);
 wire_struct!(NominalId, module, local);
 wire_struct!(ConstructorIdentity, owner, local);
@@ -2510,6 +2564,7 @@ impl PureImage {
         writer.table(&self.abstract_nominals)?;
         writer.table(&self.provenance)?;
         writer.table(&self.provenance_children)?;
+        writer.table(&self.provenance_views)?;
         writer.table(&self.effects)?;
         writer.table(&self.operations)?;
         writer.table(&self.prepared_representations)?;
@@ -2737,6 +2792,7 @@ impl PureImage {
             abstract_nominals: reader.table()?,
             provenance: reader.table()?,
             provenance_children: reader.table()?,
+            provenance_views: reader.table()?,
             effects: reader.table()?,
             operations: reader.table()?,
             prepared_representations: reader.table()?,
@@ -2940,6 +2996,7 @@ impl PureImage {
                 || !self.global_parameters.is_empty()
                 || !self.provenance.is_empty()
                 || !self.provenance_children.is_empty()
+                || !self.provenance_views.is_empty()
                 || !self.call_codecs.is_empty()
                 || !self.scalar_preflights.is_empty()
             {
@@ -3560,6 +3617,10 @@ impl Decoder<'_> {
         node.map_err(ImageFailure::from)
     }
 }
+
+#[cfg(test)]
+#[path = "image_provenance_tests.rs"]
+mod provenance_tests;
 
 #[cfg(test)]
 mod tests {
@@ -7251,7 +7312,7 @@ struct OperationIdentity {
     local: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 enum TypeVariableIdentity {
     Resolved { module: u32, local: u32 },
     Generated(u32),
@@ -8381,6 +8442,9 @@ enum StructuralInput<'a> {
     Argument(&'a crate::types::KindedArgument),
 }
 
+#[path = "image_row_order.rs"]
+mod row_order;
+
 // Match Core's Type depth, not the number of private wire records. Row,
 // instance and argument wrappers are metadata; Types reached through them
 // inherit their enclosing depth. A unary application's function spine records
@@ -8784,19 +8848,7 @@ impl Encoder<'_> {
                             }
                         }
                         StructuralInput::Row(row) => {
-                            if let Some(tail) = row.tail() {
-                                for instance in tail.lacks().iter().rev() {
-                                    push(
-                                        &mut tasks,
-                                        Task::Visit(
-                                            StructuralInput::Instance(instance),
-                                            structural_child_depth(tag, 0, depth),
-                                        ),
-                                        self.work,
-                                    )?;
-                                }
-                            }
-                            for instance in row.known().iter().rev() {
+                            for instance in self.portable_row_members(row, depth)?.into_iter().rev() {
                                 push(
                                     &mut tasks,
                                     Task::Visit(
@@ -10288,6 +10340,7 @@ impl Encoder<'_> {
         // The original is already an arena. Retain its source-order construction
         // records without recursive traversal or per-child Arc clones.
         let start = self.image.provenance.len();
+        let children_start = self.image.provenance_children.len();
         charge(self.work, original.nodes().len())?;
         for (local, node) in original.nodes().iter().enumerate() {
             let root = |child: usize| -> Result<u32, ImageFailure> {
@@ -10405,10 +10458,16 @@ impl Encoder<'_> {
         if original.root() >= original.nodes().len() {
             return Err(ImageFailure::InvalidRecord);
         }
-        index(
-            start
-                .checked_add(original.root())
-                .ok_or(ImageFailure::Resource)?,
+        let nodes = Slice::of(&self.image.provenance, start)?;
+        let children = Slice::of(&self.image.provenance_children, children_start)?;
+        push(
+            &mut self.image.provenance_views,
+            ProvenanceViewRecord {
+                nodes,
+                children,
+                root: index(original.root())?,
+            },
+            self.work,
         )
     }
 
@@ -10420,12 +10479,18 @@ impl Encoder<'_> {
         for access in registry.source_accesses() {
             self.encode_source_access(access)?;
         }
+        let mut preflights = Vec::new();
         for (function, fact) in registry.scalar_preflights() {
+            let key = self.binder_id(function)?;
+            push(&mut preflights, (key, function, fact), self.work)?;
+        }
+        sort_image_records(&mut preflights, |entry| entry.0, self.work)?;
+        for (function_key, function, fact) in preflights {
             charge(self.work, 1)?;
             if function != fact.function() {
                 return Err(ImageFailure::InvalidRecord);
             }
-            let function = self.binder_id(function)?;
+            let function = function_key;
             let source = self.span(fact.source())?;
             let origin = self.encode_origin(fact.origin())?;
             let original = fact.annotation();
@@ -10449,9 +10514,14 @@ impl Encoder<'_> {
                 self.work,
             )?;
         }
+        let mut nominal_parameters = Vec::new();
         for (owner, parameters) in registry.nominal_parameter_entries() {
+            let key = self.nominal(owner)?;
+            push(&mut nominal_parameters, (key, parameters), self.work)?;
+        }
+        sort_image_records(&mut nominal_parameters, |entry| entry.0, self.work)?;
+        for (owner, parameters) in nominal_parameters {
             charge(self.work, 1)?;
-            let owner = self.nominal(owner)?;
             let start = self.image.parameters.len();
             for parameter in parameters {
                 self.encode_parameter(parameter)?;
@@ -10499,7 +10569,13 @@ impl Encoder<'_> {
                 .map_err(|_| ImageFailure::Resource)?;
             source_families.insert(header.family, ());
         }
+        let mut abstracts = Vec::new();
         for (id, kind, origin) in registry.abstract_nominal_kind_entries() {
+            let key = self.nominal(id)?;
+            push(&mut abstracts, (key, id, kind, origin), self.work)?;
+        }
+        sort_image_records(&mut abstracts, |entry| entry.0, self.work)?;
+        for (key, id, kind, origin) in abstracts {
             charge(self.work, 1)?;
             if source_families.contains_key(&id) {
                 continue;
@@ -10511,7 +10587,7 @@ impl Encoder<'_> {
                 .image_abstract_nominal_name(id)
                 .ok_or(ImageFailure::InvalidRecord)?;
             let spelling = append(&mut self.image.bytes, spelling.as_bytes(), self.work)?;
-            let id = self.nominal(id)?;
+            let id = key;
             let kind = self.encode_kind(kind)?;
             let origin = self.span(origin)?;
             push(
@@ -10884,98 +10960,148 @@ impl Decoder<'_> {
         Ok(parameters)
     }
 
-    // Restore one arena allocation. Each subsequent annotation only obtains a
-    // paid view of a checked root; it never recursively copies this tree.
-    fn provenance_arena(
-        &mut self,
-    ) -> Result<Option<crate::resolved::ResolvedTypeProvenance>, ImageFailure> {
+    // Restore each recorded complete arena once. Occurrence roots may share
+    // only their own arena; all nodes/edges retain existing full-arena equality.
+    fn provenance_arena(&mut self) -> Result<Option<RestoredProvenance>, ImageFailure> {
         use crate::resolved::ResolvedTypeProvenanceNode as P;
-        if self.image.provenance.is_empty() {
-            return Ok(None);
-        }
-        charge(
-            self.work,
-            self.image
-                .provenance
-                .len()
-                .checked_add(1)
-                .ok_or(ImageFailure::Resource)?,
-        )?;
-        let mut arena = Vec::new();
-        arena
-            .try_reserve_exact(self.image.provenance.len())
+        charge(self.work, self.image.provenance_views.len())?;
+        let mut views = Vec::new();
+        views
+            .try_reserve_exact(self.image.provenance_views.len())
             .map_err(|_| ImageFailure::Resource)?;
-        for (slot, record) in self.image.provenance.iter().enumerate() {
-            charge(self.work, 1)?;
-            let root = |record: u32| -> Result<usize, ImageFailure> {
-                let root = usize::try_from(record).map_err(|_| ImageFailure::InvalidRecord)?;
-                if root >= slot {
-                    return Err(ImageFailure::InvalidRecord);
-                }
-                Ok(root)
-            };
-            let roots =
-                |records: Slice, work: &mut TypeWorkBudget| -> Result<Box<[usize]>, ImageFailure> {
+        let mut next_node = 0usize;
+        let mut next_child = 0usize;
+        for view in &self.image.provenance_views {
+            charge(self.work, 6)?;
+            let node_start =
+                usize::try_from(view.nodes.start).map_err(|_| ImageFailure::InvalidRecord)?;
+            let child_start =
+                usize::try_from(view.children.start).map_err(|_| ImageFailure::InvalidRecord)?;
+            let root = usize::try_from(view.root).map_err(|_| ImageFailure::InvalidRecord)?;
+            let records = view.nodes.get(&self.image.provenance)?;
+            view.children.get(&self.image.provenance_children)?;
+            if node_start != next_node
+                || child_start != next_child
+                || records.is_empty()
+                || root >= records.len()
+            {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            next_node = node_start
+                .checked_add(records.len())
+                .ok_or(ImageFailure::Resource)?;
+            let child_end_u32 = view
+                .children
+                .start
+                .checked_add(view.children.len)
+                .ok_or(ImageFailure::InvalidRecord)?;
+            next_child = usize::try_from(child_end_u32).map_err(|_| ImageFailure::InvalidRecord)?;
+            charge(
+                self.work,
+                records.len().checked_add(1).ok_or(ImageFailure::Resource)?,
+            )?;
+            let mut arena = Vec::new();
+            arena
+                .try_reserve_exact(records.len())
+                .map_err(|_| ImageFailure::Resource)?;
+            let mut child_cursor = view.children.start;
+            for (slot, record) in records.iter().enumerate() {
+                charge(self.work, 1)?;
+                let root = |record: u32| -> Result<usize, ImageFailure> {
+                    let root = usize::try_from(record).map_err(|_| ImageFailure::InvalidRecord)?;
+                    let root = root
+                        .checked_sub(node_start)
+                        .ok_or(ImageFailure::InvalidRecord)?;
+                    if root >= slot {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    Ok(root)
+                };
+                let mut roots = |records: Slice,
+                                 work: &mut TypeWorkBudget|
+                 -> Result<Box<[usize]>, ImageFailure> {
+                    let end = records
+                        .start
+                        .checked_add(records.len)
+                        .ok_or(ImageFailure::InvalidRecord)?;
+                    if records.start != child_cursor || end > child_end_u32 {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
                     let mut roots = Vec::new();
                     for record in records.get(&self.image.provenance_children)? {
                         push(&mut roots, root(*record)?, work)?;
                     }
+                    child_cursor = end;
                     Ok(roots.into_boxed_slice())
                 };
-            let record = match *record {
-                ProvenanceRecord::Resource {
-                    span,
-                    resource,
-                    arguments,
-                } => P::Resource {
-                    span: self.span(span)?,
-                    resource: self.resource_identity(resource)?,
-                    arguments: roots(arguments, self.work)?,
-                },
-                ProvenanceRecord::ForeignOwner {
-                    span,
-                    nominal,
-                    arguments,
-                } => P::ForeignOwner {
-                    span: self.span(span)?,
-                    nominal: self.nominal(nominal)?,
-                    arguments: roots(arguments, self.work)?,
-                },
-                ProvenanceRecord::Fact(span) => P::Fact(self.span(span)?),
-                ProvenanceRecord::Tuple { span, elements } => P::Tuple {
-                    span: self.span(span)?,
-                    elements: roots(elements, self.work)?,
-                },
-                ProvenanceRecord::Row { span, arguments } => P::Row {
-                    span: self.span(span)?,
-                    argument_roots: roots(arguments, self.work)?,
-                },
-                ProvenanceRecord::Function {
-                    span,
-                    domain,
-                    codomain,
-                    effect_arguments,
-                } => P::Function {
-                    span: self.span(span)?,
-                    domain: root(domain)?,
-                    codomain: root(codomain)?,
-                    effect_arguments: roots(effect_arguments, self.work)?,
-                },
-                ProvenanceRecord::Application {
-                    span,
-                    function,
-                    argument,
-                    argument_span,
-                } => P::Application {
-                    span: self.span(span)?,
-                    function: root(function)?,
-                    argument: root(argument)?,
-                    argument_span: self.span(argument_span)?,
-                },
-            };
-            arena.push(record);
+                let record = match *record {
+                    ProvenanceRecord::Resource {
+                        span,
+                        resource,
+                        arguments,
+                    } => P::Resource {
+                        span: self.span(span)?,
+                        resource: self.resource_identity(resource)?,
+                        arguments: roots(arguments, self.work)?,
+                    },
+                    ProvenanceRecord::ForeignOwner {
+                        span,
+                        nominal,
+                        arguments,
+                    } => P::ForeignOwner {
+                        span: self.span(span)?,
+                        nominal: self.nominal(nominal)?,
+                        arguments: roots(arguments, self.work)?,
+                    },
+                    ProvenanceRecord::Fact(span) => P::Fact(self.span(span)?),
+                    ProvenanceRecord::Tuple { span, elements } => P::Tuple {
+                        span: self.span(span)?,
+                        elements: roots(elements, self.work)?,
+                    },
+                    ProvenanceRecord::Row { span, arguments } => P::Row {
+                        span: self.span(span)?,
+                        argument_roots: roots(arguments, self.work)?,
+                    },
+                    ProvenanceRecord::Function {
+                        span,
+                        domain,
+                        codomain,
+                        effect_arguments,
+                    } => P::Function {
+                        span: self.span(span)?,
+                        domain: root(domain)?,
+                        codomain: root(codomain)?,
+                        effect_arguments: roots(effect_arguments, self.work)?,
+                    },
+                    ProvenanceRecord::Application {
+                        span,
+                        function,
+                        argument,
+                        argument_span,
+                    } => P::Application {
+                        span: self.span(span)?,
+                        function: root(function)?,
+                        argument: root(argument)?,
+                        argument_span: self.span(argument_span)?,
+                    },
+                };
+                arena.push(record);
+            }
+            if child_cursor != child_end_u32 {
+                return Err(ImageFailure::InvalidRecord);
+            }
+            views.push(crate::resolved::ResolvedTypeProvenance::new(arena, root));
         }
-        Ok(Some(crate::resolved::ResolvedTypeProvenance::new(arena, 0)))
+        if next_node != self.image.provenance.len()
+            || next_child != self.image.provenance_children.len()
+        {
+            return Err(ImageFailure::InvalidRecord);
+        }
+        Ok(if views.is_empty() {
+            None
+        } else {
+            Some(RestoredProvenance { views })
+        })
     }
 
     fn scalar_representation(
@@ -12125,9 +12251,24 @@ impl Decoder<'_> {
     }
 }
 
+struct RestoredProvenance {
+    views: Vec<crate::resolved::ResolvedTypeProvenance>,
+}
+impl RestoredProvenance {
+    fn image_view(
+        &self,
+        slot: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<crate::resolved::ResolvedTypeProvenance, ()> {
+        work.charge(1)?;
+        let original = self.views.get(slot).ok_or(())?;
+        original.image_view(original.root(), work)
+    }
+}
+
 struct RestoredNativeRegistry {
     registry: ResolvedRegistry,
-    provenance: Option<crate::resolved::ResolvedTypeProvenance>,
+    provenance: Option<RestoredProvenance>,
     prepared: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
     symbols: Vec<Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
 }
@@ -12136,7 +12277,7 @@ struct RestoredNativeRegistry {
 /// coordinates. These handles are needed by the generated-registration gate;
 /// returning them alone never admits an executable callback.
 pub(crate) struct RestoredEffectImage {
-    provenance: Option<crate::resolved::ResolvedTypeProvenance>,
+    provenance: Option<RestoredProvenance>,
     pub(crate) program: crate::core::ValidatedEffectProgram,
     pub(crate) prepared: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
     pub(crate) symbols: Vec<Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
@@ -12797,7 +12938,7 @@ impl Decoder<'_> {
     fn effect_data(
         &mut self,
         record: EffectDeclarationRecord,
-        arena: Option<&crate::resolved::ResolvedTypeProvenance>,
+        arena: Option<&RestoredProvenance>,
     ) -> Result<crate::resolved::ResolvedEffectDeclaration, ImageFailure> {
         use crate::resolved::{
             ResolvedEffectDeclaration, ResolvedEffectOperation, ResolvedEffectOperationBuffer,
@@ -12824,7 +12965,7 @@ impl Decoder<'_> {
             let provenance_root = usize::try_from(record.annotation.provenance)
                 .map_err(|_| ImageFailure::InvalidRecord)?;
             let arena = arena.ok_or(ImageFailure::InvalidRecord)?;
-            if provenance_root >= self.image.provenance.len() {
+            if provenance_root >= self.image.provenance_views.len() {
                 return Err(ImageFailure::InvalidRecord);
             }
             let provenance = arena
@@ -12860,7 +13001,26 @@ impl Decoder<'_> {
     }
 }
 
+type CheckedReencodingData = (NativeBuildImage, Vec<(ModuleId, Arc<SourceFile>)>);
+
 impl RestoredEffectImage {
+    /// Reuse the complete checked producer encoder after independent restore.
+    /// This returns data, never executable provider admission.
+    pub(crate) fn reencode_checked_data(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<CheckedReencodingData, NativeImageFailure> {
+        charge(work, self.sources.len())?;
+        let mut provenance = Vec::new();
+        provenance.try_reserve_exact(self.sources.len()).map_err(|_| ImageFailure::Resource)?;
+        for (module, source) in self.modules.iter().zip(&self.sources) {
+            charge(work, source.snapshot_work().map_err(|_| ImageFailure::Resource)?.checked_add(1).ok_or(ImageFailure::Resource)?)?;
+            provenance.push((*module, Arc::new(source.clone())));
+        }
+        let build = encode_checked_preparation(&self.program, &provenance, super::host::NATIVE_TARGET, work)?;
+        Ok((build, provenance))
+    }
+
     /// Drops startup-only coordinates/arena view after executable admission.
     /// The checked program/descriptor owners retain their original required data.
     pub(crate) fn into_program(self) -> crate::core::ValidatedEffectProgram {

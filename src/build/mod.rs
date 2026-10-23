@@ -12,10 +12,13 @@ mod checked_link;
 mod checked_native_build;
 mod checked_producer;
 mod checked_receipt;
+mod checked_request;
 mod emit;
 mod gas;
 mod host;
 mod image;
+
+pub use checked_request::{ApplicabilityRequest, RequestLimits};
 
 pub use checked_receipt::{
     ArtifactPin, ProducerReceipt, ProducerReceiptLimits, ProducerRole, ReceiptFailure, ReceiptField,

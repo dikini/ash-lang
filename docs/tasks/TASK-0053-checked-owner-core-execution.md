@@ -1,7 +1,7 @@
 # TASK-0053: Connected checked owner execution and immutable admission
 
 - ID: `TASK-0053`
-- Status: active for actual root-link provenance; protected activation and connected execution await their gates
+- Status: active for protected applicability-request and sealed-image preparation; connected execution awaits its gates
 - Related: [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](TASK-0051-checked-ffi-contract-carriers.md),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
@@ -198,7 +198,7 @@ thirteen rebound inner mutations and exact/short/spent/fresh controls. Eleven
 retired transient inputs remain qualified; nine nested warning lines remain.
 The explicit private 2 GiB per-file policy changes no shared default and does
 not establish the public/default profile. No generated output or selected native
-function has run. Final published-head review and retention remain pending.
+function has run. PR115 is retained at `9e57263b` after [final review](https://github.com/dikini/ash-lang/pull/115#pullrequestreview-5626758869) and [retention](https://github.com/dikini/ash-lang/pull/115#issuecomment-6362455189); the guarded #62 partial record is verified with all four whole criteria open.
 
 This addresses transient input correspondence, not full tool/native/runtime
 conformity. All six complete closure fields, independent premises, protected
@@ -207,6 +207,57 @@ admission/execution work must use the actual artifacts, independently reviewed
 finite AD16 premises and administrator-established context, rather than another
 query-only observation. Actual initialized-eight-byte acquisition, copy,
 finish/Trace and the root-triggered full F-core gate remain required.
+
+## Active protected preparation component
+
+The current step-5 candidate connects ReceiptSeed/native/root records and full
+image/facts/original/policy re-admission to bounded applicability-request data.
+Exact versioned AD16 residual premises remain proposed; six Missing fields cannot
+be completed by copying observation hashes. The separate trusted-preparation
+crate excludes selected provider adapters and validates a fixed administrator
+configuration/store ingress, calling-thread credentials including FSIDs,
+namespace/mount/ancestor/ACL/descriptor state, and non-executing sealed-image
+preparation. Its protected prepared object has only the real consumer constructor.
+Low-level sealed data and untrusted approval-comparator examples confer no
+protected applicability. All four seals precede final same-fd hash and strict
+ELF inspection. No execution operation or public guard removal is added.
+
+Independent request comparisons exposed complete-arena reconstruction expansion,
+unordered wire traversal and process-local wrapper identifiers. The candidate
+preserves every original arena node/edge/root through version-14 occurrence views,
+orders only unordered metadata/row sets by complete portable coordinates before
+encoding children, and renders private bridge identifiers from authenticated
+emission coordinates. Ordered arguments, original equality and full image/facts/
+policy/Rust comparisons remain exact.
+
+Session 4120 passes both packages' Clippy and 42 distinct tests: 18 focused,
+22 existing affected regressions, one genuine static producer/request test and
+one actual ELF sealing/approval-data test. The affected set includes three fresh
+startup controls at unchanged default work 327680. The genuine linked request
+passes independent re-admission, typed category/context/premise donors and exact/
+short/spent/fresh controls; the actual ELF passes same-open copy, four seals,
+final hash and structural inspection without startup. The final source uses an
+explicit private 2 GiB link-input observation profile; it does not prove public
+producer/default-profile admission. All 30 phase input maps and tools match and
+owned children are reaped with absent groups. The native build retains nine
+warning lines, including possible-loading caveats. The
+[delivery record](evidence/checked-owner-core-execution/protected-preparation/README.md)
+preserves historical failures and fresh artifact associations separately.
+
+A later read-only whole-workspace formatting check returns 1 for retained baseline
+and new call layouts; no formatter/full-workspace pass is claimed. The reviewed
+cadence keeps this tested fingerprint and requires formatting cleanup/check at
+the next root-owned F-core integration freeze before its fresh full gate, final
+artifact and approval.
+
+This candidate is not yet retained. All six complete closure fields remain
+Missing and premises proposed. Genuine protected positives require external
+administrator-established installation and independent applicable per-image
+approval; no test token substitutes for them. Implementable work remaining after
+retention is the reviewed approval/launcher-to-runtime transfer for actual owner
+acquire, copy, finish and Trace, plus refreshed required F3 images on this codec.
+Protected deployment and any generated output execution require their separate
+gates; the connected F-core and whole acceptance remain open.
 
 ## Acceptance for this bounded delivery
 

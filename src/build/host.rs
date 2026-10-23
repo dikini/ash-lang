@@ -857,6 +857,11 @@ pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram
                         });
                     match observed {
                         Ok(bytes) => {
+                            if let Some(native) = &prepared.native_build {
+                                let request = super::checked_request::from_linked_files(&project, &bytes, native.limits())
+                                    .map_err(|_| io::Error::other("applicability request refused"))?;
+                                fs::write(project.join("applicability-request.json"), request)?;
+                            }
                             fs::write(&receipt_path, bytes)?;
                             receipt_written = true;
                         }

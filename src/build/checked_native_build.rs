@@ -17,7 +17,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Limits {
     pub file_bytes: usize,
     pub total_bytes: usize,
@@ -1398,6 +1399,12 @@ mod tests {
         )
         .unwrap();
         let project = built.producer_receipt().unwrap().parent().unwrap();
+        let request_path = project.join("applicability-request.json");
+        let request_bytes = fs::read(&request_path).unwrap();
+        super::super::checked_request::exercise_linked_request_data_for_test(&request_bytes);
+        println!("PROTECTED_PREPARATION_DATA {}", serde_json::json!({
+            "request": request_path, "image": built.executable(),
+        }));
         assert!(!project.join("linked-program").exists());
         for phase in 0..2 {
             let lifecycle: serde_json::Value = serde_json::from_slice(

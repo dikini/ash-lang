@@ -451,21 +451,15 @@ impl Encoder<'_> {
         };
         let defining = original.original_registry();
         let items = defining.image_registry_items(self.work).map_err(failure)?;
-        let mut names = defining
+        let mut names = Vec::new();
+        for (id, name) in defining
             .image_registry_abstract_names(self.work)
-            .map_err(failure)?;
-        // Match the deterministic identity order used by the selector records.
-        for position in 0..names.len() {
-            let mut selected = position;
-            for candidate in position + 1..names.len() {
-                charge(self.work, 1)?;
-                if names[candidate].0 < names[selected].0 {
-                    selected = candidate;
-                }
-            }
-            charge(self.work, 1)?;
-            names.swap(position, selected);
+            .map_err(failure)?
+        {
+            let key = self.nominal(id)?;
+            push(&mut names, (key, name), self.work)?;
         }
+        super::sort_image_records(&mut names, |entry| entry.0, self.work)?;
         if !defining
             .matches_image_registry_projection(canonical, self.work)
             .map_err(failure)?
@@ -475,7 +469,6 @@ impl Encoder<'_> {
         let header = self.encode_source_header(&original.header().original)?;
         let start = self.image.source_registry_abstracts.len();
         for (id, name) in names {
-            let id = self.nominal(id)?;
             let spelling = append(&mut self.image.bytes, name.as_bytes(), self.work)?;
             push(
                 &mut self.image.source_registry_abstracts,
@@ -485,6 +478,7 @@ impl Encoder<'_> {
         }
         let abstracts = Slice::of(&self.image.source_registry_abstracts, start)?;
         let start = self.image.source_registry_items.len();
+        let mut portable_items = Vec::new();
         for item in items {
             let (tag, module, owner, local) = match item {
                 Item::Nominal(id) | Item::Abstract(id) | Item::Foreign(id) => {
@@ -533,7 +527,7 @@ impl Encoder<'_> {
                 }
             };
             push(
-                &mut self.image.source_registry_items,
+                &mut portable_items,
                 SourceRegistryItemRecord {
                     tag,
                     module,
@@ -543,6 +537,16 @@ impl Encoder<'_> {
                 self.work,
             )?;
         }
+        super::sort_image_records(
+            &mut portable_items,
+            |item| (item.tag, item.module, item.owner, item.local),
+            self.work,
+        )?;
+        append(
+            &mut self.image.source_registry_items,
+            &portable_items,
+            self.work,
+        )?;
         let items = Slice::of(&self.image.source_registry_items, start)?;
         let start = self.image.source_registry_modules.len();
         for (module, source) in original.module_sources() {
@@ -639,7 +643,13 @@ impl Encoder<'_> {
                 self.work,
             )?;
         }
+        let mut headers = Vec::new();
         for header in registry.source_resource_facts() {
+            let key = self.resource_identity(header.id)?;
+            push(&mut headers, ((key.module, key.local), header), self.work)?;
+        }
+        super::sort_image_records(&mut headers, |entry| entry.0, self.work)?;
+        for (_, header) in headers {
             self.encode_source_header(header)?;
         }
         let mut selected = HashMap::new();
@@ -674,7 +684,14 @@ impl Encoder<'_> {
             selected.insert(header.answer.id, ());
         }
         // The admission inventory permits only actual scope Fresh identities here.
+        let mut parameters = Vec::new();
         for parameter in registry.type_variables() {
+            let key = self.type_variable(parameter.id)?;
+            push(&mut parameters, (key, parameter), self.work)?;
+        }
+        super::sort_image_records(&mut parameters, |entry| entry.0, self.work)?;
+        for (_, parameter) in parameters {
+            charge(self.work, 1)?;
             if !selected.contains_key(&parameter.id) {
                 let slot = self.encode_parameter(parameter)?;
                 push(&mut self.image.source_parameters, slot, self.work)?;
@@ -1179,18 +1196,30 @@ impl Encoder<'_> {
         }
         let resumes = Slice::of(&self.image.source_plain_pairs, start)?;
         let start = self.image.source_substitutions.len();
+        let mut substitutions = Vec::new();
         for (source, ty) in claim.substitution.types {
+            let key = self.type_variable(*source)?;
+            push(&mut substitutions, (key, ty), self.work)?;
+        }
+        super::sort_image_records(&mut substitutions, |entry| entry.0, self.work)?;
+        for (original, ty) in substitutions {
             let record = SourceSubstitutionRecord {
-                original: self.type_variable(*source)?,
+                original,
                 value: self.encode_type(ty)?,
             };
             push(&mut self.image.source_substitutions, record, self.work)?;
         }
         let types = Slice::of(&self.image.source_substitutions, start)?;
         let start = self.image.source_substitutions.len();
+        let mut substitutions = Vec::new();
         for (source, row) in claim.substitution.rows {
+            let key = self.type_variable(*source)?;
+            push(&mut substitutions, (key, row), self.work)?;
+        }
+        super::sort_image_records(&mut substitutions, |entry| entry.0, self.work)?;
+        for (original, row) in substitutions {
             let record = SourceSubstitutionRecord {
-                original: self.type_variable(*source)?,
+                original,
                 value: self.encode_structural(StructuralInput::Row(row))?,
             };
             push(&mut self.image.source_substitutions, record, self.work)?;
@@ -1380,11 +1409,11 @@ impl Decoder<'_> {
     }
     fn provenance_view(
         &mut self,
-        arena: Option<&crate::resolved::ResolvedTypeProvenance>,
+        arena: Option<&super::RestoredProvenance>,
         root: u32,
     ) -> Result<crate::resolved::ResolvedTypeProvenance, ImageFailure> {
         let root = usize::try_from(root).map_err(|_| ImageFailure::InvalidRecord)?;
-        if root >= self.image.provenance.len() {
+        if root >= self.image.provenance_views.len() {
             return Err(ImageFailure::InvalidRecord);
         }
         arena
@@ -1395,7 +1424,7 @@ impl Decoder<'_> {
     fn resolved_annotation(
         &mut self,
         record: ResolvedTypeRecord,
-        arena: Option<&crate::resolved::ResolvedTypeProvenance>,
+        arena: Option<&super::RestoredProvenance>,
     ) -> Result<ResolvedAnnotationOwner, ImageFailure> {
         let ty = self.ty(record.ty)?;
         let provenance = self.provenance_view(arena, record.provenance)?;
@@ -1411,7 +1440,7 @@ impl Decoder<'_> {
     fn resource_effect(
         &mut self,
         record: ResourceEffectRecord,
-        arena: Option<&crate::resolved::ResolvedTypeProvenance>,
+        arena: Option<&super::RestoredProvenance>,
     ) -> Result<ResolvedEffectOwner, ImageFailure> {
         let instance = self.structural(record.effect)?.instance()?;
         let mut provenance = Vec::new();
@@ -1434,7 +1463,7 @@ impl Decoder<'_> {
     pub(super) fn source_registry(
         &mut self,
         mut registry: ResolvedRegistry,
-        arena: Option<&crate::resolved::ResolvedTypeProvenance>,
+        arena: Option<&super::RestoredProvenance>,
     ) -> Result<ResolvedRegistry, ImageFailure> {
         let mut source_parameters = ParameterBuffer(Vec::new());
         charge(self.work, self.image.source_parameters.len())?;
@@ -1513,7 +1542,7 @@ impl Decoder<'_> {
     fn source_header(
         &mut self,
         record: ResourceHeaderRecord,
-        arena: Option<&crate::resolved::ResolvedTypeProvenance>,
+        arena: Option<&super::RestoredProvenance>,
     ) -> Result<SourceResourceTypeFact, ImageFailure> {
         let id = self.resource_identity(record.id)?;
         let family = self.nominal(record.family)?;

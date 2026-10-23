@@ -27,7 +27,7 @@ sha2 = "=0.10.9"
 ash-foreign-adapter = { path = "foreign-adapter" }
 
 [workspace]
-members = ["foreign-adapter", "xtask"]
+members = ["foreign-adapter", "xtask", "trusted-preparation"]
 resolver = "3"
 
 # Receipt hashing is verification tooling. Product gates keep the default profile.
