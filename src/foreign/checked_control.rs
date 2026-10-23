@@ -94,13 +94,13 @@ pub(super) struct FinishWitness(ClosingSnapshot);
 #[derive(Debug)]
 pub(crate) struct SyntheticFinishWitness(ClosingSnapshot);
 impl SyntheticFinishWitness {
-    pub(super) fn completion(&self) -> Completion {
+    pub(crate) fn completion(&self) -> Completion {
         self.0.completion
     }
-    pub(super) fn native(&self) -> Native {
+    pub(crate) fn native(&self) -> Native {
         self.0.native
     }
-    pub(super) fn unresolved(&self) -> bool {
+    pub(crate) fn unresolved(&self) -> bool {
         self.0.unresolved
     }
 }
@@ -146,7 +146,7 @@ pub(crate) enum Continuation {
     Completed,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Completion {
+pub(crate) enum Completion {
     Observed(Native),
     SessionLost,
     Quarantined,
@@ -1163,6 +1163,12 @@ impl RuntimeBoundary {
         let witness = self.ledger.finish_witness(self.owner, &mut self.prepaid)?;
         self.ledger
             .source_continued(self.owner, witness, &mut self.prepaid)
+    }
+    /// Fixed-size admitted facts only. Unlike the diagnostic snapshot, this
+    /// does not scan history or reconstruct a native transition.
+    pub(super) fn closing_record(&self) -> (Option<Completion>, K, Native, bool) {
+        let record = &self.ledger.records[self.owner.index];
+        (record.completion, record.k, record.native, record.unresolved)
     }
     pub(super) fn snapshot(&self) -> BoundarySnapshot {
         let record = &self.ledger.records[self.owner.index];

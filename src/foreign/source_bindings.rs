@@ -1546,16 +1546,17 @@ impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
         guard: NativeOwnerGuard,
         operands: &[NativeOwnerOperand],
         blocked: bool,
-    ) -> (
+    ) -> Result<(
         SourceOwnerReturnedAuthority<'bindings>,
         NativeOwnerDisposition,
         Option<super::source_runtime::NativeOwnerStatus>,
-    ) {
-        guard
-            .begin_checked_finish()
-            .expect("admitted checked finish ticket");
-        let (consumed, status) = guard.finish_with_plan(&self.plan, operands, blocked);
-        (
+    ), super::source_runtime::NativeOwnerAdmissionError> {
+        let (consumed, status) = if self.symbol.prepared().checked_contract().is_some() {
+            guard.finish_checked_admitted(&self.plan, operands, blocked)?
+        } else {
+            guard.finish_with_plan(&self.plan, operands, blocked)
+        };
+        Ok((
             SourceOwnerReturnedAuthority {
                 checked: None,
                 _symbol: self.symbol,
@@ -1563,7 +1564,7 @@ impl<'bindings> AdmittedSourceOwnerTeardownInvocation<'bindings> {
             },
             consumed,
             status,
-        )
+        ))
     }
 }
 

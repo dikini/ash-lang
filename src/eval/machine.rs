@@ -22,6 +22,9 @@ mod source_data_phases;
 #[path = "source_window_phases.rs"]
 pub(super) mod source_window_phases;
 
+#[path = "checked_reporting.rs"]
+mod checked_reporting;
+
 #[path = "source_owner_phases.rs"]
 mod source_owner_phases;
 #[cfg(test)]
@@ -1020,6 +1023,7 @@ pub struct Machine<'runtime> {
     pending_source_call: Option<source_scalar_phases::ScalarCallProgress<'runtime>>,
     pending_source_owner_call: Option<source_owner_phases::SourceOwnerCallProgress<'runtime>>,
     checked_owner_limits: Option<crate::foreign::source_runtime::CheckedOwnerLimits>,
+    checked_reports: Option<super::checked_reports::ResourceReports>,
     cleanup_limit: usize,
     live_cleanups: usize,
     program: ExecutableProgram,
@@ -1051,6 +1055,7 @@ impl<'runtime> Machine<'runtime> {
             pending_source_call: None,
             pending_source_owner_call: None,
             checked_owner_limits: None,
+            checked_reports: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
             live_cleanups: 0,
@@ -1089,6 +1094,7 @@ impl<'runtime> Machine<'runtime> {
             pending_source_call: None,
             pending_source_owner_call: None,
             checked_owner_limits: None,
+            checked_reports: None,
             program: ExecutableProgram::Effect(program.shared()),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
             live_cleanups: 0,
@@ -1112,7 +1118,13 @@ impl<'runtime> Machine<'runtime> {
         }
     }
 
-    fn run(mut self) -> Result<Evaluation, RuntimeFailure> {
+    fn run(self) -> Result<Evaluation, RuntimeFailure> {
+        // Ordinary entry points retain their existing result and closed checked
+        // activation. Only the private connected startup may retain the envelope.
+        self.run_with_reports().into_parts().0
+    }
+
+    fn run_with_reports(mut self) -> super::CheckedEvaluation {
         let scope = disposal::Scope::enter();
         let result = self.run_loop();
         let result = match result {
@@ -1124,9 +1136,16 @@ impl<'runtime> Machine<'runtime> {
             },
             result => result,
         };
+        // Move already funded report storage before disposing the machine. No
+        // source result, failure, or host cleanup overwrites these observations.
+        let reports = self
+            .checked_reports
+            .take()
+            .map(super::checked_reports::ResourceReports::into_records)
+            .unwrap_or_default();
         // Disposal remains within the observation scope on both paths.
         drop(self);
-        scope.finish(result)
+        super::CheckedEvaluation::from_parts(scope.finish(result), reports)
     }
 
     fn quarantine_abandoned_providers(&mut self) -> Result<(), ResourceFailure> {
@@ -7567,6 +7586,37 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn machine_envelope_preserves_preexisting_reports_on_real_ok_and_error_paths() {
+        use super::super::checked_reports::ResourceReports;
+        use super::super::{ResourceClosing, ResourceDiagnostic, ResourceNativeFact, ResourceReport};
+        let source = SourceFile::new("checked-envelope-data", "42").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let mut builder = CoreBuilder::new();
+        let root = builder.integer(Integer::parse_decimal("42").unwrap(), Type::Int, origin).unwrap();
+        let program = validate(builder.finish(root).unwrap(), &[&source]).unwrap();
+        for fail in [false, true] {
+            let mut machine = Machine::new(&program);
+            let mut reports = ResourceReports::reserve(1, &mut TypeWorkBudget::with_limit(1)).unwrap();
+            reports.ready().unwrap().commit(ResourceReport::observed(
+                ResourceClosing::Transferred, ResourceNativeFact::Owned, true,
+                None, ResourceDiagnostic::Lost,
+            ));
+            // Untrusted observation DATA only: no checked owner, host activation,
+            // native callback, protected context, or new authority is constructed.
+            machine.checked_reports = Some(reports);
+            if fail { machine.control = None; }
+            let outcome = machine.run_with_reports();
+            assert_eq!(outcome.resource_reports().len(), 1);
+            assert_eq!(outcome.resource_reports()[0].closing(), ResourceClosing::Transferred);
+            assert!(outcome.resource_reports()[0].unresolved());
+            if fail { assert!(outcome.result().is_err()); }
+            else { assert_eq!(outcome.result().unwrap().value.to_string(), "42"); }
+        }
+        // This proves envelope preservation, not settlement of an actual pending
+        // owner on drop; that discriminating connected control remains required.
     }
 
     #[test]

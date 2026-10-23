@@ -130,6 +130,7 @@ impl CheckedEvaluation {
 
 /// Storage is funded before native entry. A ready writer holds its exclusive
 /// borrow before the call, so commit cannot allocate or replace an older record.
+#[derive(Debug)]
 pub(crate) struct ResourceReports {
     records: Vec<ResourceReport>,
     limit: usize,

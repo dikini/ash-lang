@@ -373,6 +373,71 @@ fn checked_owner_local_finish_never_becomes_native_readiness() {
 }
 
 #[test]
+fn checked_owner_finish_missing_control_refuses_without_dispatch_or_drop_retry() {
+    with_requests(|acquire, _| {
+        let mut work = TypeWorkBudget::default();
+        let (ready, storage) = authority_guard(&acquire, 183, &mut work);
+        let guard = ready.returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
+            .record().into_guard().unwrap();
+        let plan = crate::foreign::source_runtime::NativeOwnerDestruction::Void {
+            callback: dispose, consumes: true,
+        };
+        let before = DISPOSALS.get();
+        assert!(guard.finish_checked_admitted(&plan, &[], false).is_err());
+        assert_eq!(DISPOSALS.get(), before);
+        // Explicit legacy fixture reclamation remains a separate host phase.
+        assert!(storage.close());
+        assert_eq!(DISPOSALS.get(), before + 1);
+    });
+}
+
+#[test]
+fn checked_owner_finish_dispatch_keeps_local_witness_without_callback() {
+    for local in [false, true] {
+        with_requests(|acquire, finish| {
+            let mut work = TypeWorkBudget::default();
+            let (ready, storage) = ready(&acquire, 182, &mut work);
+            let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+            let mut guard = ready
+                .returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
+                .record()
+                .into_guard()
+                .unwrap();
+            handle.publish(182, acquire._scope_node, &mut work).unwrap();
+            if local {
+                guard.quarantine();
+            }
+            handle.closing(182, acquire._scope_node, &mut work).unwrap();
+            guard.prepare_checked_finish(&finish, 182, false, &mut work).unwrap();
+            let before = DISPOSALS.get();
+            let plan = crate::foreign::source_runtime::NativeOwnerDestruction::Void {
+                callback: dispose,
+                consumes: true,
+            };
+            // This is the same admitted dispatch used by the source invocation;
+            // the callback is Rust-only and supplies no native ABI/free evidence.
+            let (returned, status) = guard.finish_checked_admitted(&plan, &[], false).unwrap();
+            assert!(status.is_none());
+            assert_eq!(DISPOSALS.get(), before + usize::from(!local));
+            assert_eq!(returned.synthetic_witness().is_some(), local);
+            assert_eq!(returned.is_retained(), local);
+            if let Some(witness) = returned.synthetic_witness() {
+                assert_eq!(witness.completion(), crate::foreign::checked_control::Completion::Quarantined);
+                assert_eq!(witness.native(), crate::foreign::checked_control::Native::Owned);
+                assert!(!witness.unresolved());
+            }
+            assert_eq!(handle.snapshot().observations, if local { 1 } else { 2 });
+            assert_eq!(handle.snapshot().continuation, crate::foreign::checked_control::Continuation::Required);
+            drop(returned);
+            assert_eq!(DISPOSALS.get(), before + usize::from(!local));
+            // Separate explicit legacy fixture reclamation is not source Finish.
+            assert!(storage.close());
+            assert_eq!(DISPOSALS.get(), before + 1);
+        });
+    }
+}
+
+#[test]
 fn checked_owner_boundary_finish_commit_survives_output_failure_without_replay() {
     with_requests(|acquire, finish| {
         let mut work = TypeWorkBudget::default();

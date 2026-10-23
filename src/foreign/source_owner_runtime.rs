@@ -330,7 +330,7 @@ struct NativeOwnerSlot {
     dependencies: Box<[usize]>,
     closure: Box<[usize]>,
     live_dependents: usize,
-    checked: Option<super::super::checked_control::RuntimeBoundary>,
+    checked: Option<crate::foreign::checked_control::RuntimeBoundary>,
 }
 
 impl NativeOwnerStorage {
@@ -610,6 +610,37 @@ impl NativeOwnerGuard {
         .0
     }
 
+    /// Consume the preflighted one-shot decision before dispatch. A synthetic
+    /// return retains the exact physical owner and closing witness, and never
+    /// invokes the native plan or fabricates a scalar status.
+    pub(crate) fn finish_checked_admitted(
+        mut self,
+        plan: &NativeOwnerDestruction,
+        operands: &[NativeOwnerOperand],
+        blocked: bool,
+    ) -> Result<(NativeOwnerDisposition, Option<NativeOwnerStatus>), NativeOwnerAdmissionError> {
+        let entry = match self.begin_checked_finish_entry() {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                self.quarantine();
+                return Err(NativeOwnerAdmissionError::Authority);
+            }
+            Err(error) => {
+                self.quarantine();
+                return Err(error);
+            }
+        };
+        match entry {
+            crate::foreign::checked_control::FinishEntry::NativeReady => {
+                Ok(self.finish_with_plan(plan, operands, blocked))
+            }
+            crate::foreign::checked_control::FinishEntry::Synthetic(witness) => Ok((
+                NativeOwnerDisposition::Synthetic { guard: self, witness },
+                None,
+            )),
+        }
+    }
+
     pub(crate) fn finish_with_plan(
         mut self,
         plan: &NativeOwnerDestruction,
@@ -662,6 +693,17 @@ pub(crate) struct NativeOwnerBoundary {
     slot: usize,
 }
 impl NativeOwnerBoundary {
+    pub(crate) fn closing_record(&self) -> Result<(
+        Option<crate::foreign::checked_control::Completion>,
+        crate::foreign::checked_control::K,
+        crate::foreign::checked_control::Native,
+        bool,
+    ), NativeOwnerAdmissionError> {
+        let slots = self.storage.slots.borrow();
+        let checked = slots[self.slot].checked.as_ref()
+            .ok_or(NativeOwnerAdmissionError::Authority)?;
+        Ok(checked.closing_record())
+    }
     pub(crate) fn publish(
         &self,
         activation: usize,
@@ -714,7 +756,7 @@ impl NativeOwnerBoundary {
             .map_err(control_error)
     }
     #[cfg(test)]
-    pub(crate) fn snapshot(&self) -> super::super::checked_control::BoundarySnapshot {
+    pub(crate) fn snapshot(&self) -> crate::foreign::checked_control::BoundarySnapshot {
         self.storage.slots.borrow()[self.slot]
             .checked
             .as_ref()
@@ -777,8 +819,8 @@ impl NativeOwnerCopyRecord {
         self.boundary.output_failed();
     }
 }
-fn control_error(error: super::super::checked_control::Failure) -> NativeOwnerAdmissionError {
-    if error == super::super::checked_control::Failure::Resource {
+fn control_error(error: crate::foreign::checked_control::Failure) -> NativeOwnerAdmissionError {
+    if error == crate::foreign::checked_control::Failure::Resource {
         NativeOwnerAdmissionError::Work
     } else {
         NativeOwnerAdmissionError::Authority
@@ -872,12 +914,13 @@ impl NativeOwnerGuard {
     }
     pub(crate) fn begin_checked_finish_entry(
         &self,
-    ) -> Result<Option<super::super::checked_control::FinishEntry>, NativeOwnerAdmissionError> {
+    ) -> Result<Option<crate::foreign::checked_control::FinishEntry>, NativeOwnerAdmissionError> {
         self.storage.slots.borrow_mut()[self.slot]
             .checked.as_mut()
             .map(|control| control.begin_finish_entry().map_err(control_error))
             .transpose()
     }
+    #[cfg(test)]
     pub(crate) fn begin_checked_finish(&self) -> Result<(), NativeOwnerAdmissionError> {
         if let Some(control) = &mut self.storage.slots.borrow_mut()[self.slot].checked {
             control.begin_finish().map_err(control_error)?;
@@ -893,25 +936,35 @@ pub(crate) enum NativeOwnerDisposition {
     Consumed(Arc<CheckedForeignOwner>),
     Retained(NativeOwnerGuard),
     Blocked(NativeOwnerGuard),
+    Synthetic {
+        guard: NativeOwnerGuard,
+        witness: crate::foreign::checked_control::SyntheticFinishWitness,
+    },
 }
 
 impl NativeOwnerDisposition {
     pub(crate) fn owner(&self) -> &Arc<CheckedForeignOwner> {
         match self {
             Self::Consumed(owner) => owner,
-            Self::Retained(guard) | Self::Blocked(guard) => guard.owner(),
+            Self::Retained(guard) | Self::Blocked(guard) | Self::Synthetic { guard, .. } => guard.owner(),
         }
     }
     pub(crate) fn is_retained(&self) -> bool {
         !matches!(self, Self::Consumed(_))
     }
     pub(crate) fn is_blocked(&self) -> bool {
-        matches!(self, Self::Blocked(_))
+        matches!(self, Self::Blocked(_) | Self::Synthetic { .. })
+    }
+    pub(crate) fn synthetic_witness(&self) -> Option<&crate::foreign::checked_control::SyntheticFinishWitness> {
+        match self {
+            Self::Synthetic { witness, .. } => Some(witness),
+            _ => None,
+        }
     }
     pub(crate) fn into_retained(self) -> Option<NativeOwnerGuard> {
         match self {
             Self::Consumed(_) => None,
-            Self::Retained(guard) | Self::Blocked(guard) => Some(guard),
+            Self::Retained(guard) | Self::Blocked(guard) | Self::Synthetic { guard, .. } => Some(guard),
         }
     }
 }
@@ -987,7 +1040,7 @@ impl NativeOwnerGuardReady {
         &mut self,
         receipt: &super::super::source_bindings::SourceOwnerScopeRequest,
         activation: usize,
-        limits: Option<super::super::checked_control::BoundaryLimits>,
+        limits: Option<crate::foreign::checked_control::BoundaryLimits>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), NativeOwnerAdmissionError> {
         if receipt._scope.header().original.host.is_none() {
@@ -1007,7 +1060,7 @@ impl NativeOwnerGuardReady {
                 return Err(NativeOwnerAdmissionError::Authority);
             }
         }
-        let checked = super::super::checked_control::RuntimeBoundary::reserve(
+        let checked = crate::foreign::checked_control::RuntimeBoundary::reserve(
             receipt,
             activation,
             limits.ok_or(NativeOwnerAdmissionError::Authority)?,
