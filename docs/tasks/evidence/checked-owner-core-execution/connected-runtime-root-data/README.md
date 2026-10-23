@@ -1,20 +1,26 @@
 # Checked owner settlement and artifact-root request DATA
 
-This is a qualified old-base checkpoint of PR118 on retained `4e995067`. It is
-partial TASK0053 product work, not whole F4/F6 acceptance or an execution permit.
-The code was tested before this README, task/plan update and evidence assembly.
-PR110 retention, actual-tip rebase and refreshed Clippy plus 45 are still required
-before PR118 retention; no old runtime or executable equivalence transfers.
+This partial PR118 delivery is tested on retained PR110 `334935b8`. It is
+TASK0053 product work, not whole F4/F6 acceptance or an execution permit. All four
+commits rebased without conflicts and compare equal to old-base `77aecf5c` in
+range-diff. The code was tested before this README, task/plan update and evidence
+assembly. No old runtime or executable equivalence transfers.
 
-Session 25968 passed ash-only targeted Clippy and 45 distinct Rust tests in 15
-commands. All15 before/after maps contain the same 6,575 input files; 63 critical
-snapshots and physical tool hashes match. The test executable is845,636,544 bytes,
-SHA256 `566e941ec6ef9cc98d00b547871a76a8af9d20c2a224a277ec2ef1d468afb74f`.
+Current session 84452 passed ash-only targeted Clippy and 45 distinct Rust tests
+in 15 commands. All 15 before/after maps contain the same 7,894 input files;
+91 critical snapshots and physical tool hashes match. The current test executable
+is 639,725,360 bytes, SHA256
+`e02849159af06729ca024947cda77924fb85ad1f2ad5b758dcc7b929799edd08`.
 Every owned child was reaped with its process group known absent; no timeout,
-resource stop or cleanup error occurred. Independent audit `f95a3e0c` confirms
+resource stop or cleanup error occurred. Independent audit `d573f463` confirms
 these observations. Clippy used `-D clippy::all`, not `-D warnings`: each raw log
 retains 17 warning lines, including library/test summaries (14 ordinary-library
 warnings; 6 test-library warnings with five duplicates). No warning-free claim.
+
+Historical session 25968 passed the same focused gates on old base `4e995067`.
+Its 6,575 inputs, 63 critical snapshots and 845,636,544-byte executable
+`566e941e…` remain qualified old-base observations; they do not establish the
+current combined source or executable.
 
 The45 controls cover closed dependency-graph DATA, actual Cargo configuration
 discovery and forbidden substitutions, root identity/reconstruction and work

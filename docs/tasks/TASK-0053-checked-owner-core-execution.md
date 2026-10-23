@@ -293,19 +293,20 @@ report channel. Shared pre-entry storage does not merge these categories.
 
 The next tested settlement checkpoint passes session 23592's 37 distinct ordinary Rust controls across nine commands. It implements cumulative pre-entry report tickets, actual terminal/captured settlement, separate successful-refusal/discard guard inspection, and checked Finish admission before optional output failure. [Compact evidence](evidence/checked-owner-core-execution/connected-runtime-settlement/README.md) preserves all tested inputs, actual results and historical 99447's 35-pass/setup-failure outcome. The current raw logs retain 13 ordinary-library dead-code warnings plus their summary. This paragraph and evidence were assembled after tests; runtime blobs remain exact.
 
-The next bounded source checkpoint passes session 25968's targeted ash-only
+The rebased bounded source checkpoint passes session 84452's targeted ash-only
 Clippy and 45 Rust controls. It distinguishes return-failure disposal from terminal
 traversal, prepares a fixed generated-project recipe, and independently restores
 full originals to reconstruct version2 root-request code/configuration DATA.
 Closed Cargo configuration/tool/cache selection and pinned dependency edges are
 checked; image, facts, policy, Rust, original mappings and contracts remain exact.
 Version1 stays separate. The [root/request evidence](evidence/checked-owner-core-execution/connected-runtime-root-data/README.md)
-retains all 63 tested snapshots and 15 equal maps containing6,575 inputs, tools and
+retains all 91 current tested snapshots and 15 equal maps containing 7,894 inputs, tools and
 reaped/empty owned groups. Raw logs retain 14 ordinary-library warnings and 6 test
 warnings (five duplicates), plus summaries. Clippy denies `clippy::all`; it does
 not claim warning-free Rust. This paragraph/evidence is post-test, with runtime
-blobs exact. The checkpoint is qualified to old base `4e995067`: retain PR110
-first, then rebase PR118 to the actual retaining tip and refresh both gates.
+blobs exact. The checkpoint is based on actual retained PR110 `334935b8`;
+all four replayed commits compare equal in range-diff. Historical 25968 remains
+qualified to old base `4e995067`, with no old executable transfer.
 
 Historical 33360's exact-work replay failure and fresh 47297's 16-unit reencoding
 variation remain separate evidence. The narrow test correction preserves the

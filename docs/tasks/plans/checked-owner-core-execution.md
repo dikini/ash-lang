@@ -310,18 +310,19 @@ root-owned format-before-F-core/full-gate/final-artifact trigger above.
 
 Session 23592 passes 37 ordinary Rust controls with nine equal before/after maps of 6,404 input files, 57 source snapshots and matching tools and all children reaped/groups absent. The [compact settlement evidence](../evidence/checked-owner-core-execution/connected-runtime-settlement/README.md) preserves exact source and historical 99447's 35-pass/envelope-setup failure. Runtime blobs remain tested; this record/evidence is post-test. Raw logs have 13 ordinary-library warnings plus summary, not Clippy success.
 
-The P2 return-failure point is now distinct from frame traversal. Session 25968
+The P2 return-failure point is now distinct from frame traversal. Session 84452
 refreshes targeted ash-only Clippy and 45 Rust controls for settlement plus closed
 project/identity/request DATA. The [compact root/request evidence](../evidence/checked-owner-core-execution/connected-runtime-root-data/README.md)
 retains actual snapshots/maps/tools/cleanup and historical failures. This is an
-old-`4e995067` checkpoint: PR110 retains first, then PR118 rebases to the actual
-tip and refreshes Clippy plus 45. Code remains tested; this plan/evidence is
+current-`334935b8` checkpoint after PR110 retention and a conflict-free rebase;
+all four commits remain range-diff equal and both gates are freshly verified.
+Old-base 25968 evidence remains separately qualified. Code remains tested; this plan/evidence is
 post-test. Ordinary Rust warnings remain visible; no warning-free, generated
 project, native, protected positive or full F-core claim transfers.
 
 ### Remaining finite slices
 
-1. Rebase and retain the bounded settlement/project/request delivery after
+1. Retain the bounded settlement/project/request delivery after completed
    actual-tip Clippy plus 45 and exact-head review. Benefit: a reviewed current
    producer-to-decoder DATA seam and settled evaluator observations. Complexity 1;
    stop for any changed-input/refusal or review finding, preserving prior receipts.
@@ -330,7 +331,11 @@ project, native, protected positive or full F-core claim transfers.
    generated project and independently rederive its actual code/configuration
    identity; bind all fixed build-script, lock-policy, toolchain, manifest/lock,
    leaf/shim and payload bytes. Benefit: removes the generated-code/evaluator
-   gap rather than adding another observation layer. Complexity 3; stop on any
+   gap rather than adding another observation layer. The first discriminator is
+   actual generated Cargo/bin/leaf compilation and link with a matching opened
+   ELF and receipt, using the existing owned runner/cache; DATA-only rendering
+   cannot satisfy it. Expected scope is two or three coherent source/test
+   iterations. Complexity 3; stop on any
    ABI, nominal DATA boundary, identity or incomplete-closure mismatch. Protected
    positive execution remains unrun.
 3. Implement the reviewed one-shot trusted child, same-FD execution and
