@@ -395,3 +395,7 @@ receipt; do not open another standalone preparation/evidence PR as completion.
 The separate root assignment authorizes this passive source implementation.
 These documents grant no build, native command, protected deployment or store
 provisioning permission.
+
+## Generated root compile/link work item
+
+The current [compile/link WIP evidence](evidence/checked-owner-core-execution/generated-root-compile/README.md) records28740 on retained PR119 `a3fc751d`:12 ordinary controls PASS and actual canonical-root/leaf compilation plus static link, followed by postlink Association. The staging ELF was removed on failure; no physical final-ELF rehash, final receipt/request, missing-release negative or execution credit. All8 maps of8,095 inputs/97 snapshots/tools match; cleanup is complete. This prose follows the tested runtime source. The linked-vs-raw configuration association defect is source-proven, but28740's first failing predicate is unrecorded. Repair/full13 gate, actual evaluator adapters, protected startup/native positive and full F-core remain pending.
