@@ -391,7 +391,10 @@ mod tests {
             link: super::super::checked_link::Limits {
                 file_bytes: 2 * 1024 * 1024 * 1024,
                 total_bytes: 4 * 1024 * 1024 * 1024,
-                map_bytes: 128 * 1024 * 1024,
+                // Connected evaluator/provider map measured 157,968,330 B in
+                // passive relink 58055; supported 256 MiB leaves 41.15% headroom.
+                // This selects a fixture observation bound, not a product max.
+                map_bytes: 256 * 1024 * 1024,
                 output_bytes: 1024 * 1024,
                 record_bytes: 1024 * 1024,
                 paths: 2048,
