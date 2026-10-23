@@ -182,14 +182,19 @@ Public execution remains closed.
    final static test built the artifact before a test-only sidecar path failure;
    its narrow repair now passes the fresh static association test and Clippy,
    yielding 35 distinct passing tests with source qualifications. PR113 is retained
-   at `a2f1c938`; review/retention/PM links are in the task. The next slice captures
-   actual root-link argv/response/map and transient inputs before cleanup, with
-   bounded checked Cargo and the same receipt/final-ELF association. The current
-   private BFD descriptor proxy and independent raw-marker checks pass Clippy
-   and six bounded controls; the actual static gate still refuses BFD map framing
-   after a nonregular-map-destination diagnostic. Rejected stdout was not retained.
-   The [partial product record](../evidence/checked-owner-core-execution/root-link-provenance/README.md)
-   preserves that blocker; canonical map/artifact/mutant verification is pending.
+   at `a2f1c938`; review/retention/PM links are in the task. The root-link component captures
+   actual argv/response/map and transient inputs before cleanup, with bounded
+   checked Cargo and the same receipt/final-ELF association. After rebasing onto
+   retained comparator fix `577b0c87`, fresh session 8323 passes Clippy and 18
+   distinct tests, including actual selected-profile static linking and the
+   affected public legacy compile/link path. The same-open BFD proxy, marker,
+   map, staging/final ELF and receipt chain are independently audited; thirteen
+   rebound inner mutations and exact/short/spent/fresh controls pass. The
+   [product record](../evidence/checked-owner-core-execution/root-link-provenance/README.md)
+   preserves earlier refusals and old-a2 evidence separately. Eleven retired
+   inputs, nine nested warnings, the explicit private 2 GiB profile and no
+   output execution remain qualified. Final published-head review/retention
+   are pending; all six complete closure fields remain Missing.
    These observations
    do not discharge complete closure or protected deployment. Freeze bounded deterministic receipt/plan and policy versions binding the full checked
    required closure, original operation/bridge/payload/facts mappings, native/

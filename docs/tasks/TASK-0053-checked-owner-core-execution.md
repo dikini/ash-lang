@@ -174,30 +174,31 @@ changes no whole acceptance criteria or public execution guards.
 
 ## Active actual root-link observations
 
-The next step-5 component starts from retained `a2f1c938`. A private checked
-root-link observer captures actual arguments, bounded response-file bytes and
-expansion, GNU/BFD map and resolved object/archive/CRT/runtime/script input pins
-before returning to rustc. Unknown forms, missing LOAD paths, unsupported script
-features and nested script groups refuse. The same prepared native archive must
-appear in the actual input set. The copied staging ELF must match the observed
-linker output before cleanup. Owned data crosses cleanup and binds the existing
-ReceiptSeed configuration chain before publication; legacy linking is unchanged.
+The step-5 root-link component starts from retained `a2f1c938` and is now
+rebased onto retained comparator fix `577b0c87`. A private checked observer
+captures actual arguments, bounded response-file bytes, GNU/BFD map and resolved
+object/archive/CRT/runtime/script input pins before returning to rustc. Unknown
+forms, missing LOAD paths and unsupported script features refuse. The same
+prepared native archive must appear in the input set. Staging bytes must match
+the observed output before cleanup; owned data binds the existing ReceiptSeed
+configuration chain and final ELF before publication. Legacy linking is unchanged.
 
-Checked Cargo compilation and cleanup now use the bounded owned transaction.
-A private same-group BFD proxy checks and delegates an opened tool descriptor;
-its exclusive entry marker proves an attempt, with successful cc/map/output and
-cleanup correspondence separately required. The independent decoder compares
-raw marker bytes, digest and the complete invocation. The [partial product
-record](evidence/checked-owner-core-execution/root-link-provenance/README.md)
-records Clippy and six bounded controls passing on frozen `6260b756`, followed
-by the genuine static test failing `Unsupported: BFD map`. Nested stderr reports
-that the map destination is not a regular file. Rejected bounded stdout was not
-retained, so its bytes/format cannot be inferred. No valid map, accepted record,
-final artifact association or inner record-mutant credit follows. A narrow paid
-raw-map retention repair and actual canonical verification remain required.
-The chosen 2 GiB per-file canonical observation policy is explicit test data,
-not a raised default or complete supported-profile result. No generated output
-or selected native function has run.
+Checked Cargo compilation and cleanup use the bounded owned transaction. A
+same-group BFD proxy hashes and delegates one opened tool descriptor. Its
+exclusive marker proves attempted entry; successful cc, exact raw-marker and
+invocation correspondence, map/output equality and cleanup are separately
+required. The [product record](evidence/checked-owner-core-execution/root-link-provenance/README.md)
+preserves earlier cap/selector/map refusals and the lost rejected stdout without
+inventing its format. The narrow documented `-Map=-` repair now passes actual
+canonical verification. Fresh session 8323 on `577b0c87` passes Clippy and 18
+distinct tests: link six, genuine checked static one, receipt seven, three
+non-startup artifact controls and public legacy receipt compile/link one.
+Independent audit confirms the fresh ELF/receipt/native/root/map/marker chain,
+thirteen rebound inner mutations and exact/short/spent/fresh controls. Eleven
+retired transient inputs remain qualified; nine nested warning lines remain.
+The explicit private 2 GiB per-file policy changes no shared default and does
+not establish the public/default profile. No generated output or selected native
+function has run. Final published-head review and retention remain pending.
 
 This addresses transient input correspondence, not full tool/native/runtime
 conformity. All six complete closure fields, independent premises, protected
