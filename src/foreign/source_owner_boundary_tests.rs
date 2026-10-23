@@ -312,6 +312,67 @@ fn checked_owner_boundary_exact_activation_scope_and_independent_group() {
 }
 
 #[test]
+fn checked_owner_local_finish_never_becomes_native_readiness() {
+    with_requests(|acquire, finish| {
+        let mut work = TypeWorkBudget::default();
+        let (ready, storage) = ready(&acquire, 181, &mut work);
+        let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let mut guard = ready
+            .returned(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())
+            .record()
+            .into_guard()
+            .unwrap();
+        handle.publish(181, acquire._scope_node, &mut work).unwrap();
+        guard.quarantine();
+        handle.closing(181, acquire._scope_node, &mut work).unwrap();
+        guard
+            .prepare_checked_finish(&finish, 181, false, &mut work)
+            .unwrap();
+        let before = DISPOSALS.get();
+        let Some(crate::foreign::checked_control::FinishEntry::Synthetic(witness)) =
+            guard.begin_checked_finish_entry().unwrap()
+        else {
+            panic!("actual local close must not grant native entry")
+        };
+        assert_eq!(
+            witness.completion(),
+            crate::foreign::checked_control::Completion::Quarantined
+        );
+        assert_eq!(
+            witness.native(),
+            crate::foreign::checked_control::Native::Owned
+        );
+        assert!(!witness.unresolved());
+        assert!(guard.begin_checked_finish_entry().is_err());
+        assert!(
+            guard
+                .prepare_checked_finish(&finish, 181, false, &mut work)
+                .is_err()
+        );
+        assert_eq!(DISPOSALS.get(), before);
+        assert_eq!(handle.snapshot().observations, 1); // injected Acquire only
+        assert_eq!(
+            handle.snapshot().k,
+            crate::foreign::checked_control::K::Discharged
+        );
+        assert_eq!(
+            handle.snapshot().continuation,
+            crate::foreign::checked_control::Continuation::Required
+        );
+        drop(guard);
+        assert_eq!(DISPOSALS.get(), before);
+        // Explicit legacy Rust-backed host cleanup is a different phase. It
+        // neither dispatches the source Finish nor manufactures a native fact.
+        assert!(storage.close());
+        assert_eq!(DISPOSALS.get(), before + 1);
+        assert_eq!(
+            handle.snapshot().native,
+            crate::foreign::checked_control::Native::Owned
+        );
+    });
+}
+
+#[test]
 fn checked_owner_boundary_finish_commit_survives_output_failure_without_replay() {
     with_requests(|acquire, finish| {
         let mut work = TypeWorkBudget::default();

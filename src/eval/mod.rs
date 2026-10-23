@@ -1,7 +1,11 @@
 //! Explicit first-order evaluation of independently validated Core families.
 
+mod checked_reports;
 pub(crate) mod disposal;
 mod failure;
+pub use checked_reports::{
+    CheckedEvaluation, ResourceClosing, ResourceDiagnostic, ResourceNativeFact, ResourceReport,
+};
 mod machine;
 mod value;
 

@@ -870,6 +870,14 @@ impl NativeOwnerGuard {
         }
         Ok(())
     }
+    pub(crate) fn begin_checked_finish_entry(
+        &self,
+    ) -> Result<Option<super::super::checked_control::FinishEntry>, NativeOwnerAdmissionError> {
+        self.storage.slots.borrow_mut()[self.slot]
+            .checked.as_mut()
+            .map(|control| control.begin_finish_entry().map_err(control_error))
+            .transpose()
+    }
     pub(crate) fn begin_checked_finish(&self) -> Result<(), NativeOwnerAdmissionError> {
         if let Some(control) = &mut self.storage.slots.borrow_mut()[self.slot].checked {
             control.begin_finish().map_err(control_error)?;
