@@ -66,7 +66,7 @@ and original receipt/log are retained; this is not a resource failure or
 semantic red. Source review subsequently repaired output capture, all-error
 process cleanup, aggregate input limits and the causal ABI/object inclusion.
 
-[The current source manifest](current-source-manifest.json) includes later
+[The historical early-source manifest](current-source-manifest.json) includes later
 fixture nonce and typed canonical-Record hostile assertion refinements.
 [The transfer record](source-transfer.json) verifies that production bytes
 before cfg(test) are unchanged from the tested freeze. The nonce prevents old
@@ -115,3 +115,34 @@ The earlier paragraph's pending refresh status describes the early checkpoint;
 8117 supplies the subsequent 34-test and Clippy results, with this final gate
 still open. Six complete closure fields, protected deployment, checked native
 execution and F-core acceptance remain open.
+
+## Final repaired-source verification
+
+Session 4854 passed fresh Clippy `--lib --tests -D warnings` and the exact
+ignored static test on checkpoint `a05b604c`. The test now reached canonical
+sidecar matching before independent image/config/tool substitution, missing
+and duplicate input, unknown field, aggregate-limit and exact/short/spent/fresh
+work controls. The actual final receipt retained all six Missing closure fields
+and refused activation. [Final receipts and logs](final/provenance.json),
+[original inventory](final/execution-manifest.json) and
+[associations](final/execution-associations.json) retain the outcome. All 5,300
+inputs matched aggregate `372a1c74ab82bf1934a3dcf8a24bfd0bd221db1c6602bcc43ec20b4443651f4e`;
+tools matched, both children were reaped and owned groups were empty.
+
+The [final post-link readback](final/post-link-readback.json) pins the actual
+73,929,920-byte ELF (`8111f303`), 750-byte receipt (`cea34c1d`) and 21,262-byte
+sidecar (`e2edd345`). The ELF is x86-64 ELF64 little-endian ET_EXEC with 12 program
+headers, four LOAD segments, no INTERP or DYNAMIC segment and entry in an
+executable LOAD. These structural observations do not disprove loading behavior
+or establish protected immutable execution. No output was started.
+
+The bounded delivery has **35 distinct passing tests**: 34 on `3111dc94` and the
+repaired static test on `a05b604c`. The former tests' bodies and all production
+bytes are unchanged by the one-expression test-path repair; their complete
+runtime fingerprint is not transferred to the new artifact. Clippy was rerun
+on the repaired source. Earlier repeated controls do not increase the distinct
+count. The [final source manifest](final/manifest.json) identifies tested code
+and fixtures; subsequent assembly changes only prose/evidence. Final independent
+published-head review and retention remain pending. Complete native/header/tool/
+runtime closure, independent premises, protected context/approval, immutable
+launcher, checked native execution and F-core remain open.

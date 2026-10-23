@@ -165,8 +165,9 @@ records four initial controls, then Clippy and 34 distinct current-source tests
 passing in PR113. The final static test built the actual checked artifact and
 decoded its receipt before a test-only sidecar path error. Separate post-test
 readback verified artifact/data associations without crediting unexecuted test
-assertions. The narrow receipt-parent path repair needs a fresh static gate;
-final review and retention remain pending. No output was executed. This work
+assertions. The repaired static gate and fresh Clippy now pass, giving 35 distinct tests
+with explicit source-transfer qualifications. Final review and retention remain
+pending. No output was executed. This work
 changes no whole acceptance criteria or public execution guards.
 
 ## Acceptance for this bounded delivery

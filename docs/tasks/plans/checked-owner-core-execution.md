@@ -180,7 +180,9 @@ Public execution remains closed.
    into that same receipt. Its [early evidence](../evidence/checked-owner-core-execution/native-build-provenance/README.md)
    records four initial controls, then 34 distinct tests and Clippy passing. The
    final static test built the artifact before a test-only sidecar path failure;
-   its narrow repair and fresh static association test remain pending. These observations
+   its narrow repair now passes the fresh static association test and Clippy,
+   yielding 35 distinct passing tests with source qualifications. Final review
+   and retention remain pending. These observations
    do not discharge complete closure or protected deployment. Freeze bounded deterministic receipt/plan and policy versions binding the full checked
    required closure, original operation/bridge/payload/facts mappings, native/
    headers/runtime/tool/config hashes, mode/role/target, finite capacities and

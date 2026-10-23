@@ -3,8 +3,8 @@
     "path": "batch-results.json",
     "bytes": 259130,
     "sha256": "affbc20e2e9992e3d8d8c7d102583d7983295a068b9184a536600eb3911f9d4c",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "batch-results.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "cache-after.json",
@@ -24,8 +24,8 @@
     "path": "phase-01.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-01.inputs.json",
@@ -38,8 +38,8 @@
     "path": "phase-01.log",
     "bytes": 153652,
     "sha256": "9200c4dadc0a661b605c7878181c2e69f80d6873749a419a531a8ecfbf4c0be6",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-01.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-01.process.json",
@@ -52,8 +52,8 @@
     "path": "phase-01.receipt.json",
     "bytes": 156573,
     "sha256": "7bb418cf79193b5e23f592b1d2c0c86943e71e7192183be9186b088b54a3cb12",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-01.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-01.resources.json",
@@ -66,8 +66,8 @@
     "path": "phase-02.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-02.inputs.json",
@@ -80,8 +80,8 @@
     "path": "phase-02.log",
     "bytes": 49302,
     "sha256": "ea57e04b909a563b78e0a1657b6c022c171a539d4827c615a8f4f110e85413ec",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-02.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-02.process.json",
@@ -94,8 +94,8 @@
     "path": "phase-02.receipt.json",
     "bytes": 5167,
     "sha256": "d46c05fe56d404541c5d702ffe02c4067dd3b069f9476cb32b6db0d64e8a5755",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-02.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-02.resources.json",
@@ -108,8 +108,8 @@
     "path": "phase-03.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-03.inputs.json",
@@ -122,8 +122,8 @@
     "path": "phase-03.log",
     "bytes": 49113,
     "sha256": "a02d742392cb39fd4158317fcfb1869de878326734244654a7b9f4a3e1f05aab",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-03.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-03.process.json",
@@ -136,8 +136,8 @@
     "path": "phase-03.receipt.json",
     "bytes": 5185,
     "sha256": "5a29e6a25edd185c04a9e787527965312821a4c60a65eed1f01c7299c213a9c6",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-03.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-03.resources.json",
@@ -150,8 +150,8 @@
     "path": "phase-04.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-04.inputs.json",
@@ -164,8 +164,8 @@
     "path": "phase-04.log",
     "bytes": 49094,
     "sha256": "d3181439bb5f80ab546682fbfefc7bffbacdd8b3eeaee6f6f592ed9b2fc4c3ad",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-04.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-04.process.json",
@@ -178,8 +178,8 @@
     "path": "phase-04.receipt.json",
     "bytes": 5164,
     "sha256": "41dc05fd5102632186b514430791585e6840aa860e54439ae8192867bb278ae6",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-04.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-04.resources.json",
@@ -192,8 +192,8 @@
     "path": "phase-05.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-05.inputs.json",
@@ -206,8 +206,8 @@
     "path": "phase-05.log",
     "bytes": 49107,
     "sha256": "a1d046ca67e46253705d983c7966f1437718913c89736f727a3ce278494f65ff",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-05.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-05.process.json",
@@ -220,8 +220,8 @@
     "path": "phase-05.receipt.json",
     "bytes": 5198,
     "sha256": "47f2486406e3ca1fc0df975941726ecdb177cc4436570cf7363896bae3baa007",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-05.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-05.resources.json",
@@ -234,8 +234,8 @@
     "path": "phase-06.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-06.inputs.json",
@@ -248,8 +248,8 @@
     "path": "phase-06.log",
     "bytes": 49432,
     "sha256": "dfb0a221f6230537c75e626d939a0097cf78346e221f1efe73dfd71c19017847",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-06.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-06.process.json",
@@ -262,8 +262,8 @@
     "path": "phase-06.receipt.json",
     "bytes": 5184,
     "sha256": "1f5b0b86a92350f6c19f573dba0626178808d47e8d85c7e25587a0d2523c1e0d",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-06.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-06.resources.json",
@@ -276,8 +276,8 @@
     "path": "phase-07.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-07.inputs.json",
@@ -290,8 +290,8 @@
     "path": "phase-07.log",
     "bytes": 49776,
     "sha256": "958a298ce8f6ca2bf963c1205c4fa7583950197b52b00105605e1699fdfa7ac4",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-07.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-07.process.json",
@@ -304,8 +304,8 @@
     "path": "phase-07.receipt.json",
     "bytes": 5083,
     "sha256": "91aa45820cefca1265c6f2dd29595f8fb58b893d42958ab2d3512504a8ac8ac3",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-07.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-07.resources.json",
@@ -318,8 +318,8 @@
     "path": "phase-08.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-08.inputs.json",
@@ -332,8 +332,8 @@
     "path": "phase-08.log",
     "bytes": 49562,
     "sha256": "be8665f70d97763870218387001a2f1aeaa0c12a1c052c7f3e7fa53f3c7117ca",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-08.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-08.process.json",
@@ -346,8 +346,8 @@
     "path": "phase-08.receipt.json",
     "bytes": 5086,
     "sha256": "0cc8c451b12576218349068c91df5492565bc4394182a9d55b84c564f2224a55",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-08.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-08.resources.json",
@@ -360,8 +360,8 @@
     "path": "phase-09.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-09.inputs.json",
@@ -374,8 +374,8 @@
     "path": "phase-09.log",
     "bytes": 49547,
     "sha256": "25dd845b0c507bd5e8c7be986948fb0e98c8fd5449f9e51d0d042268f22152c4",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-09.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-09.process.json",
@@ -388,8 +388,8 @@
     "path": "phase-09.receipt.json",
     "bytes": 5074,
     "sha256": "51057876046d2ded2d8b3bb6ae2abcbe6e8082e1c7c924097e45333c7967ed65",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-09.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-09.resources.json",
@@ -402,8 +402,8 @@
     "path": "phase-10.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-10.inputs.json",
@@ -416,8 +416,8 @@
     "path": "phase-10.log",
     "bytes": 49206,
     "sha256": "dcc57f8d24545203c2558a59bad95942adc3594a2d9cc0818a21821beda0bd34",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-10.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-10.process.json",
@@ -430,8 +430,8 @@
     "path": "phase-10.receipt.json",
     "bytes": 5073,
     "sha256": "1bd4b1c604ca693e0d8d03e36f57e41afd342fe3e5c315abece622945fc67444",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-10.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-10.resources.json",
@@ -444,8 +444,8 @@
     "path": "phase-11.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-11.inputs.json",
@@ -458,8 +458,8 @@
     "path": "phase-11.log",
     "bytes": 49097,
     "sha256": "c0c40ae1f0b815b3e5712b7b1d42f8aa614fc4b765f94a4c51d1b8d6001042f3",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-11.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-11.process.json",
@@ -472,8 +472,8 @@
     "path": "phase-11.receipt.json",
     "bytes": 5168,
     "sha256": "8ce82cb228a07c3f907a3e6b95f8ec558746c047c27ade44a1dd69835457eca4",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-11.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-11.resources.json",
@@ -486,8 +486,8 @@
     "path": "phase-12.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-12.inputs.json",
@@ -500,8 +500,8 @@
     "path": "phase-12.log",
     "bytes": 49107,
     "sha256": "d29dcbee5aa0b21be49155b317388e90f362791b6f094adc3cf0a6f2b63b18b0",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-12.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-12.process.json",
@@ -514,8 +514,8 @@
     "path": "phase-12.receipt.json",
     "bytes": 5179,
     "sha256": "2d18e56b3a7a7f7e9d0c4a90920a8bd25b381fae8897f70012c8ebb479f31e5b",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-12.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-12.resources.json",
@@ -528,8 +528,8 @@
     "path": "phase-13.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-13.inputs.json",
@@ -542,8 +542,8 @@
     "path": "phase-13.log",
     "bytes": 49084,
     "sha256": "716ff5c12b6ae2ddf05804c06ce54d31b7f4ae12f98b1a4dfacca6d8f7a098f8",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-13.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-13.process.json",
@@ -556,8 +556,8 @@
     "path": "phase-13.receipt.json",
     "bytes": 5156,
     "sha256": "2b050d8b74676a4fea4b4a94c46b830cee817de0f40f27bda0a4893b473274e6",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-13.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-13.resources.json",
@@ -570,8 +570,8 @@
     "path": "phase-14.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-14.inputs.json",
@@ -584,8 +584,8 @@
     "path": "phase-14.log",
     "bytes": 49097,
     "sha256": "120ced56837d0bb9d7f0566e5ae315286708633d799eba1d5b05398a113f2928",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-14.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-14.process.json",
@@ -598,8 +598,8 @@
     "path": "phase-14.receipt.json",
     "bytes": 5168,
     "sha256": "f362aa4a29b27008e613ccf69c5e45cb28977f19c5da956e8c5efe9ad269af11",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-14.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-14.resources.json",
@@ -612,8 +612,8 @@
     "path": "phase-15.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-15.inputs.json",
@@ -626,8 +626,8 @@
     "path": "phase-15.log",
     "bytes": 49106,
     "sha256": "80f87ce93970673432daca2300c817b127d2bc6ca26c0d9a80ba032b8002eb8b",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-15.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-15.process.json",
@@ -640,8 +640,8 @@
     "path": "phase-15.receipt.json",
     "bytes": 5178,
     "sha256": "c23f127829466aea85123887e70724680654c6acb7355230c085716436fa9872",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-15.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-15.resources.json",
@@ -654,8 +654,8 @@
     "path": "phase-16.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-16.inputs.json",
@@ -668,8 +668,8 @@
     "path": "phase-16.log",
     "bytes": 49096,
     "sha256": "e27489b42e67e31d34174b858b9fdd3baa0736ec02301863cd228f92dbd4619b",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-16.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-16.process.json",
@@ -682,8 +682,8 @@
     "path": "phase-16.receipt.json",
     "bytes": 5168,
     "sha256": "eb77e294545e5403b1b5f40ff284c46edd2063426e0c7ef55988d1d929eefa2f",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-16.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-16.resources.json",
@@ -696,8 +696,8 @@
     "path": "phase-17.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-17.inputs.json",
@@ -710,8 +710,8 @@
     "path": "phase-17.log",
     "bytes": 49086,
     "sha256": "cf7bed88aa21a0e387830c20cf5bf42bc9aa89929f97a404b47903c1c9a9b9d2",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-17.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-17.process.json",
@@ -724,8 +724,8 @@
     "path": "phase-17.receipt.json",
     "bytes": 5157,
     "sha256": "9493b9d3cf6d43a62148fe7693d6980b4e450273c29dbb4b0deffb6ce440ec17",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-17.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-17.resources.json",
@@ -738,8 +738,8 @@
     "path": "phase-18.before.json",
     "bytes": 858787,
     "sha256": "86902ecfaa03e196cbd012799b8e5d1c089dc8fad5bf924085b63c715af6f097",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tested-input-map.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-18.inputs.json",
@@ -752,8 +752,8 @@
     "path": "phase-18.log",
     "bytes": 49898,
     "sha256": "872fb722726d65b33e7055f1b02801330d3a47e02145d0a9094dfdf541d2b419",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-18.log.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-18.process.json",
@@ -766,8 +766,8 @@
     "path": "phase-18.receipt.json",
     "bytes": 5200,
     "sha256": "c263f08b09a254220e14646a26658f9b1f854ba2b7dbde8088b450f545f78176",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "phase-18.receipt.json.gz",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "phase-18.resources.json",
@@ -787,14 +787,14 @@
     "path": "tools-after.json",
     "bytes": 2291,
     "sha256": "c73076f91328da256e1de84120ad64dddd2ac2929398c606be4dcf85311b4ebc",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tools-before.json",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   },
   {
     "path": "tools-before.json",
     "bytes": 2291,
     "sha256": "c73076f91328da256e1de84120ad64dddd2ac2929398c606be4dcf85311b4ebc",
-    "retained_as": null,
-    "qualification": "external original omitted; original inventory pin retained"
+    "retained_as": "tools-before.json",
+    "qualification": "exact original or decoded gzip; equal maps may deduplicate"
   }
 ]
