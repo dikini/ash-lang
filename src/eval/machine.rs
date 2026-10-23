@@ -1173,7 +1173,7 @@ impl<'runtime> Machine<'runtime> {
         if disposal::failure().is_some() && let Ok(evaluation) = &mut result {
             // finish will discard an otherwise completed value. Preserve that
             // actual full prefix too; Box-to-Vec moves its allocation intact.
-            failure_effect_trace = evaluation.effect_trace.take().map(Box::into_vec);
+            failure_effect_trace = evaluation.effect_trace.take().map(|trace| trace.into_vec());
         }
         (super::CheckedEvaluation::with_inspections_and_trace(scope.finish(result), reports, unpublished, failure_effect_trace), work)
     }
