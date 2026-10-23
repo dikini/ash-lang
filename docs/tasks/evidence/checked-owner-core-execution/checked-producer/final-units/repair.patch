@@ -1,0 +1,29 @@
+diff --git a/src/build/checked_producer.rs b/src/build/checked_producer.rs
+index b963ce84..1015c60f 100644
+--- a/src/build/checked_producer.rs
++++ b/src/build/checked_producer.rs
+@@ -262,8 +262,7 @@ fn complete_association(
+                 pay(work, 2)?;
+                 if let Some(EffectExprKind::Pure(PureExprKind::Variable(function))) =
+                     program.node(application.function()).map(|node| &node.kind)
+-                {
+-                    if matches!(
++                    && matches!(
+                         program
+                             .registry()
+                             .scalar_preflight(function.binder())
+@@ -274,10 +273,10 @@ fn complete_association(
+                                 | Role::CheckedCopyBytes
+                                 | Role::CheckedCopyNul
+                         )
+-                    ) && !primitives.contains(&index)
+-                    {
+-                        return Err(ReceiptFailure::Association);
+-                    }
++                    )
++                    && !primitives.contains(&index)
++                {
++                    return Err(ReceiptFailure::Association);
+                 }
+             }
+             _ => {}

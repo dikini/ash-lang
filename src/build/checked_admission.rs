@@ -163,6 +163,58 @@ impl<'a> PassivePlan<'a> {
         applicability: &Applicability<'_>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
+        Self::admit_kind(
+            build,
+            program,
+            provenance,
+            payload,
+            expected,
+            applicability,
+            work,
+            false,
+        )
+    }
+
+    /// Producer-only checked association; this is not protected applicability.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn admit_checked_preparation(
+        build: &'a NativeBuildImage,
+        program: &'a ValidatedEffectProgram,
+        provenance: &[(
+            crate::module::ModuleId,
+            std::sync::Arc<crate::source::SourceFile>,
+        )],
+        payload: &[u8],
+        expected: &[u8],
+        applicability: &Applicability<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        Self::admit_kind(
+            build,
+            program,
+            provenance,
+            payload,
+            expected,
+            applicability,
+            work,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn admit_kind(
+        build: &'a NativeBuildImage,
+        program: &'a ValidatedEffectProgram,
+        provenance: &[(
+            crate::module::ModuleId,
+            std::sync::Arc<crate::source::SourceFile>,
+        )],
+        payload: &[u8],
+        expected: &[u8],
+        applicability: &Applicability<'_>,
+        work: &mut TypeWorkBudget,
+        checked_preparation: bool,
+    ) -> Result<Self, Failure> {
         let metadata = applicability.encode(work)?;
         pay(work, 3)?;
         if payload.len() > applicability.limits.image
@@ -174,9 +226,17 @@ impl<'a> PassivePlan<'a> {
         // Reuse the actual product constructor, including its checked Host
         // refusal. A passive caller cannot substitute another image or bypass
         // that guard by supplying matching digest claims.
-        let canonical_build =
+        let canonical_build = if checked_preparation {
+            super::image::encode_checked_preparation(
+                program,
+                provenance,
+                applicability.target,
+                work,
+            )
+        } else {
             super::image::encode_effect_for_build(program, provenance, applicability.target, work)
-                .map_err(build_failure)?;
+        }
+        .map_err(build_failure)?;
         let canonical = canonical_build
             .image
             .encode_bytes(work)

@@ -1,0 +1,14 @@
+{
+  "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-producer-artifact-79-1792732391472921424/program",
+  "bytes": 73930248,
+  "sha256": "ba3f0429fa91fa53feaa7f42a218a2d3cb55d08f2038d7044b474025da7ad88d",
+  "elf": "ELF64LE x86-64 ET_EXEC",
+  "program_headers": 12,
+  "load_segments": 4,
+  "interpreter": false,
+  "dynamic": false,
+  "entry_in_executable_load": true,
+  "one_open_object_stable": true,
+  "execution": "none",
+  "qualification": "Structural packaging only; no loading/native/approval/context/immutable-launch authority"
+}

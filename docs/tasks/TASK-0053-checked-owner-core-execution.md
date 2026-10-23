@@ -1,7 +1,7 @@
 # TASK-0053: Connected checked owner execution and immutable admission
 
 - ID: `TASK-0053`
-- Status: active for bounded producer-receipt implementation; protected activation and connected execution await their gates
+- Status: active for checked producer preparation; protected activation and connected execution await their gates
 - Related: [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](TASK-0051-checked-ffi-contract-carriers.md),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
@@ -94,8 +94,8 @@ one public compile/link-only receipt observation: 25 distinct tests on base
 started. Missing checked/native/header/tool/premise/context closure stays explicit;
 producer claims and observations grant no protected approval or activation.
 
-The active source candidate connects those records to physical owner slots and
-evaluator boundaries on retained PR101 `c51089c8b6de76384361283f671d1f2dbf3ad58e`.
+PR111 retained the connection from those records to physical owner slots and
+evaluator boundaries at `0bbf75cb`, on retained PR101 `c51089c8b6de76384361283f671d1f2dbf3ad58e`.
 It reserves finite policy data before entry and journals the genuine source/Core
 sequence Allocate, QueryBytes, ByteLength, checked-copy primitive, and Free.
 The primitive retains its own scope/window/function/application identity, not a
@@ -110,9 +110,8 @@ compile and inventory failures remain separate. After mechanical lint repairs,
 all eleven connected controls, 55 affected unit tests and Clippy passed on one
 frozen source map. Three separately authorized existing legacy native regressions
 also passed, covering static/shared destruction captures and byte mutation refusal.
-Independent audits verified both batches; final published-head review remains
-pending. The genuine initialized-eight-byte source/Core preparation uses explicitly
-injected native returns and copy completion. The C helper remains unbuilt and unexecuted;
+Independent audits and the [published-head review](https://github.com/dikini/ash-lang/pull/111#pullrequestreview-5623795424) verified both batches. The [retention receipt](https://github.com/dikini/ash-lang/pull/111#issuecomment-6357224049) and [partial acceptance confirmation](https://github.com/dikini/ash-lang/issues/62#issuecomment-6357300062) close that bounded delivery record. The genuine initialized-eight-byte source/Core preparation uses explicitly
+injected native returns and copy completion. That runtime delivery did not build or execute the C helper;
 the private evaluator phase additionally copies initialized Rust test storage
 through the actual checked-copy code. That is injected-phase evidence, not C
 initialization, native freeing, authored Trace or deployed execution evidence. Existing public build, binding, initializer and report
@@ -121,6 +120,32 @@ checked closure, protected approval/context, immutable same-fd launch and deploy
 verification. F3 and F6 use their separately assigned targets; no work limit or
 execution permission changes. Include progress with the product PR, not a
 standalone preparation PR.
+
+## Active checked producer connection
+
+The next product slice starts from retained `0bbf75cb`. It reuses the complete
+private image serializer, independent original re-admission and typed bridge
+planner for the genuine initialized-eight-byte source/Core fixture. A paid
+whole-program census must associate every Host, checked foreign request, window
+and checked-copy primitive with the supported dependency-free owner path.
+Versioned finite boundary capacities are bound to the actual emitted image and
+facts as data. They are not complete protected Policy or execution authority.
+
+The generated checked artifact retains the real image restore/admission/evaluator
+entry with its existing refusals. A distinct checked producer receipt role binds
+image, facts, generated Rust, original mapping and capacity data from that same
+transaction. Native, header, runtime, tool, premise and context closure remain
+explicitly unavailable. Completion of this slice requires the genuine static
+GNU compile/link-only artifact, strict same-open-object ELF observation and
+independent substitution/refusal controls. The first genuine static compile/link-only artifact passed on the early
+`0fe030db` producer source. Its structural readback and receipt remain earlier
+input evidence. After one mechanical Clippy repair, Clippy and 30 affected units passed.
+The final static artifact refresh also passed on those same code statements
+plus one descriptive receipt-role comment correction: 31 distinct tests and
+Clippy, with source qualifications retained in the evidence.
+The helper has been compiled/linked only, with no calls to its functions.
+No generated output startup or protected deployment is assigned by this
+preparation path.
 
 ## Acceptance for this bounded delivery
 

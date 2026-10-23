@@ -1,0 +1,42 @@
+{
+  "base": "0bbf75cb1fec3071f974b4644bf86a192cf3c55d",
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "env_overrides": {
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": ""
+  },
+  "require_absent": [
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS"
+  ],
+  "per_command_deadline_seconds": 1800,
+  "raw_log_cap_bytes": 16777216,
+  "execution": "Root authorizes finite frozen-source unit/compile/Clippy work concurrent with source review; no generated or foreign native execution",
+  "commands": [
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "build::checked_producer::tests::",
+        "--",
+        "--skip",
+        "checked_producer_real_static_artifact_and_receipt_without_execution"
+      ],
+      "expect_tests": 4
+    }
+  ],
+  "scope": "Four ordinary genuine checked producer image/emission/census/receipt/policy controls, no C compiler/linker/output execution",
+  "memory_stop": {
+    "available_bytes_below": 3221225472,
+    "consecutive_samples": 3,
+    "sample_period_seconds": 5,
+    "scope": "own process group only; observation is not quota"
+  },
+  "failure": "Stop at first compile/setup/test/count/source/timeout/resource/owned-process failure; retain actual outcome; no semantic red for setup failures."
+}

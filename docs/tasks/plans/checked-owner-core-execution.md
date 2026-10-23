@@ -123,7 +123,10 @@ private evaluator phase over initialized Rust storage. The
 retain exact inputs and scope. The final repaired map passed eleven connected
 controls, 55 affected units, Clippy, and three separately authorized existing legacy
 native regressions. Those legacy helpers assert exact output/trace results; they
-are not checked execution evidence. Final published-head review remains pending.
+are not checked execution evidence. The [published-head review](https://github.com/dikini/ash-lang/pull/111#pullrequestreview-5623795424) and
+[retention receipt](https://github.com/dikini/ash-lang/pull/111#issuecomment-6357224049)
+verified the partial delivery retained as `0bbf75cb`; its
+[partial acceptance record](https://github.com/dikini/ash-lang/issues/62#issuecomment-6357300062) is closed.
 The genuine source/Core
 fixture selects Acquire, QueryView, Extent, checked-copy and Finish: five distinct
 observations. The primitive keeps its actual scope/window/type-application/function
@@ -230,8 +233,9 @@ and keep connected acceptance open; do not declare the task complete.
 
 AD-0016 retention is recorded above. Root implementation/native assignments,
 selected helper ABI/source/static image correspondence and the minimal required
-F3 closure remain prerequisites. The existing startup Resource defect is not erased by a new
-feature gate. Unrelated closure breadth, general C-to-S dependencies, multi-
+F3 closure remain prerequisites. PR101 retained its default startup regression
+repairs at `c51089c8`; any later Resource refusal still requires its own causal
+repair and cannot be bypassed by a new feature gate. Unrelated closure breadth, general C-to-S dependencies, multi-
 library integration, NUL/write cases, SQLite and F7 remain separate required
 program work. Native truth/no-loading/source correspondence stays a reviewed
 trust premise, never established by one successful output. Concrete semantic

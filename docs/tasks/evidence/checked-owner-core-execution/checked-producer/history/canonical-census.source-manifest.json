@@ -1,0 +1,54 @@
+{
+  "base": "0bbf75cb1fec3071f974b4644bf86a192cf3c55d",
+  "files": [
+    {
+      "path": "src/build/mod.rs",
+      "after": {
+        "bytes": 20352,
+        "sha256": "e247fd782233c0bd3bb5c304b567347ca3598843bf1068a5bc42e74663e6f56c"
+      }
+    },
+    {
+      "path": "src/build/image.rs",
+      "after": {
+        "bytes": 537158,
+        "sha256": "9d78fa30b5ae382305368cae852f1d5e61d8ee5749557d4e5caabec3db583d2d"
+      }
+    },
+    {
+      "path": "src/build/emit.rs",
+      "after": {
+        "bytes": 26102,
+        "sha256": "937ae400779a0c5adabf225589109fea52b349df4009be794a60673ea162588a"
+      }
+    },
+    {
+      "path": "src/build/host.rs",
+      "after": {
+        "bytes": 30253,
+        "sha256": "48c26e7661e3e17479dce4fa810b1618e6f4187b7472c7693c9afe8f78c92bd5"
+      }
+    },
+    {
+      "path": "src/build/checked_admission.rs",
+      "after": {
+        "bytes": 26433,
+        "sha256": "7b3457a1120340056ac50a1ebb71dbb7fde19dd5c162511dc8dfdae59292d585"
+      }
+    },
+    {
+      "path": "src/build/checked_receipt.rs",
+      "after": {
+        "bytes": 35604,
+        "sha256": "15d7443753eaf91dbee0fe488134a89967dc5fe85f43764c79e096a9140069e8"
+      }
+    },
+    {
+      "path": "src/build/checked_producer.rs",
+      "after": {
+        "bytes": 34685,
+        "sha256": "e2994d678145123c854a080c5e6fe6fb40283efb5943a41db75626dcdcc9a224"
+      }
+    }
+  ]
+}

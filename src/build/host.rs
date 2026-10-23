@@ -91,6 +91,7 @@ pub struct PreparedProgramBuild {
     producer_receipt: Option<super::checked_receipt::ReceiptSeed>,
     preparation_work: usize,
     compilation_work: CompilationWork,
+    checked_preparation: bool,
 }
 
 impl PreparedProgramBuild {
@@ -415,11 +416,95 @@ pub fn prepare_program(
         producer_receipt,
         preparation_work: work.used(),
         compilation_work: *program.compilation_work(),
+        checked_preparation: false,
     })
 }
 
 // Fixed-size binary-kind check only. It does not parse archive members or
 // supply ABI/contract facts; ordinary linker failures remain native-tool errors.
+/// Private producer-only checked Core entry. No public checked compilation or
+/// startup permission is introduced. Source phase measurements are unavailable
+/// through this low-level validated-Core API and remain explicitly absent.
+#[allow(
+    dead_code,
+    reason = "TASK0053 producer is private until applicable protected launch exists"
+)]
+pub(super) fn prepare_checked_program(
+    program: &crate::core::ValidatedEffectProgram,
+    provenance: &[(
+        crate::module::ModuleId,
+        std::sync::Arc<crate::source::SourceFile>,
+    )],
+    mut configuration: BuildConfiguration,
+    policy: crate::foreign::source_runtime::CheckedOwnerLimits,
+) -> Result<PreparedProgramBuild, BuildFailure> {
+    if configuration.target != NATIVE_TARGET
+        || !cfg!(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            target_env = "gnu"
+        ))
+    {
+        return Err(BuildFailure(Failure::UnsupportedTarget));
+    }
+    if configuration.output.file_name().is_none() {
+        return Err(BuildFailure(Failure::InvalidOutput));
+    }
+    compiler_profile()?;
+    let limits = configuration
+        .producer_receipt
+        .ok_or(BuildFailure(Failure::UnsupportedProgram))?;
+    let mut work = super::gas::preparation(provenance, program.node_count())
+        .map_err(|()| BuildFailure(Failure::PreparationResource))?;
+    for (index, input) in configuration.native_inputs.iter_mut().enumerate() {
+        if !matches!(input, NativeLinkInput::StaticArchive(_)) {
+            return Err(BuildFailure(Failure::UnsupportedProgram));
+        }
+        work.charge(1)
+            .map_err(|()| BuildFailure(Failure::PreparationResource))?;
+        let absolute = std::path::absolute(input.path())?;
+        input.replace_path(absolute);
+        validate_native_input(input, index)?;
+    }
+    let build =
+        image::encode_checked_preparation(program, provenance, &configuration.target, &mut work)
+            .map_err(|error| {
+                BuildFailure(match error {
+                    image::NativeImageFailure::Image(error) => Failure::Image(error),
+                    image::NativeImageFailure::Bridge(error) => Failure::Bridge(error),
+                })
+            })?;
+    let emission = emit::checked_native_host(
+        &build,
+        program,
+        policy,
+        &super::runtime_fingerprint(),
+        &mut work,
+    )
+    .map_err(|error| BuildFailure(Failure::Emission(error)))?;
+    let mut seed = super::checked_receipt::ReceiptSeed::from_checked_emission(
+        &build,
+        program,
+        provenance,
+        &emission,
+        configuration.target.as_bytes(),
+        limits,
+        policy,
+    )
+    .map_err(|error| BuildFailure(Failure::Receipt(error)))?;
+    seed.observe_native_inputs(&configuration.native_inputs)
+        .map_err(|error| BuildFailure(Failure::Receipt(error)))?;
+    Ok(PreparedProgramBuild {
+        configuration,
+        generated_rust: emission.rust_source,
+        native_payloads: Some(emission.payloads),
+        producer_receipt: Some(seed),
+        preparation_work: work.used(),
+        compilation_work: CompilationWork::default(),
+        checked_preparation: true,
+    })
+}
+
 fn validate_native_input(input: &NativeLinkInput, index: usize) -> Result<(), BuildFailure> {
     let invalid = || BuildFailure(Failure::InvalidNativeInput(index));
     let mut file = fs::File::open(input.path())?;
@@ -594,6 +679,24 @@ pub fn build_prepared(mut prepared: PreparedProgramBuild) -> Result<BuiltProgram
             validate_native_input(input, index)?;
         }
         command.arg("--");
+        if prepared.checked_preparation {
+            // Exact root-only GNU whole-image selection, never global flags or
+            // a default-profile fallback. This still grants no launch authority.
+            command.args([
+                "-C",
+                "linker=/usr/bin/cc",
+                "-C",
+                "link-arg=-fuse-ld=bfd",
+                "-C",
+                "target-feature=+crt-static",
+                "-C",
+                "relocation-model=static",
+                "-C",
+                "link-arg=-no-pie",
+                "-C",
+                "strip=debuginfo",
+            ]);
+        }
         for input in &prepared.configuration.native_inputs {
             let mut argument = std::ffi::OsString::from("link-arg=");
             argument.push(input.path().as_os_str());

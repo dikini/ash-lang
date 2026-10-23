@@ -160,12 +160,14 @@ mod tests {
                     .map_err(EmissionFailure::Bridge)?,
             );
         }
-        let rust_source = render_native_host_text(build, fingerprint, work, Some(&wrappers))?;
+        let rust_source =
+            render_native_host_text(build, fingerprint, work, Some(&wrappers), false)?;
         Ok(NativeHostEmission {
             rust_source,
             payloads: NativePayloads {
                 image,
                 expected_facts,
+                checked_policy: None,
             },
         })
     }
@@ -342,12 +344,14 @@ main () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {
 pub(super) enum NativePayloadRole {
     ProgramImage,
     ExpectedFacts,
+    CheckedPolicy,
 }
 impl NativePayloadRole {
     pub(super) const fn file_name(self) -> &'static str {
         match self {
             Self::ProgramImage => "program-image.bin",
             Self::ExpectedFacts => "expected-facts.bin",
+            Self::CheckedPolicy => "checked-policy.bin",
         }
     }
 }
@@ -358,6 +362,7 @@ impl NativePayloadRole {
 pub(super) struct NativePayloads {
     image: Vec<u8>,
     expected_facts: Vec<u8>,
+    checked_policy: Option<Vec<u8>>,
 }
 impl NativePayloads {
     pub(super) fn bytes(&self) -> (&[u8], &[u8]) {
@@ -369,11 +374,28 @@ impl NativePayloads {
         self.image[0] ^= 1;
     }
 
-    pub(super) fn into_files(self) -> [(NativePayloadRole, Vec<u8>); 2] {
+    #[cfg(test)]
+    pub(super) fn test_change_policy(&mut self) {
+        self.checked_policy.as_mut().expect("checked test policy")[12] ^= 1;
+    }
+    #[cfg(test)]
+    pub(super) fn test_change_facts(&mut self) {
+        self.expected_facts[0] ^= 1;
+    }
+
+    pub(super) fn checked_policy(&self) -> Option<&[u8]> {
+        self.checked_policy.as_deref()
+    }
+    pub(super) fn into_files(self) -> impl Iterator<Item = (NativePayloadRole, Vec<u8>)> {
         [
             (NativePayloadRole::ProgramImage, self.image),
             (NativePayloadRole::ExpectedFacts, self.expected_facts),
         ]
+        .into_iter()
+        .chain(
+            self.checked_policy
+                .map(|bytes| (NativePayloadRole::CheckedPolicy, bytes)),
+        )
     }
 }
 
@@ -385,7 +407,7 @@ pub(super) struct NativeHostEmission {
 
 const NATIVE_HOST_START: &str = "#![deny(unsafe_code)]\nconst RUNTIME_FINGERPRINT: [u8; 32] = [\n";
 
-fn render_native_payloads(output: &mut impl fmt::Write) -> fmt::Result {
+fn render_native_payloads(output: &mut impl fmt::Write, checked: bool) -> fmt::Result {
     output.write_str(concat!(
         "];\n",
         "const _: () = assert!(ash::build::__private_runtime_matches(&RUNTIME_FINGERPRINT),\n",
@@ -400,7 +422,15 @@ fn render_native_payloads(output: &mut impl fmt::Write) -> fmt::Result {
         output,
         "static EXPECTED_FACTS: &[u8] = include_bytes!({:?});",
         NativePayloadRole::ExpectedFacts.file_name()
-    )
+    )?;
+    if checked {
+        writeln!(
+            output,
+            "static CHECKED_POLICY: &[u8] = include_bytes!({:?});",
+            NativePayloadRole::CheckedPolicy.file_name()
+        )?;
+    }
+    Ok(())
 }
 
 const NATIVE_HOST_MAIN: &str = concat!(
@@ -411,6 +441,18 @@ const NATIVE_HOST_MAIN: &str = concat!(
     "        Err(error) => { eprintln!(\"{error}\"); std::process::ExitCode::FAILURE }\n",
     "    }\n",
     "}\n",
+);
+
+// Retain the same guarded runtime entry as an ordinary whole-program build.
+// The policy is producer data; it does not authorize that entry or bypass its
+// independent image, binding, initializer or checked-execution refusals.
+const CHECKED_PRODUCER_MAIN: &str = concat!(
+    "];\nfn main() -> std::process::ExitCode {\n",
+    "    std::hint::black_box(CHECKED_POLICY);\n",
+    "    match ash::build::__run_private_effect_image(&RUNTIME_FINGERPRINT, IMAGE, EXPECTED_FACTS, LIBRARIES) {\n",
+    "        Ok(value) => { println!(\"{value}\"); std::process::ExitCode::SUCCESS }\n",
+    "        Err(error) => { eprintln!(\"{error}\"); std::process::ExitCode::FAILURE }\n",
+    "    }\n}\n",
 );
 
 fn render_coordinates(
@@ -435,6 +477,7 @@ fn render_native_suffix(
     output: &mut impl fmt::Write,
     build: &super::image::NativeBuildImage,
     wrappers: Option<&[String]>,
+    checked: bool,
 ) -> fmt::Result {
     output.write_str("#[allow(unsafe_code)]\nmod native_bridges {\n")?;
     for (library_index, library) in build.libraries.iter().enumerate() {
@@ -509,7 +552,11 @@ fn render_native_suffix(
             library.image_library, library.module, library.ordinal
         )?;
     }
-    output.write_str(NATIVE_HOST_MAIN)
+    output.write_str(if checked {
+        CHECKED_PRODUCER_MAIN
+    } else {
+        NATIVE_HOST_MAIN
+    })
 }
 
 /// One paid preparation pass emits exact image data, independent expectations,
@@ -519,6 +566,28 @@ pub(super) fn native_host(
     build: &super::image::NativeBuildImage,
     runtime_fingerprint: &[u8; 32],
     work: &mut TypeWorkBudget,
+) -> Result<NativeHostEmission, EmissionFailure> {
+    native_host_kind(build, runtime_fingerprint, work, None)
+}
+
+pub(super) fn checked_native_host(
+    build: &super::image::NativeBuildImage,
+    program: &crate::core::ValidatedEffectProgram,
+    limits: crate::foreign::source_runtime::CheckedOwnerLimits,
+    runtime_fingerprint: &[u8; 32],
+    work: &mut TypeWorkBudget,
+) -> Result<NativeHostEmission, EmissionFailure> {
+    native_host_kind(build, runtime_fingerprint, work, Some((program, limits)))
+}
+
+fn native_host_kind(
+    build: &super::image::NativeBuildImage,
+    runtime_fingerprint: &[u8; 32],
+    work: &mut TypeWorkBudget,
+    checked: Option<(
+        &crate::core::ValidatedEffectProgram,
+        crate::foreign::source_runtime::CheckedOwnerLimits,
+    )>,
 ) -> Result<NativeHostEmission, EmissionFailure> {
     let bytes = build
         .image
@@ -534,12 +603,28 @@ pub(super) fn native_host(
         super::bridge::admit_render_inspection(&bridge.plan, work)
             .map_err(EmissionFailure::Bridge)?;
     }
-    let output = render_native_host_text(build, runtime_fingerprint, work, None)?;
+    let checked_policy = checked
+        .map(|(program, limits)| {
+            let image = super::checked_receipt::pin(&bytes, work)?;
+            let facts = super::checked_receipt::pin(&facts, work)?;
+            super::checked_producer::policy_bytes(program, image, facts, limits, work)
+        })
+        .transpose()
+        .map_err(|error| {
+            if error == super::checked_receipt::ReceiptFailure::Resource {
+                EmissionFailure::Resource
+            } else {
+                EmissionFailure::Image(ImageFailure::InvalidRecord)
+            }
+        })?;
+    let output =
+        render_native_host_text(build, runtime_fingerprint, work, None, checked.is_some())?;
     Ok(NativeHostEmission {
         rust_source: output,
         payloads: NativePayloads {
             image: bytes,
             expected_facts: facts,
+            checked_policy,
         },
     })
 }
@@ -549,6 +634,7 @@ fn render_native_host_text(
     runtime_fingerprint: &[u8; 32],
     work: &mut TypeWorkBudget,
     wrappers: Option<&[String]>,
+    checked: bool,
 ) -> Result<String, EmissionFailure> {
     // Counting pays each exact Rust text fragment before visiting/copying it.
     // Coordinate formatting is fixed-width; this writer owns no text storage.
@@ -574,8 +660,8 @@ fn render_native_host_text(
             bytes: prefix,
             work,
         };
-        render_native_payloads(&mut counter).map_err(|_| EmissionFailure::Resource)?;
-        render_native_suffix(&mut counter, build, wrappers)
+        render_native_payloads(&mut counter, checked).map_err(|_| EmissionFailure::Resource)?;
+        render_native_suffix(&mut counter, build, wrappers, checked)
             .map_err(|_| EmissionFailure::Resource)?;
         counter.bytes
     };
@@ -587,8 +673,9 @@ fn render_native_host_text(
         .map_err(|_| EmissionFailure::Resource)?;
     output.push_str(NATIVE_HOST_START);
     emit_array(&mut output, runtime_fingerprint);
-    render_native_payloads(&mut output).map_err(|_| EmissionFailure::Resource)?;
-    render_native_suffix(&mut output, build, wrappers).map_err(|_| EmissionFailure::Resource)?;
+    render_native_payloads(&mut output, checked).map_err(|_| EmissionFailure::Resource)?;
+    render_native_suffix(&mut output, build, wrappers, checked)
+        .map_err(|_| EmissionFailure::Resource)?;
     debug_assert_eq!(output.len(), length);
     Ok(output)
 }
