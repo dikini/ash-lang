@@ -439,3 +439,11 @@ installation, exact per-image approval and selected native execution remain
 separate prerequisites. Root owns formatting/full F-core verification before
 fresh final artifact and deployment approval. No whole F4/F6 acceptance closes
 from this source slice.
+
+## Protected provider and one-shot ingress verification
+
+The [provider evidence](../evidence/checked-owner-core-execution/protected-root-provider/README.md) records fresh session 6822: both-package all-target Clippy and the actual generated root/leaf canonical, receipt/request, chain/donor and missing-release linker control PASS on `be49b367`, based on retained PR121 `d8145b19`. All 8,756 inputs and 23 snapshots match. The 29 ordinary controls remain prior session 84835 evidence, transferred only with unchanged production bytes and a single cfg(test) map selection; they were not rerun. This prose/evidence assembly follows the tested source.
+
+The connected source consumes actual verification into private root admission, restores exact originals, reserves mandatory reports before Machine entry and preserves runtime-error closings/trace. Fixed parent/child same-FD ingress and bounded post-reap DATA publication are implemented. The measured 157,968,330-byte BFD map justifies the fixture's supported 256 MiB selection (41.15% headroom); original 128 MiB failure and separate passive measurement remain qualified. Product maxima/defaults and meters are unchanged. Ordinary warnings and two glibc loading warnings remain.
+
+No launcher/application/native callback executed. Default bootstrap association remains None and all six conformity fields remain Missing. Next is administrator-established store identity, configured source/artifact freshness, a separately closed static launcher build/descriptor, complete finite approvals and the exact one-shot deployment/run handoff. Actual acquire/copy/Finish/Trace and independent reports, root-owned formatting/full F-core verification and whole F4/F6 acceptance remain open.
