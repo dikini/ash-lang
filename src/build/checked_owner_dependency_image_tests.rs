@@ -1,6 +1,7 @@
 //! Real private checked dependency reconstruction, without executable admission.
 use super::super::{
-    NativeImageFailure, PreparedOwnerCallRecord, PureImage, encode_effect_for_build, encode_program,
+    NativeImageFailure, PreparedOwnerCallRecord, PureImage, admit_native_interpretation_instance,
+    encode_effect_for_build, encode_program,
 };
 use super::*;
 
