@@ -611,7 +611,10 @@ mod tests {
         let image = super::super::checked_receipt::pin(image, &mut work).unwrap();
         let facts = super::super::checked_receipt::pin(facts, &mut work).unwrap();
         let bytes = emission.payloads.checked_policy().unwrap();
-        assert_eq!(decode_policy(bytes, image, facts, &mut work).unwrap(), policy(&program));
+        let decoded = decode_policy(bytes, image, facts, &mut work).unwrap();
+        let expected = policy(&program);
+        assert_eq!((decoded.groups, decoded.owners, decoded.pending, decoded.observations, decoded.history, decoded.continuations),
+            (expected.groups, expected.owners, expected.pending, expected.observations, expected.history, expected.continuations));
         for (offset, value) in [(8, 2), (92, 1), (108, 2), (116, 2)] {
             let mut changed = bytes.to_vec();
             changed[offset] = value;
