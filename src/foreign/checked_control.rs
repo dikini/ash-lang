@@ -1548,6 +1548,53 @@ mod tests {
             assert_eq!(ledger.records[owner.index].native, Native::NoOwner);
             assert_eq!(ledger.publish_acquired(owner, &mut TypeWorkBudget::default()), Err(Failure::State));
             assert_eq!(ledger.records[owner.index].k, K::Absent);
+
+            let prepare_finish = || {
+                let (mut ledger, owner) = prepare();
+                let mut work = TypeWorkBudget::default();
+                let acquire = ledger.enter(owner, CallKind::Acquire, &header.acquire, &mut work).unwrap();
+                ledger.observed(acquire, Observed::AcquiredStatus { reply: Scalar(I32(0)), present: true }).unwrap();
+                ledger.publish_acquired(owner, &mut work).unwrap();
+                assert_eq!(ledger.close(owner, true, false, &mut work).unwrap(), Close::NativeFinish);
+                (ledger, owner)
+            };
+            let (mut measured, owner) = prepare_finish();
+            let mut work = TypeWorkBudget::default();
+            measured.enter(owner, CallKind::Finish, &header.teardown, &mut work).unwrap();
+            let finish_exact = work.used();
+            for limit in [0, finish_exact - 1] {
+                let (mut ledger, owner) = prepare_finish();
+                let serial = ledger.records[owner.index].serial;
+                let history = ledger.history.len();
+                assert_eq!(ledger.enter(owner, CallKind::Finish, &header.teardown, &mut TypeWorkBudget::with_limit(limit)), Err(Failure::Resource));
+                let record = &ledger.records[owner.index];
+                assert_eq!(record.serial, serial);
+                assert!(record.pending.is_none());
+                assert!(!record.unresolved);
+                assert_eq!(record.native, Native::Owned);
+                assert_eq!(record.k, K::Closing);
+                assert_eq!(record.continuation, Continuation::Required);
+                assert_eq!(record.access, Access::Retired);
+                assert!(record.closing.is_none());
+                assert!(!record.witness_issued);
+                assert_eq!(ledger.history.len(), history);
+                assert_eq!(ledger.observed_calls, 1);
+                assert_eq!(ledger.in_flight, 0);
+                assert!(matches!(ledger.finish_witness(owner, &mut TypeWorkBudget::default()), Err(Failure::State)));
+                // A fresh exact meter retries the same unchanged closing owner.
+                let mut fresh = TypeWorkBudget::with_limit(finish_exact);
+                let finish = ledger.enter(owner, CallKind::Finish, &header.teardown, &mut fresh).unwrap();
+                assert_eq!(fresh.used(), finish_exact);
+                ledger.observed(finish, Observed::FinishedStatus { reply: Scalar(I32(0)), consumed: true }).unwrap();
+                assert_eq!(ledger.records[owner.index].native, Native::Consumed);
+                assert_eq!(ledger.records[owner.index].k, K::Discharged);
+                let witness = ledger.finish_witness(owner, &mut TypeWorkBudget::default()).unwrap();
+                assert_eq!(witness.0.operation, header.teardown.operation());
+                assert_eq!(witness.0.completion, Completion::Observed(Native::Consumed));
+                assert!(matches!(ledger.finish_witness(owner, &mut TypeWorkBudget::default()), Err(Failure::State)));
+                ledger.source_continued(owner, witness, &mut TypeWorkBudget::default()).unwrap();
+                assert_eq!(ledger.records[owner.index].continuation, Continuation::Completed);
+            }
         });
     }
 
