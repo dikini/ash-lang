@@ -31,13 +31,20 @@ initial M1 FFI delivery. Each later milestone owns its scoped design gates.
 - [S3 #133](https://github.com/dikini/ash-lang/issues/133): demonstrate ordinary Ash binding checks and existing cleanup/handlers.
 - [S4 #134](https://github.com/dikini/ash-lang/issues/134): integrate documentation, focused tests and the normal workspace gate.
 
+Retain [SQLite canary #133](https://github.com/dikini/ash-lang/issues/133) in S1
+design and S3/S4 integration. After S1 design, exercise representable calls and
+report concrete
+unsupported cases/differences. The small fixture complements it. Full SQLite
+coverage and numeric representation delivery are not required now; discovered
+C-aligned representation gaps are future work to prioritize as needed.
+
 Only the planning revision is active now. S2-S4 are planned work, not execution
 assignments. See the owned plan for the bounded completion conditions.
 
 ## Progress
 
 The user's 2026-10-24 instruction supersedes the old F1-F8 workplan and active
-checked-host/SQLite/deployment assignments. Prior completion claims and evidence
+checked-host/full-SQLite/deployment assignments. Prior completion claims and evidence
 retain their recorded scope. Unfinished criteria are deprecated or deferred,
 not marked satisfied. Root publishes the corresponding live issue changes under [parent #52](https://github.com/dikini/ash-lang/issues/52).
 Old #57-64 and the premature #130 are deprecated/superseded, not completed.

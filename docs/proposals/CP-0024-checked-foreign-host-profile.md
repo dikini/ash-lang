@@ -78,8 +78,10 @@ this documentation checkpoint.
 
 No C numeric primitive types or implicit conversions. Explicit conversions such
 as int64 to Int would belong in ordinary Ash libraries if the needed
-representations later exist. Full SQLite, security/host/quarantine mechanisms,
-receipts, protected launch and isolation are outside this smaller delivery.
+representations later exist. C-aligned primitive representations are future
+work discovered as needed, not a scheduled type catalogue or an initial
+bytes/address prerequisite. Full SQLite coverage, security/host/quarantine
+mechanisms, receipts, protected launch and isolation are outside this delivery.
 Earlier F1-F8 planning gates are superseded as active assignments, not completed.
 
 ## Required evidence
@@ -90,3 +92,11 @@ provide one small native-call example with ordinary Ash normal/error handling,
 ordinary cleanup, focused type/effect/resource and representation tests, matching
 documentation, and the normal workspace gate. They establish only observed
 behavior and ordinary language invariants, not arbitrary foreign correctness.
+
+SQLite remains a required [canary #133](https://github.com/dikini/ash-lang/issues/133)
+during design and integration. After S1 design, exercise currently representable
+calls and report
+concrete unsupported cases, differences and gaps, with contracts/checks in
+ordinary Ash. The small native fixture complements this canary; it does not
+replace it. A discovered representation gap is reported for later prioritization,
+not an automatic machinery change or a requirement to deliver numeric types now.
