@@ -3,7 +3,6 @@
   "tested_source": "531e76778e438b26dafdee63a5d05af7aec2997b",
   "tested_tree": "3fc3ccc83382ee48382707b5d195d5887ebedca3",
   "base_retained_PR126": "8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5",
-  "new_docs_only_base_reconciliation_pending": "52d4e122b7330cf29b7283bd4f5696704e64d4aa",
   "scope": "Portable unconfigured static launcher preparation and external complete closure DATA assembly only",
   "counts": {
     "distinct_passing_tests": 36,
@@ -2391,12 +2390,12 @@
     "physical_directories_guarded": true
   },
   "remaining": [
-    "Root exact-head evidence/source review and artifact release",
-    "Reconcile docs-only52d base and prove actual source/tool/config equality before publication; no build solely for Git SHA",
+    "Independent reconciliation review, then root publication/integration and actual retained-result verification",
+    "Docs-only52d reconciliation complete; exact equality recorded in reconciliation.json; guarded case records/caches preserved",
     "Exact invocation context/capability-drop tool and numeric runtime budget review",
     "Identical configured app/launcher private literal and fresh configured artifacts",
     "Six independent finite conformity reviews and protected per-image/launcher approvals",
-    "Separate installation/readback and native one-shot grant",
+    "Separate installation/readback and native one-shot operator assignment",
     "F-core/full-workspace and retained-result verification/acceptance"
   ],
   "no_performed": [
@@ -2404,5 +2403,8 @@
     "protected install/provisioning or approval generation",
     "GitHub publication",
     "full-workspace gate"
-  ]
+  ],
+  "delivery_retaining_base": "52d4e122b7330cf29b7283bd4f5696704e64d4aa",
+  "docs_only_reconciliation": "reconciliation.json",
+  "original_F3_status": "Original source/static scope closed after PR127 retained52d4e122 and independent final acceptance readback; native/F-core/full-workspace obligations remain separate."
 }

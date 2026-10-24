@@ -10,8 +10,15 @@ The [receipt](receipt.json) pins tested source `531e7677`, based on retained
 PR126 `8f0c5f46`. Three source commits reconciled from archived `e0b1ba79` with
 equal range-diff patches; subsequent changes only format the new external test
 and remove its redundant function-pointer annotation. The source reviewer
-cleared those deltas. Publication still needs reconciliation onto the later
-docs-only `52d4e122` and an explicit source/tool/configuration equality record.
+cleared those deltas. The delivery is now reconciled onto retained PR127
+`52d4e122`, which records the complete original F3 source/static acceptance.
+The [reconciliation readback](reconciliation.json) confirms six equal rebase
+patches, all 316 tracked dependency inputs, 245 build-script-watched files,
+seven physical tools and closed Cargo configuration bytes. The earlier 250-entry
+slice and all 350 guarded artifact files also remain equal. These focused
+observations transfer within those input boundaries; no build was repeated for
+the Git SHA change. Independent reconciliation review and retained-result
+verification remain pending.
 
 | Focused result | Count and scope |
 | --- | --- |
@@ -53,8 +60,10 @@ overwrite. Eighteen four-role transient inputs were observed before cleanup and
 are no longer independently present. Their recorded hashes do not restore them.
 
 Large ELF/maps remain pinned at the guarded owned case paths in the receipt;
-the packet avoids duplicating them. Do not remove those physical records before
-reviewer/owner release. No extra cache or worktree was created. Default
+the packet avoids duplicating them. The independent focused review released
+reconciliation coordination; it did not release these physical case records or
+caches for deletion. Preserve them until the owning PR/checkpoint lifecycle
+permits retirement. No extra cache or worktree was created. Default
 `INSTALLED=None`, protected guards, runtime limits and ASHOUT03/ASHOBS03 remain
 unchanged. Actual invocation context and budgets, configured identical private
 association source, fresh configured artifacts, six independent finite reviews,
