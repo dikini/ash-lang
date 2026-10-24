@@ -1074,9 +1074,11 @@ impl NativeOwnerGuard {
             // No admitted O4 must not overwrite the last observation or turn
             // an invalid typed reply into known retention. Keep the pending
             // attempt unresolved, with the same protected backing and no retry.
-            if slot.checked.is_some() && guard_disposal_observation(consumes, status).is_none() {
+            if let Some(checked) = &mut slot.checked
+                && guard_disposal_observation(consumes, status).is_none()
+            {
                 slot.quarantined = true;
-                slot.checked.as_mut().expect("checked slot").output_failed();
+                checked.output_failed();
                 drop(slots);
                 return (NativeOwnerDisposition::Blocked(self), status);
             }
