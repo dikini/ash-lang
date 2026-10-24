@@ -629,3 +629,12 @@ compile/link with coherent-donor and missing-symbol controls. No generated
 application/launcher executes. Use fresh exact source/tool/artifact pins and
 owned process cleanup; independent operator review precedes the once-only run.
 No old configured identity/approval, status-profile or native acceptance transfers.
+
+
+### Disposal focused gate complete; retention pending
+
+Session `94828` on `595dda47` passes both-package targeted Clippy and all 42 distinct planned tests, including the six new controls and actual nonexecuting root/leaf canonical/donor/missing-release compile/link. The [evidence index](../evidence/checked-owner-core-execution/unpublished-disposal/index.json) preserves all frozen inputs, original failures and exact current results. Independent actual review `5bcfda37` verifies physical source/tool/artifact and owned cleanup associations. The preceding unrun/candidate paragraphs are historical.
+
+The retries repair two private helper imports, a tail-expression lint, and the legacy model's accidental removal of required scalar-readable declarations plus its corresponding metadata assertion. Production admission and runtime postconditions remain unchanged. Delivery04 was never launched. ASHOUT03/ASHOBS03, KAbsent, one-shot disposal before payload copy, shared-denial zero-call behavior and legacy tariffs are covered by the focused controls. Status-accounting evidence does not open checked OutputAcquire/StatusTeardown or establish native L2.
+
+Next: exact unsigned product-equal evidence checkpoint and independent publication review for PR124, then root integration and partial acceptance. Replay the separately parked output/status source and primary typed-status admission only after this actual retaining tip. Configured source/artifacts/approvals must be refreshed before any selected native run; no deployment, six-field conformity or whole F-core claim transfers from this gate.

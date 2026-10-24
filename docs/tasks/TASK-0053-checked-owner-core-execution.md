@@ -434,10 +434,12 @@ independent source review `ec8a8389`. Task/plan append conflicts preserve the
 current retained history; the separate conformity-readiness checkpoint is not
 silently imported. The candidate `2d5a1f7a` discussion in the plan is historical.
 
-All six new controls are still unrun. Next is the finite both-package targeted
-Clippy, genuine void Machine/ledger/disposal and affected legacy/report controls,
-then the nonexecuting generated root/leaf compile/link discriminator on this
-combined source. ASHOUT03/ASHOBS03 require fresh code/request/artifact association.
+The [disposal evidence](evidence/checked-owner-core-execution/unpublished-disposal/README.md) records session `94828`: both-package targeted Clippy and all 42 distinct tests PASS (41 ordinary and one ignored nonexecuting generated-root selector), including all six new controls, on exact source `595dda47`. Independent actual review `5bcfda37` verifies all 15 commands, 9,599 input files, 15 snapshots, physical tools/artifacts and owned cleanup. The earlier replay checkpoint above is source history; this result supersedes its unrun status. ASHOUT03/ASHOBS03 require fresh code/request/artifact association.
 The independent output/status source `c8c62384` remains parked on its own branch
 and is excluded. Status-profile/Core/emission and native SQLite L2, configured
 approvals/deployment/execution, F-core and whole criteria remain open.
+
+
+The genuine void path disposes an admitted unpublished owner before Refused payload copying or discard reporting, preserves KAbsent and never synthesizes source Finish or a closing record. Shared-denied groups remain at zero calls. Separate acquisition and latest-disposal observations survive output failure; invalid/no-O4 attempts preserve the prior observation and unresolved backing without retry. The legacy status controls remain accounting models, not checked status-profile admission.
+
+Fresh actual root/leaf compile/link yields ELF `67f43b5e` (100,547,432 bytes), receipt `ce2e8195` and request `cf13c1b1`; the authenticated configuration chain and independent root identity `cc199c7a` match. The coherent donor controls and fresh missing-release undefined-symbol refusal pass. Two glibc loading warnings and ordinary Rust warnings remain. Original `77443`/`97993` compile/lint failures, `62391` partial 11-pass/one fixture-setup-failure result and superseded delivery04 UNRUN remain separate evidence. No selected native callback or generated application/launcher ran. Six conformity fields remain Missing; configured approvals, genuine status transport, native SQLite L2, F-core and whole criteria remain open. This task/evidence prose was assembled after testing without changing product bytes.
