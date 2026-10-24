@@ -233,6 +233,13 @@ whole F2 completion.
 
 ### F3: Carry checked contracts through modules and Core
 
+- Current state: original source/static implementation is complete on retained
+  PR126 `8f0c5f46`. The [original-obligation map](../evidence/checked-ffi-original-acceptance/README.md)
+  records the complete criterion, historical/fresh evidence and Type/Row codec
+  composition. The acceptance documentation requires its own review/retention
+  and guarded #59 readback before PM confirms issue closure. This does not close
+  F4/F5/F6/F7, the connected F-core/full-workspace checkpoint or Main integration.
+
 - Outcome: extend existing canonical contracts and phase projections with host,
   assumption, result, dependency, and completion facts independently validated
   across source, summaries, linking, Core, and private program images.

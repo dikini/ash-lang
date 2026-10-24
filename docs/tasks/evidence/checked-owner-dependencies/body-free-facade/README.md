@@ -53,7 +53,9 @@ commands, raw logs, receipts, tested snapshots and independent audits. Run
 `python3 verify.py` to reconstruct and verify every indexed original. ELFs remain
 external pinned evidence, not repository blobs.
 
-The [TASK-0051 plan](../../../plans/checked-ffi-contract-carriers.md) owns the
-bounded assignment. Whole F3, combined-facade private-image coverage, later
-binding/evaluation/native activation and the connected F-core gate remain
-separate. No additional mutation matrix or runtime authority follows.
+The historical [TASK-0051 plan](https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/plans/checked-ffi-contract-carriers.md) owned the
+bounded assignment. At that checkpoint, whole F3, combined-facade private-image coverage, later
+binding/evaluation/native activation and the connected F-core gate remained
+separate. Current original F3 acceptance is recorded in the
+[obligation map](../../checked-ffi-original-acceptance/README.md). No additional
+mutation matrix or runtime authority follows.
