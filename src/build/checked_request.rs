@@ -656,8 +656,20 @@ fn encode_kind(
 ///
 /// # Errors
 /// Refuses unlinked/already-completed input, malformed or donor bodies, and
-/// exhausted byte/work bounds. Encoding and independent decoding share `work`.
+/// exhausted byte/work bounds. Encoding and independent decoding share one private
+/// meter initialized from `limits.work`.
 pub fn assemble_checked_closure_data(
+    linked: &[u8],
+    closures: [&[u8]; 6],
+    limits: RequestLimits,
+) -> Result<Vec<u8>, ReceiptFailure> {
+    assemble_checked_closure_data_with_work(linked, closures, limits,
+        &mut TypeWorkBudget::with_limit(limits.work))
+}
+// Internal callers/tests retain a single cumulative meter, including a funded
+// prefix, exhausted reuse and fresh sufficient execution. The public wrapper
+// creates exactly one private meter and does not split encoding from decoding.
+fn assemble_checked_closure_data_with_work(
     linked: &[u8],
     closures: [&[u8]; 6],
     limits: RequestLimits,
@@ -997,8 +1009,9 @@ pub(super) fn exercise_complete_closure_assembly_for_test(bytes: &[u8]) {
     }
     bodies[4] = serde_json::to_vec(&premises).unwrap(); bodies[5] = context;
     let mut measured = TypeWorkBudget::with_limit(limits.work);
-    let completed = assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut measured).unwrap();
+    let completed = assemble_checked_closure_data_with_work(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut measured).unwrap();
     let cost = measured.used();
+    assert_eq!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits).unwrap(), completed);
     ApplicabilityRequest::decode(&completed, limits).unwrap().check_complete().unwrap();
     let record: Record = serde_json::from_slice(&completed).unwrap();
     assert_eq!(serde_json::to_value(&record.root_build).unwrap(), serde_json::to_value(&base.root_build).unwrap());
@@ -1015,17 +1028,17 @@ pub(super) fn exercise_complete_closure_assembly_for_test(bytes: &[u8]) {
         assert_eq!(before.pin(field), after.pin(field));
     }
     assert_eq!(after.activate(), Err(ReceiptFailure::ProtectedAuthorityUnavailable));
-    assert!(assemble_checked_closure_data(&completed, bodies.each_ref().map(Vec::as_slice), limits,
+    assert!(assemble_checked_closure_data_with_work(&completed, bodies.each_ref().map(Vec::as_slice), limits,
         &mut TypeWorkBudget::with_limit(limits.work)).is_err());
     for prefix in [0, 7] {
         let mut exact = TypeWorkBudget::with_limit(prefix + cost); exact.charge(prefix).unwrap();
-        assert_eq!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut exact).unwrap(), completed);
+        assert_eq!(assemble_checked_closure_data_with_work(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut exact).unwrap(), completed);
         assert_eq!(exact.used(), prefix + cost);
-        assert!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut exact).is_err());
+        assert!(assemble_checked_closure_data_with_work(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut exact).is_err());
         let mut short = TypeWorkBudget::with_limit(prefix + cost - 1); short.charge(prefix).unwrap();
-        assert_eq!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut short), Err(ReceiptFailure::Resource));
-        assert!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut short).is_err());
-        assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut TypeWorkBudget::with_limit(cost)).unwrap();
+        assert_eq!(assemble_checked_closure_data_with_work(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut short), Err(ReceiptFailure::Resource));
+        assert!(assemble_checked_closure_data_with_work(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut short).is_err());
+        assemble_checked_closure_data_with_work(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut TypeWorkBudget::with_limit(cost)).unwrap();
     }
     for field in ["category", "program", "facts", "policy", "native_build", "root_link", "premises", "context"] {
         let mut donor = bodies.clone();
@@ -1033,19 +1046,19 @@ pub(super) fn exercise_complete_closure_assembly_for_test(bytes: &[u8]) {
         if field == "category" { value[field] = "header".into(); }
         else { value[field] = serde_json::json!([]); }
         donor[0] = serde_json::to_vec(&value).unwrap();
-        assert!(assemble_checked_closure_data(bytes, donor.each_ref().map(Vec::as_slice), limits,
+        assert!(assemble_checked_closure_data_with_work(bytes, donor.each_ref().map(Vec::as_slice), limits,
             &mut TypeWorkBudget::with_limit(limits.work)).is_err(), "donor {field}");
     }
     for slot in [4, 5] {
         let mut donor = bodies.clone();
         donor[slot] = b"{}".to_vec();
-        assert!(assemble_checked_closure_data(bytes, donor.each_ref().map(Vec::as_slice), limits,
+        assert!(assemble_checked_closure_data_with_work(bytes, donor.each_ref().map(Vec::as_slice), limits,
             &mut TypeWorkBudget::with_limit(limits.work)).is_err());
     }
     let mut duplicate = base.clone(); duplicate.parts.push(duplicate.parts[0].clone());
     let mut reserved = base.clone(); reserved.parts.push(Part { id: 8, bytes: vec![] });
     for donor in [duplicate, reserved] {
-        assert!(assemble_checked_closure_data(&serde_json::to_vec(&donor).unwrap(), bodies.each_ref().map(Vec::as_slice), limits,
+        assert!(assemble_checked_closure_data_with_work(&serde_json::to_vec(&donor).unwrap(), bodies.each_ref().map(Vec::as_slice), limits,
             &mut TypeWorkBudget::with_limit(limits.work)).is_err());
     }
 }
@@ -1317,7 +1330,7 @@ mod tests {
         let encoded = encode_preparation(parts, RequestLimits::default()).unwrap();
         let summary = ApplicabilityRequest::decode(&encoded, RequestLimits::default()).unwrap();
         assert!(!summary.linked());
-        assert_eq!(assemble_checked_closure_data(&encoded, [b"{}".as_slice(); 6], RequestLimits::default(),
+        assert_eq!(assemble_checked_closure_data_with_work(&encoded, [b"{}".as_slice(); 6], RequestLimits::default(),
             &mut TypeWorkBudget::with_limit(RequestLimits::default().work)), Err(ReceiptFailure::IncompleteClosure));
         assert_eq!(summary.missing_fields().len(), 6);
         assert_eq!(

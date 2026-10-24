@@ -501,13 +501,10 @@ fn run(
 // The same owned-group and strictly bounded pipe implementation also covers
 // checked Cargo before the root linker wrapper is ever entered. Legacy Cargo
 // retains its existing behavior and does not pay this opt-in transaction work.
-pub(super) fn run_root_cargo(
-    command: &mut Command,
-    directory: &Path,
-    log: &Path,
+pub(super) fn root_cargo_work(
+    command: &Command,
     limits: super::checked_link::Limits,
-    work: &mut TypeWorkBudget,
-) -> Result<std::process::ExitStatus, ReceiptFailure> {
+) -> Result<usize, ReceiptFailure> {
     let argument_bytes = command
         .get_args()
         .try_fold(0usize, |n, a| n.checked_add(a.len() + 1))
@@ -518,7 +515,16 @@ pub(super) fn run_root_cargo(
         .and_then(|n| n.checked_add(limits.cargo_seconds as usize * 400 + 16384))
         .and_then(|n| n.checked_add(argument_bytes))
         .ok_or(ReceiptFailure::Resource)?;
-    pay(work, reserve)?;
+    Ok(reserve)
+}
+pub(super) fn run_root_cargo(
+    command: &mut Command,
+    directory: &Path,
+    log: &Path,
+    limits: super::checked_link::Limits,
+    work: &mut TypeWorkBudget,
+) -> Result<std::process::ExitStatus, ReceiptFailure> {
+    pay(work, root_cargo_work(command, limits)?)?;
     let out = directory.join("cargo.stdout");
     let err = directory.join("cargo.stderr");
     let out_file = io(fs::File::create(&out))?;
