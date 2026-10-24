@@ -1724,14 +1724,26 @@ fn genuine_generic_status_finish_never_retries_on_drop_or_explicit_storage_close
             handle.publish(111,acquire._scope_node,&mut work).unwrap();
             handle.closing(111,acquire._scope_node,&mut work).unwrap();
             guard.prepare_checked_finish(&finish,111,false,&mut work).unwrap();
+            let before=handle.snapshot();
+            assert_eq!(before.k,K::Closing); assert_eq!(before.native,Native::Owned);
+            assert!(!before.unresolved); assert_eq!(STATUS_CALLS.get(),0);
             let result=guard.finish_checked_admitted(&plan(),&[NativeOwnerOperand::Address(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())],false);
             let invalid=matches!(reply,NativeScalarReply::Scalar(NativeScalarValue::U32(_)));
             let consumed=reply==NativeScalarReply::Scalar(NativeScalarValue::I32(0));
             assert_eq!(result.is_err(),invalid);
             assert_eq!(handle.snapshot().native,if consumed {Native::Consumed}else{Native::Owned});
             assert_eq!(handle.snapshot().unresolved,invalid);
-            assert_eq!(handle.snapshot().k,if invalid {K::Closing}else{K::Discharged});
+            assert_eq!(handle.snapshot().k,if invalid {K::Transferred}else{K::Discharged});
             assert_eq!(handle.latest_status(),Some(if invalid {-11}else if consumed {0}else{7}));
+            assert_eq!(handle.retains_backing(),!consumed);
+            if invalid {
+                // The invalid return terminates through output_failed BEFORE
+                // Err drops its guard: O8/K8 transfers, never completes, K.
+                assert!(handle.snapshot().terminal);
+                assert_eq!(handle.snapshot().observations,1,"only acquisition has an admitted native observation");
+                assert!(handle.closing_record().unwrap().0.is_none());
+                assert!(handle.source_continued(111,acquire._scope_node).is_err());
+            }
             drop(result);
             assert_eq!(storage.close(),consumed);
             assert_eq!(STATUS_CALLS.get(),1,"retained and no-O4 attempts must not replay in Drop or host close");
