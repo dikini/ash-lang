@@ -184,7 +184,7 @@ pub(super) fn compile_launcher(request: LauncherRequest<'_>) -> Result<LauncherA
     input(fs::create_dir(&cleanup_directory))?;
     let mut clean = environment.launcher_clean_command(canonical, request.target, &mut work)
         .map_err(project_error)?;
-    let cleanup_allowance = super::checked_native_build::root_cargo_work(&clean, request.limits)?;
+    let cleanup_allowance = super::checked_native_build::root_cargo_total_work(&clean, request.limits)?;
     work.charge(cleanup_allowance).map_err(|()| ReceiptFailure::Resource)?;
     let mut cleanup_work = TypeWorkBudget::with_limit(cleanup_allowance);
     let status = capture.run_cargo(&mut command, &log);
@@ -534,7 +534,31 @@ mod tests {
                 &mut TypeWorkBudget::default()).unwrap();
             assert!(matches!(environment.launcher_clean_command(canonical, &target,
                 &mut TypeWorkBudget::with_limit(0)), Err(super::super::checked_root_identity::Failure::Resource)));
-            let allowance = super::super::checked_native_build::root_cargo_work(&clean, limits).unwrap();
+            let opening = super::super::checked_native_build::root_cargo_work(&clean, limits).unwrap();
+            let allowance = super::super::checked_native_build::root_cargo_total_work(&clean, limits).unwrap();
+            assert_eq!(allowance, opening + 6 * limits.cargo_bytes);
+            let overflow = super::super::checked_link::Limits { cargo_bytes: usize::MAX / 10, ..limits };
+            assert_eq!(super::super::checked_native_build::root_cargo_total_work(&clean, overflow), Err(ReceiptFailure::Resource));
+            let stdout = directory.join("inert.stdout");
+            let stderr = directory.join("inert.stderr");
+            fs::write(&stdout, vec![b'o'; limits.cargo_bytes]).unwrap();
+            fs::write(&stderr, vec![b'e'; limits.cargo_bytes]).unwrap();
+            // Exercise the real settled-output read/copy path at its maximum
+            // nonempty bound; no subprocess or Cargo command is executed.
+            for funding in [allowance, allowance - 1, allowance] {
+                let mut work = TypeWorkBudget::with_limit(funding);
+                work.charge(opening).unwrap();
+                let recorded = super::super::checked_native_build::record_root_cargo_output(
+                    &stdout, &stderr, &log, limits.cargo_bytes, &mut work);
+                if funding == allowance {
+                    recorded.unwrap(); assert_eq!(work.used(), allowance);
+                    assert_eq!(super::super::checked_native_build::record_root_cargo_output(
+                        &stdout, &stderr, &log, limits.cargo_bytes, &mut work), Err(ReceiptFailure::Resource));
+                } else { assert_eq!(recorded, Err(ReceiptFailure::Resource)); }
+            }
+            let mut parent = TypeWorkBudget::with_limit(allowance);
+            parent.charge(allowance).unwrap();
+            assert!(parent.charge(1).is_err());
             let mut state = (TypeWorkBudget::with_limit(0), TypeWorkBudget::with_limit(allowance), 0);
             let finished = super::super::artifacts::GeneratedArtifacts { project: &directory,
                 target_directory: &target, package_name: "ash-checked-launcher",
@@ -544,12 +568,16 @@ mod tests {
                         if stage == 0 { postbuild.charge(1).map_err(|()| std::io::Error::other("injected capture exhaustion")) }
                         else { Ok(()) }
                     },
-                    |_, (_, cleanup, calls), _| {
-                        // Consume the exact separately reserved runner funding;
-                        // inspect the already-built clean command, never run it.
+                    |_, (_, cleanup, calls), log| {
+                        // Consume opening plus actual nonempty output charges
+                        // from the separately prepaid cleanup meter. Never run
+                        // the already-built clean command.
                         cleanup.charge(super::super::checked_native_build::root_cargo_work(&clean, limits)
                             .map_err(|e| std::io::Error::other(format!("cleanup reserve: {e:?}")))?)
                             .map_err(|()| std::io::Error::other("cleanup funding lost"))?;
+                        super::super::checked_native_build::record_root_cargo_output(
+                            &stdout, &stderr, log, limits.cargo_bytes, cleanup)
+                            .map_err(|e| std::io::Error::other(format!("cleanup output: {e:?}")))?;
                         assert!(clean.get_args().any(|arg| arg == "ash-trusted-preparation"));
                         *calls += 1; Ok(())
                     },

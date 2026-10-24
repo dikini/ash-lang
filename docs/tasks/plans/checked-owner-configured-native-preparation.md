@@ -58,6 +58,11 @@ closed cleanup command are prepared before Cargo starts. Its complete runner
 allowance is charged in advance and retained in a separate cleanup meter;
 build/capture/postbuild exhaustion cannot consume cleanup funding. Every
 post-start result enters the existing cleanup-before-publication path.
+The complete cleanup allowance is the opening runner charge plus checked
+`6 * cargo_bytes`: both bounded streams each pay two units per read byte and
+one per log-copy byte after process settlement. Nonempty inert stdout/stderr
+exercise that same shared accounting path at exact, one-short, spent and fresh
+funding; overflow refuses. These controls remain UNRUN.
 
 ## Configured source variant remains pending
 
