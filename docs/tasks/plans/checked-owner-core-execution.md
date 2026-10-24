@@ -611,3 +611,21 @@ separate from that common latest-observation field. Three overlap resolutions
 preserve both scalar helpers, the existing borrowed fixture-program helper and
 the common acquisition/rejection authority methods. This candidate is not a
 retaining tip and supplies no combined verification claim.
+
+
+### Current disposal delivery replay
+
+The candidate reconciliation paragraphs above describe preserved source history.
+The current separate delivery now starts from actual retained common PR123
+`d66ecd78`; replay source `4d6d2300` keeps all twelve reviewed implementation
+files exactly equal to `89d4f798`/`ec8a8389`. Only Task53/plan append conflicts
+needed resolution, preserving the retained history and excluding unrelated
+readiness evidence. Output/status `c8c62384` is parked separately and excluded.
+
+The six new controls remain unrun. Freeze one finite gate containing targeted
+both-package Clippy, all six new controls, necessary void/legacy/shared-denial,
+mandatory-report/prepaid-wire regressions and the existing actual root/leaf
+compile/link with coherent-donor and missing-symbol controls. No generated
+application/launcher executes. Use fresh exact source/tool/artifact pins and
+owned process cleanup; independent operator review precedes the once-only run.
+No old configured identity/approval, status-profile or native acceptance transfers.

@@ -423,3 +423,21 @@ No launcher/application/native callback executed. Default bootstrap association 
 ## Next bounded runtime dependency: unpublished guard disposal
 
 The next [planned runtime slice](plans/checked-owner-core-execution.md#next-runtime-slice-admitted-unpublished-guard-disposal) supplies the private admitted guard-disposal mechanism needed by TASK0054 / [F5 #61](https://github.com/dikini/ash-lang/issues/61). Current checked Acquire refusal safely retains opaque backing but does not establish L2 once-close. The proposed implementation preserves KAbsent and separate guard inspection, admits no Fresh source Close or public primitive, and must keep shared group denial/L8 at zero C calls. It remains separate from the current common-quarantine delivery and uses its actual retaining tip for final implementation verification. Void/status teardown and the missing genuine status-leaf/profile dependency remain explicit; no native L2 or whole F5 acceptance is claimed.
+
+
+## Unpublished disposal delivery on the retained common base
+
+The delivery branch replays only the three reviewed disposal commits onto PR123's
+actual retaining tip `d66ecd78`. Clean unsigned source checkpoint `4d6d2300`
+contains all twelve implementation files byte-equal to `89d4f798`, covered by
+independent source review `ec8a8389`. Task/plan append conflicts preserve the
+current retained history; the separate conformity-readiness checkpoint is not
+silently imported. The candidate `2d5a1f7a` discussion in the plan is historical.
+
+All six new controls are still unrun. Next is the finite both-package targeted
+Clippy, genuine void Machine/ledger/disposal and affected legacy/report controls,
+then the nonexecuting generated root/leaf compile/link discriminator on this
+combined source. ASHOUT03/ASHOBS03 require fresh code/request/artifact association.
+The independent output/status source `c8c62384` remains parked on its own branch
+and is excluded. Status-profile/Core/emission and native SQLite L2, configured
+approvals/deployment/execution, F-core and whole criteria remain open.
