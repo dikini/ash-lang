@@ -1,4 +1,4 @@
-//! Canonical binding for scalar and dependency-free source owner contracts.
+//! Canonical binding for scalar and bounded source owner contracts.
 //!
 //! ABI preparation remains in one shared allocation. Binding adds the original
 //! resolved operation, its complete binder vector and signature, and the common
@@ -636,6 +636,59 @@ pub(crate) fn independent_status_teardown(symbol: &PreparedForeignSymbol) -> boo
         && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
 }
 
+// Shape restrictions supplement, never replace, the complete original source
+// signature/owner/host/row validation in bind_foreign_symbol_for_profile and
+// private-image restoration. They grant no runtime group or native authority.
+fn single_checked_parent(prepared: &PreparedForeignLibrary, owner_index: usize) -> bool {
+    use super::source_contract::PreparedAddressRepresentation;
+    let Some(owner) = prepared.owners().get(owner_index) else { return false; };
+    let Some(selected) = prepared.checked_contract().and_then(|contract| contract.owners().get(owner_index)) else { return false; };
+    let [retained] = owner.retained_parameters() else { return false; };
+    let host = selected.host_parameter();
+    let owned = owner.owned_parameter();
+    owner.representation() == PreparedAddressRepresentation::Opaque
+        && selected.member_index() == owner.member_index()
+        && *retained != owned && *retained != host && host != owned
+        && [host, owned, *retained].into_iter().all(|position|
+            owner.parameters().get(position).is_some_and(|parameter| parameter.kind() == &Kind::Type))
+}
+
+pub(crate) fn dependent_output_acquire(
+    prepared: &PreparedForeignLibrary,
+    symbol: &PreparedForeignSymbol,
+) -> bool {
+    use super::source_contract::{PreparedAddressRepresentation as Address, PreparedOwnerCall as Role, PreparedScalarRepresentation as Scalar};
+    let Some(Role::OutputAcquire { application, output_operand: 3, offset: Some(offset), .. }) = symbol.owner_call() else { return false; };
+    let operands = symbol.operands();
+    single_checked_parent(prepared, application.owner())
+        && offset.operand == 4 && offset.input_operand == 1
+        && operands.len() == 5
+        && matches!(operands[0].source(), PreparedOperandSource::Enclosing(path) if path == &[0])
+        && operands[0].representation() == PreparedRepresentation::Address(Address::Opaque)
+        && matches!(operands[1].source(), PreparedOperandSource::Nul(path) if path == &[1])
+        && operands[1].representation() == PreparedRepresentation::Address(Address::Bytes)
+        && matches!(operands[2].source(), PreparedOperandSource::Source(path) if path == &[2])
+        && operands[2].representation() == PreparedRepresentation::Scalar(Scalar::Signed(32))
+        && matches!(operands[3].source(), PreparedOperandSource::OwnerOutput)
+        && operands[3].representation() == PreparedRepresentation::Address(Address::Opaque)
+        && matches!(operands[4].source(), PreparedOperandSource::OffsetOutput)
+        && operands[4].representation() == PreparedRepresentation::Address(Address::Bytes)
+        && symbol.result() == PreparedAbiResult::Scalar(Scalar::Signed(32))
+}
+
+pub(crate) fn dependent_status_teardown(
+    prepared: &PreparedForeignLibrary,
+    symbol: &PreparedForeignSymbol,
+) -> bool {
+    use super::source_contract::{PreparedOwnerCall as Role, PreparedScalarRepresentation as Scalar};
+    let Some(Role::StatusTeardown { application, outcomes, .. }) = symbol.owner_call() else { return false; };
+    single_checked_parent(prepared, application.owner())
+        && independent_status_teardown(symbol)
+        && matches!(symbol.operands()[0].source(), PreparedOperandSource::Current(path) if path == &[0])
+        && symbol.result() == PreparedAbiResult::Scalar(Scalar::Signed(32))
+        && matches!(outcomes.as_slice(), [outcome] if outcome.predicates.is_empty() && outcome.consumes && outcome.readable)
+}
+
 /// Explicit static checked binding; it grants no executable runtime authority.
 pub(crate) fn bind_checked_foreign_symbol(
     library: NativeLibraryId,
@@ -658,6 +711,11 @@ pub(crate) fn bind_checked_foreign_symbol(
             };
             charge(work, if matches!(role, PreparedOwnerCall::OutputAcquire { .. } | PreparedOwnerCall::StatusTeardown { .. }) { 12 } else { 1 }, effect.span)?;
             let symbol = &prepared.symbols()[symbol_index];
+            if matches!(role, PreparedOwnerCall::OutputAcquire { .. } | PreparedOwnerCall::StatusTeardown { .. })
+                && prepared.owners().get(role.application().owner()).is_some_and(|owner| !owner.retained_parameters().is_empty())
+            {
+                charge(work, 12, effect.span)?;
+            }
             prepared.owners().get(role.application().owner()).is_some_and(|owner| {
                 (owner.retained_parameters().is_empty()
                     || owner.representation() == Representation::Opaque) && match role {
@@ -683,14 +741,16 @@ pub(crate) fn bind_checked_foreign_symbol(
                             && owner.representation() == Representation::Opaque
                     }
                     PreparedOwnerCall::OutputAcquire { .. } => {
-                        owner.retained_parameters().is_empty()
-                            && owner.representation() == Representation::Opaque
-                            && independent_output_acquire(symbol)
+                        owner.representation() == Representation::Opaque
+                            && ((owner.retained_parameters().is_empty()
+                                && independent_output_acquire(symbol))
+                                || dependent_output_acquire(&prepared, symbol))
                     }
                     PreparedOwnerCall::StatusTeardown { .. } => {
-                        owner.retained_parameters().is_empty()
-                            && owner.representation() == Representation::Opaque
-                            && independent_status_teardown(symbol)
+                        owner.representation() == Representation::Opaque
+                            && ((owner.retained_parameters().is_empty()
+                                && independent_status_teardown(symbol))
+                                || dependent_status_teardown(&prepared, symbol))
                     }
                     _ => false,
                 }

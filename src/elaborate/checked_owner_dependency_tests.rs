@@ -144,7 +144,7 @@ fn checked_owner_dependency_missing_retains_refuses_original_binding() {
     binding_refuses(&DEPENDENT.replace("        retains C\n", ""));
 }
 
-fn binding_refuses(source: &str) {
+pub(super) fn binding_refuses(source: &str) {
     use crate::resolve::{DependencyExports, ResolveModuleError, ResolveReason};
     let graph = graph_with_entry(source, None);
     let mut checked = Vec::<CheckedModule>::new();

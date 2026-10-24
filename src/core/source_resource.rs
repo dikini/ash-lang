@@ -860,10 +860,10 @@ impl CheckedSourceResourceHeader {
             return Err(invalid());
         }
         if checked && matches!(acquire.owner_role(), Some(PreparedOwnerCall::OutputAcquire { .. })) {
-            charge(work, 12)?;
+            charge(work, if owner.owner().retained_parameters().is_empty() { 12 } else { 24 })?;
         }
         if checked && matches!(teardown.owner_role(), Some(PreparedOwnerCall::StatusTeardown { .. })) {
-            charge(work, 12)?;
+            charge(work, if owner.owner().retained_parameters().is_empty() { 12 } else { 24 })?;
         }
         if checked
             && ((!owner.owner().retained_parameters().is_empty()
@@ -888,13 +888,17 @@ impl CheckedSourceResourceHeader {
                     )
                 )
                 || (matches!(acquire.owner_role(), Some(PreparedOwnerCall::OutputAcquire { .. }))
-                    && (!owner.owner().retained_parameters().is_empty()
-                        || !crate::foreign::checked_source::independent_output_acquire(acquire.symbol())))
+                    && !((owner.owner().retained_parameters().is_empty()
+                        && crate::foreign::checked_source::independent_output_acquire(acquire.symbol()))
+                        || (crate::foreign::checked_source::dependent_output_acquire(owner.prepared(), acquire.symbol())
+                            && crate::foreign::checked_source::dependent_status_teardown(owner.prepared(), teardown.symbol()))))
                 || !match teardown.owner_role() {
                     Some(PreparedOwnerCall::Teardown { .. }) => matches!(teardown.symbol().result(), crate::foreign::source_contract::PreparedAbiResult::Void),
-                    Some(PreparedOwnerCall::StatusTeardown { .. }) => owner.owner().retained_parameters().is_empty()
-                        && owner.owner().representation() == PreparedAddressRepresentation::Opaque
-                        && crate::foreign::checked_source::independent_status_teardown(teardown.symbol()),
+                    Some(PreparedOwnerCall::StatusTeardown { .. }) => owner.owner().representation() == PreparedAddressRepresentation::Opaque
+                        && ((owner.owner().retained_parameters().is_empty()
+                            && crate::foreign::checked_source::independent_status_teardown(teardown.symbol()))
+                            || (crate::foreign::checked_source::dependent_output_acquire(owner.prepared(), acquire.symbol())
+                                && crate::foreign::checked_source::dependent_status_teardown(owner.prepared(), teardown.symbol()))),
                     _ => false,
                 }
                 || !checked_finish_pointer_operands(&teardown, work)?)
@@ -2017,6 +2021,33 @@ impl FlowPath {
         })
     }
 }
+// Post-observation denial never mints or replaces a finish witness. The
+// witness must already name this exact original consuming status request; the
+// caller independently restricts the operand to a declared Enclosing State.
+fn consumed_status_request(
+    program: &UnvalidatedEffectProgram,
+    header: &CheckedSourceResourceHeader,
+    phase: SourceResourcePhase,
+    path: &FlowPath,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ValidationError> {
+    charge(work, 15)?;
+    if phase != SourceResourcePhase::Finish || !path.consumed || !path.attempted_teardown
+        || path.blocked || header.dependencies.len() != 1
+        || !crate::foreign::checked_source::dependent_status_teardown(header.owner.prepared(), header.teardown.symbol())
+    { return Ok(false); }
+    let Some(CheckedFinishOutcome::Consumed(request)) = path.checked_finish_outcome else { return Ok(false); };
+    let EffectExprKind::Operation(EffectOperation::Request(original)) = &node(program, request)?.kind else { return Ok(false); };
+    if original.operation() != header.teardown.operation() { return Ok(false); }
+    for interpreted in &header.original.interpreted {
+        charge(work, 1)?;
+        if crate::types::compare_effect_instances_with_budget(&interpreted.instance, original.effect(), work)
+            .map_err(|_| resource())? == std::cmp::Ordering::Equal
+        { return Ok(true); }
+    }
+    Ok(false)
+}
+
 /// Symbolic admission separates a compatible pattern from one which is certain
 /// to match. Independent values retain no constructor/boolean choice; an owner
 /// beside them does not make that choice known.
@@ -2571,9 +2602,11 @@ fn eval_flow<'a>(
                                 .ok_or_else(invalid)?;
                             use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
                             if matches!(fact.role(), Role::CheckedQuarantine | Role::CheckedRejectAcquisition) {
+                                let after_teardown = path.consumed || path.attempted_teardown
+                                    || path.checked_finish_outcome.is_some();
                                 if header.owner.prepared().checked_contract().is_none()
-                                    || path.consumed || path.attempted_teardown
-                                    || path.checked_finish_outcome.is_some()
+                                    || (after_teardown && (fact.role() != Role::CheckedQuarantine
+                                        || !consumed_status_request(program, header, phase, &path, work)?))
                                 { return Err(invalid()); }
                                 let acquisition = if fact.role() == Role::CheckedRejectAcquisition {
                                     if phase != SourceResourcePhase::Acquire
@@ -2602,7 +2635,8 @@ fn eval_flow<'a>(
                                         state, host, &program.registry, work,
                                     )?;
                                     let allowed = match facts.fact(fields[0])? {
-                                        FlowFact::Current => phase != SourceResourcePhase::Acquire
+                                        FlowFact::Current => !after_teardown
+                                            && phase != SourceResourcePhase::Acquire
                                             && same(state, &header.original.state.ty, work)?,
                                         FlowFact::Enclosing(selected) => *selected == identity
                                             && facts.borrowed(fields[0], false, header, work)?,
@@ -2627,9 +2661,9 @@ fn eval_flow<'a>(
                                 ), 0, work)?;
                                 let returned = facts.wrapped(
                                     ConstructorId::new(fact.call_codec().ids().call, 2), failure, work)?;
-                                // Ordinary diagnostic data, NOT FinishBoundary:
-                                // the later teardown request alone earns K6's
-                                // exact private completion witness.
+                                // Ordinary diagnostic data, NOT FinishBoundary.
+                                // Preserve any already admitted consumed request;
+                                // otherwise only a later teardown may earn K6.
                                 push(&mut results, (returned, path), work)?;
                                 continue;
                             }

@@ -13,6 +13,129 @@ pub(crate) fn assert_core_controls(
     provenance: &[(crate::module::ModuleId, Arc<crate::source::SourceFile>)],
     donor_required: bool,
 ) {
+    assert_controls(core, provenance, donor_required, !donor_required);
+}
+
+pub(crate) fn assert_statement_core_controls(
+    core: &crate::core::ValidatedEffectProgram,
+    provenance: &[(crate::module::ModuleId, Arc<crate::source::SourceFile>)],
+) {
+    assert_controls(core, provenance, false, false);
+    // Direct private-flow injections supplement the genuine whole-Core positive
+    // above; booleans alone must not replace its original consumed request.
+    let template = core
+        .nodes()
+        .iter()
+        .find_map(|node| match &node.kind {
+            EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope))
+                if !scope.header().dependencies.is_empty() =>
+            {
+                Some(scope.original())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let program = template.original_finish();
+    let header = template.header();
+    let request = |matching: bool| {
+        program
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request))
+                    if (request.operation() == header.teardown.operation()) == matching =>
+                {
+                    Some(NodeId::new(program.arena, u32::try_from(index).unwrap()))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let original = request(true);
+    let unrelated = request(false);
+    let fresh = || {
+        let mut path = FlowPath::new(&mut TypeWorkBudget::default()).unwrap();
+        path.consumed = true;
+        path.attempted_teardown = true;
+        path.checked_finish_outcome = Some(CheckedFinishOutcome::Consumed(original));
+        path
+    };
+    assert!(
+        consumed_status_request(
+            program,
+            header,
+            SourceResourcePhase::Finish,
+            &fresh(),
+            &mut TypeWorkBudget::default()
+        )
+        .unwrap()
+    );
+    for mutation in 0..8 {
+        let mut path = fresh();
+        let phase = match mutation {
+            0 => {
+                path.consumed = false;
+                SourceResourcePhase::Finish
+            }
+            1 => {
+                path.attempted_teardown = false;
+                SourceResourcePhase::Finish
+            }
+            2 => {
+                path.checked_finish_outcome = None;
+                SourceResourcePhase::Finish
+            }
+            3 => {
+                path.checked_finish_outcome = Some(CheckedFinishOutcome::Retained(original));
+                SourceResourcePhase::Finish
+            }
+            4 => {
+                path.checked_finish_outcome = Some(CheckedFinishOutcome::Boundary(original));
+                SourceResourcePhase::Finish
+            }
+            5 => {
+                path.checked_finish_outcome = Some(CheckedFinishOutcome::Consumed(unrelated));
+                SourceResourcePhase::Finish
+            }
+            6 => {
+                path.blocked = true;
+                SourceResourcePhase::Finish
+            }
+            _ => SourceResourcePhase::Handler,
+        };
+        assert!(
+            !consumed_status_request(
+                program,
+                header,
+                phase,
+                &path,
+                &mut TypeWorkBudget::default()
+            )
+            .unwrap()
+        );
+    }
+    let mut short = TypeWorkBudget::with_limit(0);
+    assert_eq!(
+        consumed_status_request(
+            program,
+            header,
+            SourceResourcePhase::Finish,
+            &fresh(),
+            &mut short
+        )
+        .unwrap_err()
+        .reason(),
+        ValidationReason::Resource
+    );
+}
+
+fn assert_controls(
+    core: &crate::core::ValidatedEffectProgram,
+    provenance: &[(crate::module::ModuleId, Arc<crate::source::SourceFile>)],
+    donor_required: bool,
+    require_rows: bool,
+) {
     let sources = provenance
         .iter()
         .map(|(_, s)| s.as_ref())
@@ -111,7 +234,7 @@ pub(crate) fn assert_core_controls(
             _ => None,
         })
         .collect::<Vec<_>>();
-    if !donor_required {
+    if require_rows {
         assert_eq!(row_positions.len(), 2);
     }
     let cases = 6 + usize::from(donor.is_some()) + 2 * usize::from(!row_positions.is_empty());
