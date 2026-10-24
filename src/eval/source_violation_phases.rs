@@ -699,3 +699,66 @@ mod tests {
         });
     }
 }
+
+#[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+mod dependent_violation_controls {
+    use super::*;
+    use crate::{core::PureValue, types::Kind};
+
+    #[test]
+    fn authored_prepare_quarantine_uses_exact_enclosing_parent_and_retains_suspect_child() {
+        crate::foreign::source_bindings::with_dependent_violation_boundary_for_test(|fixture| {
+            let mut machine = Machine::new_effect(fixture.program);
+            machine.control = None;
+            machine.source_bindings = Some(&fixture.bindings);
+            let before_parent = fixture.parent_boundary.snapshot();
+            let before_child = fixture.child_boundary.snapshot();
+            let observed_child = fixture.child_boundary.prepaid_scope_observer();
+            let module = fixture.program.registry().scalar_preflight(fixture.call.function).unwrap().module();
+            let intrinsic = fixture.program.nodes().iter().find_map(|node| match &node.kind {
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Intrinsic(intrinsic)))
+                    if matches!(intrinsic.operation(), Intrinsic::ForeignQuarantine { function }
+                        if function == fixture.call.function) => Some(*intrinsic),
+                _ => None,
+            }).unwrap();
+            let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+                super::super::pure_expression(&machine.program, fixture.call.application).unwrap() else { unreachable!(); };
+            let caller = super::super::Instantiation::default();
+            let role = Role::CheckedQuarantine;
+            let parameters = [(role.host_parameter(module).unwrap(), Kind::Type),
+                (role.state_parameter(module).unwrap(), Kind::Type)];
+            let defining = super::super::Instantiation::default().apply(&caller, &parameters,
+                application.arguments(), application.row_arguments(), &mut TypeWorkBudget::default()).unwrap();
+            let callable = super::super::SourceByteCallable { intrinsic, application: fixture.call.application,
+                caller: caller.clone(), defining };
+            machine.frames.push(Frame::SourceResourceBoundary(Box::new(super::super::SourceResourceBoundary {
+                checked: Some(fixture.child_boundary), report_slot: None, node: fixture.scope,
+                key: super::super::ActivationKey(112), environment: super::super::Environment::new(),
+                owner: Some(fixture.child), dependencies: Vec::new(), phase: ProviderPhase::Acquire,
+                payload: None, saved: None, consumed: false, blocked: false, discarded: false,
+            })));
+            let cause = machine.foreign_constructor(constructor(module, Nominal::ViolationCause, 0),
+                Some(Value::Integer(crate::integer::Integer::from_i64(7))), RuntimePhase::Access).unwrap();
+            let value = machine.foreign_tuple(&[Value::NativeStateView(super::super::ActivationKey(111)), cause], RuntimePhase::Access).unwrap();
+            machine.return_source_violation_call(fixture.call.apply.unwrap(), callable, caller, value).unwrap();
+            assert!(!fixture.parent.ordinary_live());
+            assert!(fixture.parent.physically_live());
+            assert!(fixture.parent.preflight_dependents(&mut TypeWorkBudget::default()).unwrap());
+            assert_eq!(fixture.parent_boundary.latest_status(), Some(0));
+            assert_eq!(observed_child.latest_status(), Some(7));
+            assert_eq!(observed_child.snapshot(), before_child, "L8 denies group without rewriting child O4/K/history");
+            let after_parent = fixture.parent_boundary.snapshot();
+            assert_eq!((after_parent.native, after_parent.k, after_parent.observations, after_parent.history),
+                (before_parent.native, before_parent.k, before_parent.observations, before_parent.history));
+            let Frame::SourceResourceBoundary(boundary) = &machine.frames[0] else { unreachable!(); };
+            assert!(boundary.blocked);
+            assert!(boundary.owner.as_ref().unwrap().physically_live());
+            assert!(!boundary.owner.as_ref().unwrap().ordinary_live());
+            assert!(machine.checked_reports.is_none(), "quarantine is not local completion");
+            assert!(matches!(machine.control, Some(Control::Return(_))));
+            drop(machine);
+            assert_eq!(crate::foreign::checked_leaf_transport::calls()[4], 0,
+                "authored Enclosing quarantine never finalizes suspect output on frame disposal");
+        });
+    }
+}

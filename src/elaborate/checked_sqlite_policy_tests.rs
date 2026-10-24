@@ -152,8 +152,11 @@ fn checked_policy_trace_is_ordinary_source_without_native_authority() {
 #[test]
 fn checked_statement_tail_policy_rejects_actual_negative_and_outside_offsets() {
     let policy = SQLITE.split_once("pub type OpenPolicy").unwrap().1;
-    let source = format!("import @builtin.foreign as Foreign\nimport @builtin.bytes as B\nimport @builtin.string as Text\npub type OpenPolicy{policy}\n");
+    let source = format!("import @builtin.foreign as Foreign\nimport @builtin.bytes as B\nimport @builtin.string as Text\npub foreign library Offsets {{\n profile \"x86_64-unknown-linux-gnu\"\n repr Signed = signed(64)\n const Negative : Signed = -1\n}}\npub negative_offset : Unit -> Int\nnegative_offset () = Offsets.Negative\npub type OpenPolicy{policy}\n");
     for (offset, expected) in [(-1, false), (0, false), (9, true), (10, true), (11, false)] {
+        // Signed foreign constants already admit negative values. The ordinary
+        // helper supplies an actual negative Int without extending expression grammar.
+        let offset = if offset < 0 { "SQLite.negative_offset ()".to_owned() } else { offset.to_string() };
         let entry = format!("import producer as SQLite\nmain : Unit -> Bool\nmain () = SQLite.valid_tail (\"SELECT 1; \", {offset})\n");
         let (core, _) = checked_owner_passive_program_for_source(&source, &entry);
         let result = crate::eval::evaluate_effect(&core).unwrap();

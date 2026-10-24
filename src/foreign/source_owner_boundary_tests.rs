@@ -1909,3 +1909,135 @@ fn genuine_dependent_parent_locator_rejects_other_group_storage_stale_and_denied
         if let Some(donor) = donor { assert!(donor.ordinary_live()); }
     }
 }
+
+/// Actual SQLite source/Core denial occurrence with injected dependent backing.
+/// This supplies no protected context or executable host permission.
+#[cfg(not(ash_checked_owner_root = "v1"))]
+pub(crate) struct DependentViolationBoundaryForTest<'a> {
+    pub(crate) program: &'a crate::core::ValidatedEffectProgram,
+    pub(crate) scope: crate::core::NodeId,
+    pub(crate) call: crate::core::source_resource::SourceByteCall,
+    pub(crate) bindings: SourceNativeBindings,
+    pub(crate) parent: crate::foreign::source_runtime::NativeOwnerGuard,
+    pub(crate) child: crate::foreign::source_runtime::NativeOwnerGuard,
+    pub(crate) parent_boundary: crate::foreign::source_runtime::NativeOwnerBoundary,
+    pub(crate) child_boundary: crate::foreign::source_runtime::NativeOwnerBoundary,
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+pub(crate) fn with_dependent_violation_boundary_for_test(
+    test: impl FnOnce(DependentViolationBoundaryForTest<'_>),
+) {
+    use crate::foreign::checked_leaf_transport as leaf;
+    leaf::reset();
+    let (program, _) = crate::elaborate::checked_owner_passive_program_for_source(
+        include_str!("../../libraries/sqlite_checked.ash"),
+        include_str!("../../tests/fixtures/checked-sqlite/dependent-physical-entry.ash"));
+    let (parent_acquire, _) = program_scope_requests(&program, Some(false));
+    let (child_acquire, _) = program_scope_requests(&program, Some(true));
+    let storage = Rc::new(NativeOwnerStorage::default());
+    let mut work = TypeWorkBudget::default();
+    let ready = dependent_physical_ready(&parent_acquire, 111, &storage, Vec::new(), &mut work);
+    let parent_boundary = ready.checked_boundary(&mut work).unwrap().unwrap();
+    let parent = ready.invoke_checked_output_leaf(b":memory:\0").unwrap().record().into_guard().unwrap();
+    parent_boundary.publish(111, parent_acquire._scope_node, &mut work).unwrap();
+    let dependency = storage.declared_dependency(111, &mut work).unwrap();
+    let NativeOwnerOperand::CheckedParent(locator) = dependency.operand(&mut work).unwrap() else { panic!("opaque loan") };
+    let ready = dependent_physical_ready(&child_acquire, 112, &storage, vec![dependency], &mut work);
+    let child_boundary = ready.checked_boundary(&mut work).unwrap().unwrap();
+    leaf::output_status(7);
+    let child = ready.invoke_checked_output_leaf_with_parent(b"SELECT 1;\0", Some((locator, 10))).unwrap().record().into_guard().unwrap();
+    let executable = crate::eval::ExecutableProgram::Effect(program.shared());
+    let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+        &program.node(child_acquire._scope_node).unwrap().kind else { unreachable!(); };
+    let mut selected = None;
+    scope.visit_byte_calls(|call, work| {
+        if selected.is_none() && call.apply.is_some()
+            && program.registry().scalar_preflight(call.function).is_some_and(|fact|
+                fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedQuarantine)
+            && SourceOwnerViolationRequest::admit(&executable, child_acquire._scope_node,
+                crate::core::source_resource::SourceResourcePhase::Acquire, call, work).is_ok() {
+            selected = Some(call);
+        }
+        Ok(())
+    }, &mut work).unwrap();
+    let bindings = SourceNativeBindings { owner_storage: storage, ..SourceNativeBindings::default() };
+    test(DependentViolationBoundaryForTest { program: &program, scope: child_acquire._scope_node,
+        call: selected.expect("authored Prepare error/non-null Enclosing quarantine"), bindings,
+        parent, child, parent_boundary, child_boundary });
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn genuine_dependent_physical_preparation_exact_short_spent_fresh_and_report_failure_preserve_edges() {
+    use crate::foreign::{checked_leaf_transport as leaf, source_runtime::{CheckedParentLocator,
+        NativeOwnerAdmissionError, NativeOwnerBoundary, NativeOwnerDestruction}, checked_control::{Native, K}};
+    let (program, _) = crate::elaborate::checked_owner_passive_program_for_source(
+        include_str!("../../libraries/sqlite_checked.ash"),
+        include_str!("../../tests/fixtures/checked-sqlite/dependent-physical-entry.ash"));
+    let (parent_acquire, _) = program_scope_requests(&program, Some(false));
+    let (child_acquire, _) = program_scope_requests(&program, Some(true));
+    let prepare_child = |storage: &Rc<NativeOwnerStorage>, work: &mut TypeWorkBudget|
+        -> Result<(NativeOwnerGuardReady, CheckedParentLocator, NativeOwnerBoundary), NativeOwnerAdmissionError> {
+        let mut ready = NativeOwnerGuardReady::in_storage_plan(Arc::clone(&child_acquire._scope.header().owner),
+            NativeOwnerDestruction::CheckedLeaf, 0, 0, Rc::clone(storage)).map_err(|()|NativeOwnerAdmissionError::Storage(1))?;
+        let state = crate::types::IterativeTypeOwner::new(crate::types::clone_type_with_budget(&child_acquire.state, work).map_err(|()|NativeOwnerAdmissionError::Work)?);
+        let access = crate::types::IterativeTypeOwner::new(crate::types::clone_type_with_budget(&child_acquire.access, work).map_err(|()|NativeOwnerAdmissionError::Work)?);
+        let dependency = storage.declared_dependency(111, work)?;
+        let NativeOwnerOperand::CheckedParent(locator) = dependency.operand(work)? else { panic!("opaque parent locator") };
+        ready.prepare_authority(112, state, access, vec![dependency], Vec::new(), work)?;
+        ready.prepare_checked_boundary(&child_acquire, 112, Some(limits()), work)?;
+        let boundary = ready.checked_boundary(work)?.unwrap();
+        Ok((ready, locator, boundary))
+    };
+    let run = |limit: usize, prefix: usize, enter: bool| {
+        leaf::reset();
+        let storage = Rc::new(NativeOwnerStorage::default());
+        let mut setup = TypeWorkBudget::default();
+        let parent_ready = dependent_physical_ready(&parent_acquire, 111, &storage, Vec::new(), &mut setup);
+        let parent_boundary = parent_ready.checked_boundary(&mut setup).unwrap().unwrap();
+        let parent = parent_ready.invoke_checked_output_leaf(b":memory:\0").unwrap().record().into_guard().unwrap();
+        parent_boundary.publish(111, parent_acquire._scope_node, &mut setup).unwrap();
+        let before = parent_boundary.snapshot();
+        let mut work = TypeWorkBudget::with_limit(limit); work.charge(prefix).unwrap();
+        let result = prepare_child(&storage, &mut work);
+        let used = work.used() - prefix;
+        let success = result.is_ok();
+        match result {
+            Err(error) => {
+                assert!(matches!(error, NativeOwnerAdmissionError::Work), "only work exhaustion earns short-budget credit: {error:?}");
+                assert_eq!(leaf::calls()[0], 1, "no child native entry under refusal");
+                assert!(!parent.preflight_dependents(&mut setup).unwrap());
+                assert_eq!(parent_boundary.snapshot(), before);
+            }
+            Ok((ready, locator, boundary)) if enter => {
+                // No external work remains, but mandatory arming and O4 already
+                // own their storage/work. A later report failure cannot roll back.
+                assert_eq!(work.remaining(), 0);
+                let child = ready.invoke_checked_output_leaf_with_parent(b"SELECT 1;\0", Some((locator, 10))).unwrap().record().into_guard().unwrap();
+                assert_eq!(boundary.snapshot().native, Native::Owned);
+                assert_eq!(boundary.snapshot().k, K::Absent);
+                assert!(parent.preflight_dependents(&mut setup).unwrap());
+                boundary.output_failed();
+                assert_eq!(boundary.snapshot().native, Native::Owned);
+                assert_eq!(boundary.snapshot().k, K::Absent);
+                drop(child);
+                assert!(parent.preflight_dependents(&mut setup).unwrap(), "postreturn terminal report loss preserves edge");
+                assert!(parent.physically_live());
+                assert_eq!(leaf::calls(), [2,0,0,0,0], "report loss neither retries nor finalizes");
+            }
+            Ok((ready, _, _)) => { drop(ready); assert!(!parent.preflight_dependents(&mut setup).unwrap()); }
+        }
+        (success, used)
+    };
+    let (success, cost) = run(327_680, 0, false); assert!(success);
+    for prefix in [0, 7] {
+        assert!(!run(prefix + cost - 1, prefix, false).0);
+        assert!(run(prefix + cost, prefix, true).0);
+        // A spent meter refuses a fresh preparation before entry; a separately
+        // fresh sufficient preparation succeeds. No uncertain call is replayed.
+        assert!(!run(prefix, prefix, false).0);
+        assert_eq!(run(prefix + cost, prefix, true), (true, cost));
+    }
+    println!("dependent physical preparation work={cost}; unchanged allowance327680; exact/prefix/one-short/spent/fresh and armed report-loss edge preservation");
+}

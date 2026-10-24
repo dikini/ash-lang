@@ -2153,4 +2153,4 @@ pub(crate) use boundary_tests::{
     with_eight_byte_body_pair_for_test, with_violation_boundary_for_test,
 };
 #[cfg(all(test, not(ash_checked_owner_root = "v1")))]
-pub(crate) use boundary_tests::{with_unpublished_leaf_for_test, with_unpublished_int_refusal_for_test, with_output_status_unpublished_for_test, with_output_status_closing_for_test};
+pub(crate) use boundary_tests::{with_unpublished_leaf_for_test, with_unpublished_int_refusal_for_test, with_output_status_unpublished_for_test, with_output_status_closing_for_test, with_dependent_violation_boundary_for_test};
