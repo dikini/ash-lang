@@ -935,7 +935,7 @@ impl NativeOwnerGuard {
                 }
             }
             self.initialized_bytes = None;
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(any(test, ash_checked_owner_root = "v1")))]
         {
