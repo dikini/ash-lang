@@ -29,24 +29,28 @@ they arise and report them for later prioritization; no fixed type catalogue,
 scheduled extension phase or numeric-delivery prerequisite follows.
 
 Root assigns each stage. The user has authorized removal of unnecessary code;
-new pointer/API implementation and native execution still need S1 design.
+PR138 delivered the first retirement. S1 now reviews CP-0024's concrete mapping;
+new pointer/API implementation and native examples follow after that review.
 Existing machinery governs values and artifacts originating in FFI. Foreign
 origin adds no admission, lifecycle or validation protocol.
 
 Use this concrete sequence:
 
-1. Retire the milestone-only artifact/receipt/protected-launch package, producer,
-   root, leaf, link observers, APIs and dedicated tests. Trim their hooks from
-   normal build/emission; preserve typed bridges, generic image/Core fixes,
-   fingerprint/gas, managed Bytes, effects, handlers and cleanup. No Main reset.
-2. Settle the smallest address/byte mapping in S1, then replace inherited foreign
-   policy in the existing entry and delete its obsolete dependency closure.
+1. Delivered in PR138: the milestone-only artifact/receipt/protected-launch
+   package, producer, root, leaf, link observers, APIs and dedicated tests were
+   removed. Typed bridges, generic image/Core fixes, fingerprint/gas, managed
+   Bytes, effects, handlers and cleanup remain. No Main reset.
+2. Review CP-0024's opaque nominal Address, null/equality, synchronous read-only
+   Bytes pointer arguments and ordinary symbol effects in S1; no new memory API.
+   Then replace inherited foreign policy in the existing entry and delete its obsolete dependency closure.
    Current shared checked source-projection/reconstruction and injected leaf
    policy tests remain only until this replacement; they are not a permanent
    compatibility stack. No new general resource-State mechanism is assumed.
 3. Use ordinary Ash binding code and existing cleanup for the small normal/error
-   example. Assess pointer-only SQLite canary calls, such as libversion/sourceid,
-   against open/prepare calls whose C int/out-pointer shapes may be unsupported.
+   example: make/fail/echo/release with ordinary null/error handling. Keep managed
+   Bytes echo separate and never free its backing. Exercise SQLite libversion/
+   sourceid pointer returns; report missing text readback and open/prepare C int/
+   out-pointer shapes.
    Report actual gaps; do not add a shim to claim numeric representation support.
 4. The developer owns focused ordinary build/image/nonforeign regressions and a
    workspace check for this removal. At the integrated slim path plus example,
