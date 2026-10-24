@@ -414,3 +414,58 @@ one-short, spent and fresh controls remain mandatory. For the observed
 73,351-byte image and 36,737 expectation bytes, the existing startup formula
 supplies 2,421,936 units. Complete cost and headroom still require execution;
 classification alone is not a passing gate or runtime/native evidence.
+
+
+### Complete focused source/static result
+
+The preceding pending and failure paragraphs are historical. Based on retained PR125
+`15128ba4`, clean source `2a6812fe` passes actual session `15251`: all 18 distinct
+focused Rust selectors, including four explicitly ignored dependent controls,
+and targeted Ash library/test Clippy (19 commands). No current selector was
+skipped or left unrun. The [evidence record](evidence/checked-sqlite-dependent-static/README.md)
+retains exact commands, inputs, observations, earlier failures and independent
+actual review `5cfa056f`. This is source/static delivery, not native execution.
+
+The genuine Type-only Statement fixture preserves original Connection/Statement,
+H, ordered Type actuals, retained-parent and typed status/offset relations through
+source checking, actual producer checked-header publication, linking, independent
+Core, identity and
+fold transformations, and private image reconstruction. Statement Core uses
+118,437 of 327,680 work units. The separate nonempty-Row Statement fixture
+passes source/link/Core/transforms and funding controls at 166,399 units; it
+does not exercise Statement Rows through private image reconstruction. Original
+request-specific consumption and post-observation Enclosing denial remain
+distinct from Boundary and synthetic Finish. Connection/arena source and pure
+policy controls, direct-versus-alias quarantine refusal, Child dependency and
+borrow regressions all pass. This records the current actual Statement header
+and linked-program boundary; it does not transfer the older Child/facade
+source-absent consumer proof wholesale.
+
+The image repairs restore only the already admitted owner-free checked lexical
+host relation, and account for its actual mapped H in the exact registry
+inventory. Ordinary closed instances, other open Type/Row slots and dependent
+executable/runtime refusal remain unchanged. Successful source-header membership
+queries previously cost four or five units across three lookups because of
+unordered early exit. A full paid census preserves the answer and makes those
+lookups cost six, adding only one or two units without sorting, storage or a
+limit change. Strict exact/prefixed/one-short/spent/fresh controls now pass.
+
+Statement standalone remains Resource under the generic 327,680 allowance; the
+failed attempt does not measure full standalone demand. The private startup reconstruction segment under the existing production
+allowance instead uses 626,374 of its existing 2,421,936 units,
+leaving 1,795,562 (74.14%). The smaller Child retains standalone Fits. Its host
+is also present in complete retained original views, so the new inventory-only
+donors are explicitly scoped to Statement's boundary-only host; all older
+Child controls remain. The rejected structural-depth 256 trial is retained as
+contrary evidence; parser 128 and the original safety tests remain unchanged,
+with ordinary DATA-only source factoring.
+
+Dependent Ledger/executable/physical admission, parent/destination loans and
+edges, copied SQL/offset carriers, multioperand/current borrowing, complete E/B
+policy and actual SQLite/arena behavior remain outstanding. Pure-source tests
+do not exercise a real negative offset; that later Core/runtime value boundary
+is still required. No native callback, generated application, launcher or
+deployment ran. All six conformity fields remain Missing and default association
+is None. Full F-core, milestone workspace and separate Main integration gates
+remain open. This result supplies bounded F3/F5 evidence; it does not check a
+whole criterion.

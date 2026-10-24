@@ -496,3 +496,24 @@ The preceding source-only/UNRUN output-status paragraphs are historical. On reta
 The [current evidence](evidence/checked-owner-core-execution/independent-output-status/README.md) records 64 ordinary behavioral passes plus Clippy on `45f53d93`/session `35186`, then fresh both-package Clippy and both actual two-role/four-role root/leaf canonical/original/donor/missing-symbol compile-link selectors on `c96a1629`/session `31191`. The 64 ordinary controls transfer behavior only across the sole root-cfg retention-typing repair: they are not 66 fresh tests, and build.rs hashes that file, so no old source/runtime/artifact/approval equality transfers. Both new profiles bind their own fresh code identities, ELF, receipt and request. Independent actual review `5849b981` checks physical inputs/tools/artifacts and all cleanup. Earlier four failed/partial actuals and superseded unlaunched metadata remain separate.
 
 The two-role ELF is `f4b530f4` (100,657,792 bytes), receipt `7aa9b8e9`, request `a1c99a43`, identity `72ce3092`; the four-role regression is `60f8c537` (100,666,224 bytes), receipt `d5c5cb32`, request `42e408c9`, identity `10d282c0`. Current leaf source/selected artifact provenance and cache reuse qualifications are retained. Ordinary/glibc warnings remain. No generated application, launcher or selected C callback ran. Default association is None and all six conformity fields remain Missing. Dependent/multioperand/copied-input profiles, full SQLite/arena policy and native behavior, configured approvals/deployment, F-core and whole criteria stay open. This is post-test prose/evidence assembly with tested product/manifests/watched compilation inputs unchanged.
+
+
+## Dependent source/static prerequisite verified
+
+[TASK0054's focused evidence](evidence/checked-sqlite-dependent-static/README.md)
+now records all 18 selected source/Core/private-image controls and targeted Ash
+library/test Clippy passing in `15251` on `2a6812fe`. The genuine Type-only
+Statement fixture preserves original H/Type/retained-owner/status/offset
+relations through funded private reconstruction. The separate nonempty-Row
+Statement fixture covers source/link/Core/transforms and funding, not its
+private image. Dependent runtime/executable admission still
+refuses before entry. This advances the static prerequisite only.
+
+The next physical extension still needs exact parent/destination loans, owner
+arming, retained edges, copied SQL/offset and multioperand carriers, genuine
+status outcomes and shared-denial behavior. All final application/launcher/
+configuration/source-code identities and finite approval associations must be
+fresh; earlier unconfigured artifacts or approvals do not transfer. No native
+callback or protected execution ran here, all six conformity fields remain
+Missing, and configured F-core/isolation/full-workspace/Main obligations remain
+open.
