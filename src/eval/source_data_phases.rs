@@ -136,6 +136,10 @@ impl Machine<'_> {
                 .owner
                 .as_ref()
                 .ok_or(RuntimeFailure::ForeignBinding)?;
+            if boundary.phase == ProviderPhase::Body {
+                owner.pay_group_checks(1, &mut self.instantiation_work)
+                    .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
+            }
             if !std::sync::Arc::ptr_eq(owner.owner(), &scope.header().owner)
                 || boundary.phase == ProviderPhase::Body && !owner.ordinary_live()
                 || !scope

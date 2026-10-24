@@ -175,6 +175,17 @@ impl Machine<'_> {
                 .owner
                 .as_ref()
                 .ok_or(RuntimeFailure::ForeignBinding)?;
+            // A related owner can deny this group without changing this frame's
+            // local blocked flag, including while Finish uses cached windows.
+            if guard.shared_group_denied(&mut self.instantiation_work)
+                .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?
+            {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
+            if boundary.phase == ProviderPhase::Body {
+                guard.pay_group_checks(1, &mut self.instantiation_work)
+                    .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
+            }
             if !Arc::ptr_eq(guard.owner(), &original_owner)
                 || !guard.physically_live()
                 || boundary.phase == ProviderPhase::Body && !guard.ordinary_live()
@@ -218,6 +229,11 @@ impl Machine<'_> {
                 completion,
                 &mut self.instantiation_work,
             )?;
+            if dependency.shared_group_denied(&mut self.instantiation_work)
+                .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?
+            {
+                return Err(RuntimeFailure::ForeignBinding);
+            }
             super::charge_effect_work(
                 &mut self.instantiation_work,
                 boundary.dependencies.len(),
@@ -506,6 +522,8 @@ impl Machine<'_> {
                             return Err(RuntimeFailure::ForeignBinding);
                         }
                         let actual = owner.owner.as_ref().ok_or(RuntimeFailure::ForeignBinding)?;
+                        actual.pay_group_checks(usize::from(source_phase == SourceResourcePhase::Handler) + usize::from(!invocation.uses_checked_leaf()), &mut self.instantiation_work)
+                            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
                         if !Arc::ptr_eq(
                             actual.owner(),
                             symbol.owner().ok_or(RuntimeFailure::ForeignBinding)?,
@@ -782,6 +800,8 @@ impl Machine<'_> {
                 return Err(RuntimeFailure::ForeignBinding);
             }
         }
+        dependency.pay_group_checks(1, &mut self.instantiation_work)
+            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
         Ok(crate::foreign::source_runtime::NativeOwnerOperand::Address(
             dependency.address().ok_or(RuntimeFailure::ForeignBinding)?,
         ))
@@ -822,6 +842,55 @@ fn value_leaf<'a>(
     }
     Ok(value)
 }
+
+/// Physical barrier shared by cached extent and copy access. Source
+/// occurrence/type admission remains in the caller; this grants none.
+fn require_cached_window_owner(
+    frames: &[Frame],
+    owner_key: ActivationKey,
+    provider_phase: ProviderPhase,
+    work: &mut TypeWorkBudget,
+) -> Result<(), RuntimeFailure> {
+    // The same original physical guard must still exist. View and extent
+    // tokens cannot substitute a same-typed activation or revive consumed,
+    // blocked or ordinarily revoked access.
+    let mut live = false;
+    for frame in frames.iter().rev() {
+        super::charge_effect_work(work, 1, RuntimePhase::Access)?;
+        let Frame::SourceResourceBoundary(owner) = frame else {
+            continue;
+        };
+        if owner.key != owner_key {
+            continue;
+        }
+        let guard = owner.owner.as_ref().ok_or(RuntimeFailure::ForeignBinding)?;
+        // A related owner can deny this group without changing this frame's
+        // local blocked flag, including while Finish uses cached windows.
+        if guard.shared_group_denied(work)
+            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, work))?
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        if provider_phase == ProviderPhase::Body {
+            guard.pay_group_checks(1, work)
+                .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, work))?;
+        }
+        if live
+            || owner.consumed
+            || owner.blocked
+            || !guard.physically_live()
+            || provider_phase == ProviderPhase::Body && !guard.ordinary_live()
+        {
+            return Err(RuntimeFailure::ForeignBinding);
+        }
+        live = true;
+    }
+    if !live {
+        return Err(RuntimeFailure::ForeignBinding);
+    }
+    Ok(())
+}
+
 
 impl Machine<'_> {
     #[inline(never)]
@@ -1085,32 +1154,7 @@ impl Machine<'_> {
         {
             return Err(RuntimeFailure::ForeignBinding);
         }
-        // The same original physical guard must still exist. View and extent
-        // tokens cannot substitute a same-typed activation or revive consumed,
-        // blocked or ordinarily revoked access.
-        let mut live = false;
-        for frame in self.frames.iter().rev() {
-            super::charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
-            let Frame::SourceResourceBoundary(owner) = frame else {
-                continue;
-            };
-            if owner.key != window.owner {
-                continue;
-            }
-            let guard = owner.owner.as_ref().ok_or(RuntimeFailure::ForeignBinding)?;
-            if live
-                || owner.consumed
-                || owner.blocked
-                || !guard.physically_live()
-                || boundary.phase == ProviderPhase::Body && !guard.ordinary_live()
-            {
-                return Err(RuntimeFailure::ForeignBinding);
-            }
-            live = true;
-        }
-        if !live {
-            return Err(RuntimeFailure::ForeignBinding);
-        }
+        require_cached_window_owner(&self.frames, window.owner, boundary.phase, &mut self.instantiation_work)?;
         if extent.is_some_and(|extent| extent.view != view_key) {
             if checked_copy {
                 return Err(RuntimeFailure::ForeignBinding);

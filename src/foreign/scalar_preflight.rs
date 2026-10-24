@@ -88,6 +88,8 @@ pub(crate) enum ForeignScalarPreflightRole {
     CheckedByteWrite,
     CheckedCopyBytes,
     CheckedCopyNul,
+    CheckedQuarantine,
+    CheckedRejectAcquisition,
 }
 
 impl ForeignScalarPreflightRole {
@@ -107,6 +109,8 @@ impl ForeignScalarPreflightRole {
             Self::CheckedByteWrite => 12,
             Self::CheckedCopyBytes => 13,
             Self::CheckedCopyNul => 14,
+            Self::CheckedQuarantine => 15,
+            Self::CheckedRejectAcquisition => 16,
         }
     }
 
@@ -126,6 +130,8 @@ impl ForeignScalarPreflightRole {
             Self::CheckedByteWrite => 25,
             Self::CheckedCopyBytes => 27,
             Self::CheckedCopyNul => 29,
+            Self::CheckedQuarantine => 31,
+            Self::CheckedRejectAcquisition => 33,
             _ => return None,
         };
         Some(TypeVariableId::resolved(module, local))
@@ -156,6 +162,7 @@ impl ForeignScalarPreflightRole {
         match self {
             Self::DataOf => Some(TypeVariableId::resolved(module, 7)),
             Self::ReplaceData => Some(TypeVariableId::resolved(module, 9)),
+            Self::CheckedQuarantine => Some(TypeVariableId::resolved(module, 32)),
             _ => self.byte_parameter(module),
         }
     }
@@ -190,9 +197,10 @@ impl ForeignScalarPreflightRole {
         parameters: &[(TypeVariableId, Kind)],
     ) -> bool {
         if let Some(host) = self.host_parameter(module) {
-            return self.borrowed_parameter(module).is_some_and(|borrowed| {
-                parameters == [(host, Kind::Type), (borrowed, Kind::Type)]
-            });
+            return match self.borrowed_parameter(module) {
+                Some(borrowed) => parameters == [(host, Kind::Type), (borrowed, Kind::Type)],
+                None => parameters == [(host, Kind::Type)],
+            };
         }
         match (self.borrowed_parameter(module), self.data_parameter(module)) {
             (Some(state), Some(data)) => parameters == [(state, Kind::Type), (data, Kind::Type)],
@@ -207,9 +215,10 @@ impl ForeignScalarPreflightRole {
         parameters: &[TypeVariableId],
     ) -> bool {
         if let Some(host) = self.host_parameter(module) {
-            return self
-                .borrowed_parameter(module)
-                .is_some_and(|borrowed| parameters == [host, borrowed]);
+            return match self.borrowed_parameter(module) {
+                Some(borrowed) => parameters == [host, borrowed],
+                None => parameters == [host],
+            };
         }
         match (self.borrowed_parameter(module), self.data_parameter(module)) {
             (Some(state), Some(data)) => parameters == [state, data],
@@ -335,33 +344,25 @@ impl CheckedForeignScalarPreflight {
         call_codec: Arc<CheckedForeignCallCodec>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, ForeignAdmissionError> {
-        let core_signature = if let Some(parameter) = role.borrowed_parameter(call_codec.module()) {
+        let borrowed = role.borrowed_parameter(call_codec.module());
+        let host = role.host_parameter(call_codec.module());
+        let core_signature = if borrowed.is_some() || host.is_some() {
             let body = crate::types::IterativeTypeOwner::new(
                 crate::types::clone_type_with_budget(&annotation.ty, work)
                     .map_err(|()| failure(ForeignAdmissionReason::WorkExhausted, source))?,
             );
             let data = role.data_parameter(call_codec.module());
-            let host = role.host_parameter(call_codec.module());
-            let count = 1 + usize::from(data.is_some()) + usize::from(host.is_some());
+            let count = usize::from(borrowed.is_some()) + usize::from(data.is_some())
+                + usize::from(host.is_some());
             charge(work, 2 + count, source)?;
             let mut parameters = Vec::new();
-            parameters
-                .try_reserve_exact(count)
+            parameters.try_reserve_exact(count)
                 .map_err(|_| failure(ForeignAdmissionReason::WorkExhausted, source))?;
-            if let Some(host) = host {
-                parameters.push((host, Kind::Type));
+            for parameter in [host, borrowed, data].into_iter().flatten() {
+                parameters.push((parameter, Kind::Type));
             }
-            parameters.push((parameter, Kind::Type));
-            if let Some(data) = data {
-                parameters.push((data, Kind::Type));
-            }
-            Some(Type::Forall(
-                parameters.into_boxed_slice(),
-                Box::new(body.into_inner()),
-            ))
-        } else {
-            None
-        };
+            Some(Type::Forall(parameters.into_boxed_slice(), Box::new(body.into_inner())))
+        } else { None };
         let fact = Self {
             function,
             role,
@@ -461,6 +462,10 @@ impl CheckedForeignScalarPreflight {
             || !matches!(&self.annotation.origin, Origin::Source(span) if *span == self.annotation.span)
         {
             return Err(invalid());
+        }
+        if matches!(self.role, ForeignScalarPreflightRole::CheckedQuarantine
+            | ForeignScalarPreflightRole::CheckedRejectAcquisition) {
+            return self.authenticate_checked_violation_annotation(work);
         }
         if self.role.host_parameter(module).is_some() {
             return self.authenticate_checked_memory_annotation(work);
@@ -1029,3 +1034,4 @@ pub(crate) fn admit_projected_preflights(
 }
 
 mod checked_memory;
+mod checked_violation;

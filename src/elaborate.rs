@@ -11965,6 +11965,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 return Err(invalid_state());
             }
             return Ok(Some(match fact.role() {
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedQuarantine => {
+                    Intrinsic::ForeignQuarantine { function: name.id }
+                }
+                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedRejectAcquisition => {
+                    Intrinsic::ForeignRejectAcquisition { function: name.id }
+                }
                 crate::foreign::scalar_preflight::ForeignScalarPreflightRole::I64 => {
                     Intrinsic::ForeignCheckedI64 { function: name.id }
                 }
@@ -43046,5 +43052,5 @@ impl CoreElaborator<EffectOperationFamily> {
 mod checked_owner_lifecycle_tests;
 #[cfg(test)]
 pub(crate) use checked_owner_lifecycle_tests::{
-    checked_owner_passive_program, checked_owner_passive_program_for_source,
+    checked_owner_passive_program, checked_owner_passive_program_for_source, checked_owner_violation_program,
 };

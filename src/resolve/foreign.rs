@@ -204,7 +204,7 @@ impl Resolver {
                 None
             }
         });
-        if declarations.definitions.len() != 15
+        if declarations.definitions.len() != 17
             || loaded.surface().definitions.get(10).is_none_or(|definition| definition.public)
             || metadata.is_none_or(|metadata| metadata.interface.name.id != BinderId::resolved(self.module, 10)
                 || !metadata.interface.type_parameters.is_empty()
@@ -234,6 +234,8 @@ impl Resolver {
             ForeignScalarPreflightRole::CheckedByteWrite,
             ForeignScalarPreflightRole::CheckedCopyBytes,
             ForeignScalarPreflightRole::CheckedCopyNul,
+            ForeignScalarPreflightRole::CheckedQuarantine,
+            ForeignScalarPreflightRole::CheckedRejectAcquisition,
         ] {
             let definition = &declarations.definitions[role.local() as usize];
             let ResolvedDefinitionKind::Equational(global) = &definition.kind else {

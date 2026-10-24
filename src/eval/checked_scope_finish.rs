@@ -67,7 +67,16 @@ impl Machine<'_> {
     }
 
     fn checked_record_value(&mut self, module: ModuleId, facts: ClosingFacts) -> Result<Value, RuntimeFailure> {
-        let status = if let Some(status) = facts.status {
+        self.checked_observation_record(module, facts.native, facts.unresolved, facts.status)
+    }
+
+    /// Independent last admitted observation only; this constructs no closing
+    /// witness and inserts no supervisor report.
+    pub(super) fn checked_observation_record(
+        &mut self, module: ModuleId, native: ResourceNativeFact,
+        unresolved: bool, status: Option<i128>,
+    ) -> Result<Value, RuntimeFailure> {
+        let status = if let Some(status) = status {
             // Every selected scalar is at most 64 bits. Pay before constructing
             // the independent mathematical integer used by the source codec.
             charge_effect_work(&mut self.instantiation_work, 8, RuntimePhase::Cleanup)?;
@@ -80,12 +89,12 @@ impl Machine<'_> {
         } else {
             self.foreign_constructor(constructor(module, Role::NativeStatus, 0), None, RuntimePhase::Cleanup)?
         };
-        let native = match facts.native { ResourceNativeFact::NoOwner => 0, ResourceNativeFact::Owned => 1,
+        let native = match native { ResourceNativeFact::NoOwner => 0, ResourceNativeFact::Owned => 1,
             ResourceNativeFact::Consumed => 2, ResourceNativeFact::Unknown => 3 };
         let native = self.foreign_constructor(constructor(module, Role::NativeFact, native), None, RuntimePhase::Cleanup)?;
         let absence = self.foreign_constructor(constructor(module, Role::DiagnosticAbsence, 0), None, RuntimePhase::Cleanup)?;
         let diagnostic = self.foreign_constructor(constructor(module, Role::Diagnostic, 0), Some(absence), RuntimePhase::Cleanup)?;
-        let fields = self.foreign_tuple(&[status, native, Value::Boolean(facts.unresolved), diagnostic], RuntimePhase::Cleanup)?;
+        let fields = self.foreign_tuple(&[status, native, Value::Boolean(unresolved), diagnostic], RuntimePhase::Cleanup)?;
         self.foreign_constructor(constructor(module, Role::BoundaryRecord, 0), Some(fields), RuntimePhase::Cleanup)
     }
 

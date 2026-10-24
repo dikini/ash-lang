@@ -496,3 +496,29 @@ fn checked_owner_dependency_initialized_byte_child_remains_refused() {
 fn checked_owner_dependency_body_free_facade_requires_exact_hidden_child() {
     crate::resolved::source_control_assert_dependent_facade_closure(&row_source_from(DEPENDENT));
 }
+
+#[test]
+fn checked_quarantine_requires_declared_enclosing_state_and_exact_host() {
+    let before = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => Refused ()";
+    let after = "Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => {\n                let denied = Foreign.checked_quarantine (dependency, Foreign.UnexpectedNull)\n                let repeated = Foreign.checked_quarantine (dependency, Foreign.UnexpectedNull)\n                Refused ()\n            }";
+    // Only the child acquire has the exact declared Enclosing dependency in
+    // scope. Parent remains the unchanged independent original owner.
+    let start = DEPENDENT.find("resource Child<").unwrap();
+    let source = format!("{}{}", &DEPENDENT[..start], DEPENDENT[start..].replacen(before, after, 1));
+    linked_core(&source, CONSUMER);
+    // A same-shaped local alias is not a direct canonical call. Exact H
+    // TypeApplication mutation is tested independently in the image control.
+    let alias = source.replace("let denied = Foreign.checked_quarantine",
+        "let alias : (ParentState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                let denied = alias");
+    assert_ne!(alias, source);
+    source_refuses(&alias);
+    // A merely ordinary parent handle is not the descriptor-witnessed State.
+    // Constrain the latent H explicitly: this argument contains no controlled
+    // State to select the host before independent lifecycle-flow checking.
+    let call = "Foreign.checked_quarantine (dependency, Foreign.UnexpectedNull)";
+    assert_eq!(source.matches(call).count(), 2);
+    let ordinary = source.replace(call, "ordinary_quarantine (parent, Foreign.UnexpectedNull)")
+        .replacen("let denied = ordinary_quarantine",
+            "let ordinary_quarantine : (Parent<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                let denied = ordinary_quarantine", 1);
+    source_refuses(&ordinary);
+}

@@ -1658,6 +1658,8 @@ pub(crate) struct SourceByteCall {
     pub(crate) apply: Option<NodeId>,
     pub(crate) application: NodeId,
     pub(crate) function: crate::resolved::BinderId,
+    // Only acquisition rejection uses the exact flow-proved preceding request.
+    pub(crate) acquisition: Option<NodeId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1938,6 +1940,7 @@ impl CheckedFinishOutcome {
 struct FlowPath {
     locals: HashMap<crate::resolved::BinderId, usize>,
     acquired: bool,
+    acquisition: Option<NodeId>,
     consumed: bool,
     attempted_teardown: bool,
     checked_finish_outcome: Option<CheckedFinishOutcome>,
@@ -1951,6 +1954,7 @@ impl FlowPath {
         Ok(Self {
             locals: HashMap::new(),
             acquired: false,
+            acquisition: None,
             consumed: false,
             attempted_teardown: false,
             checked_finish_outcome: None,
@@ -1992,6 +1996,7 @@ impl FlowPath {
         Ok(Self {
             locals,
             acquired: self.acquired,
+            acquisition: self.acquisition,
             consumed: self.consumed,
             attempted_teardown: self.attempted_teardown,
             checked_finish_outcome: self.checked_finish_outcome,
@@ -2256,7 +2261,8 @@ fn eval_flow<'a>(
                 facts.add(
                     if fact.role().view_parameter(fact.module()).is_some() {
                         FlowFact::ViewCallable(fact.function(), None)
-                    } else if fact.role().state_parameter(fact.module()).is_some() {
+                    } else if fact.role().state_parameter(fact.module()).is_some()
+                        || fact.role() == crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedRejectAcquisition {
                         FlowFact::ByteCallable(fact.function(), None)
                     } else {
                         FlowFact::ScalarPreflight
@@ -2313,6 +2319,12 @@ fn eval_flow<'a>(
                     Intrinsic::ForeignExtentValue { function } => {
                         (function, ForeignScalarPreflightRole::ExtentValue)
                     }
+                    Intrinsic::ForeignQuarantine { function } => {
+                        (function, ForeignScalarPreflightRole::CheckedQuarantine)
+                    }
+                    Intrinsic::ForeignRejectAcquisition { function } => {
+                        (function, ForeignScalarPreflightRole::CheckedRejectAcquisition)
+                    }
                     Intrinsic::ForeignByteRead { function } => {
                         (function, ForeignScalarPreflightRole::ByteRead)
                     }
@@ -2336,7 +2348,8 @@ fn eval_flow<'a>(
                 let value = facts.add(
                     if role.view_parameter(fact.module()).is_some() {
                         FlowFact::ViewCallable(function, None)
-                    } else if role.state_parameter(fact.module()).is_some() {
+                    } else if role.state_parameter(fact.module()).is_some()
+                        || role == ForeignScalarPreflightRole::CheckedRejectAcquisition {
                         FlowFact::ByteCallable(function, None)
                     } else {
                         FlowFact::ScalarPreflight
@@ -2429,7 +2442,7 @@ fn eval_flow<'a>(
                     | FlowFact::ViewCallable(_, Some(_)) => None,
                     _ => return Err(invalid()),
                 };
-                for (argument, path) in eval_flow(
+                for (argument, mut path) in eval_flow(
                     program,
                     header,
                     application.argument(),
@@ -2450,6 +2463,7 @@ fn eval_flow<'a>(
                         push(
                             &mut facts.byte_calls,
                             SourceByteCall {
+                                acquisition: None,
                                 apply: Some(id),
                                 application: selected_application,
                                 function: canonical,
@@ -2544,6 +2558,70 @@ fn eval_flow<'a>(
                                 .registry
                                 .scalar_preflight(function)
                                 .ok_or_else(invalid)?;
+                            use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+                            if matches!(fact.role(), Role::CheckedQuarantine | Role::CheckedRejectAcquisition) {
+                                if header.owner.prepared().checked_contract().is_none()
+                                    || path.consumed || path.attempted_teardown
+                                    || path.checked_finish_outcome.is_some()
+                                { return Err(invalid()); }
+                                let acquisition = if fact.role() == Role::CheckedRejectAcquisition {
+                                    if phase != SourceResourcePhase::Acquire
+                                        || !facts.independent(argument, work)? {
+                                        return Err(invalid());
+                                    }
+                                    Some(path.acquisition.ok_or_else(invalid)?)
+                                } else {
+                                    let FlowFact::Tuple(fields) = facts.fact(argument)? else {
+                                        return Err(invalid());
+                                    };
+                                    if fields.len() != 2 || !facts.independent(fields[1], work)? {
+                                        return Err(invalid());
+                                    }
+                                    // Inspect the original application and its
+                                    // fixed H/State argument vector separately.
+                                    charge(work, 3)?;
+                                    let EffectExprKind::Pure(PureExprKind::Computation(
+                                        PureComputation::TypeApplication(applied),
+                                    )) = &node(program, selected_application)?.kind
+                                    else { return Err(invalid()); };
+                                    let [host, state] = applied.arguments() else {
+                                        return Err(invalid());
+                                    };
+                                    let identity = quarantine_state_identity(
+                                        state, host, &program.registry, work,
+                                    )?;
+                                    let allowed = match facts.fact(fields[0])? {
+                                        FlowFact::Current => phase != SourceResourcePhase::Acquire
+                                            && same(state, &header.original.state.ty, work)?,
+                                        FlowFact::Enclosing(selected) => *selected == identity
+                                            && facts.borrowed(fields[0], false, header, work)?,
+                                        // Pending Fresh may be suspect: select its
+                                        // request group through reject, never S.
+                                        _ => false,
+                                    };
+                                    if !allowed { return Err(invalid()); }
+                                    None
+                                };
+                                push(&mut facts.byte_calls, SourceByteCall {
+                                    acquisition,
+                                    apply: Some(id),
+                                    application: selected_application,
+                                    function,
+                                }, work)?;
+                                path.blocked = true;
+                                let failure = facts.wrapped(ConstructorId::new(
+                                    NominalTypeId::new(fact.module(),
+                                        crate::module::ForeignCheckedNominalRole::BoundaryFailure.local()),
+                                    2,
+                                ), 0, work)?;
+                                let returned = facts.wrapped(
+                                    ConstructorId::new(fact.call_codec().ids().call, 2), failure, work)?;
+                                // Ordinary diagnostic data, NOT FinishBoundary:
+                                // the later teardown request alone earns K6's
+                                // exact private completion witness.
+                                push(&mut results, (returned, path), work)?;
+                                continue;
+                            }
                             if fact.role().data_parameter(fact.module()).is_some() {
                                 if phase == SourceResourcePhase::Acquire
                                     || path.consumed
@@ -2571,6 +2649,7 @@ fn eval_flow<'a>(
                                 push(
                                     &mut facts.byte_calls,
                                     SourceByteCall {
+                                        acquisition: None,
                                         apply: Some(id),
                                         application: selected_application,
                                         function,
@@ -2607,6 +2686,7 @@ fn eval_flow<'a>(
                             push(
                                 &mut facts.byte_calls,
                                 SourceByteCall {
+                                    acquisition: None,
                                     apply: Some(id),
                                     application: selected_application,
                                     function,
@@ -2694,6 +2774,7 @@ fn eval_flow<'a>(
                     push(
                         &mut facts.byte_calls,
                         SourceByteCall {
+                            acquisition: None,
                             apply: None,
                             application: id,
                             function,
@@ -2707,11 +2788,15 @@ fn eval_flow<'a>(
                         .registry
                         .scalar_preflight(function)
                         .ok_or_else(invalid)?;
+                    use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+                    let denial = matches!(fact.role(), Role::CheckedQuarantine | Role::CheckedRejectAcquisition);
+                    let reject = fact.role() == Role::CheckedRejectAcquisition;
                     let data = fact.role().data_parameter(fact.module()).is_some();
                     let offset = primitive_host_offset(fact, header, application.arguments(), work)?;
-                    if application.arguments().len() != 1 + usize::from(data) + offset
+                    if application.arguments().len() != usize::from(!reject) + usize::from(data) + offset
                         || !application.row_arguments().is_empty()
-                        || !same(&application.arguments()[offset], &header.original.state.ty, work)?
+                        || denial && header.owner.prepared().checked_contract().is_none()
+                        || !denial && !same(&application.arguments()[offset], &header.original.state.ty, work)?
                         || data
                             && !same(&application.arguments()[offset + 1], &header.original.data.ty, work)?
                     {
@@ -2720,6 +2805,7 @@ fn eval_flow<'a>(
                     push(
                         &mut facts.byte_calls,
                         SourceByteCall {
+                            acquisition: None,
                             apply: None,
                             application: id,
                             function,
@@ -2989,6 +3075,8 @@ fn eval_flow<'a>(
                     }
                     let refusal = facts.wrapped(call.conversion_failed, 0, work)?;
                     push(&mut results, (refusal, path.copy(work)?), work)?;
+                    charge(work, 1)?;
+                    path.acquisition = Some(id);
                     if matches!(
                         header.codec.report,
                         SourceResourceReportCodec::CheckedScope { .. }
@@ -3114,6 +3202,7 @@ fn eval_flow<'a>(
                         let outcome =
                             facts.wrapped(ConstructorId::new(call.call, 2), boundary, work)?;
                         push(&mut results, (outcome, path.copy(work)?), work)?;
+                        if path.blocked { continue; }
                         path.consumed = *consumes;
                         path.checked_finish_outcome = Some(if *consumes {
                             CheckedFinishOutcome::Consumed(id)
@@ -3312,6 +3401,58 @@ fn primitive_host_offset(
     } else {
         Ok(0)
     }
+}
+
+/// Quarantine selects native State, while ordinary dependency input tracking
+/// also admits resource handles. Keep that broader input fact unchanged.
+fn quarantine_state_identity(
+    state: &Type,
+    host: &Type,
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<crate::types::TypeVariableId, ValidationError> {
+    use crate::foreign::source_owner::{
+        StateArgument, authenticate_source_owner_candidate, state_arguments,
+    };
+    let mut head = state;
+    let nominal = loop {
+        charge(work, 1)?;
+        match head {
+            Type::Application(function, _) => head = function,
+            Type::Nominal(nominal) | Type::ForeignOwnerApply(nominal, _) => break *nominal,
+            _ => return Err(invalid()),
+        }
+    };
+    charge(work, registry.source_owner_candidate_count())?;
+    let (prepared, index, _, parameters) = registry
+        .source_owner_candidates()
+        .find(|(_, _, candidate, _)| *candidate == nominal)
+        .ok_or_else(invalid)?;
+    let map = |error: crate::foreign::checked_source::ForeignAdmissionError| {
+        if error.is_resource_exhaustion() { resource() } else { invalid() }
+    };
+    authenticate_source_owner_candidate(prepared, index, nominal, parameters, registry, work)
+        .map_err(map)?;
+    charge(work, 2)?;
+    let owner = prepared.owners().get(index).ok_or_else(invalid)?;
+    let selected = prepared.checked_contract().and_then(|contract| contract.owners().get(index))
+        .ok_or_else(invalid)?;
+    if selected.member_index() != owner.member_index() {
+        return Err(invalid());
+    }
+    let arguments = state_arguments(
+        state, nominal, parameters, prepared.origin().primary_span(), work,
+    ).map_err(map)?;
+    let Some(StateArgument::Type(actual_host)) = arguments.get(selected.host_parameter()) else {
+        return Err(invalid());
+    };
+    if !same(actual_host, host, work)? {
+        return Err(invalid());
+    }
+    let Some(StateArgument::Type(Type::Variable(identity))) =
+        arguments.get(owner.owned_parameter())
+    else { return Err(invalid()); };
+    Ok(*identity)
 }
 
 fn admit_view_primitive(
@@ -3677,6 +3818,7 @@ fn check_flow(
                     return Err(invalid());
                 };
                 if !path.acquired
+                    || path.blocked
                     || fields.len() != 2
                     || !matches!(facts.fact(fields[0])?, FlowFact::Fresh)
                     || !facts.borrowed(fields[1], false, header, work)?
@@ -4688,6 +4830,7 @@ impl SourceResourceScopeNode {
         let copy = &self.descriptor.copies[index];
         for call in &self.original().byte_calls[index] {
             charge(work, copy.nodes.len())?;
+            if call.acquisition.is_some() { charge(work, copy.nodes.len())?; }
             let map = |original| {
                 copy.nodes
                     .iter()
@@ -4695,6 +4838,7 @@ impl SourceResourceScopeNode {
             };
             visit(
                 SourceByteCall {
+                    acquisition: call.acquisition.map(|request| map(request).ok_or_else(invalid)).transpose()?,
                     apply: call
                         .apply
                         .map(|apply| map(apply).ok_or_else(invalid))
@@ -4722,6 +4866,7 @@ impl SourceResourceScopeNode {
             |call, _| {
                 found |= call
                     == SourceByteCall {
+                        acquisition: None,
                         apply: Some(apply),
                         application,
                         function,
@@ -4730,6 +4875,20 @@ impl SourceResourceScopeNode {
             },
             work,
         )?;
+        Ok(found)
+    }
+
+    /// Exact conservative-denial call and preceding acquisition, reconstructed
+    /// from its original phase and mapped through this specialization forest.
+    pub(crate) fn contains_violation_call(
+        &self, phase: SourceResourcePhase, expected: SourceByteCall,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        let mut found = false;
+        self.visit_phase_byte_calls(phase, |call, _| {
+            found |= call == expected;
+            Ok(())
+        }, work)?;
         Ok(found)
     }
 

@@ -128,6 +128,8 @@ pub(super) const FORMALS: &[(&str, &[u32])] = &[
     ("pub checked_byte_write<H, S>", &[25, 26]),
     ("pub checked_copy_bytes<H, V>", &[27, 28]),
     ("pub checked_copy_nul<H, V>", &[29, 30]),
+    ("pub checked_quarantine<H, S>", &[31, 32]),
+    ("pub checked_reject_acquisition<H>", &[33]),
 ];
 
 /// Exact formal-name coordinates to reserved builtin locals; not a role grant.
@@ -402,7 +404,7 @@ mod tests {
                 "ViolationCause"
             ]
         );
-        assert_eq!(module.surface.definitions.len(), 15);
+        assert_eq!(module.surface.definitions.len(), 17);
         assert!(!module.surface.definitions[10].public);
         let crate::surface::SurfaceDefinitionKind::Equational(metadata) =
             &module.surface.definitions[10].kind
@@ -472,10 +474,12 @@ mod tests {
             assert_eq!(locals, expected);
         }
         for (index, name, expected) in [
-            (11, "checked_byte_read", [23, 24]),
-            (12, "checked_byte_write", [25, 26]),
-            (13, "checked_copy_bytes", [27, 28]),
-            (14, "checked_copy_nul", [29, 30]),
+            (11, "checked_byte_read", &[23, 24][..]),
+            (12, "checked_byte_write", &[25, 26][..]),
+            (13, "checked_copy_bytes", &[27, 28][..]),
+            (14, "checked_copy_nul", &[29, 30][..]),
+            (15, "checked_quarantine", &[31, 32][..]),
+            (16, "checked_reject_acquisition", &[33][..]),
         ] {
             let crate::surface::SurfaceDefinitionKind::Equational(value) =
                 &module.surface.definitions[index].kind
@@ -519,7 +523,7 @@ mod tests {
             );
         }
         seen.sort_unstable();
-        assert_eq!(seen, (0..31).collect::<Vec<_>>());
+        assert_eq!(seen, (0..34).collect::<Vec<_>>());
         let (_, name, formal) = foreign_native_host_ranges(source).unwrap();
         assert_eq!(module.surface.effects[0].name.span.range(), name);
         assert_eq!(

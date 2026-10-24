@@ -307,6 +307,81 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         .map_err(|()| type_resource())
     }
 
+    /// Recognize only a directly instantiated canonical quarantine original.
+    /// This source frontier grants no independent lifecycle-flow authority.
+    fn direct_source_quarantine(
+        &mut self,
+        mut function: NodeId,
+        function_type: &Type,
+        argument: &Type,
+        span: Span,
+    ) -> Result<bool, TypeError> {
+        use crate::core::{PureComputation, PureExprKind, packed::Intrinsic};
+        use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
+        let Some(header) = self.provider_context.as_ref()
+            .and_then(|context| context.source.as_ref()).map(Arc::clone)
+        else { return Ok(false); };
+        if header.owner.prepared().checked_contract().is_none() {
+            return Ok(false);
+        }
+        let Type::Tuple(fields) = argument else { return Ok(false); };
+        let Some(signature) = function_type.function_view() else { return Ok(false); };
+        let Type::Application(call, result) = signature.value() else { return Ok(false); };
+        if fields.len() != 2
+            || fields[1] != Type::Nominal(NominalTypeId::new(header.acquire.call_codec().module(), 17))
+            || **call != Type::Nominal(header.acquire.call_codec().ids().call)
+            || **result != Type::Unit {
+            return Ok(false);
+        }
+        let mut actuals = None;
+        let (function, module) = loop {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            let kind = self.builder.compiler_node_kind(function)?;
+            match F::pure(kind) {
+                Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) => {
+                    if actuals.is_some() || application.arguments().len() != 2
+                        || !application.row_arguments().is_empty() {
+                        return Ok(false);
+                    }
+                    actuals = Some((
+                        IterativeTypeOwner::new(clone_type_with_budget(&application.arguments()[0], &mut self.type_work).map_err(|()| type_resource())?),
+                        IterativeTypeOwner::new(clone_type_with_budget(&application.arguments()[1], &mut self.type_work).map_err(|()| type_resource())?),
+                    ));
+                    function = application.function();
+                }
+                Some(PureExprKind::Variable(variable)) => {
+                    let function = variable.binder();
+                    let Some(module) = function.module() else { return Ok(false); };
+                    break (function, module);
+                }
+                Some(PureExprKind::Value(crate::core::PureValue::Intrinsic(value))) => {
+                    let Intrinsic::ForeignQuarantine { function } = value.operation() else {
+                        return Ok(false);
+                    };
+                    break (function, value.module());
+                }
+                _ => return Ok(false),
+            }
+        };
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        let Some(fact) = self.registry.scalar_preflight(function) else { return Ok(false); };
+        if !fact.module().is_builtin_foreign() || fact.module() != module
+            || fact.function() != function || fact.role() != Role::CheckedQuarantine {
+            return Ok(false);
+        }
+        let Some((host, state)) = actuals else { return Ok(false); };
+        let expected_host = header.original.host
+            .and_then(|selector| header.original.parameters.get(selector.position))
+            .ok_or_else(invalid_state)?.id;
+        self.refine_pattern_expected(&host, &Type::Variable(expected_host), span)?;
+        let state = IterativeTypeOwner::new(self.zonk(&state)?);
+        if !crate::types::same_type_with_budget(&state, &fields[0], &mut self.type_work)
+            .map_err(|()| type_resource())? {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     pub(super) fn check_provider_source_application(
         &mut self,
         function: NodeId,
@@ -315,6 +390,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
     ) -> Result<(), TypeError> {
         if !self.contains_provider_state(argument)? {
+            return Ok(());
+        }
+        if self.direct_source_quarantine(function, function_type, argument, span)? {
             return Ok(());
         }
         if let Some(window) = self

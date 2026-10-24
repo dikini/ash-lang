@@ -39,11 +39,46 @@ pub(crate) struct NativeOwnerDependency {
 }
 
 impl NativeOwnerDependency {
+    /// Pay new selected checked-root lookups before source preflight. Legacy
+    /// slots retain their existing tariff; this grants no entry permission.
+    pub(crate) fn pay_group_checks(&self, count: usize, work: &mut TypeWorkBudget)
+        -> Result<(), NativeOwnerAdmissionError> {
+        if self.storage.slots.borrow()[self.slot].checked_group_root.is_some() {
+            pay(work, count.checked_mul(2).ok_or(NativeOwnerAdmissionError::Work)?)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn shared_group_denied(&self, work: &mut TypeWorkBudget)
+        -> Result<bool, NativeOwnerAdmissionError> {
+        let slots = self.storage.slots.borrow();
+        if let Some(root) = slots[self.slot].checked_group_root {
+            pay(work, 2)?;
+            Ok(slots[root].checked_group_denied)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub(crate) fn same_slot(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.storage, &other.storage) && self.slot == other.slot
     }
+    pub(crate) fn checked_boundary(
+        &self, work: &mut TypeWorkBudget,
+    ) -> Result<NativeOwnerBoundary, NativeOwnerAdmissionError> {
+        let slots = self.storage.slots.borrow();
+        if slots[self.slot].checked.is_none() {
+            return Err(NativeOwnerAdmissionError::Authority);
+        }
+        pay(work, 1)?;
+        Ok(NativeOwnerBoundary { storage: Rc::clone(&self.storage), slot: self.slot })
+    }
     pub(crate) fn address(&self) -> Option<*mut core::ffi::c_void> {
-        self.storage.slots.borrow()[self.slot].raw_address().map(NonNull::as_ptr)
+        let slots = self.storage.slots.borrow();
+        if slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied) {
+            return None;
+        }
+        slots[self.slot].raw_address().map(NonNull::as_ptr)
     }
     pub(crate) fn state(
         &self,
@@ -130,6 +165,22 @@ impl NativeOwnerStatus {
                 NativeScalarValue::FunctionAddressAllBitsOne => None,
             },
         }
+    }
+}
+
+fn observed_scalar_status(reply: NativeScalarReply) -> Option<i128> {
+    match reply {
+        NativeScalarReply::Void => None,
+        NativeScalarReply::Scalar(value) => match value {
+            NativeScalarValue::I8(value) => Some(i128::from(value)),
+            NativeScalarValue::U8(value) => Some(i128::from(value)),
+            NativeScalarValue::I32(value) => Some(i128::from(value)),
+            NativeScalarValue::U32(value) => Some(i128::from(value)),
+            NativeScalarValue::I64(value) => Some(i128::from(value)),
+            NativeScalarValue::U64(value) => Some(i128::from(value)),
+            NativeScalarValue::USize(value) => Some(value as i128),
+            NativeScalarValue::FunctionAddressAllBitsOne => None,
+        },
     }
 }
 
@@ -348,6 +399,10 @@ struct NativeOwnerSlot {
     #[cfg(any(test, ash_checked_owner_root = "v1"))]
     leaf: Option<CheckedLeafBacking>,
     quarantined: bool,
+    // Stable indexes into this never-removed arena; no owner/member backedges.
+    // Legacy slots have no checked group. Only the root's denial bit is read.
+    checked_group_root: Option<usize>,
+    checked_group_denied: bool,
     host_attempted: bool,
     authority: Option<NativeOwnerSlotAuthority>,
     dependencies: Box<[usize]>,
@@ -355,6 +410,9 @@ struct NativeOwnerSlot {
     live_dependents: usize,
     checked: Option<crate::foreign::checked_control::RuntimeBoundary>,
     closing_status: Option<i128>,
+    // Optional numeric status of the latest admitted native observation, not
+    // a sticky last-number register. Source bookkeeping/refusal never writes it.
+    last_observed_status: Option<i128>,
 }
 
 #[cfg(any(test, ash_checked_owner_root = "v1"))]
@@ -401,6 +459,8 @@ impl NativeOwnerStorage {
             #[cfg(any(test, ash_checked_owner_root = "v1"))]
             leaf,
             quarantined: false,
+            checked_group_root: None,
+            checked_group_denied: false,
             host_attempted: false,
             authority: None,
             dependencies: Box::new([]),
@@ -408,8 +468,53 @@ impl NativeOwnerStorage {
             live_dependents: 0,
             checked: None,
             closing_status: None,
+            last_observed_status: None,
         });
         Ok(index)
+    }
+
+    fn validated_group_root(
+        slots: &[NativeOwnerSlot], index: usize,
+    ) -> Result<Option<usize>, NativeOwnerAdmissionError> {
+        let slot = slots.get(index).ok_or(NativeOwnerAdmissionError::Authority)?;
+        if let Some(root) = slot.checked_group_root
+            && (root > index
+                || slots.get(root).is_none_or(|slot| slot.checked_group_root != Some(root)))
+        {
+            return Err(NativeOwnerAdmissionError::Authority);
+        }
+        Ok(slot.checked_group_root)
+    }
+
+    fn denied(slots: &[NativeOwnerSlot], index: usize) -> bool {
+        let slot = &slots[index];
+        slot.quarantined || slot.checked_group_root
+            .is_some_and(|root| slots[root].checked_group_denied)
+    }
+
+    fn entry_allowed(
+        slots: &mut [NativeOwnerSlot], index: usize, require_live: bool,
+    ) -> Result<(), NativeOwnerAdmissionError> {
+        if slots[index].checked_group_root.is_none() {
+            return Ok(()); // legacy entry keeps its existing checks/tariff
+        }
+        if let Some(control) = &mut slots[index].checked {
+            control.check_group_entry().map_err(control_error)?;
+        }
+        if Self::denied(slots, index) || (require_live && !slots[index].physically_live()) {
+            return Err(NativeOwnerAdmissionError::Authority);
+        }
+        Ok(())
+    }
+
+    fn sync_group_denial(slots: &mut [NativeOwnerSlot], index: usize) {
+        if Self::denied(slots, index)
+            && let Some(control) = &mut slots[index].checked
+        {
+            // Denial changes no native observation or K. The existing owner's
+            // later structural finish selects its own synthetic witness.
+            control.quarantine();
+        }
     }
 
     fn has_dependents(slots: &[NativeOwnerSlot], index: usize) -> bool {
@@ -442,7 +547,8 @@ impl NativeOwnerStorage {
     }
 
     fn destroy(slots: &mut [NativeOwnerSlot], index: usize) {
-        if slots[index].host_attempted || Self::has_dependents(slots, index) {
+        if slots[index].checked_group_root.is_some_and(|root| slots[root].checked_group_denied)
+            || slots[index].host_attempted || Self::has_dependents(slots, index) {
             return;
         }
         let slot = &mut slots[index];
@@ -471,7 +577,7 @@ impl NativeOwnerStorage {
 
     fn abandon(&self, index: usize) {
         let mut slots = self.slots.borrow_mut();
-        if !slots[index].quarantined {
+        if !Self::denied(&slots, index) {
             Self::destroy(&mut slots, index);
         }
     }
@@ -489,6 +595,30 @@ impl NativeOwnerStorage {
             Self::destroy(&mut slots, index);
         }
         slots.iter().all(|slot| !slot.physically_live())
+    }
+
+    /// Exact typed State lookup only for a direct conservative-denial call.
+    /// The evaluator still proves original Current/Enclosing membership. This
+    /// receipt exposes no address after denial and grants no ordinary access.
+    pub(crate) fn denial_dependency(
+        self: &Rc<Self>, activation: usize, ty: &Type, work: &mut TypeWorkBudget,
+    ) -> Result<NativeOwnerDependency, NativeOwnerAdmissionError> {
+        let slots = self.slots.borrow();
+        pay(work, slots.len())?;
+        let mut selected = None;
+        for (index, slot) in slots.iter().enumerate() {
+            let Some(authority) = &slot.authority else { continue; };
+            if authority.activation != activation || !slot.physically_live() { continue; }
+            if !crate::types::same_type_with_budget(&authority.state, ty, work)
+                .map_err(|()| NativeOwnerAdmissionError::Work)? { continue; }
+            pay(work, 2)?;
+            NativeOwnerStorage::validated_group_root(&slots, index)?
+                .ok_or(NativeOwnerAdmissionError::Authority)?;
+            if selected.replace(index).is_some() { return Err(NativeOwnerAdmissionError::Authority); }
+        }
+        let slot = selected.ok_or(NativeOwnerAdmissionError::Authority)?;
+        pay(work, 1)?;
+        Ok(NativeOwnerDependency { storage: Rc::clone(self), slot })
     }
 
     pub(crate) fn view(
@@ -518,7 +648,8 @@ impl NativeOwnerStorage {
             if !matches {
                 continue;
             }
-            if slot.quarantined
+            if slot.checked_group_root.is_some() { pay(work, 2)?; }
+            if Self::denied(&slots, index)
                 && !completion.is_some_and(|guard| {
                     Rc::ptr_eq(self, &guard.storage)
                         && slots[guard.slot].dependencies.contains(&index)
@@ -556,7 +687,8 @@ impl NativeOwnerStorage {
             {
                 continue;
             }
-            if !slot.physically_live() || slot.quarantined || selected.replace(index).is_some() {
+            if slot.checked_group_root.is_some() { pay(work, 2)?; }
+            if !slot.physically_live() || Self::denied(&slots, index) || selected.replace(index).is_some() {
                 return Err(NativeOwnerAdmissionError::Authority);
             }
         }
@@ -601,6 +733,33 @@ pub(crate) struct NativeOwnerGuard {
 enum GuardBacking { Legacy, CheckedLeaf }
 
 impl NativeOwnerGuard {
+    /// Pay new selected checked-root lookups before source preflight. Legacy
+    /// slots retain their existing tariff; this grants no entry permission.
+    pub(crate) fn pay_group_checks(&self, count: usize, work: &mut TypeWorkBudget)
+        -> Result<(), NativeOwnerAdmissionError> {
+        if self.storage.slots.borrow()[self.slot].checked_group_root.is_some() {
+            pay(work, count.checked_mul(2).ok_or(NativeOwnerAdmissionError::Work)?)?;
+        }
+        Ok(())
+    }
+
+    /// Private unit model of another member's irreversible shared-root store.
+    /// Supplies no source request, native observation or admission permission.
+    #[cfg(test)]
+    pub(crate) fn install_shared_denial_for_test(&self) {
+        let mut slots = self.storage.slots.borrow_mut();
+        let root = NativeOwnerStorage::validated_group_root(&slots, self.slot).unwrap().unwrap();
+        slots[root].checked_group_denied = true;
+    }
+
+    pub(crate) fn shared_group_denied(&self, work: &mut TypeWorkBudget)
+        -> Result<bool, NativeOwnerAdmissionError> {
+        let slots = self.storage.slots.borrow();
+        if let Some(root) = slots[self.slot].checked_group_root {
+            pay(work, 2)?;
+            Ok(slots[root].checked_group_denied)
+        } else { Ok(false) }
+    }
     pub(crate) fn owner(&self) -> &Arc<CheckedForeignOwner> {
         &self.owner
     }
@@ -608,7 +767,11 @@ impl NativeOwnerGuard {
         self.storage.slots.borrow()[self.slot].physically_live()
     }
     pub(crate) fn completion_address(&self) -> Option<*mut core::ffi::c_void> {
-        self.storage.slots.borrow()[self.slot].raw_address().map(NonNull::as_ptr)
+        let slots = self.storage.slots.borrow();
+        if slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied) {
+            return None;
+        }
+        slots[self.slot].raw_address().map(NonNull::as_ptr)
     }
     pub(crate) fn retained_dependency_count(&self) -> usize {
         self.storage.slots.borrow()[self.slot].dependencies.len()
@@ -625,7 +788,7 @@ impl NativeOwnerGuard {
     pub(crate) fn ordinary_live(&self) -> bool {
         let slots = self.storage.slots.borrow();
         let slot = &slots[self.slot];
-        slot.physically_live() && !slot.quarantined
+        slot.physically_live() && !NativeOwnerStorage::denied(&slots, self.slot)
     }
     pub(crate) fn quarantine(&mut self) {
         self.initialized_bytes = None;
@@ -656,9 +819,10 @@ impl NativeOwnerGuard {
         {
             return None;
         }
+        let address = self.completion_address()?;
         Some(NativeByteAccess {
             _guard: self,
-            address: self.storage.slots.borrow()[self.slot].raw_address()?,
+            address: NonNull::new(address)?,
             index,
             callbacks: self.bytes?,
         })
@@ -726,11 +890,13 @@ impl NativeOwnerGuard {
         use super::super::checked_leaf_transport::FreeObservation;
         let mut slots = self.storage.slots.try_borrow_mut()
             .map_err(|_| NativeOwnerAdmissionError::Authority)?;
+        NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
+        let blocked = blocked || slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied);
         let slot = slots.get_mut(self.slot).ok_or(NativeOwnerAdmissionError::Authority)?;
         if !slot.physically_live() || !slot.dependencies.is_empty() {
             return Err(NativeOwnerAdmissionError::Authority);
         }
-        let NativeOwnerSlot { leaf, checked, quarantined, closing_status, .. } = slot;
+        let NativeOwnerSlot { leaf, checked, quarantined, closing_status, last_observed_status, .. } = slot;
         let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
         let entry = control.begin_finish_entry_with_blocked(blocked).map_err(control_error)?;
         match entry {
@@ -749,6 +915,7 @@ impl NativeOwnerGuard {
                         // Both fields are reserved observations. No storage
                         // reborrow, allocation or source construction follows C.
                         *closing_status = None;
+                        *last_observed_status = None;
                         control.finished(true);
                     }
                     FreeObservation::NoOwner => {
@@ -769,7 +936,12 @@ impl NativeOwnerGuard {
         operands: &[NativeOwnerOperand],
         blocked: bool,
     ) -> (NativeOwnerDisposition, Option<NativeOwnerStatus>) {
-        if blocked {
+        let denied = {
+            let slots = self.storage.slots.borrow();
+            slots[self.slot].checked_group_root.is_some()
+                && NativeOwnerStorage::denied(&slots, self.slot)
+        };
+        if blocked || denied {
             self.quarantine();
             return (NativeOwnerDisposition::Blocked(self), None);
         }
@@ -782,6 +954,7 @@ impl NativeOwnerGuard {
             // Preserve the actual primitive status alongside the native fact,
             // before any later source-output/report-capacity refusal.
             slot.closing_status = status.and_then(NativeOwnerStatus::independent);
+            slot.last_observed_status = slot.closing_status;
             if consumes {
                 NativeOwnerStorage::record_consumed(&mut slots, self.slot);
             }
@@ -812,7 +985,7 @@ impl Drop for NativeOwnerGuard {
             // in Drop. The slot still owns its opaque cell; the ordinary host
             // close records transfer once that external borrow has ended.
             if let Ok(mut slots) = self.storage.slots.try_borrow_mut()
-                && !slots[self.slot].quarantined
+                && !NativeOwnerStorage::denied(&slots, self.slot)
             {
                 NativeOwnerStorage::destroy(&mut slots, self.slot);
             }
@@ -830,6 +1003,38 @@ pub(crate) struct NativeOwnerBoundary {
     slot: usize,
 }
 impl NativeOwnerBoundary {
+    pub(crate) fn acquisition_request(&self) -> Option<crate::core::NodeId> {
+        self.storage.slots.borrow()[self.slot].checked.as_ref()
+            .and_then(|checked| checked.acquisition_request())
+    }
+    /// The evaluator has authenticated the original call and exact selected
+    /// Current/Enclosing slot. No cause data enters this native observation.
+    /// All checks/work precede the irreversible denial; the returned scalars
+    /// need no allocation, ledger transition, source K or report insertion.
+    pub(crate) fn deny(
+        &self, receipt: &super::super::source_bindings::SourceOwnerViolationRequest,
+        activation: usize, work: &mut TypeWorkBudget,
+    ) -> Result<(crate::foreign::checked_control::Native, bool, Option<i128>), NativeOwnerAdmissionError> {
+        pay(work, 4)?;
+        let mut slots = self.storage.slots.try_borrow_mut()
+            .map_err(|_| NativeOwnerAdmissionError::Authority)?;
+        let root = NativeOwnerStorage::validated_group_root(&slots, self.slot)?
+            .ok_or(NativeOwnerAdmissionError::Authority)?;
+        let slot = &slots[self.slot];
+        let checked = slot.checked.as_ref().ok_or(NativeOwnerAdmissionError::Authority)?;
+        if receipt.reject {
+            checked.authorize_rejection(receipt, activation, work).map_err(control_error)?;
+        } else if !slot.physically_live() {
+            return Err(NativeOwnerAdmissionError::Authority);
+        }
+        // No fallible operation follows this store. Synchronizing this owner's
+        // existing ledger only denies continuation; it asserts no native event.
+        slots[root].checked_group_denied = true;
+        NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
+        let slot = &slots[self.slot];
+        let (_, _, native, unresolved) = slot.checked.as_ref().expect("checked above").closing_record();
+        Ok((native, unresolved, slot.last_observed_status))
+    }
     /// Same-slot backing inspection only. Presence proves neither native
     /// permission nor protected retention; absence does not prove disposal.
     pub(crate) fn retains_backing(&self) -> bool {
@@ -855,9 +1060,11 @@ impl NativeOwnerBoundary {
         scope: crate::core::NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<(), NativeOwnerAdmissionError> {
-        self.storage.slots.borrow_mut()[self.slot]
-            .checked
-            .as_mut()
+        let mut slots = self.storage.slots.borrow_mut();
+        if NativeOwnerStorage::denied(&slots, self.slot) {
+            return Err(NativeOwnerAdmissionError::Authority);
+        }
+        slots[self.slot].checked.as_mut()
             .ok_or(NativeOwnerAdmissionError::Authority)?
             .publish(activation, scope, work)
             .map_err(control_error)
@@ -876,9 +1083,9 @@ impl NativeOwnerBoundary {
         scope: crate::core::NodeId,
         work: &mut TypeWorkBudget,
     ) -> Result<(), NativeOwnerAdmissionError> {
-        self.storage.slots.borrow_mut()[self.slot]
-            .checked
-            .as_mut()
+        let mut slots = self.storage.slots.borrow_mut();
+        NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
+        slots[self.slot].checked.as_mut()
             .ok_or(NativeOwnerAdmissionError::Authority)?
             .closing(activation, scope, work)
             .map_err(control_error)
@@ -920,9 +1127,10 @@ impl NativeOwnerBorrowRecord {
         // Query's additional nonowning view retain is paid during preparation.
         let view_boundary = query.then(|| NativeOwnerBoundary { storage: Rc::clone(&self.boundary.storage), slot: self.boundary.slot });
         let mut slots = self.boundary.storage.slots.try_borrow_mut().map_err(|_| NativeScalarCallError::ArgumentContract)?;
+        NativeOwnerStorage::entry_allowed(&mut slots, self.boundary.slot, true)
+            .map_err(|_| NativeScalarCallError::ArgumentContract)?;
         let slot = slots.get_mut(self.boundary.slot).ok_or(NativeScalarCallError::ArgumentContract)?;
-        if slot.quarantined { return Err(NativeScalarCallError::ArgumentContract); }
-        let NativeOwnerSlot { leaf, checked, .. } = slot;
+        let NativeOwnerSlot { leaf, checked, last_observed_status, .. } = slot;
         let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeScalarCallError::ArgumentContract); };
         if !cell.is_occupied() { return Err(NativeScalarCallError::ArgumentContract); }
         let control = checked.as_mut().ok_or(NativeScalarCallError::ArgumentContract)?;
@@ -932,6 +1140,10 @@ impl NativeOwnerBorrowRecord {
                 super::view::NativeViewReturned::checked(view_boundary.expect("query retain"), descriptor)))
         } else { cell.length(key).map(|length| super::super::source_bindings::SourceWindowRaw::Scalar(NativeScalarReply::Scalar(NativeScalarValue::USize(length)))) };
         // The native borrow returned even when its pointer/range validation refused.
+        *last_observed_status = result.as_ref().ok().and_then(|raw| match raw {
+            super::super::source_bindings::SourceWindowRaw::Scalar(scalar) => observed_scalar_status(*scalar),
+            super::super::source_bindings::SourceWindowRaw::View(_) => None,
+        });
         control.borrowed();
         if result.is_err() { control.output_failed(); }
         drop(slots);
@@ -939,19 +1151,19 @@ impl NativeOwnerBorrowRecord {
     }
 
     pub(crate) fn begin(&self) -> Result<(), NativeOwnerAdmissionError> {
-        self.boundary.storage.slots.borrow_mut()[self.boundary.slot]
-            .checked
-            .as_mut()
+        let mut slots = self.boundary.storage.slots.borrow_mut();
+        NativeOwnerStorage::entry_allowed(&mut slots, self.boundary.slot, true)?;
+        slots[self.boundary.slot].checked.as_mut()
             .ok_or(NativeOwnerAdmissionError::Authority)?
             .begin_borrow(&self.original)
             .map_err(control_error)
     }
-    pub(crate) fn returned(self) -> NativeOwnerBoundary {
-        self.boundary.storage.slots.borrow_mut()[self.boundary.slot]
-            .checked
-            .as_mut()
-            .expect("prepared borrow record")
-            .borrowed();
+    pub(crate) fn returned(self, status: Option<NativeScalarReply>) -> NativeOwnerBoundary {
+        let mut slots = self.boundary.storage.slots.borrow_mut();
+        slots[self.boundary.slot].last_observed_status = status.and_then(observed_scalar_status);
+        slots[self.boundary.slot].checked.as_mut()
+            .expect("prepared borrow record").borrowed();
+        drop(slots);
         self.boundary
     }
     pub(crate) fn output_failed(&self) {
@@ -972,33 +1184,34 @@ impl NativeOwnerCopyRecord {
         let (owner, descriptor) = view.checked_descriptor().ok_or(NativeOwnerAdmissionError::Authority)?;
         if owner.slot != self.boundary.slot || !Rc::ptr_eq(&owner.storage, &self.boundary.storage) { return Err(NativeOwnerAdmissionError::Authority); }
         let mut slots = self.boundary.storage.slots.try_borrow_mut().map_err(|_| NativeOwnerAdmissionError::Authority)?;
+        NativeOwnerStorage::entry_allowed(&mut slots, self.boundary.slot, true)?;
         let slot = slots.get_mut(self.boundary.slot).ok_or(NativeOwnerAdmissionError::Authority)?;
-        if slot.quarantined { return Err(NativeOwnerAdmissionError::Authority); }
-        let NativeOwnerSlot { leaf, checked, .. } = slot;
+        let NativeOwnerSlot { leaf, checked, last_observed_status, .. } = slot;
         let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeOwnerAdmissionError::Authority); };
         if !cell.is_occupied() { return Err(NativeOwnerAdmissionError::Authority); }
         let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
         control.begin_copy(self.identity, &mut self.entry_work).map_err(control_error)?;
         let result = cell.copy(descriptor, 0, destination);
+        *last_observed_status = None;
         control.copied();
         if result.is_err() { control.output_failed(); }
         result.map_err(|_| NativeOwnerAdmissionError::Authority)
     }
 
     pub(crate) fn begin(&mut self) -> Result<(), NativeOwnerAdmissionError> {
-        self.boundary.storage.slots.borrow_mut()[self.boundary.slot]
-            .checked
-            .as_mut()
+        let mut slots = self.boundary.storage.slots.borrow_mut();
+        NativeOwnerStorage::entry_allowed(&mut slots, self.boundary.slot, true)?;
+        slots[self.boundary.slot].checked.as_mut()
             .ok_or(NativeOwnerAdmissionError::Authority)?
             .begin_copy(self.identity, &mut self.entry_work)
             .map_err(control_error)
     }
     pub(crate) fn returned(self) -> NativeOwnerBoundary {
-        self.boundary.storage.slots.borrow_mut()[self.boundary.slot]
-            .checked
-            .as_mut()
-            .expect("prepared primitive copy record")
-            .copied();
+        let mut slots = self.boundary.storage.slots.borrow_mut();
+        slots[self.boundary.slot].last_observed_status = None;
+        slots[self.boundary.slot].checked.as_mut()
+            .expect("prepared primitive copy record").copied();
+        drop(slots);
         self.boundary
     }
     pub(crate) fn output_failed(&self) {
@@ -1035,6 +1248,12 @@ impl NativeOwnerGuard {
     ) -> Result<Option<NativeOwnerBorrowRecord>, NativeOwnerAdmissionError> {
         {
             let slots = self.storage.slots.borrow();
+            if slots[self.slot].checked_group_root.is_some() { pay(work, 2)?; }
+            if NativeOwnerStorage::denied(&slots, self.slot)
+                || !slots[self.slot].physically_live()
+            {
+                return Err(NativeOwnerAdmissionError::Authority);
+            }
             if let Some(control) = &slots[self.slot].checked {
                 control
                     .borrow_request(receipt, activation, original, work)
@@ -1062,6 +1281,12 @@ impl NativeOwnerGuard {
     ) -> Result<NativeOwnerCopyRecord, NativeOwnerAdmissionError> {
         {
             let slots = self.storage.slots.borrow();
+            if slots[self.slot].checked_group_root.is_some() { pay(work, 2)?; }
+            if NativeOwnerStorage::denied(&slots, self.slot)
+                || !slots[self.slot].physically_live()
+            {
+                return Err(NativeOwnerAdmissionError::Authority);
+            }
             slots[self.slot]
                 .checked
                 .as_ref()
@@ -1089,7 +1314,9 @@ impl NativeOwnerGuard {
         blocked: bool,
         work: &mut TypeWorkBudget,
     ) -> Result<(), NativeOwnerAdmissionError> {
-        if let Some(control) = &mut self.storage.slots.borrow_mut()[self.slot].checked {
+        let mut slots = self.storage.slots.borrow_mut();
+        NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
+        if let Some(control) = &mut slots[self.slot].checked {
             control
                 .prepare_finish(receipt, activation, blocked, work)
                 .map_err(control_error)?;
@@ -1101,9 +1328,11 @@ impl NativeOwnerGuard {
     pub(crate) fn begin_checked_finish_entry(
         &self,
     ) -> Result<Option<crate::foreign::checked_control::FinishEntry>, NativeOwnerAdmissionError> {
-        self.storage.slots.borrow_mut()[self.slot]
-            .checked.as_mut()
-            .map(|control| control.begin_finish_entry().map_err(control_error))
+        let mut slots = self.storage.slots.borrow_mut();
+        NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
+        let blocked = slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied);
+        slots[self.slot].checked.as_mut()
+            .map(|control| control.begin_finish_entry_with_blocked(blocked).map_err(control_error))
             .transpose()
     }
     #[cfg(test)]
@@ -1242,6 +1471,7 @@ impl NativeOwnerGuardReady {
             let slot = &slots[self.guard.slot];
             if !Arc::ptr_eq(self.guard.owner(), &receipt._scope.header().owner)
                 || slot.checked.is_some()
+                || slot.checked_group_root.is_none()
                 || !slot
                     .authority
                     .as_ref()
@@ -1267,7 +1497,9 @@ impl NativeOwnerGuardReady {
         self.guard.checked_boundary(work)
     }
     pub(crate) fn begin_checked_acquire(&mut self) -> Result<(), NativeOwnerAdmissionError> {
-        if let Some(control) = &mut self.guard.storage.slots.borrow_mut()[self.guard.slot].checked {
+        let mut slots = self.guard.storage.slots.borrow_mut();
+        NativeOwnerStorage::entry_allowed(&mut slots, self.guard.slot, false)?;
+        if let Some(control) = &mut slots[self.guard.slot].checked {
             control.begin_acquire().map_err(control_error)?;
         }
         Ok(())
@@ -1294,6 +1526,8 @@ impl NativeOwnerGuardReady {
         {
             return Err(NativeOwnerAdmissionError::Authority);
         }
+        let checked_owner = self.guard.owner.prepared().checked_contract().is_some();
+        let mut group_root = None;
         let mut direct = Vec::new();
         let mut closure = Vec::new();
         pay(work, dependencies.len())?;
@@ -1304,8 +1538,23 @@ impl NativeOwnerGuardReady {
             if !Rc::ptr_eq(&dependency.storage, &self.guard.storage)
                 || dependency.slot >= index
                 || !slots[dependency.slot].physically_live()
-                || slots[dependency.slot].quarantined
             {
+                return Err(NativeOwnerAdmissionError::Authority);
+            }
+            if checked_owner || slots[dependency.slot].checked_group_root.is_some() {
+                pay(work, 2)?;
+                let dependency_root = NativeOwnerStorage::validated_group_root(&slots, dependency.slot)?;
+                if NativeOwnerStorage::denied(&slots, dependency.slot) {
+                    return Err(NativeOwnerAdmissionError::Authority);
+                }
+                if checked_owner {
+                    let root = dependency_root.ok_or(NativeOwnerAdmissionError::Authority)?;
+                    if group_root.is_some_and(|previous| previous != root) {
+                        return Err(NativeOwnerAdmissionError::Authority);
+                    }
+                    group_root = Some(root);
+                }
+            } else if slots[dependency.slot].quarantined {
                 return Err(NativeOwnerAdmissionError::Authority);
             }
             pay(work, direct.len())?;
@@ -1332,6 +1581,11 @@ impl NativeOwnerGuardReady {
                     closure.push(*inherited);
                 }
             }
+        }
+        if checked_owner {
+            pay(work, 1)?;
+            // This is a fresh reserved slot; inherited roots are never reset.
+            slots[index].checked_group_root = Some(group_root.unwrap_or(index));
         }
         let slot = &mut slots[index];
         slot.authority = Some(NativeOwnerSlotAuthority {
@@ -1363,12 +1617,14 @@ impl NativeOwnerGuardReady {
         let mut slots = self.guard.storage.slots.try_borrow_mut()
             .map_err(|_| NativeScalarCallError::ArgumentContract)?;
         let index = self.guard.slot;
+        NativeOwnerStorage::entry_allowed(&mut slots, index, false)
+            .map_err(|_| NativeScalarCallError::ArgumentContract)?;
         let slot = slots.get_mut(index).ok_or(NativeScalarCallError::ArgumentContract)?;
-        if slot.quarantined || !slot.dependencies.is_empty()
+        if !slot.dependencies.is_empty()
             || self.prepared_initialized_bytes != Some(initialized) {
             return Err(NativeScalarCallError::ArgumentContract);
         }
-        let NativeOwnerSlot { leaf, checked, .. } = slot;
+        let NativeOwnerSlot { leaf, checked, last_observed_status, .. } = slot;
         let Some(CheckedLeafBacking::Cell(cell)) = leaf else {
             return Err(NativeScalarCallError::ArgumentContract);
         };
@@ -1378,6 +1634,7 @@ impl NativeOwnerGuardReady {
         control.begin_acquire().map_err(|_| NativeScalarCallError::ArgumentContract)?;
         let returned = prepared.invoke();
         let present = returned.nonnull();
+        *last_observed_status = None;
         control.acquired(present);
         if present { self.guard.initialized_bytes = self.prepared_initialized_bytes; }
         drop(slots);
@@ -1462,6 +1719,7 @@ impl NativeOwnerCallReturned {
             let mut slots = self.guard.storage.slots.borrow_mut();
             let index = self.guard.slot;
             let present = slots[index].raw.address.is_some();
+            slots[index].last_observed_status = self.scalar.and_then(observed_scalar_status);
             if let Some(checked) = &mut slots[index].checked {
                 checked.acquired(present);
             }
@@ -1609,6 +1867,93 @@ mod tests {
             work,
         )?;
         Ok(ready)
+    }
+
+    #[test]
+    fn checked_group_denial_preserves_siblings_backing_and_skips_all_destructors() {
+        use crate::types::TypeWorkBudget;
+        // Actual immutable checked owner metadata; the returns below are private
+        // Rust slot injections, not native calls or source admission evidence.
+        let (program, _) = crate::elaborate::checked_owner_passive_program();
+        let mut pending = vec![program.root()];
+        let owner = loop {
+            let node = program.node(pending.pop().unwrap()).unwrap();
+            if let crate::core::EffectExprKind::Operation(
+                crate::core::EffectOperation::SourceResourceScope(scope),
+            ) = &node.kind {
+                break std::sync::Arc::clone(&scope.header().owner);
+            }
+            pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
+        };
+        assert!(owner.prepared().checked_contract().is_some());
+        HOST_ORDER.with(|order| order.borrow_mut().clear());
+        let storage = std::rc::Rc::new(super::NativeOwnerStorage::default());
+        let mut work = TypeWorkBudget::default();
+        let parent = model_ready(&owner, &storage, 1, Vec::new(), &mut work).unwrap()
+            .returned(std::ptr::without_provenance_mut::<u8>(1).cast())
+            .record().into_guard().unwrap();
+        let first = model_ready(&owner, &storage, 2,
+            vec![storage.declared_dependency(1, &mut work).unwrap()], &mut work).unwrap()
+            .returned(std::ptr::without_provenance_mut::<u8>(2).cast())
+            .record().into_guard().unwrap();
+        let sibling = model_ready(&owner, &storage, 3,
+            vec![storage.declared_dependency(1, &mut work).unwrap()], &mut work).unwrap()
+            .returned(std::ptr::without_provenance_mut::<u8>(3).cast())
+            .record().into_guard().unwrap();
+        let descendant = model_ready(&owner, &storage, 4,
+            vec![storage.declared_dependency(2, &mut work).unwrap()], &mut work).unwrap()
+            .returned(std::ptr::without_provenance_mut::<u8>(4).cast())
+            .record().into_guard().unwrap();
+        let independent = model_ready(&owner, &storage, 5, Vec::new(), &mut work).unwrap()
+            .returned(std::ptr::without_provenance_mut::<u8>(5).cast())
+            .record().into_guard().unwrap();
+        assert!(model_ready(&owner, &storage, 6, vec![
+            storage.declared_dependency(1, &mut work).unwrap(),
+            storage.declared_dependency(5, &mut work).unwrap(),
+        ], &mut work).is_err(), "cross-group dependency refuses before edge commit");
+        let before = {
+            let slots = storage.slots.borrow();
+            assert_eq!(slots[parent.slot].live_dependents, 2);
+            assert_eq!(slots[first.slot].live_dependents, 1);
+            assert_eq!(slots[independent.slot].live_dependents, 0);
+            for member in [&parent, &first, &sibling, &descendant] {
+                assert_eq!(slots[member.slot].checked_group_root, Some(parent.slot));
+            }
+            slots.iter().map(|slot| slot.live_dependents).collect::<Vec<_>>()
+        };
+        assert!(parent.ordinary_live() && sibling.ordinary_live() && descendant.ordinary_live());
+        // Model the explicit primitive's irreversible store, not ordinary
+        // local/ancestor quarantine (whose host-close semantics are unchanged).
+        storage.slots.borrow_mut()[parent.slot].checked_group_denied = true;
+        assert!(!parent.ordinary_live() && !first.ordinary_live());
+        assert!(!sibling.ordinary_live() && !descendant.ordinary_live());
+        assert!(independent.ordinary_live(), "same host/storage does not merge independent roots");
+        let parent_state = crate::types::IterativeTypeOwner::new({
+            let slots = storage.slots.borrow();
+            crate::types::clone_type_with_budget(&slots[parent.slot].authority.as_ref().unwrap().state, &mut work).unwrap()
+        });
+        for _ in 0..2 {
+            let denial = storage.denial_dependency(1, &parent_state, &mut work).unwrap();
+            assert_eq!(denial.slot, parent.slot);
+            assert!(denial.shared_group_denied(&mut work).unwrap());
+            assert!(denial.address().is_none(), "denial lookup grants no ordinary/raw access");
+            assert!(storage.view(1, &parent_state, super::NativeOwnerViewKind::State, None, &mut work).is_err());
+        }
+        drop(parent_state);
+        drop(first);
+        drop(descendant);
+        drop(sibling);
+        drop(parent);
+        HOST_ORDER.with(|order| assert!(order.borrow().is_empty(), "no suspect Drop destructor"));
+        drop(independent);
+        HOST_ORDER.with(|order| assert_eq!(&*order.borrow(), &[5]));
+        assert!(!storage.close());
+        let slots = storage.slots.borrow();
+        for index in 0..4 {
+            assert!(slots[index].physically_live(), "quarantine retains native backing");
+            assert_eq!(slots[index].live_dependents, before[index]);
+        }
+        HOST_ORDER.with(|order| assert_eq!(&*order.borrow(), &[5], "explicit close also denies"));
     }
 
     #[test]

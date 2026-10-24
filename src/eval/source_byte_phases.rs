@@ -189,6 +189,11 @@ impl super::Machine<'_> {
         caller: super::Instantiation,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
+        if matches!(callable.intrinsic.operation(),
+            crate::core::packed::Intrinsic::ForeignQuarantine { .. }
+                | crate::core::packed::Intrinsic::ForeignRejectAcquisition { .. }) {
+            return self.return_source_violation_call(apply, callable, caller, value);
+        }
         if matches!(
             callable.intrinsic.operation(),
             crate::core::packed::Intrinsic::ForeignCopyBytes { .. }
@@ -459,6 +464,8 @@ impl super::Machine<'_> {
         let index = match operands {
             ByteOperands::Read(index) | ByteOperands::Write(index, _) => index,
         };
+        owner.pay_group_checks(if boundary.phase == super::ProviderPhase::Finish { 1 } else { 2 }, &mut self.instantiation_work)
+            .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
         let access = if boundary.phase == super::ProviderPhase::Finish {
             owner.completion_byte_access(index)
         } else {

@@ -1106,6 +1106,37 @@ checked builds and K realization remain outside this subset and refuse explicitl
 Static dependent-owner admission does not authorize an executable activation or
 native call.
 
+The compiler-owned `checked_quarantine<H, S>` and
+`checked_reject_acquisition<H>` operations provide conservative denial in a
+direct checked provider or lifecycle phase. Quarantine requires the exact
+Current or declared Enclosing State and that State's selected H; a compatible
+State, ordinary resource handle, generic helper or caller-supplied identity
+supplies no authority. Acquisition rejection requires the exact admitted
+acquisition request in the current acquire phase, before publication, including
+an observed null result. Original publication, complete Type/Row arguments and
+copied call/request correspondence are reconstructed independently.
+
+Independent acquisitions have distinct groups even under one H. An acquisition
+with declared dependencies inherits their one exact group; dependencies spanning
+different groups reject before native entry or dependency-edge commitment.
+Explicit denial irreversibly revokes ordinary entry, aliases and windows for that
+group while retaining backing, dependency edges, established native observations
+and unresolved facts. It invokes no native operation, destructor, source Finish
+or K discharge. Denied backing cannot become a suspect destructor operand during
+guard loss or host cleanup. This explicit group denial is separate from existing
+local boundary quarantine and its admitted host-cleanup behavior.
+
+With mandatory evaluator capacity the operation returns
+`BoundaryFailed(Quarantined(record))`. The record uses the selected owner's last
+admitted observation and optional numeric status, never the independent
+`ViolationCause` payload. A later admitted void observation supplies no numeric
+status; pre-entry refusal and source bookkeeping supply no replacement
+observation. Work or storage exhaustion while constructing the mandatory result
+is terminal and preserves the already installed denial. The ordinary failure
+value is not a completion witness: a later structural Finish still needs that
+owner's own one-shot synthetic closing relation. These operations grant no
+protected startup, binding installation or native execution authority.
+
 Each symbol has one outer pure source arrow and a complete ordered parameter
 vector containing only `Type` and `EffectRow` parameters. Omitted kinds are
 `Type`. Parameters are retained even when they contribute no ABI operand.

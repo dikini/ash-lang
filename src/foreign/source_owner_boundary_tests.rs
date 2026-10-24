@@ -69,9 +69,15 @@ fn with_context(
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, FixtureRequest, FixtureRequest),
 ) {
     let (program, _) = crate::elaborate::checked_owner_passive_program();
+    with_program_context(&program, test);
+}
+fn with_program_context(
+    program: &crate::core::ValidatedEffectProgram,
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, FixtureRequest, FixtureRequest),
+) {
     let executable = crate::eval::ExecutableProgram::Effect(program.shared());
     let mut work = TypeWorkBudget::default();
-    let ids = nodes(&program);
+    let ids = nodes(program);
     for node_id in ids.iter().copied() {
         let node = program.node(node_id).unwrap();
         let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &node.kind
@@ -128,7 +134,7 @@ fn with_context(
                 "a different genuine operation cannot acquire this scope"
             );
             test(
-                &program,
+                program,
                 FixtureRequest::new(acquire, scope, &mut work),
                 FixtureRequest::new(finish, scope, &mut work),
             );
@@ -878,7 +884,7 @@ fn checked_owner_boundary_initialized_eight_byte_full_request_preparation() {
             .unwrap();
         ticket.begin().unwrap();
         assert!(handle.snapshot().unresolved);
-        let returned = ticket.returned(); // UNIT-INJECTED callback return only
+        let returned = ticket.returned(None); // UNIT-INJECTED callback return only
         assert_eq!(
             returned.snapshot().native,
             super::super::checked_control::Native::Owned
@@ -1171,7 +1177,7 @@ pub(crate) fn with_eight_byte_boundary_for_test(
             .unwrap()
             .unwrap();
         ticket.begin().unwrap();
-        let _injected = ticket.returned();
+        let _injected = ticket.returned(None);
     }
     test(EightByteBoundary {
         program: &program,
@@ -1356,5 +1362,139 @@ fn checked_leaf_preentry_null_output_loss_and_synthetic_finish_do_not_invent_rel
         assert_eq!(leaf::calls(), [1, 0, 0, 0, 0]);
         assert_eq!(handle.snapshot().native, crate::foreign::checked_control::Native::Owned);
         assert!(handle.retains_backing());
+    }
+}
+
+/// Exact source/Core call plus unit-injected native observation. This never
+/// registers a binding, creates RootAdmission, or executes a native callback.
+pub(crate) struct ViolationBoundaryForTest<'p> {
+    pub(crate) program: &'p crate::core::ValidatedEffectProgram,
+    pub(crate) scope: crate::core::NodeId,
+    pub(crate) call: crate::core::source_resource::SourceByteCall,
+    pub(crate) finish: SourceOwnerScopeRequest,
+    pub(crate) finish_node: crate::core::NodeId,
+    pub(crate) finish_instance: EffectInstance,
+    pub(crate) finish_symbol: Arc<CheckedForeignSymbol>,
+    pub(crate) bindings: SourceNativeBindings,
+    pub(crate) guard: Option<crate::foreign::source_runtime::NativeOwnerGuard>,
+    pub(crate) boundary: crate::foreign::source_runtime::NativeOwnerBoundary,
+}
+pub(crate) fn with_violation_boundary_for_test(
+    reject: bool, present: bool, test: impl FnOnce(ViolationBoundaryForTest<'_>),
+) {
+    let (program, _) = crate::elaborate::checked_owner_violation_program();
+    with_program_context(&program, |program, acquire, finish| {
+        let mut work = TypeWorkBudget::default();
+        let mut selected = None;
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &program.node(acquire._scope_node).unwrap().kind else { unreachable!(); };
+        scope.visit_byte_calls(|call, _| {
+            let role = program.registry().scalar_preflight(call.function).unwrap().role();
+            if role == if reject { super::super::scalar_preflight::ForeignScalarPreflightRole::CheckedRejectAcquisition }
+                else { super::super::scalar_preflight::ForeignScalarPreflightRole::CheckedQuarantine }
+                && call.apply.is_some() { selected = Some(call); }
+            Ok(())
+        }, &mut work).unwrap();
+        let (ready, storage) = ready(&acquire, 111, &mut work);
+        let boundary = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let guard = ready.returned(if present { std::ptr::NonNull::<u8>::dangling().as_ptr().cast() }
+            else { std::ptr::null_mut() }).record().into_guard();
+        if !reject { boundary.publish(111, acquire._scope_node, &mut work).unwrap(); }
+        let symbol = Arc::clone(&finish._scope.header().teardown);
+        let mut bindings = SourceNativeBindings { owner_storage: storage, ..SourceNativeBindings::default() };
+        bindings.owners.insert(symbol.operation(), SourceOwnerBinding {
+            symbol: Arc::clone(&symbol), target: "x86_64-unknown-linux-gnu", callback: SourceOwnerCallback::Teardown(dispose),
+        });
+        test(ViolationBoundaryForTest { program, scope: acquire._scope_node,
+            call: selected.expect("actual original denial call"), finish_node: finish._request,
+            finish_instance: finish._instance.clone(), finish_symbol: symbol, bindings,
+            finish: finish.receipt, guard, boundary });
+    });
+}
+
+#[test]
+fn checked_violation_request_and_null_observation_identity_are_exact() {
+    use crate::core::source_resource::SourceResourcePhase as Phase;
+    let (program, _) = crate::elaborate::checked_owner_violation_program();
+    with_program_context(&program, |program, acquire, _finish| {
+        let mut work = TypeWorkBudget::default();
+        let mut call = None;
+        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
+            &program.node(acquire._scope_node).unwrap().kind else { unreachable!(); };
+        scope.visit_byte_calls(|candidate, _| {
+            if candidate.apply.is_some() && candidate.acquisition.is_some() { call = Some(candidate); }
+            Ok(())
+        }, &mut work).unwrap();
+        let executable = crate::eval::ExecutableProgram::Effect(program.shared());
+        let receipt = SourceOwnerViolationRequest::admit(&executable, acquire._scope_node,
+            Phase::Acquire, call.unwrap(), &mut work).unwrap();
+        let (mut ready, _storage) = authority_guard(&acquire, 111, &mut work);
+        ready.prepare_checked_boundary(&acquire, 111, Some(limits()), &mut work).unwrap();
+        let boundary = ready.checked_boundary(&mut work).unwrap().unwrap();
+        assert!(boundary.deny(&receipt, 111, &mut work).is_err(), "reserved slot is not an observed acquisition");
+        ready.begin_checked_acquire().unwrap();
+        assert!(boundary.deny(&receipt, 111, &mut work).is_err(), "entry without return is not an admitted observation");
+        assert_eq!(boundary.snapshot().observations, 0);
+    });
+    for (reject, present) in [(true, false), (true, true), (false, true)] {
+        with_violation_boundary_for_test(reject, present, |mut fixture| {
+            let executable = crate::eval::ExecutableProgram::Effect(fixture.program.shared());
+            let phase = if reject { Phase::Acquire } else { Phase::Handler };
+            let mut work = TypeWorkBudget::default();
+            let mut receipt = SourceOwnerViolationRequest::admit(&executable, fixture.scope,
+                phase, fixture.call, &mut work).unwrap();
+            let before = fixture.boundary.snapshot();
+            let mut wrong = fixture.call;
+            wrong.acquisition = Some(fixture.scope);
+            assert!(SourceOwnerViolationRequest::admit(&executable, fixture.scope,
+                phase, wrong, &mut work).is_err());
+            assert!(SourceOwnerViolationRequest::admit(&executable, fixture.scope,
+                Phase::Finish, fixture.call, &mut work).is_err());
+            if reject {
+                assert!(fixture.boundary.deny(&receipt, 112, &mut work).is_err());
+                receipt.acquisition = Some(fixture.scope);
+                assert!(fixture.boundary.deny(&receipt, 111, &mut work).is_err());
+                receipt.acquisition = fixture.call.acquisition;
+            }
+            let required = if reject { 10 } else { 4 };
+            for prefix in [0, 7] {
+                let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
+                short.charge(prefix).unwrap();
+                assert!(fixture.boundary.deny(&receipt, 111, &mut short).is_err());
+                assert!(fixture.boundary.deny(&receipt, 111, &mut short).is_err());
+                assert_eq!(fixture.boundary.snapshot(), before);
+                assert_eq!(fixture.guard.as_ref().map(|owner| owner.ordinary_live()), present.then_some(true));
+            }
+            let mut exact = TypeWorkBudget::with_limit(required);
+            let (native, unresolved, status) = fixture.boundary.deny(&receipt, 111, &mut exact).unwrap();
+            assert_eq!(exact.used(), required);
+            assert_eq!(native, before.native);
+            assert_eq!(unresolved, before.unresolved);
+            assert_eq!(status, None, "cause is not a native status");
+            let after = fixture.boundary.snapshot();
+            let repeated = fixture.boundary.deny(&receipt, 111, &mut work).unwrap();
+            assert_eq!(repeated, (native, unresolved, status), "conservative denial is idempotent");
+            assert_eq!(fixture.boundary.snapshot(), after, "repeat adds no native/K/history event");
+            assert_eq!(after.native, before.native);
+            assert_eq!(after.k, before.k);
+            assert_eq!(after.observations, before.observations);
+            assert_eq!(after.history, before.history);
+            assert!(!fixture.guard.as_ref().is_some_and(|owner| owner.ordinary_live()));
+            DISPOSALS.set(0);
+            if !reject {
+                fixture.boundary.closing(111, fixture.scope, &mut work).unwrap();
+                let guard = fixture.guard.as_mut().unwrap();
+                guard.prepare_checked_finish(&fixture.finish, 111, false, &mut work).unwrap();
+                let Some(crate::foreign::checked_control::FinishEntry::Synthetic(witness)) =
+                    guard.begin_checked_finish_entry().unwrap() else { panic!("group denial requires K6"); };
+                assert_eq!(witness.completion(), crate::foreign::checked_control::Completion::Quarantined);
+                assert_eq!(witness.native(), before.native);
+                assert_eq!(fixture.boundary.snapshot().observations, before.observations);
+                assert_eq!(fixture.boundary.snapshot().k, crate::foreign::checked_control::K::Discharged);
+                assert!(guard.begin_checked_finish_entry().is_err(), "one structural finish witness");
+            }
+            drop(fixture.guard);
+            assert_eq!(DISPOSALS.get(), 0, "suspect guard never invokes fallback disposal");
+        });
     }
 }

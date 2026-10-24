@@ -14,6 +14,8 @@ mod source_scalar_phases;
 
 #[path = "source_byte_phases.rs"]
 mod source_byte_phases;
+#[path = "source_violation_phases.rs"]
+mod source_violation_phases;
 #[cfg(test)]
 #[path = "source_byte_tests.rs"]
 mod source_byte_tests;
@@ -1575,6 +1577,8 @@ impl<'runtime> Machine<'runtime> {
                         | crate::core::packed::Intrinsic::ForeignCopyBytes { .. }
                         | crate::core::packed::Intrinsic::ForeignCopyNul { .. }
                         | crate::core::packed::Intrinsic::ForeignExtentValue { .. }
+                        | crate::core::packed::Intrinsic::ForeignQuarantine { .. }
+                        | crate::core::packed::Intrinsic::ForeignRejectAcquisition { .. }
                 ) {
                     return Err(RuntimeFailure::ForeignBinding);
                 }
@@ -2095,7 +2099,9 @@ impl<'runtime> Machine<'runtime> {
                             | crate::core::packed::Intrinsic::ForeignReplaceData { .. }
                             | crate::core::packed::Intrinsic::ForeignCopyBytes { .. }
                             | crate::core::packed::Intrinsic::ForeignCopyNul { .. }
-                            | crate::core::packed::Intrinsic::ForeignExtentValue { .. }))
+                            | crate::core::packed::Intrinsic::ForeignExtentValue { .. }
+                        | crate::core::packed::Intrinsic::ForeignQuarantine { .. }
+                        | crate::core::packed::Intrinsic::ForeignRejectAcquisition { .. }))
                 {
                     charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
                     self.frames
@@ -3880,7 +3886,9 @@ fn apply_intrinsic(
         (
             Intrinsic::ForeignCopyBytes { .. }
             | Intrinsic::ForeignCopyNul { .. }
-            | Intrinsic::ForeignExtentValue { .. },
+            | Intrinsic::ForeignExtentValue { .. }
+            | Intrinsic::ForeignQuarantine { .. }
+            | Intrinsic::ForeignRejectAcquisition { .. },
             _,
         ) => return Err(RuntimeFailure::ForeignBinding),
         (Intrinsic::ForeignCheckedNul { function }, Value::String(text)) => {

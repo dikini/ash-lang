@@ -68,6 +68,9 @@ impl Machine<'_> {
                 {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
+                boundary.owner.as_ref().ok_or(RuntimeFailure::InvalidControlState)?
+                    .pay_group_checks(1, &mut self.instantiation_work)
+                    .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
                 if boundary
                     .owner
                     .as_ref()
@@ -107,7 +110,10 @@ impl Machine<'_> {
                         .owner
                         .as_ref()
                         .ok_or(RuntimeFailure::InvalidControlState)?;
-                    if guard.completion_address().is_none()
+                    // Required dependent Finish may recover only the exact
+                    // retained State coordinate. This projects no address and
+                    // grants no native/ordinary access after group denial.
+                    if !guard.physically_live()
                         || !std::sync::Arc::ptr_eq(guard.owner(), &finishing.header().owner)
                     {
                         return Err(RuntimeFailure::InvalidControlState);
