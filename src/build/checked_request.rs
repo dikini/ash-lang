@@ -1214,10 +1214,20 @@ mod tests {
         };
         let root = super::super::emit::checked_root_host(&build, &program, policy, &mut work).unwrap();
         assert!(root.host.rust_source.contains("const CHECKED_PROFILE: u8 = 2"));
+        let repeated_build = super::super::image::encode_checked_preparation(&program, &provenance,
+            super::super::host::NATIVE_TARGET, &mut work).unwrap();
+        let repeated = super::super::emit::checked_root_host(&repeated_build, &program, policy, &mut work).unwrap();
+        assert_eq!(root.host.payloads.bytes(), repeated.host.payloads.bytes(), "repeated encoding of the same Core is byte-exact");
         let (image, facts) = root.host.payloads.bytes();
         let decoded_image = super::super::image::PureImage::decode_bytes(image, &mut work).unwrap();
         decoded_image.admit_expected_native_facts(facts, &mut work).unwrap();
         let restored = decoded_image.restore_effect(&mut work).unwrap();
+        let owner_rows = |registry: &crate::resolved::ResolvedRegistry| registry.image_interface_owner_definitions()
+            .map(|(id, parameters)| (id.declaration(), parameters.iter().map(|parameter|
+                (parameter.spelling.clone(), format!("{:?}", parameter.kind))).collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+        assert_eq!(owner_rows(program.registry()), owner_rows(restored.program.registry()),
+            "restoration preserves source-order interface owners and every original ordered formal row");
         let (rebuilt, _) = restored.reencode_checked_data(&mut work).unwrap();
         let regenerated = super::super::emit::checked_root_host(&rebuilt, &restored.program, policy, &mut work).unwrap();
         assert_eq!(root.leaf.source, regenerated.leaf.source, "dependent typed leaf regenerates from restored originals");
