@@ -29,8 +29,8 @@ they arise and report them for later prioritization; no fixed type catalogue,
 scheduled extension phase or numeric-delivery prerequisite follows.
 
 Root assigns each stage. The user has authorized removal of unnecessary code;
-PR138 delivered the first retirement. S1 now reviews CP-0024's concrete mapping;
-new pointer/API implementation and native examples follow after that review.
+PR138 delivered the first retirement. S1 independently reviewed CP-0024's
+accepted mapping; S2 implementation follows design retention and assignment.
 Existing machinery governs values and artifacts originating in FFI. Foreign
 origin adds no admission, lifecycle or validation protocol.
 
@@ -40,8 +40,8 @@ Use this concrete sequence:
    package, producer, root, leaf, link observers, APIs and dedicated tests were
    removed. Typed bridges, generic image/Core fixes, fingerprint/gas, managed
    Bytes, effects, handlers and cleanup remain. No Main reset.
-2. Review CP-0024's opaque nominal Address, null/equality, synchronous read-only
-   Bytes pointer arguments and ordinary symbol effects in S1; no new memory API.
+2. S1 accepted CP-0024's opaque nominal Address, null/equality, synchronous
+   read-only Bytes pointer arguments and ordinary symbol effects; no new memory API.
    Then replace inherited foreign policy in the existing entry and delete its obsolete dependency closure.
    Current shared checked source-projection/reconstruction and injected leaf
    policy tests remain only until this replacement; they are not a permanent

@@ -1,13 +1,13 @@
 # CP-0024: Smaller foreign-library boundary
 
 - ID: `CP-0024`
-- Status: proposed
+- Status: accepted
 - Related: [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [TASK-0050](../tasks/TASK-0050-checked-ffi-regions-control-program.md)
 
 > The user agreed the smaller responsibility boundary on 2026-10-24. This is
-> the S1 technical design for independent review, not implemented Ash. The
-> previous checked-host proposal is [retained in Git](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md).
+> the independently reviewed S1 design for S2 implementation, not implemented
+> Ash. The previous checked-host proposal is [retained in Git](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md).
 
 ## Current behavior
 
@@ -144,7 +144,7 @@ accepted decisions remain current truth until that transition is retained.
 ## Resulting specification truth
 
 The implemented boundary will be the mapping above, with ordinary Ash checks and
-module-authored policy. This docs-only S1 candidate establishes no new runtime
+module-authored policy. This docs-only S1 design establishes no new runtime
 behavior and does not complete S2-S4.
 
 ## Interactions and non-goals
@@ -168,8 +168,8 @@ isolation requirement. Later regions/control/workers remain separate work.
 mapping and removal boundary before implementation.
 [S2 #132](https://github.com/dikini/ash-lang/issues/132) tests passive imports,
 Address/null/equality and ordinary capture, exact generated pointer/void calls,
-Bytes backing, missing native effects, unsupported signatures and removal of the
-old policy routes. Ordinary Core/image reconstruction must still reject malformed
+Bytes backing, ordinary source-handler overrides, missing native effects,
+unsupported signatures and removal of the old policy routes. Ordinary Core/image reconstruction must still reject malformed
 data; no live pointer is encoded in an image.
 [S3 #133](https://github.com/dikini/ash-lang/issues/133) supplies the fixture's
 normal/null/error paths, ordinary cleanup and SQLite coverage/gap observations.
