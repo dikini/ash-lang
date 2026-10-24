@@ -86,8 +86,58 @@ pub(crate) fn controls(
             Unsupported::EffectOperation
         )))
     ));
+    // Real lexical-host scalar boundaries use their independently checked H;
+    // no owner-bearing or ordinary interpreter gains this representation rule.
+    for node in program.nodes() {
+        let crate::core::EffectExprKind::Operation(
+            crate::core::EffectOperation::NativeInterpret(boundary),
+        ) = &node.kind else { continue; };
+        let Some(host) = boundary.host() else { continue; };
+        for original in boundary.interpretations() {
+            let mut measured = TypeWorkBudget::default();
+            admit_native_interpretation_instance(original.effect(), original.symbol(), Some(host), &mut measured).unwrap();
+            let cost = measured.used();
+            for prefix in [0, 7] {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                admit_native_interpretation_instance(original.effect(), original.symbol(), Some(host), &mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(admit_native_interpretation_instance(original.effect(), original.symbol(), Some(host), &mut short), Err(ImageFailure::Resource)));
+            }
+            let wrong_host = crate::core::effect::ForeignHostIdentity {
+                identity: crate::types::TypeVariableId::generated(u32::MAX),
+                effect: host.effect(),
+            };
+            assert_ne!(wrong_host.identity(), host.identity());
+            assert!(admit_native_interpretation_instance(original.effect(), original.symbol(), Some(wrong_host), &mut TypeWorkBudget::default()).is_err());
+            assert!(matches!(admit_native_interpretation_instance(original.effect(), original.symbol(), None, &mut TypeWorkBudget::default()), Err(ImageFailure::Unsupported(Unsupported::OpenNativeInstance))));
+            use crate::types::{EffectInstance, EffectRow, EffectRowVariable, KindedArgument};
+            let arguments = original.effect().arguments();
+            let wrong_type = Type::Variable(wrong_host.identity());
+            let open_row = EffectRow::open(EffectRowVariable::rigid(wrong_host.identity()), Box::new([]));
+            // Wrong and nested host, non-host extra Type and Row actuals all
+            // retain exact original-vector/closed-actual refusal.
+            let donors = [
+                vec![KindedArgument::TypeArg(wrong_type.clone())],
+                vec![KindedArgument::TypeArg(Type::Tuple(Box::new([Type::Variable(host.identity())])))],
+                arguments.iter().cloned().chain([KindedArgument::TypeArg(wrong_type)]).collect(),
+                arguments.iter().cloned().chain([KindedArgument::RowArg(open_row)]).collect(),
+            ];
+            for donor in donors {
+                let donor = EffectInstance::new_kinded(original.effect().effect(), donor.into_boxed_slice());
+                assert!(admit_native_interpretation_instance(&donor, original.symbol(), Some(host), &mut TypeWorkBudget::default()).is_err());
+            }
+            let owner = program.nodes().iter().find_map(|node| {
+                let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) = &node.kind else { return None; };
+                scope.native_interpretations().iter().find(|interpretation| interpretation.symbol().owner().is_some())
+            }).expect("genuine source owner interpreter donor");
+            assert!(admit_native_interpretation_instance(owner.effect(), owner.symbol(), Some(host), &mut TypeWorkBudget::default()).is_err());
+        }
+    }
     let mut encoding = TypeWorkBudget::default();
-    let encoder = encode_program(
+    let encoded = encode_program(
         program,
         provenance,
         &mut encoding,
@@ -105,8 +155,12 @@ pub(crate) fn controls(
             Ok(())
         },
         |encoder, kind| encoder.encode_effect_node(kind),
-    )
-    .unwrap();
+    );
+    if encoded.is_err() {
+        let error = encoded.err().expect("checked failed encoding");
+        panic!("dependency encoding failed used={} limit={} actual={error:?}", encoding.used(), encoding.limit());
+    }
+    let encoder = encoded.expect("checked successful encoding");
     let image = encoder.image;
     let owner = image
         .prepared_owners
@@ -162,7 +216,7 @@ pub(crate) fn controls(
             );
         }
         (_, Err(error)) => {
-            panic!("smaller baseline must fit unchanged standalone default: {error:?}")
+            panic!("smaller baseline must fit unchanged standalone default: used={} limit={} actual={error:?}", standalone_work.used(), standalone_work.limit())
         }
         (_, Ok(restored)) => {
             drop(restored);

@@ -84,7 +84,7 @@ fn checked_connection_finish_rejects_switched_disposition_and_boundary() {
     for (from, to) in [
         (
             "                let reject : Foreign.ViolationCause -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_reject_acquisition\n                let denied = reject (Foreign.UnexpectedStatus status)",
-            "                let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                let denied = quarantine (state, Foreign.UnexpectedStatus status)",
+            "                let denied = Foreign.checked_quarantine (state, Foreign.UnexpectedStatus status)",
         ),
         (
             "Foreign.CheckedReturned(Foreign.Retained(status)) => Foreign.FinishedRetained(state, NativeCloseError status)",

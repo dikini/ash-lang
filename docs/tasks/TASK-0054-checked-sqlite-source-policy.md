@@ -339,3 +339,31 @@ The two diagnostic refs preserve temporary markers, which are excluded from the
 product branch. The focused 18 controls and Clippy must run again; Core/image
 cost, Standalone::Fits, native behavior and negative-offset evidence are not
 claimed by the diagnostics.
+
+
+### Lexical checked-host image correspondence
+
+Run 32518 now passes Statement source checking, independent Core validation,
+ordinary transforms and six hostile Core controls. Measured Core work is
+118,436 of 327,680, leaving 209,244; exact, prefixed, one-short, spent and fresh
+checks reached their assertions. The selector then refuses image construction
+with `Unsupported(OpenNativeInstance)` before standalone restoration or image
+cost measurement. The preserved genuine entry initializes SQLite inside its
+fresh lexical host; that path remains in the test.
+
+The serializer and restorer now reuse the admitted checked symbol's original
+host selection. Only the exact direct lexical H at the original host position
+may remain open in an owner-free checked scalar interpretation. Every other
+Type/Row actual keeps the closed-instance check; ordinary host-free native
+interpretations retain their prior rule. Independent Core still authenticates
+the host binder, canonical NativeHost row, full original vector and non-escape.
+The private image control checks the genuine Initialize path and wrong-H,
+nested-H, extra open Type/Row, owner-bearing and host-free donors, with exact and
+one-short work. Dependent executable/runtime admission remains closed.
+
+The existing Connection Fresh-state negative now calls the canonical quarantine
+builtin directly. Its former local alias hit the earlier ordinary-State-call
+guard and did not establish the intended lifecycle refusal. The original Source
+refusal assertion and canonical positive remain. These changes and all required
+focused controls await current-candidate execution; no standalone fit or image
+allowance result is inferred from the passing Core measurement.
