@@ -3,9 +3,10 @@ use ash::build::{ReceiptFailure, RequestLimits, assemble_checked_closure_data};
 
 #[test]
 fn external_closure_assembly_uses_public_limits_and_preserves_bounded_refusal() {
-    // This signature cannot compile if a crate-private meter leaks into the API.
-    let assemble: fn(&[u8], [&[u8]; 6], RequestLimits) -> Result<Vec<u8>, ReceiptFailure> =
-        assemble_checked_closure_data;
+    // These external calls cannot compile if a crate-private meter leaks into
+    // the required API arguments. Infer the function item without a duplicate
+    // complex signature; use only public DATA and RequestLimits below.
+    let assemble = assemble_checked_closure_data;
     let limits = RequestLimits {
         bytes: 4096,
         work: 4096,
