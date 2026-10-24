@@ -6,7 +6,7 @@ const SOURCE: &str = include_str!("../../libraries/sqlite_checked.ash");
 const ENTRY: &str = include_str!("../../tests/fixtures/checked-sqlite/dependent-entry.ash");
 
 #[test]
-#[ignore = "pending checked dependent OutputAcquire/offset and dependent StatusTeardown source/Core carrier"]
+#[ignore = "pending dependent OutputAcquire/offset, StatusTeardown, and post-consumption Enclosing denial source/Core carriers"]
 fn checked_sqlite_dependent_source_preserves_original_parent_core_and_transforms() {
     let graph = graph_with_entry(SOURCE, Some(ENTRY));
     let checked =
@@ -62,7 +62,7 @@ fn checked_sqlite_dependent_source_preserves_original_parent_core_and_transforms
 }
 
 #[test]
-#[ignore = "pending canonical dependent source; run explicitly with --ignored after common carriers"]
+#[ignore = "pending canonical dependent source including post-consumption Enclosing denial; run explicitly with --ignored after common carriers"]
 fn checked_sqlite_dependent_source_rejects_wrong_host_suspect_finalize_and_fresh_quarantine() {
     check_graph(&graph_with_entry(SOURCE, Some(ENTRY))).expect("canonical source before mutations");
     for (from, to) in [
@@ -73,10 +73,6 @@ fn checked_sqlite_dependent_source_rejects_wrong_host_suspect_finalize_and_fresh
         (
             "perform Prepare<H, C, S>.call (enclosing, sql, length)",
             "perform Prepare<S, C, H>.call (enclosing, sql, length)",
-        ),
-        (
-            "                        let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)",
-            "let denied = quarantine (state, Foreign.UnexpectedStatus status)",
         ),
         (
             "                        let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)",
@@ -91,10 +87,20 @@ fn checked_sqlite_dependent_source_rejects_wrong_host_suspect_finalize_and_fresh
             "semantic refusal, not missing canonical support: {error:?}"
         );
     }
+    // Keep the mutant well typed so only Fresh-vs-Enclosing authority can reject it.
+    let from = "                        let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                        let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)";
+    let to = "                        let quarantine : (StatementState<H, C, S>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                        let denied = quarantine (state, Foreign.UnexpectedStatus status)";
+    assert_eq!(SOURCE.matches(from).count(), 1);
+    let error = check_graph(&graph_with_entry(&SOURCE.replace(from, to), Some(ENTRY)))
+        .expect_err("well-typed Fresh State is not Enclosing quarantine authority");
+    assert!(
+        matches!(error, TypeError::Source(_)),
+        "require source authority refusal, not a type mismatch: {error:?}"
+    );
 }
 
 #[test]
-#[ignore = "pending dependent StatusTeardown + canonical source; run explicitly with --ignored"]
+#[ignore = "pending dependent StatusTeardown, post-consumption Enclosing denial, and canonical source; run explicitly with --ignored"]
 fn checked_sqlite_dependent_finish_rejects_duplicate_and_retained_witnesses() {
     check_graph(&graph_with_entry(SOURCE, Some(ENTRY)))
         .expect("canonical source before finish mutations");

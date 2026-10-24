@@ -2,6 +2,8 @@
 use super::*;
 
 const SQLITE: &str = include_str!("../../libraries/sqlite_checked.ash");
+// Exact independent producer from reviewed df39297d, separate from pending dependent admission.
+const CONNECTION: &str = include_str!("../../tests/fixtures/checked-sqlite/connection-source.ash");
 const ARENA: &str = include_str!("../../libraries/arena_checked.ash");
 
 #[test]
@@ -20,7 +22,7 @@ main () = foreign host H {
     }
 }
 "#;
-    let graph = graph_with_entry(SQLITE, Some(entry));
+    let graph = graph_with_entry(CONNECTION, Some(entry));
     let checked = check_graph(&graph).expect("real Connection source and body-free consumer");
     let producer = checked
         .iter()
@@ -69,7 +71,14 @@ fn checked_arena_source_links_core_identity_and_fold() {
 
 #[test]
 fn checked_connection_finish_rejects_switched_disposition_and_boundary() {
-    check_graph(&graph(SQLITE, false)).expect("genuine library before hostile controls");
+    check_graph(&graph(CONNECTION, false))
+        .expect("preserved independent producer before hostile controls");
+    let (before, connection) = CONNECTION
+        .split_once("pub resource Connection<H, C>")
+        .unwrap();
+    let (connection, after) = connection
+        .split_once("// Pure classification supplements")
+        .unwrap();
     for (from, to) in [
         (
             "                let reject : Foreign.ViolationCause -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_reject_acquisition\n                let denied = reject (Foreign.UnexpectedStatus status)",
@@ -84,8 +93,12 @@ fn checked_connection_finish_rejects_switched_disposition_and_boundary() {
             "Foreign.BoundaryFailed(reason) => Foreign.FinishedConsumed Foreign.FinishOk",
         ),
     ] {
-        assert_eq!(SQLITE.matches(from).count(), 1);
-        let error = check_graph(&graph(&SQLITE.replace(from, to), false))
+        assert_eq!(connection.matches(from).count(), 1);
+        let changed = format!(
+            "{before}pub resource Connection<H, C>{}// Pure classification supplements{after}",
+            connection.replace(from, to)
+        );
+        let error = check_graph(&graph(&changed, false))
             .expect_err("source authority rejects Fresh quarantine or a different finish witness");
         assert!(
             matches!(error, TypeError::Source(_)),
