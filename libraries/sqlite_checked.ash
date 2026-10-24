@@ -128,11 +128,7 @@ pub resource Connection<H, C> {
                 Refused (OpenContradiction status)
             }
         }
-        Foreign.CheckedReturned((status, Foreign.Unreadable)) => {
-            let reject : Foreign.ViolationCause -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_reject_acquisition
-            let denied = reject (Foreign.UnexpectedStatus status)
-            Refused (OpenContradiction status)
-        }
+        Foreign.CheckedReturned((status, Foreign.Unreadable)) => Refused (OpenContradiction status)
         Foreign.CheckedConversionFailed(error) => Refused (OpenConversion error)
         Foreign.BoundaryFailed(reason) => Refused (OpenBoundary reason)
     }
@@ -212,10 +208,7 @@ pub resource Statement<H, C, S> {
                         }
                     }
                 }
-                Foreign.CheckedReturned((status, Foreign.Unreadable, _)) => {
-                    let denied = Foreign.checked_quarantine (enclosing, Foreign.ContradictoryNativeResult(status, 1))
-                    Refused (PrepareContradiction status)
-                }
+                Foreign.CheckedReturned((status, Foreign.Unreadable, _)) => Refused (PrepareContradiction status)
                 Foreign.CheckedConversionFailed(error) => Refused (PrepareConversion error)
                 Foreign.BoundaryFailed(reason) => Refused (PrepareBoundary reason)
             }

@@ -316,3 +316,26 @@ calls, while the existing direct-positive/alias-negative regression is unchanged
 No compiler authority fence or controlled-State callable rule is widened.
 Core, image and work assertions were not reached; the later 17 selectors remain
 UNRUN. The repaired original 18-selector gate is still pending.
+
+
+### Readable output and impossible source branches
+
+Run 5423 passed source/header checking, linking and lowering, then failed
+independent Core validation before image or cost checks. The preserved
+canonical-only diagnostics 32895 and 6651 identified the exact rejection:
+`validate_source_byte_call_coverage` found a sealed quarantine type application
+in Statement's unreadable owner-output arm with no authenticated flow-call
+coverage. Both original Prepare outcomes require readable output 3; symbolic
+flow therefore excludes that arm. The global Core coverage guard remains
+unchanged.
+
+Statement now keeps an exhaustive DATA refusal in that impossible arm without
+requesting State-bearing quarantine. Open likewise requires readable owner
+output 1 in every original outcome; its library and source fixture keep the
+DATA refusal without an unreachable acquisition-rejection call. Reachable
+nonnull/null contradiction arms still deny their pending or established group;
+L8 authority, original request witnesses and all hostile controls are unchanged.
+The two diagnostic refs preserve temporary markers, which are excluded from the
+product branch. The focused 18 controls and Clippy must run again; Core/image
+cost, Standalone::Fits, native behavior and negative-offset evidence are not
+claimed by the diagnostics.

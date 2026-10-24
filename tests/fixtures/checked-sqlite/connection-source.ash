@@ -93,11 +93,7 @@ pub resource Connection<H, C> {
                 Refused (OpenContradiction status)
             }
         }
-        Foreign.CheckedReturned((status, Foreign.Unreadable)) => {
-            let reject : Foreign.ViolationCause -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_reject_acquisition
-            let denied = reject (Foreign.UnexpectedStatus status)
-            Refused (OpenContradiction status)
-        }
+        Foreign.CheckedReturned((status, Foreign.Unreadable)) => Refused (OpenContradiction status)
         Foreign.CheckedConversionFailed(error) => Refused (OpenConversion error)
         Foreign.BoundaryFailed(reason) => Refused (OpenBoundary reason)
     }
