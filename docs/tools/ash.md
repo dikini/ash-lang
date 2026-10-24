@@ -62,33 +62,6 @@ in documentation and discard obsolete build/review history when the PR closes.
 Keep records needed by another live PR or checkpoint until that need ends.
 The generator does not infer PR closure or delete published executables.
 
-### Optional producer receipts
-
-Rust callers can set `BuildConfiguration::producer_receipt` to explicit
-`ProducerReceiptLimits` before preparation. This opt-in records the existing
-native Effect profile; it does not enable checked-owner builds or change the
-ordinary build's work limits. Pure builds currently refuse this option.
-
-The limits bound individual observed artifacts, receipt bytes, record/bridge
-counts and cumulative receipt work. Preparation binds the actual emitted
-program image, expected facts, generated Rust and original bridge/library/
-operation mappings. The build compares the emitted files and declared native
-inputs before and after linking, and retains both seed and resolved Cargo-lock
-observations. After successful linking and cleanup, it observes one opened
-regular staging object with a matching ELF target header before publication.
-`BuiltProgram::producer_receipt()` returns the retained binary receipt path.
-
-`ProducerReceipt::read` and `decode` enforce independent finite bounds and a
-canonical versioned encoding. Unknown, duplicate, reordered, malformed or extra
-records refuse. `matches_expected` compares data, not authority. The receipt
-records unavailable checked-contract, complete runtime/native/header/tool,
-policy, premise and context closure as missing; checked applicability refuses.
-The ordinary build can still use shared libraries and inherited tool settings.
-Neither observed file metadata nor matching digests prove compilation/link
-correspondence, stable future pathname contents, complete native behavior or
-immutable execution. No protected approval store, trusted deployment context
-or executable permission is supplied by a receipt. Public checked guards remain.
-
 ### Native link inputs
 
 Use `--native-static PATH` for a regular static archive and `--native-shared PATH`

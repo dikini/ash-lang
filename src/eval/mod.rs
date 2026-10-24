@@ -27,8 +27,3 @@ pub use value::{Closure, ExecutableNode, ExecutableProgram, ObservedValue, Value
 pub(crate) use machine::source_owner_post_record_test;
 #[cfg(test)]
 pub(crate) use machine::source_scalar_post_record_test;
-
-#[cfg(ash_checked_owner_root = "v1")]
-pub(crate) use machine::evaluate_checked_root_program;
-#[cfg(ash_checked_owner_root = "v1")]
-pub(crate) use value::HeapCell;

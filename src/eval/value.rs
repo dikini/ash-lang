@@ -91,9 +91,6 @@ pub(crate) struct ObservedHeap {
 }
 
 impl ObservedHeap {
-    #[cfg(ash_checked_owner_root = "v1")]
-    pub(crate) fn cell(&self, location: usize) -> Option<&HeapCell> { self.cells.get(location) }
-
     pub(crate) fn new(registry: Arc<ResolvedRegistry>, cells: Vec<HeapCell>) -> Arc<Self> {
         Arc::new(Self {
             registry,
@@ -117,9 +114,6 @@ impl fmt::Debug for ObservedHeap {
 }
 
 impl ObservedValue {
-    #[cfg(ash_checked_owner_root = "v1")]
-    pub(crate) fn root_parts(&self) -> (&ObservedHeap, usize) { (&self.heap, self.root) }
-
     pub(crate) fn new(heap: Arc<ObservedHeap>, root: Location) -> Self {
         Self { heap, root }
     }

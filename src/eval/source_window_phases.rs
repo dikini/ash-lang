@@ -1286,7 +1286,7 @@ impl Machine<'_> {
             unreachable!("prepaid window remains selected")
         };
         let view = &window.views[view_key.slot];
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         if view.raw.is_checked_leaf() {
             let value = ready.copy_checked_leaf(&view.raw, copy_record.take().ok_or(RuntimeFailure::ForeignBinding)?, &mut self.heap, &self.instantiation_work)?;
             self.control = Some(Control::Return(value));
@@ -1344,7 +1344,7 @@ struct CopyReplyReady {
     failure: Option<(crate::types::ConstructorId, super::Location)>,
 }
 impl CopyReplyReady {
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     fn copy_checked_leaf(mut self, view: &NativeViewReturned, record: crate::foreign::source_runtime::NativeOwnerCopyRecord, heap: &mut [super::HeapCell], work: &TypeWorkBudget) -> Result<Value, RuntimeFailure> {
         if !matches!(self.mode, CopyMode::Bytes(_)) { return Err(RuntimeFailure::ForeignBinding); }
         let bytes = Arc::get_mut(self.bytes.as_mut().ok_or(RuntimeFailure::ForeignBinding)?).ok_or(RuntimeFailure::ForeignBinding)?;

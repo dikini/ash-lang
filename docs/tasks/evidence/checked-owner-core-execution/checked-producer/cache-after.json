@@ -1,6 +1,0 @@
-{
-  "files_observed": 64111,
-  "apparent_bytes": 226675219584,
-  "excluded": "parallel-f3",
-  "qualification": "live apparent-size observation, not allocated storage or a reserved/quota/peak bound"
-}

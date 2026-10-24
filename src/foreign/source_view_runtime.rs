@@ -15,7 +15,7 @@ pub type NativeViewReadCallback = fn(*mut core::ffi::c_void, usize) -> u8;
 pub struct NativeViewReturned {
     address: Option<NonNull<core::ffi::c_void>>,
     read: Option<NativeViewReadCallback>,
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     checked: Option<(super::owner::NativeOwnerBoundary, Option<crate::foreign::checked_leaf_transport::ViewDescriptor>)>,
 }
 impl fmt::Debug for NativeViewReturned {
@@ -27,16 +27,16 @@ impl fmt::Debug for NativeViewReturned {
     }
 }
 impl NativeViewReturned {
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     pub(in crate::foreign) fn checked(
         boundary: super::owner::NativeOwnerBoundary,
         descriptor: Option<crate::foreign::checked_leaf_transport::ViewDescriptor>,
     ) -> Self { Self { address: None, read: None, checked: Some((boundary, descriptor)) } }
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     pub(crate) fn is_checked_leaf(&self) -> bool {
         self.checked.is_some()
     }
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     pub(in crate::foreign) fn checked_descriptor(&self) -> Option<(&super::owner::NativeOwnerBoundary, &crate::foreign::checked_leaf_transport::ViewDescriptor)> {
         self.checked.as_ref().and_then(|(owner, descriptor)| descriptor.as_ref().map(|descriptor| (owner, descriptor)))
     }
@@ -48,12 +48,12 @@ impl NativeViewReturned {
         Self {
             address: NonNull::new(address),
             read: Some(read),
-            #[cfg(any(test, ash_checked_owner_root = "v1"))]
+            #[cfg(test)]
             checked: None,
         }
     }
     pub(crate) fn is_null(&self) -> bool {
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         if let Some((_, descriptor)) = &self.checked { return descriptor.is_none(); }
         self.address.is_none()
     }
