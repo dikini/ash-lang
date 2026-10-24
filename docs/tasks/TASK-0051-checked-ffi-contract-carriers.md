@@ -1,7 +1,7 @@
 # TASK-0051: Checked FFI Contract Carriers
 
 - ID: `TASK-0051`
-- Status: active
+- Status: complete (original F3 source/static work)
 - Related: [F3 issue #59](https://github.com/dikini/ash-lang/issues/59),
   [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
   [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
@@ -38,7 +38,9 @@ milestone acceptance map and F-core checkpoint scheduling.
 
 ## Work
 
-Follow the [task-owned implementation plan](plans/checked-ffi-contract-carriers.md).
+The [completed execution plan](https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/plans/checked-ffi-contract-carriers.md) is retained in Git. The
+[original-obligation acceptance map](evidence/checked-ffi-original-acceptance/README.md)
+records the complete source/static result.
 
 1. Parse and retain the explicit checked library boundary without turning a
    checked marker into executable permission. Preserve legacy source behavior.
@@ -55,7 +57,38 @@ Follow the [task-owned implementation plan](plans/checked-ffi-contract-carriers.
    the distinction between accepted CP-0024 and current Main semantics. Leave
    whole-task acceptance unchecked until all original F3 obligations pass.
 
-## Progress
+## Current acceptance
+
+The complete original F3 source/static work is evidenced on retained PR126
+`8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5`. The author validated the independent
+original-case audit against the criterion, retained source and evidence. The
+[finite obligation map](evidence/checked-ffi-original-acceptance/README.md) covers
+original identities, complete Type/Row vectors, body-free imports, H/effect and
+hidden dependency preservation, transformed contracts, independent Core/private
+images and charged fail-closed admission. It distinguishes historical component
+receipts from PR126's fresh 18-selector and Clippy gate, and explains the common
+codec evidence composition without claiming a direct Statement Rows image run.
+
+This acceptance record closes the implementation work. Its independent review,
+retention, guarded #59 update/readback and PM confirmation remain the explicit
+delivery steps; #59 is not claimed closed before those steps occur. F4/F5/F6/F7,
+connected F-core/full-workspace and Main gates retain their own obligations.
+Neither actual native execution nor those later gates is an unnamed original F3
+static prerequisite. CP-0024 remains accepted program work.
+
+The completed task-owned plan leaves the current tree under the documentation
+policy; its retained history is linked above. Historical pending statements below
+record their delivery-time scope and are superseded by this current acceptance.
+
+- [x] Explicit checked declaration boundary and safe incomplete-path refusal.
+- [x] Original assumptions, exact H and source/wrapper dependency carriers.
+- [x] Host introduction/elimination and checked owner effect correspondence.
+- [x] Body-free module/link/specialization correspondence and negatives.
+- [x] Independent Core/image reconstruction and transformed-contract tests.
+- [x] Charged checking work, exact/one-short bounds and affected regressions.
+- [x] Independent review and retained verification of complete F3 scope.
+
+## Historical progress
 
 PR #116 retained the separate comparator correction as
 `577b0c87305b7bea5f905c6e8833ff49d26dd39e`; independent retained-tree and author
@@ -103,14 +136,6 @@ baseline red, partial failures, corrected attribution and final frozen results.
 Independent delivery review and retention remain required. This separate fix
 does not accept the pending PR110 dependency images or any whole-F3 criterion;
 the connected F-core gate remains scheduled by PM and run by the developer.
-
-- [x] Explicit checked declaration boundary and safe incomplete-path refusal.
-- [ ] Original assumptions, exact H and source/wrapper dependency carriers.
-- [ ] Host introduction/elimination and checked owner effect correspondence.
-- [ ] Body-free module/link/specialization correspondence and negatives.
-- [ ] Independent Core/image reconstruction and transformed-contract tests.
-- [ ] Charged checking work, exact/one-short bounds and affected regressions.
-- [ ] Independent review and retained verification of complete F3 scope.
 
 PR [#83](https://github.com/dikini/ash-lang/pull/83) retains the first slice at
 `0c220ea2a0b16afa21977380173d9fc39b4ee1ba` on the milestone branch after independent
@@ -205,7 +230,7 @@ outside this partial delivery; their original criteria stay unchecked.
 
 The selected checkpoint started from retained `284e604` on
 `codex/checked-ffi-f3-selected-evidence`. Its
-[owned plan](plans/checked-ffi-contract-carriers.md#selected-ordinary-implementation-method-checkpoint)
+[owned plan](https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/plans/checked-ffi-contract-carriers.md#selected-ordinary-implementation-method-checkpoint)
 first establishes body-free module-level selected-method/prerequisite controls,
 then tests capture/table erasure against canonical completed facts. It covers
 exact original owner/head/actuals/assumption union, aliases/opaque/re-export routes,
@@ -253,7 +278,7 @@ tree equality. The author partial readback, independent retained-result audit an
 are complete. Capture-root nominal-kind membership, selected parity and the
 assigned TASK-0052 retirement/link cleanup are delivered; whole F3 remains open.
 
-The [constructor-payload checkpoint](plans/checked-ffi-contract-carriers.md#constructor-payload-declaration-closure-checkpoint)
+The [constructor-payload checkpoint](https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/plans/checked-ffi-contract-carriers.md#constructor-payload-declaration-closure-checkpoint)
 starts from that retained commit on `codex/checked-ffi-constructor-closure`.
 Its actual Leaf/Envelope payload-only control passes source, summary, body-free
 consumer, linking, independent Core and identity/fold checks. Missing hidden
@@ -359,7 +384,7 @@ This accepts no whole F3 criterion or connected lifecycle/Core/runtime authority
 PR #96 is retained at `91e6dee0` after independent audit and PM-confirmed partial
 acceptance. Its passive binding/import and legacy-codec refusal prerequisite is
 complete; connected lifecycle was not accepted. The next authorized
-[plan checkpoint](plans/checked-ffi-contract-carriers.md#connected-static-checked-owner-lifecycle-checkpoint)
+[plan checkpoint](https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/plans/checked-ffi-contract-carriers.md#connected-static-checked-owner-lifecycle-checkpoint)
 connects dependency-free Probe<H,R> under an exact lexical host and canonical
 checked_scope, with private owner/request/outcome finish lineage and separately
 retained source continuation. Actual source/body-free consumer/Core/transforms
@@ -398,7 +423,7 @@ The existing generated-host connected F3/F4/F6 trigger still schedules F-core.
 
 PR #97 is retained at `73a982f0` after independent retained-result/readback audit
 and PM-confirmed partial acceptance. The next authorized
-[scalar Current Borrow checkpoint](plans/checked-ffi-contract-carriers.md#static-scalar-current-borrow-checkpoint)
+[scalar Current Borrow checkpoint](https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/plans/checked-ffi-contract-carriers.md#static-scalar-current-borrow-checkpoint)
 adds one opaque Current-to-scalar checked native request solely through its
 owning resource's direct handler. A genuine prepared-positive/binding red
 precedes implementation. Body-free import/re-export, independent Core/transforms,
@@ -421,7 +446,7 @@ GitHub integration and partial acceptance follow; whole F3 and F-core remain ope
 
 PR #98 is retained at `c8a1fee5`; actual retention/partial acceptance and PM
 confirmation are complete. The next authorized
-[checked byte/copy window checkpoint](plans/checked-ffi-contract-carriers.md#checked-byte-and-copy-window-checkpoint)
+[checked byte/copy window checkpoint](https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/plans/checked-ffi-contract-carriers.md#checked-byte-and-copy-window-checkpoint)
 implements all four distinct checked primitives with real initialized State,
 view/Extent/window and any required declared dependency lineage. Source, body-free
 import/re-export, independent Core/transforms and static private-image validation

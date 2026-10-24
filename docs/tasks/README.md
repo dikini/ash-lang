@@ -13,10 +13,6 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
   implements the authorized opt-in F5 library source/state-policy subset under
   accepted CP-0024; protected/native and isolated acceptance remain pending.
 
-- [TASK-0051: Checked FFI Contract Carriers](TASK-0051-checked-ffi-contract-carriers.md)
-  implements F3 under accepted CP-0024; source/summary/Core/image acceptance remains
-  pending until the complete carrier boundary is independently verified.
-
 - [TASK-0050: Checked FFI, Regions, and Scoped Control Program](TASK-0050-checked-ffi-regions-control-program.md)
   coordinates the staged program. Its [plan](plans/checked-ffi-regions-control.md)
   retains the complete acceptance map and checkpoint ownership. M1 has an accepted
@@ -27,6 +23,14 @@ The generic cell product checkpoint is integrated into local `main`. Its
 record the completed transition, Main integration and exact scope.
 [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md)
 remains separate design work.
+
+## Completed source/static work
+
+[TASK-0051: Checked FFI Contract Carriers](TASK-0051-checked-ffi-contract-carriers.md)
+records complete original F3 source/summary/Core/private-image work. The
+[obligation map](evidence/checked-ffi-original-acceptance/README.md) distinguishes
+its evidence from later runtime/native and milestone gates; issue closure follows
+reviewed acceptance retention and readback.
 
 ## ffi-ash closure coordination
 

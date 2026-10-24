@@ -1,0 +1,296 @@
+{
+  "scope": "Complete original F3 source/static acceptance; no language change or runtime/native grant",
+  "retained_product": "8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5",
+  "retained_tree": "4a0332c37ac04b6ba20e5cce4abdaac4b2adeb1a",
+  "independent_audit_sha256": "e6dc7e1c9919c654a98819e3721300ee31fd4e1c3040dc76b5cb57097341f164",
+  "prior_audit": {
+    "retaining_tip": "a3fc751de6ba21f7322ad185694cc2d19cbda61a",
+    "public_url": "https://github.com/dikini/ash-lang/issues/59#issuecomment-6372509002",
+    "audit_sha256": "0a411e89419bff31624e31bcc05ccfb284e8fe82153c9cfd077501bcf87a96dc",
+    "independent_review_sha256": "63df65ae2bb80e35b0f11216bac80c5dc4410f68e89ef16c2726bd3822dff14c",
+    "transfer": "Use its concrete retained boundary map within recorded source/configuration scope, then inspect subsequent admission/image/work deltas and current15251 witnesses; do not claim old gates freshly ran."
+  },
+  "obligations": [
+    {
+      "obligation": "Defining identity, same spelling, opaque aliases and declaration closure",
+      "witness": "PR86 publication donor/stale/allocation/alias/provenance negatives; PR94/95 hidden-kind and constructor payload original-versus-donor controls.",
+      "references": [
+        {
+          "path": "src/resolved/checked_wrapper_tests.rs:169",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/resolved/checked_wrapper_tests.rs#L169"
+        },
+        {
+          "path": "src/resolved/checked_wrapper_tests.rs:230",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/resolved/checked_wrapper_tests.rs#L230"
+        },
+        {
+          "path": "src/resolved/checked_wrapper_tests.rs:312",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/resolved/checked_wrapper_tests.rs#L312"
+        },
+        {
+          "path": "src/resolved/checked_wrapper_tests.rs:590",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/resolved/checked_wrapper_tests.rs#L590"
+        },
+        {
+          "path": "src/core/validate/declaration_closure_tests.rs:50",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/core/validate/declaration_closure_tests.rs#L50"
+        },
+        {
+          "path": "src/core/validate/declaration_closure_tests.rs:87",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/core/validate/declaration_closure_tests.rs#L87"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-ffi-wrappers/verification.json",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-ffi-wrappers/verification.json"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-constructor-closure/final/verification.json",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-constructor-closure/final/verification.json"
+        }
+      ],
+      "qualification": "Discriminating retained summary/import/Core witnesses exist. No concrete missing original identity/opaque test or implementation gap found; these older gates are historical, not fresh15251 passes."
+    },
+    {
+      "obligation": "Imported body-free wrappers, aliases and hidden transitive C/S/H without body reinference",
+      "witness": "PR89 selected methods retain original capture/native prerequisites; PR110 full dependent owner/formal correspondence; PR119 actual renamed five-formal Child/Parent facade checks same publication Arcs, sole Child erasure, fresh intact retry, link, independent Core and identity/fold.",
+      "references": [
+        {
+          "path": "src/resolved/checked_dependency_wrapper_tests.rs:70",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/resolved/checked_dependency_wrapper_tests.rs#L70"
+        },
+        {
+          "path": "src/elaborate/checked_owner_dependency_tests.rs:496",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_owner_dependency_tests.rs#L496"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-ffi-selected/README.md",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-ffi-selected/README.md"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-owner-dependencies/body-free-facade/README.md:9",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-owner-dependencies/body-free-facade/README.md#L9"
+        }
+      ],
+      "qualification": "40997/ce5f2bec and retained PR119 supply this original boundary. No fresh source-absent Statement consumer or combined-facade image is claimed; neither arbitrary cross-product is separately required by the original criterion."
+    },
+    {
+      "obligation": "Complete ordered Type/Row instantiation through Core and private images",
+      "witness": "Fresh15251 Statement nonempty Before/After Rows preserve full original vectors through source/link/Core/transforms/funding (166,399 / 327,680); fresh Child fullRows private reconstruction422387/1314852 and retained-access image548659/1617462; genuine Type-only Statement image626374/2421936 proves new OutputAcquire+offset/StatusTeardown role transport.",
+      "references": [
+        {
+          "path": "src/elaborate/checked_sqlite_dependent_tests.rs:210",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_sqlite_dependent_tests.rs#L210"
+        },
+        {
+          "path": "src/elaborate/checked_owner_dependency_tests.rs:270",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_owner_dependency_tests.rs#L270"
+        },
+        {
+          "path": "src/build/source_resource_image.rs:1061",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/build/source_resource_image.rs#L1061"
+        },
+        {
+          "path": "src/build/source_resource_image.rs:2040",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/build/source_resource_image.rs#L2040"
+        },
+        {
+          "path": "src/build/image.rs:8747",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/build/image.rs#L8747"
+        },
+        {
+          "path": "src/build/image.rs:9274",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/build/image.rs#L9274"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-sqlite-dependent-static/result.json",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-sqlite-dependent-static/result.json"
+        }
+      ],
+      "qualification": "StatementRows image is NOT a direct observed witness. It is not an identified missing original F3 obligation: exact same source-scope/template argument codec, common ArgumentRow tag/decoder and full independent original/kind checks compose with the fresh Row image and new-role positive. No per-profile\u00d7Row\u00d7facade matrix is prescribed. See explicit applicability analysis below."
+    },
+    {
+      "obligation": "Forged independence and hidden captured S/C/H cannot erase authority",
+      "witness": "PR86/89 native/capture/table erasures and canonical two-contract union; PR97 constructed boundary/result/witness denials; PR101 same helper accepts independent Int but refuses Current/view, and primitive wrong-first-H controls. New Statement source/Core status/witness/parent/H mutants pass15251.",
+      "references": [
+        {
+          "path": "src/resolved/checked_wrapper_tests.rs:113",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/resolved/checked_wrapper_tests.rs#L113"
+        },
+        {
+          "path": "src/elaborate/checked_byte_window_tests.rs:731",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_byte_window_tests.rs#L731"
+        },
+        {
+          "path": "src/elaborate/checked_byte_window_tests.rs:704",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_byte_window_tests.rs#L704"
+        },
+        {
+          "path": "src/elaborate/checked_owner_lifecycle_tests.rs:445",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_owner_lifecycle_tests.rs#L445"
+        },
+        {
+          "path": "src/elaborate/checked_owner_lifecycle_tests.rs:965",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_owner_lifecycle_tests.rs#L965"
+        },
+        {
+          "path": "src/core/source_resource/checked_dependency_tests.rs:19",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/core/source_resource/checked_dependency_tests.rs#L19"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-owner-lifecycle/final/verification.json",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-owner-lifecycle/final/verification.json"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-byte-windows/candidates/final-combined-verification/README.md:8",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-byte-windows/candidates/final-combined-verification/README.md#L8"
+        }
+      ],
+      "qualification": "No admitted forgery found. Ordinary State/view helper transport and callbacks remain intentionally unsupported; their refusal is a witness, not a requirement to add those semantics."
+    },
+    {
+      "obligation": "Host-row erasure, lexical H and nearest ordinary-handler precedence",
+      "witness": "Canonical foreign host preserves unrelated outward effect/nearest ordinary handler and rejects latent H escape; copied RequestHostActual/RequestHostRow mutations; ordinary handler cannot simulate native Finish. Fresh15251 exact lexical-host image/directH/non-host Type/Row and semantic donor controls pass.",
+      "references": [
+        {
+          "path": "tests/checked_foreign_host.rs:308",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/tests/checked_foreign_host.rs#L308"
+        },
+        {
+          "path": "tests/checked_foreign_host.rs:349",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/tests/checked_foreign_host.rs#L349"
+        },
+        {
+          "path": "src/core/source_resource/checked_byte_window_core_tests.rs:67",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/core/source_resource/checked_byte_window_core_tests.rs#L67"
+        },
+        {
+          "path": "src/core/source_resource/checked_byte_window_core_tests.rs:98",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/core/source_resource/checked_byte_window_core_tests.rs#L98"
+        },
+        {
+          "path": "src/elaborate/checked_owner_lifecycle_tests.rs:941",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_owner_lifecycle_tests.rs#L941"
+        },
+        {
+          "path": "src/build/checked_owner_dependency_image_tests.rs:91",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/build/checked_owner_dependency_image_tests.rs#L91"
+        }
+      ],
+      "qualification": "No host/effect erasure gap identified. New helper permits only authenticated owner-free direct original H; ordinary closed instances and dependent executable/runtime fences remain. Extra Type/Row coverage uses genuine declared slots, not only arity refusal."
+    },
+    {
+      "obligation": "Stale summaries, transformed native-window order and required source Finish control",
+      "witness": "Stale completed publication refusal; fresh identity-traversed RequestHostActual/Row/NativeOrder negatives in retained PR101; lifecycle required Trace/DiscardUnsafe and original request-specific completion witness. Fresh15251 Statement six/eight hostile Core cases, source continuation denial, alias denial and status disposition/witness regressions pass.",
+      "references": [
+        {
+          "path": "src/resolved/checked_wrapper_tests.rs:169",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/resolved/checked_wrapper_tests.rs#L169"
+        },
+        {
+          "path": "src/elaborate/checked_byte_window_tests.rs:415",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_byte_window_tests.rs#L415"
+        },
+        {
+          "path": "src/core/source_resource/checked_byte_window_core_tests.rs:121",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/core/source_resource/checked_byte_window_core_tests.rs#L121"
+        },
+        {
+          "path": "src/elaborate/checked_owner_lifecycle_tests.rs:533",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_owner_lifecycle_tests.rs#L533"
+        },
+        {
+          "path": "src/elaborate/checked_owner_lifecycle_tests.rs:588",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_owner_lifecycle_tests.rs#L588"
+        },
+        {
+          "path": "src/core/source_resource/checked_dependency_tests.rs:19",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/core/source_resource/checked_dependency_tests.rs#L19"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-sqlite-dependent-static/result.json",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-sqlite-dependent-static/result.json"
+        }
+      ],
+      "qualification": "Static transformed/control obligations have discriminating retained witnesses. Actual runtime consumption/K/group behavior is distinct F4/F5/F7 evidence, not missing static implementation."
+    },
+    {
+      "obligation": "Independent Core/image admission, paid checking and fail-closed partial paths",
+      "witness": "Fresh15251 all18 selected tests and Clippy, genuine complete independent Core/identity/fold/private reconstruction, exact/prefix/one-short/spent/two fresh cuts and semantic-not-Resource donors; dependent original header refuses runtime before entry. Full paid source-header census fixes measured one-unit order dependence without cap change.",
+      "references": [
+        {
+          "path": "src/build/checked_owner_dependency_image_tests.rs:369",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/build/checked_owner_dependency_image_tests.rs#L369"
+        },
+        {
+          "path": "src/build/checked_owner_dependency_image_tests.rs:410",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/build/checked_owner_dependency_image_tests.rs#L410"
+        },
+        {
+          "path": "src/build/checked_owner_dependency_image_tests.rs:535",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/build/checked_owner_dependency_image_tests.rs#L535"
+        },
+        {
+          "path": "src/core/validate.rs:5710",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/core/validate.rs#L5710"
+        },
+        {
+          "path": "src/elaborate/checked_sqlite_dependent_tests.rs:10",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/src/elaborate/checked_sqlite_dependent_tests.rs#L10"
+        },
+        {
+          "path": "docs/tasks/evidence/checked-sqlite-dependent-static/README.md:44",
+          "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/evidence/checked-sqlite-dependent-static/README.md#L44"
+        }
+      ],
+      "qualification": "No uncharged/new authority gap found. Statement generic standalone Resource is honestly classified; mandatory complete startup reconstruction passes under existing 22-byte multiplier. Unsupported initialized-byte dependent children/helper/native routes publish no permission. No whole workspace or native claim."
+    }
+  ],
+  "unchanged_from_prior_audit": {
+    "src/build/source_resource_image.rs": "f684339a93cb9bd10d83756ac997835ad7e9cc2c172250a3b6df7cec00210ae3",
+    "src/resolved/checked_wrapper_tests.rs": "23b31ea0b45eb0f04efa6e201e46dacbbaaff98a576ce193749dabb2af6a1d78",
+    "src/resolved/checked_dependency_wrapper_tests.rs": "c708b5e378e5d900171c07af760588417ced0581297be505c62c2d07f7a465b0",
+    "src/core/source_resource/checked_byte_window_core_tests.rs": "49449e901865f3f1512ad8ea6086c54c136f3b8973bbc5905ac5a9d6a117364f",
+    "src/core/capture.rs": "78f6981bac35f81a7970e8c7fc2179347d2dcbe5359a88efb80a3d5aad689506"
+  },
+  "row_image_composition": {
+    "direct_new_StatementRows_image_observed": false,
+    "actual_new_StatementRows_witness": "15251 phase05 source/link/Core/identity/fold/funding,166399/327680",
+    "actual_common_Row_image_witness": "15251 phase13 genuine fullRows Child private reconstruction422387/1314852; phase14 retainedAccess548659/1617462",
+    "actual_new_role_image_witness": "15251 phase01 Type-only Statement OutputAcquire+offset/StatusTeardown,626374/2421936",
+    "codec_source_proof": "Entire source_resource_image.rs is byte-identical to prior auditedPR119 tip: encode_source_scope encodes every tagged argument; source_scope restores every one and reruns independent SourceResourceScopeNode admission. Common structural_with_depth decoder is byte-identical. Author extraction from its method declaration to the next method declaration hashes to 18130f555cf327d935744630c16cf41e4e7144f391273d94f50a66799fced57e at both retained tips; audit and author extraction boundaries need not share a digest. encode_structural differs only by adding authenticated CheckedQuarantine/CheckedRejectAcquisition preflight formal roles; ArgumentRow/Row paths are unchanged. Existing full-kind/ordered owner/Host and original symbol checks remain.",
+    "decision": "No lost Row field, role-specific Row erasure, unsupported Row image branch or authoritative every-profile cross-product requirement found. This is justified common-codec evidence composition, not a claim the absent direct StatementRows image ran or that an old facade experiment transfers wholesale. No new Row-image test assignment warranted from this audit alone."
+  },
+  "checkpoint_qualification": "Original issue59 and program-planF3 define source/summary/link/Core/private-image correspondence and charged fail-closed admission. TASK0051 owned plan472\u2013475 requires that complete behavior plus independent review, then separately says F-core waits for connectedF4/F6 and acceptedF2. TASK0050:112\u2013113 schedules F-core as the next full-workspace milestone checkpoint, not a new F3-only witness. No current full-workspace success is claimed.",
+  "author_validation": {
+    "method": "Read current original criterion, TASK51, owned/program plans, evidence map and CP24; inspect retained source/receipts, verify all named reference files and five prior-audit byte equalities. No new tests or execution.",
+    "fresh_gate": {
+      "session": 15251,
+      "commands": 19,
+      "distinct_tests": 18,
+      "explicit_ignored": 4,
+      "clippy": "targeted Ash lib/tests",
+      "all_commands_exit": 0
+    },
+    "review": "https://github.com/dikini/ash-lang/pull/126#pullrequestreview-5637406086",
+    "retention": "https://github.com/dikini/ash-lang/pull/126#issuecomment-6381697807",
+    "documentation_candidate_equality": {
+      "base": "8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5",
+      "non_document_files_byte_equal": 707,
+      "build_rs_complete_watched_files_byte_equal": 245,
+      "watched_closure_sha256": "cf6512b2c1fbd0446c4f9d69a91f876b248371ca20628a7be0d5679db9bb4d06",
+      "checks": "Changed Markdown/CommonMark tables and relative links, JSON parsing, removed-plan link audit and git diff --check; no Cargo, formatter or native run."
+    }
+  },
+  "not_claimed": [
+    "Statement nonempty-Row private image direct execution",
+    "Historical component gates freshly executed in 15251",
+    "Dependent runtime/physical admission, actual native lifetime or negative-offset execution",
+    "Connected F-core/full workspace or Main integration"
+  ],
+  "acceptance_workflow": "The acceptance documentation PR still requires independent review and retention, then guarded issue59 readback and PM confirmation. No issue mutation is made by this record.",
+  "completed_plan": {
+    "url": "https://github.com/dikini/ash-lang/blob/8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5/docs/tasks/plans/checked-ffi-contract-carriers.md#L472-L475",
+    "sha256": "72e1d11819c814a38736751b60450bb9031921ed945e73324d5ded282ca6a2bc",
+    "disposition": "Removed from current tree when TASK51 source/static work completed; exact historical plan remains in Git."
+  }
+}
