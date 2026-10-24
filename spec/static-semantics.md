@@ -1071,8 +1071,20 @@ nullable output; nonnull does not establish source acquisition success. Current-
 scalar-status teardown uses the same original opaque owner, has no additional
 input conversions, and retains its total readable consumed/retained outcomes.
 Typed native result representation and the original outcome relation determine
-disposition; a bare status number or consumption flag does not. These additions
-do not admit dependent output acquisition, offset outputs or multioperand Borrow.
+disposition; a bare status number or consumption flag does not.
+
+A separate checked opaque output form retains one original Type formal, distinct
+from its host and owned formals. Its exact ABI order is an Enclosing opaque
+pointer, NUL call-borrow bytes, signed-32 source length, nullable opaque owner
+output, and nullable byte-address offset output, with signed-32 result. The
+source paths are respectively zero, one and two; the offset output selects the
+same original NUL input at ABI position one. Original scalar-equality and
+otherwise outcomes retain the offset's readable/unreadable distinction. The
+original input allocation must remain live through checked offset interpretation;
+source receives only the bounded nullable integer offset. This form does not
+admit additional parents, arbitrary output layouts or multioperand Borrow.
+The complete original Type/Row, host, owner, retained parameter and result-codec
+relations remain mandatory in source binding, headers and private reconstruction.
 
 A checked opaque owner also admits a scalar Borrow whose source domain is the
 exact State application, with one direct Current operand and no view, Access or
@@ -1099,9 +1111,13 @@ retained positions, current forest and complete argument correspondence.
 
 The admitted checked finish request uses void teardown with the exact Current
 State and, for an opaque dependent owner, its declared Enclosing State operands,
-or the independent scalar-status alternative. The scalar-status form has only its exact Current State
-operand and its original total raw-status outcome relation. Neither alternative
-has scalar/NUL input conversion. Symbolic checking follows each declared
+or a scalar-status alternative. The scalar-status form has only its exact Current
+State operand and its original total raw-status outcome relation. A dependent
+scalar-status finish pairs with the bounded dependent output form above, retains
+the same original owner and parent, and has a signed-32 result with one readable,
+unconditional consumed outcome. It adds no parent operand to the native ABI;
+the declared parent remains an authenticated lifetime dependency. Neither finish
+alternative has scalar/NUL input conversion. Symbolic checking follows each declared
 consumed or retained outcome and its authenticated boundary-failure alternative;
 generic source arms
 remain typed and exhaustive. A fallible additional operand cannot borrow this
@@ -1131,6 +1147,16 @@ supplies no authority. Acquisition rejection requires the exact admitted
 acquisition request in the current acquire phase, before publication, including
 an observed null result. Original publication, complete Type/Row arguments and
 copied call/request correspondence are reconstructed independently.
+
+After an admitted consuming dependent scalar-status finish, quarantine may still
+select that owner's exact declared Enclosing parent in the direct finish phase.
+The existing consumed witness must name the same original teardown operation and
+complete actual effect instance. The original consumed fact and request-specific
+FinishedConsumed continuation remain unchanged; denial grants no second finish,
+retry, report or K witness. Current, a consumed State operand, an attempted call
+without its consumed outcome, a retained/boundary outcome, a different request,
+or repeated post-finish denial supplies no such authority. Runtime admission for
+this static relation remains separate.
 
 Independent acquisitions have distinct groups even under one H. An acquisition
 with declared dependencies inherits their one exact group; dependencies spanning

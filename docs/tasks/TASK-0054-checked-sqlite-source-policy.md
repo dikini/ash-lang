@@ -210,3 +210,262 @@ The combined TASK0053 delivery now reconciles runtime and primary static/Core/Le
 The [combined TASK0053 evidence](evidence/checked-owner-core-execution/independent-output-status/README.md) supersedes the current prerequisite's UNRUN note: 64 ordinary behavioral controls pass on `45f53d93`/`35186`, with qualified behavior-only transfer across two root-cfg retention casts, and fresh Clippy plus actual two-role/four-role compile-link selectors pass on `c96a1629`/`31191`. Both profiles refresh all code/runtime/input/artifact/receipt/request identities; no old approval transfers and this is not 66 fresh tests. Genuine independent checked status observation/guard/Finish is distinct from the retained legacy accounting models.
 
 The compile-only sqlite-named C fixture is not actual SQLite behavior or Native/Header conformity. This prerequisite does not render or activate the full library image, dependent Prepare/Finalize/offset output/retained-parent roles, multioperand/copied text, whole E/B or native SQLite L2. The separately authored source/dependent admission work needs reconciliation onto the actual retaining tip and its own common physical carrier/evidence joins. Default bootstrap association/six Missing fields, configured deployment, native/F-core and whole F5 acceptance remain open.
+
+
+## Dependent source and static delivery on retained PR125
+
+The five reviewed source commits are replayed onto retained PR125 `15128ba4` in
+`codex/checked-sqlite-dependent-delivery`. The replay at `3a864e35` preserves all
+15 reviewed source blobs and the retained independent status, header, root and
+guard fixes. This slice connects Connection/arena policy and exact dependent
+Prepare/Finalize originals through source, independent Core and private static
+reconstruction. It adds no dependent runtime, executable-image or physical
+admission; the same-header refusal controls remain required.
+
+The focused gate is 18 exact Rust selectors, including four explicitly ignored
+dependent controls, plus targeted Ash library/test Clippy. All are UNRUN on this
+reconciliation. Existing test helpers now print successful standalone work and
+Core allowance/remaining alongside their exact, short, spent and fresh controls.
+Statement standalone fit is an authored premise awaiting measurement; semantic
+refusal must remain distinct from Resource. No allowance or limit changes.
+
+Dependent native carriers, retained-parent loans/edges, SQL/offset lifetimes,
+post-observation runtime denial, copied/multioperand support and native SQLite
+E/B remain subsequent work. Static acceptance does not grant native authority,
+configured approval, whole F5/F-core acceptance or the milestone/Main gates.
+
+
+### First retained-tip gate findings
+
+Run `56140` stopped at Clippy with three missing-import errors in the private
+image test helper; all 18 selectors were UNRUN. The existing private record
+import was repaired without a visibility or admission change. Run `72620`
+then passed targeted Clippy and selected the first dependent test, which failed
+at Ash syntax before Core, image or work assertions. The remaining 17 selectors
+were UNRUN. Both runs retained equal source/tool maps and reaped owned groups.
+
+The authored Ash dependencies now use current spelling: no comments, one type
+alternative or match arm per logical line, and line boundaries in generated
+consumer/effect blocks. Mutation anchors follow the same source tokens without
+relaxing the semantic assertions. The unsupported `0 - 1` pure-source tail case
+and its paired expected result were removed before any passing execution.
+Negative offsets remain unexercised by these pure traces and required at the
+later common native-offset/Core boundary; no subtraction syntax, builtin or
+new test authority is introduced. All repaired selectors remain UNRUN.
+
+
+### Bounded structural allowance candidate
+
+Run `11599` passed targeted Clippy, then the first dependent selector failed at
+`StructuralDepth { limit: 128 }` before Core/image/work assertions; the remaining
+17 selectors were UNRUN. Lexical and parser diagnostics were empty. The first
+source-order pressure is checked-NUL match (32), Returned block (1), Prepare
+match (32), policy match (32), then tail match attempts 129 weighted units.
+The later six-match Open classifier is estimated at 193, not a measured CST or
+stack peak. Match and nested-pattern weights remain 32 and 8.
+
+The selected bounded candidate changes the shared conservative implementation
+allowance to 256, leaving parser/projection guards, syntax work, source policy,
+State transport and assertions unchanged. Estimated 193 leaves 24.6% headroom.
+This one-constant candidate avoids a DATA helper and lifecycle sequencing
+changes solely to fit 128. It is unverified: existing parser boundary/far-overflow
+and small-stack downstream controls must pass before the same 18 selectors run.
+A stack/safety failure rejects this candidate; there is no automatic second
+increase. DATA-only source flattening remains the alternative. The unchanged historical
+four-match provider fixture is now asserted to project, while a generated
+current-limit-plus-one nested-match source must still refuse with the exact
+StructuralDepth reason before provider checking. The candidate gate includes
+38 existing depth/stack/work controls (including the complete private
+projection test module), this pure syntax regression and the
+18 original selectors, all UNRUN on the new allowance. No result or acceptance
+transfers from the older allowance, and no native or whole F-core gate opens.
+
+
+### Rejected allowance and DATA-only fallback
+
+The single 256 candidate `c45f185b` was rejected by run `62440`: Clippy and
+29 parser/CST controls passed, but the first full-pipeline ADT worker overflowed
+its existing 512 KiB stack and aborted. The second ADT case and the later 26 tests
+were UNRUN; all 18 dependent/regression selectors were never reached. Source,
+tool, executable and lifecycle evidence was preserved. The 128 allowance and
+historical provider fixture expectation are restored exactly; weights, guards
+and safety assertions are unchanged, with no further numeric increase.
+
+The fallback flattens pure status/ASCII classifiers into Boolean-tuple matches.
+A private helper accepts only policy, String and optional readable Int DATA;
+it inspects/copies the tail only for Publish or Empty, preserving contradiction
+short-circuiting before established-owner denial. State, Host, native operands,
+actual effects and request-specific witnesses stay in the resource clauses.
+Flattened lifecycle tuple matches keep at most three concurrent matches with
+two ordinary blocks (about 98 weighted units before small pattern/discriminant
+costs), rather than the rejected fourth match at 129. Existing pure tail traces
+also exercise valid/invalid/unreadable/null tails and refused-policy cases,
+with a mutant that wrongly inspects/adopts tails for a contradictory policy.
+These are authored UNRUN controls, not native or negative-offset acceptance.
+
+
+### Direct canonical State denial
+
+Run `3549` passed Clippy and reached canonical source checking after the DATA
+factoring, then failed `Source(Argument)` at the first Statement quarantine call.
+The source had four typed local aliases of the State builtin; existing selector
+17 deliberately rejects that same alias form and admits only the direct
+canonical builtin. The source now calls `Foreign.checked_quarantine` directly
+at all four Statement sites. Fresh/Finish hostile controls follow those exact
+calls, while the existing direct-positive/alias-negative regression is unchanged.
+No compiler authority fence or controlled-State callable rule is widened.
+Core, image and work assertions were not reached; the later 17 selectors remain
+UNRUN. The repaired original 18-selector gate is still pending.
+
+
+### Readable output and impossible source branches
+
+Run 5423 passed source/header checking, linking and lowering, then failed
+independent Core validation before image or cost checks. The preserved
+canonical-only diagnostics 32895 and 6651 identified the exact rejection:
+`validate_source_byte_call_coverage` found a sealed quarantine type application
+in Statement's unreadable owner-output arm with no authenticated flow-call
+coverage. Both original Prepare outcomes require readable output 3; symbolic
+flow therefore excludes that arm. The global Core coverage guard remains
+unchanged.
+
+Statement now keeps an exhaustive DATA refusal in that impossible arm without
+requesting State-bearing quarantine. Open likewise requires readable owner
+output 1 in every original outcome; its library and source fixture keep the
+DATA refusal without an unreachable acquisition-rejection call. Reachable
+nonnull/null contradiction arms still deny their pending or established group;
+L8 authority, original request witnesses and all hostile controls are unchanged.
+The two diagnostic refs preserve temporary markers, which are excluded from the
+product branch. The focused 18 controls and Clippy must run again; Core/image
+cost, Standalone::Fits, native behavior and negative-offset evidence are not
+claimed by the diagnostics.
+
+
+### Lexical checked-host image correspondence
+
+Run 32518 now passes Statement source checking, independent Core validation,
+ordinary transforms and six hostile Core controls. Measured Core work is
+118,436 of 327,680, leaving 209,244; exact, prefixed, one-short, spent and fresh
+checks reached their assertions. The selector then refuses image construction
+with `Unsupported(OpenNativeInstance)` before standalone restoration or image
+cost measurement. The preserved genuine entry initializes SQLite inside its
+fresh lexical host; that path remains in the test.
+
+The serializer and restorer now reuse the admitted checked symbol's original
+host selection. Only the exact direct lexical H at the original host position
+may remain open in an owner-free checked scalar interpretation. Every other
+Type/Row actual keeps the closed-instance check; ordinary host-free native
+interpretations retain their prior rule. Independent Core still authenticates
+the host binder, canonical NativeHost row, full original vector and non-escape.
+The private image control checks the genuine Initialize path and wrong-H,
+nested-H, extra open Type/Row, owner-bearing and host-free donors, with exact and
+one-short work. Dependent executable/runtime admission remains closed.
+
+The existing Connection Fresh-state negative now calls the canonical quarantine
+builtin directly. Its former local alias hit the earlier ordinary-State-call
+guard and did not establish the intended lifecycle refusal. The original Source
+refusal assertion and canonical positive remain. These changes and all required
+focused controls await current-candidate execution; no standalone fit or image
+allowance result is inferred from the passing Core measurement.
+
+
+### Lexical host identity in the private registry inventory
+
+Run 71238 passed the new lexical-host controls and encoded a 73,353-byte image
+with 36,739 expectation bytes. Standalone restoration then refused
+`Unsupported(RegistryMetadata)` after 138,025 of 327,680 work units. This was a
+semantic refusal, not exhaustion; standalone fit and startup reconstruction
+cost remained unmeasured.
+
+The preserved inventory diagnostic 16477 identified the exact cause. The actual
+mapped lexical host had module provenance and kind Type but was absent from the
+two supplied scope identities. Adding only that host to a separate diagnostic
+inventory made the unchanged subset query succeed with three identities; the
+real query and refusal remained unchanged. Diagnostic work was 2,390 units on a
+separate bounded meter.
+
+Encoder preparation and restoration now inventory mapped lexical host binders
+from actual NativeInterpret nodes alongside the existing scope/window/cell
+binders. The registry's exact count, uniqueness, module and Type-kind checks
+remain unchanged, as do independent Core host authentication/non-escape and
+ordinary executable admission restrictions. Missing, aliased and duplicate host
+records must still refuse the private image inventory. The temporary diagnostic
+is retained on its own branch and excluded from the product delivery. All
+current-candidate image fit, startup work and remaining focused controls still
+require actual execution.
+
+
+### Actual standalone classification for Statement
+
+Run 70839 cleared the image inventory refusal and reached real standalone
+resource exhaustion: `CoreAdmission(TypeWorkExceeded)` at 327,064 used of
+327,680, with 616 units remaining before the denied request. This does not
+measure complete demand. Statement's independent Core validation still fits
+that allowance at 118,436 units; the composite private image restoration is a
+different operation. Clippy and the other 17 selectors were unrun after this
+canonical-first failure.
+
+The plan requires recording actual standalone fit, not promising it. The
+Statement caller now selects the existing `Standalone::Resource` observation;
+its assertions still reject every semantic/setup error. The smaller Child
+baseline remains `Fits`. No default or production allowance changes. The same
+complete startup decode/fact-admission/restoration path and exact, prefixed,
+one-short, spent and fresh controls remain mandatory. For the observed
+73,351-byte image and 36,737 expectation bytes, the existing startup formula
+supplies 2,421,936 units. Complete cost and headroom still require execution;
+classification alone is not a passing gate or runtime/native evidence.
+
+
+### Complete focused source/static result
+
+The preceding pending and failure paragraphs are historical. Based on retained PR125
+`15128ba4`, clean source `2a6812fe` passes actual session `15251`: all 18 distinct
+focused Rust selectors, including four explicitly ignored dependent controls,
+and targeted Ash library/test Clippy (19 commands). No current selector was
+skipped or left unrun. The [evidence record](evidence/checked-sqlite-dependent-static/README.md)
+retains exact commands, inputs, observations, earlier failures and independent
+actual review `5cfa056f`. This is source/static delivery, not native execution.
+
+The genuine Type-only Statement fixture preserves original Connection/Statement,
+H, ordered Type actuals, retained-parent and typed status/offset relations through
+source checking, actual producer checked-header publication, linking, independent
+Core, identity and
+fold transformations, and private image reconstruction. Statement Core uses
+118,437 of 327,680 work units. The separate nonempty-Row Statement fixture
+passes source/link/Core/transforms and funding controls at 166,399 units; it
+does not exercise Statement Rows through private image reconstruction. Original
+request-specific consumption and post-observation Enclosing denial remain
+distinct from Boundary and synthetic Finish. Connection/arena source and pure
+policy controls, direct-versus-alias quarantine refusal, Child dependency and
+borrow regressions all pass. This records the current actual Statement header
+and linked-program boundary; it does not transfer the older Child/facade
+source-absent consumer proof wholesale.
+
+The image repairs restore only the already admitted owner-free checked lexical
+host relation, and account for its actual mapped H in the exact registry
+inventory. Ordinary closed instances, other open Type/Row slots and dependent
+executable/runtime refusal remain unchanged. Successful source-header membership
+queries previously cost four or five units across three lookups because of
+unordered early exit. A full paid census preserves the answer and makes those
+lookups cost six, adding only one or two units without sorting, storage or a
+limit change. Strict exact/prefixed/one-short/spent/fresh controls now pass.
+
+Statement standalone remains Resource under the generic 327,680 allowance; the
+failed attempt does not measure full standalone demand. The private startup reconstruction segment under the existing production
+allowance instead uses 626,374 of its existing 2,421,936 units,
+leaving 1,795,562 (74.14%). The smaller Child retains standalone Fits. Its host
+is also present in complete retained original views, so the new inventory-only
+donors are explicitly scoped to Statement's boundary-only host; all older
+Child controls remain. The rejected structural-depth 256 trial is retained as
+contrary evidence; parser 128 and the original safety tests remain unchanged,
+with ordinary DATA-only source factoring.
+
+Dependent Ledger/executable/physical admission, parent/destination loans and
+edges, copied SQL/offset carriers, multioperand/current borrowing, complete E/B
+policy and actual SQLite/arena behavior remain outstanding. Pure-source tests
+do not exercise a real negative offset; that later Core/runtime value boundary
+is still required. No native callback, generated application, launcher or
+deployment ran. All six conformity fields remain Missing and default association
+is None. Full F-core, milestone workspace and separate Main integration gates
+remain open. This result supplies bounded F3/F5 evidence; it does not check a
+whole criterion.

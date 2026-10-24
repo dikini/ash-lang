@@ -678,3 +678,55 @@ planning history without merging obsolete code to manufacture ancestry.
 TASK-0050 owns this plan until it is superseded or the program closes. Consolidate
 durable conclusions in the appropriate artifacts and then retire this temporary
 plan; do not promote it into a second specification or permanent progress tracker.
+
+
+### Current dependent source/static replay
+
+TASK0054 now replays its five reviewed source commits onto retained PR125
+`15128ba4`, preserving the independent status/runtime fixes. The bounded next
+gate is 18 exact source/Core/private-image and regression selectors plus Ash
+library/test Clippy, all UNRUN. Four ignored dependent controls must be selected
+explicitly. Record actual standalone fit and full Core/private reconstruction
+cost, allowance and exact/short/spent/fresh outcomes without changing limits.
+The genuine dependent header must still refuse runtime Ledger and executable
+admission. This delivery grants no dependent physical/native authority or whole
+SQLite/F-core acceptance; those connected carriers and evidence remain pending.
+
+
+TASK-0054's measured Statement standalone classification is Resource under the
+unchanged generic default (70839); its former Fits label was an unmeasured
+premise. Preserve the smaller Child Fits baseline and the complete existing
+startup decode/fact-admission/restoration work controls. Record actual startup
+cost and margin before claiming this dependent reconstruction segment passes;
+this observation changes no allowance, supported runtime profile or acceptance
+criterion.
+
+
+### Dependent source/static focused gate completed
+
+The preceding UNRUN and unmeasured startup notes are superseded by actual
+`15251` on `2a6812fe`: all 18 distinct selected Rust controls (four explicitly
+ignored) and targeted Ash library/test Clippy pass, with all owned groups
+reaped. [TASK0054 evidence](../evidence/checked-sqlite-dependent-static/README.md)
+records genuine Type-only Statement private-image correspondence, separate
+nonempty-Row Statement source/link/Core/funding controls, hostile controls,
+unchanged runtime/executable refusal, and the current
+Child/Connection/arena regressions. Statement standalone is Resource; actual
+the private startup reconstruction segment costs 626,374 of the existing 2,421,936 units
+(74.14% remaining). No allowance changed.
+
+The one-unit work variation was unordered early-exit source-header lookup; the
+minimal full paid census preserves membership and strict budget controls. The
+new boundary-host inventory donors apply only when the host is not already
+in the fixture's retained original view. The original Child host and all
+original controls remain. The unsafe 256 structural trial is rejected and 128
+restored; no safety test was weakened.
+
+Next acceptance is independent assembled-source/evidence review, root-owned
+publication/integration and guarded partial notes for F3/F5. Full original-case
+F3 mapping is a separate bounded closure audit, not an automatic whole check.
+Connected dependent runtime/leaf/provider/copy/offset/parent-edge work and actual
+native policy remain pending, including a real negative-offset value control.
+The milestone-wide full workspace checkpoint remains pending until connected
+F-core and a supported dependent path are ready; Main integration has a separate
+gate. No configured image identity or approval transfers from this source work.

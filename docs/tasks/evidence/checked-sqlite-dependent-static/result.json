@@ -1,0 +1,597 @@
+{
+  "source": "2a6812fecd44af93914b0a2604a0c268b9eacb6d",
+  "tree": "a8534cd8677694e946cf31bbbe67bf1ee38d4dd1",
+  "base": "15128ba49f4467bbb41b498058e9de056392d913",
+  "actual_handle": 15251,
+  "terminal": 0,
+  "commands": [
+    {
+      "phase": "phase-01",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_source_preserves_original_parent_core_and_transforms",
+        "--",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_source_preserves_original_parent_core_and_transforms"
+      ],
+      "exit_code": 0,
+      "seconds": 84.424,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-01.log",
+        "bytes": 60832,
+        "sha256": "adc24f30cae91c80bbb4c22e67254d79a7df4195a08fe4896e5409a237e1c774"
+      }
+    },
+    {
+      "phase": "phase-02",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--keep-going",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "--tests",
+        "--",
+        "-D",
+        "clippy::all"
+      ],
+      "actual_names": [],
+      "exit_code": 0,
+      "seconds": 90.609,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-02.log",
+        "bytes": 160551,
+        "sha256": "f0ec3645fc773d22004dd591715311bd2ed12da648bda878c07b99f0058b1a42"
+      }
+    },
+    {
+      "phase": "phase-03",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_source_rejects_wrong_host_suspect_finalize_and_fresh_quarantine",
+        "--",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_source_rejects_wrong_host_suspect_finalize_and_fresh_quarantine"
+      ],
+      "exit_code": 0,
+      "seconds": 2.516,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-03.log",
+        "bytes": 60068,
+        "sha256": "6b5670ca47b842001840ba2de817406a3e9deed98b3d670d37fda84c4210ba78"
+      }
+    },
+    {
+      "phase": "phase-04",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_finish_rejects_duplicate_and_retained_witnesses",
+        "--",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_finish_rejects_duplicate_and_retained_witnesses"
+      ],
+      "exit_code": 0,
+      "seconds": 2.791,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-04.log",
+        "bytes": 60052,
+        "sha256": "d2cc3c3c49fd1c52a50d4e24dd6213c9a51a3f893222fc6e316e2db8d61cd6ba"
+      }
+    },
+    {
+      "phase": "phase-05",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_rows_preserve_full_original_vectors",
+        "--",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_rows_preserve_full_original_vectors"
+      ],
+      "exit_code": 0,
+      "seconds": 3.186,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-05.log",
+        "bytes": 60185,
+        "sha256": "132865531d3060fd1d0134ff5562d0f070e8040e6e123166367a472b649e8369"
+      }
+    },
+    {
+      "phase": "phase-06",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_policy_tests::checked_connection_source_links_core_identity_and_fold",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_policy_tests::checked_connection_source_links_core_identity_and_fold"
+      ],
+      "exit_code": 0,
+      "seconds": 2.023,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-06.log",
+        "bytes": 60031,
+        "sha256": "9a6401229cfc9f3e7717126f590e6cc9e2e2d697f56df49c2d515be29c815067"
+      }
+    },
+    {
+      "phase": "phase-07",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_policy_tests::checked_arena_source_links_core_identity_and_fold",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_policy_tests::checked_arena_source_links_core_identity_and_fold"
+      ],
+      "exit_code": 0,
+      "seconds": 1.981,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-07.log",
+        "bytes": 60026,
+        "sha256": "624d11a894b33ec7c09d15a28ad9d96f932c97e325d8fc5e363105575a1f56d4"
+      }
+    },
+    {
+      "phase": "phase-08",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_policy_tests::checked_connection_finish_rejects_switched_disposition_and_boundary",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_policy_tests::checked_connection_finish_rejects_switched_disposition_and_boundary"
+      ],
+      "exit_code": 0,
+      "seconds": 1.967,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-08.log",
+        "bytes": 60044,
+        "sha256": "dea1f649c7365b1b34f1c1c15c799109b381ba67791eff2959f2f1d9d0c75380"
+      }
+    },
+    {
+      "phase": "phase-09",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_policy_tests::checked_policy_trace_is_ordinary_source_without_native_authority",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_policy_tests::checked_policy_trace_is_ordinary_source_without_native_authority"
+      ],
+      "exit_code": 0,
+      "seconds": 2.17,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-09.log",
+        "bytes": 60041,
+        "sha256": "b5f20a9ac9b5dd2571f5c27c3930103e9f03c7c1a4af9c9450adf1a59544da15"
+      }
+    },
+    {
+      "phase": "phase-10",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_pure_prepare_and_tail_policy_traces",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_sqlite_dependent_tests::checked_sqlite_dependent_pure_prepare_and_tail_policy_traces"
+      ],
+      "exit_code": 0,
+      "seconds": 2.222,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-10.log",
+        "bytes": 60040,
+        "sha256": "85237dd135d8560c147b5801ba4ec89e6e515b5e38502b6031570ade1418c527"
+      }
+    },
+    {
+      "phase": "phase-11",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_complete_rows_core_and_budget_controls",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_complete_rows_core_and_budget_controls"
+      ],
+      "exit_code": 0,
+      "seconds": 2.518,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-11.log",
+        "bytes": 60187,
+        "sha256": "138a38174f97aadf9989b65c2e261bcd52a7c397b4da08015fc38d3653a132bc"
+      }
+    },
+    {
+      "phase": "phase-12",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_genuine_parent_donor_core_refuses",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_genuine_parent_donor_core_refuses"
+      ],
+      "exit_code": 0,
+      "seconds": 2.374,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-12.log",
+        "bytes": 60182,
+        "sha256": "48acf7fbbddaff0f956f401b0bc013c59c37bf31003ea86f381cf8a80e5572d9"
+      }
+    },
+    {
+      "phase": "phase-13",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_private_static_image_roundtrip_and_bounds",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_private_static_image_roundtrip_and_bounds"
+      ],
+      "exit_code": 0,
+      "seconds": 4.672,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-13.log",
+        "bytes": 60914,
+        "sha256": "6ce6bf5ce0c0cd9ce233adb9c1bc093da805c858bce547799476df88f5a9095f"
+      }
+    },
+    {
+      "phase": "phase-14",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_retained_access_borrow_requires_exact_window",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_retained_access_borrow_requires_exact_window"
+      ],
+      "exit_code": 0,
+      "seconds": 4.523,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-14.log",
+        "bytes": 60704,
+        "sha256": "c06346d6364bfa203a348179987560d4c8934c8eb0922267f42c4cec0ea6e217"
+      }
+    },
+    {
+      "phase": "phase-15",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_retained_scalar_borrow_keeps_host_and_parent",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_owner_dependency_retained_scalar_borrow_keeps_host_and_parent"
+      ],
+      "exit_code": 0,
+      "seconds": 2.621,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-15.log",
+        "bytes": 60121,
+        "sha256": "87742f95c2810e17fdf6ccf9d5802435d909337208cc43b336514abdf78254e2"
+      }
+    },
+    {
+      "phase": "phase-16",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_output_status_tests::independent_output_status_preserves_originals_through_link_core_and_transforms",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_output_status_tests::independent_output_status_preserves_originals_through_link_core_and_transforms"
+      ],
+      "exit_code": 0,
+      "seconds": 1.924,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-16.log",
+        "bytes": 60055,
+        "sha256": "fc18556dd73f49621754eaa053cbe85040b1c08d2c42e4f1470757e12a7cf571"
+      }
+    },
+    {
+      "phase": "phase-17",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_output_status_tests::independent_status_finish_cannot_swap_disposition_or_boundary_lineage",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_output_status_tests::independent_status_finish_cannot_swap_disposition_or_boundary_lineage"
+      ],
+      "exit_code": 0,
+      "seconds": 1.954,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-17.log",
+        "bytes": 60046,
+        "sha256": "d3bd7ac35d07226edf3358641797efffdeb786ad3a2fe19c910d2f9951a6d9bf"
+      }
+    },
+    {
+      "phase": "phase-18",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_quarantine_requires_declared_enclosing_state_and_exact_host",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_quarantine_requires_declared_enclosing_state_and_exact_host"
+      ],
+      "exit_code": 0,
+      "seconds": 2.088,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-18.log",
+        "bytes": 60119,
+        "sha256": "dc51ed59ef19b440e89189318f437866871b8433a9aa0eec2c39d6fbe70f8ad5"
+      }
+    },
+    {
+      "phase": "phase-19",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--package",
+        "ash",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_required_postrequest_source_continuation_cannot_be_discarded",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "actual_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_required_postrequest_source_continuation_cannot_be_discarded"
+      ],
+      "exit_code": 0,
+      "seconds": 1.817,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-sqlite-dependent-delivery22/phase-19.log",
+        "bytes": 60032,
+        "sha256": "919dd380db2a6c5df40c2ae45883a84b10e946942f0cfdfe067909da0e56d813"
+      }
+    }
+  ],
+  "distinct_tests": 18,
+  "explicit_ignored": 4,
+  "unrun": 0,
+  "measurements": [
+    {
+      "phase": "phase-01",
+      "actual": "checked dependency Core work=118437 allowance=327680 remaining=209243 rows=false donor=false, hostile cases=6; exact/prefix/short/spent/two fresh"
+    },
+    {
+      "phase": "phase-01",
+      "actual": "checked dependency standalone refusal used=327064 limit=327680 actual=CoreAdmission(TypeWorkExceeded)"
+    },
+    {
+      "phase": "phase-01",
+      "actual": "checked dependency reconstruction-segment work=626374 allowance=2421936 remaining=1795562 remaining_percent=74.14; exact/prefix/short/spent/two fresh, erased/substituted retained parameter and wrong Host refuse; no executable binding/native entry"
+    },
+    {
+      "phase": "phase-05",
+      "actual": "checked dependency Core work=166399 allowance=327680 remaining=161281 rows=true donor=false, hostile cases=8; exact/prefix/short/spent/two fresh"
+    },
+    {
+      "phase": "phase-11",
+      "actual": "checked dependency Core work=87682 allowance=327680 remaining=239998 rows=true donor=false, hostile cases=8; exact/prefix/short/spent/two fresh"
+    },
+    {
+      "phase": "phase-12",
+      "actual": "checked dependency Core work=77931 allowance=327680 remaining=249749 rows=false donor=true, hostile cases=7; exact/prefix/short/spent/two fresh"
+    },
+    {
+      "phase": "phase-13",
+      "actual": "checked dependency standalone fits used=251907 limit=327680"
+    },
+    {
+      "phase": "phase-13",
+      "actual": "checked dependency reconstruction-segment work=322392 allowance=1209164 remaining=886772 remaining_percent=73.34; exact/prefix/short/spent/two fresh, erased/substituted retained parameter and wrong Host refuse; no executable binding/native entry"
+    },
+    {
+      "phase": "phase-13",
+      "actual": "checked dependency standalone refusal used=327680 limit=327680 actual=Validation(ValidationError { reason: Resource, node: None, cause: None })"
+    },
+    {
+      "phase": "phase-13",
+      "actual": "checked dependency reconstruction-segment work=422387 allowance=1314852 remaining=892465 remaining_percent=67.88; exact/prefix/short/spent/two fresh, erased/substituted retained parameter and wrong Host refuse; no executable binding/native entry"
+    },
+    {
+      "phase": "phase-14",
+      "actual": "checked dependency standalone refusal used=327680 limit=327680 actual=Resource"
+    },
+    {
+      "phase": "phase-14",
+      "actual": "checked dependency reconstruction-segment work=548659 allowance=1617462 remaining=1068803 remaining_percent=66.08; exact/prefix/short/spent/two fresh, erased/substituted retained parameter and wrong Host refuse; no executable binding/native entry"
+    }
+  ],
+  "qualification": "Fresh complete focused Rust source/Core/private-DATA gate, not workspace/native/dependent-runtime/executable acceptance. No selected C callback/application/launcher. Negative offset real-value boundary remains outstanding."
+}

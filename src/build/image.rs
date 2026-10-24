@@ -10797,7 +10797,9 @@ impl Encoder<'_> {
                 let start = self.image.interpretations.len();
                 for interpretation in boundary.interpretations() {
                     charge(self.work, 1)?;
-                    admit_closed_native_instance(interpretation.effect(), self.work)?;
+                    admit_native_interpretation_instance(
+                        interpretation.effect(), interpretation.symbol(), boundary.host(), self.work,
+                    )?;
                     if boundary.host().is_some() {
                         if interpretation.symbol().prepared().checked_contract().is_none() {
                             return Err(ImageFailure::InvalidRecord);
@@ -10866,6 +10868,70 @@ impl Encoder<'_> {
             _ => Err(ImageFailure::Unsupported(Unsupported::EffectOperation)),
         }
     }
+}
+
+// A lexical checked host is the sole permitted open actual. This restores
+// representation only; final Core independently checks the binder and escape.
+fn admit_native_interpretation_instance(
+    instance: &crate::types::EffectInstance,
+    symbol: &crate::foreign::checked_source::CheckedForeignSymbol,
+    host: Option<crate::core::effect::ForeignHostIdentity>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ImageFailure> {
+    let Some(host) = host else {
+        return admit_closed_native_instance(instance, work);
+    };
+    charge(work, 3)?;
+    if symbol.owner().is_some()
+        || !matches!(
+            symbol.symbol().call(),
+            crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
+        )
+    {
+        return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+    }
+    let selected = crate::foreign::checked_source::checked_host_instance(symbol, instance, work)
+        .map_err(|error| {
+            if error.is_resource_exhaustion() {
+                ImageFailure::Resource
+            } else {
+                ImageFailure::RegistryAdmission
+            }
+        })?
+        .ok_or(ImageFailure::InvalidRecord)?;
+    if selected.effect() != host.effect()
+        || !matches!(selected.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == host.identity())
+    {
+        return Err(ImageFailure::InvalidRecord);
+    }
+    let contract = symbol
+        .prepared()
+        .checked_contract()
+        .ok_or(ImageFailure::InvalidRecord)?;
+    let position = contract
+        .symbols()
+        .get(symbol.symbol_index())
+        .ok_or(ImageFailure::InvalidRecord)?
+        .host_parameter();
+    charge(work, instance.arguments().len())?;
+    for (index, argument) in instance.arguments().iter().enumerate() {
+        if index == position {
+            continue;
+        }
+        let open =
+            crate::types::visit_argument_structure_with_budget(argument, work, |component, _| {
+                Ok(matches!(
+                    component,
+                    crate::types::TypeStructureNode::Type(Type::Variable(_) | Type::Inference(_))
+                        | crate::types::TypeStructureNode::Tail(_)
+                ))
+            })
+            .map_err(|()| ImageFailure::Resource)?;
+        if open {
+            return Err(ImageFailure::Unsupported(Unsupported::OpenNativeInstance));
+        }
+    }
+    Ok(())
 }
 
 fn admit_closed_native_instance(
@@ -12297,6 +12363,12 @@ impl Decoder<'_> {
                 let acquisition = self.cell_acquisition(acquisition)?;
                 push(&mut identities, acquisition.identity, self.work)?;
             }
+            if let NodeTag::NativeInterpret { host: Some(host), .. } = node.tag {
+                let identity = self.type_variable(host.identity)?;
+                if identity.module().is_some() {
+                    push(&mut identities, identity, self.work)?;
+                }
+            }
         }
         if !registry
             .native_image_subset_with_source_scopes(&identities, &original_variables, self.work)
@@ -12853,6 +12925,12 @@ impl Decoder<'_> {
             } => {
                 let body = *get(nodes, body)?;
                 let records = interpretations.get(&self.image.interpretations)?;
+                let host = host.map(|host| -> Result<_, ImageFailure> {
+                    Ok(crate::core::effect::ForeignHostIdentity {
+                        identity: self.type_variable(host.identity)?,
+                        effect: self.effect_identity(host.effect)?,
+                    })
+                }).transpose()?;
                 charge(self.work, records.len())?;
                 let mut interpretations = Vec::new();
                 interpretations
@@ -12861,8 +12939,8 @@ impl Decoder<'_> {
                 for record in records {
                     charge(self.work, 2)?;
                     let effect = self.structural(record.effect)?.instance()?;
-                    admit_closed_native_instance(&effect, self.work)?;
                     let symbol = get(symbols, record.symbol)?;
+                    admit_native_interpretation_instance(&effect, symbol, host, self.work)?;
                     if host.is_some() {
                         if symbol.prepared().checked_contract().is_none() {
                             return Err(ImageFailure::InvalidRecord);
@@ -12911,12 +12989,6 @@ impl Decoder<'_> {
                         Arc::clone(symbol),
                     ));
                 }
-                let host = host.map(|host| -> Result<_, ImageFailure> {
-                    Ok(crate::core::effect::ForeignHostIdentity {
-                        identity: self.type_variable(host.identity)?,
-                        effect: self.effect_identity(host.effect)?,
-                    })
-                }).transpose()?;
                 return builder
                     .with_caller_type_work(self.work, |builder| {
                         builder.native_interpret_with_host(
@@ -13330,6 +13402,13 @@ fn encode_native_preparation(
                     }
                 }
             }
+            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::NativeInterpret(boundary)) => {
+                if let Some(host) = boundary.host()
+                    && host.identity().module().is_some()
+                {
+                    push(&mut identities, host.identity(), work)?;
+                }
+            }
             crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resource(
                 scope,
             )) => {
@@ -13529,8 +13608,9 @@ pub(crate) fn checked_owner_dependency_image_controls(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(ModuleId, Arc<SourceFile>)],
     standalone: super::CheckedDependencyStandalone,
+    boundary_only_host_inventory: bool,
 ) {
-    source_resource_image::checked_owner_dependency_image_controls(program, provenance, standalone);
+    source_resource_image::checked_owner_dependency_image_controls(program, provenance, standalone, boundary_only_host_inventory);
 }
 
 #[cfg(test)]

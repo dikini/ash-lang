@@ -144,7 +144,7 @@ fn checked_owner_dependency_missing_retains_refuses_original_binding() {
     binding_refuses(&DEPENDENT.replace("        retains C\n", ""));
 }
 
-fn binding_refuses(source: &str) {
+pub(super) fn binding_refuses(source: &str) {
     use crate::resolve::{DependencyExports, ResolveModuleError, ResolveReason};
     let graph = graph_with_entry(source, None);
     let mut checked = Vec::<CheckedModule>::new();
@@ -269,9 +269,9 @@ fn checked_owner_dependency_genuine_parent_donor_core_refuses() {
 #[test]
 fn checked_owner_dependency_private_static_image_roundtrip_and_bounds() {
     let (core, provenance) = linked_core(DEPENDENT, CONSUMER);
-    crate::build::checked_owner_dependency_image_controls(&core, &provenance, crate::build::CheckedDependencyStandalone::Fits);
+    crate::build::checked_owner_dependency_image_controls(&core, &provenance, crate::build::CheckedDependencyStandalone::Fits, false);
     let (row_core, row_provenance) = linked_core(&row_source_from(DEPENDENT), CONSUMER);
-    crate::build::checked_owner_dependency_image_controls(&row_core, &row_provenance, crate::build::CheckedDependencyStandalone::Resource);
+    crate::build::checked_owner_dependency_image_controls(&row_core, &row_provenance, crate::build::CheckedDependencyStandalone::Resource, false);
 }
 
 fn scalar_borrow_source() -> String {
@@ -439,7 +439,7 @@ fn checked_owner_dependency_retained_access_borrow_requires_exact_window() {
         row_request,
         "perform QueryChild<{| After}, W, H, C, S, {| Before}>",
     ));
-    crate::build::checked_owner_dependency_image_controls(&row_core, &row_provenance, crate::build::CheckedDependencyStandalone::Resource);
+    crate::build::checked_owner_dependency_image_controls(&row_core, &row_provenance, crate::build::CheckedDependencyStandalone::Resource, false);
     for (before, after) in [
         (
             "copy_window ChildView<W, H, C, S>",
