@@ -62,7 +62,8 @@ The complete cleanup allowance is the opening runner charge plus checked
 `6 * cargo_bytes`: both bounded streams each pay two units per read byte and
 one per log-copy byte after process settlement. Nonempty inert stdout/stderr
 exercise that same shared accounting path at exact, one-short, spent and fresh
-funding; overflow refuses. These controls remain UNRUN.
+funding; overflow refuses. They were initially authored UNRUN; the focused
+receipt below records their subsequent verification.
 
 ## Configured source variant remains pending
 
@@ -100,18 +101,22 @@ cannot pass in a Some variant. The later configured assignment must explicitly
 select appropriate source tests and exercise actual protected refusals and
 configured admission, without a bypass or relabeling the old default result.
 
-## Frozen verification proposal: UNRUN
+## Focused verification and remaining gates
 
-No compiler, formatter, Cargo, test, helper, probe, host write, installation,
-native output or GitHub write ran for this preparation. Only source/data review,
-diff checks and documentation/data checks apply to this candidate. Root owns the
-sole build slot and must first reconcile this source onto the actual retained
-tip of the current static delivery, including its status/root/guard repairs.
-Any source or configuration movement invalidates a future artifact freeze.
+The initial source preparation ran no executable checks. Root subsequently
+assigned the sole build lane after reconciliation onto retained PR126 `8f0c5f46`.
+The [focused receipt](../evidence/checked-owner-core-execution/configured-native-preparation/README.md)
+records 36 distinct passing tests, targeted Ash Clippy and the three actual
+nonexecuting compile/link selectors on frozen source `531e7677`. It keeps
+ignored selectors, baseline formatting/warnings, cache reuse and transient-input
+limits explicit. No prepared output/native callback, helper/context probe,
+installation or protected approval ran. Later docs-only `52d4e122` reconciliation
+requires explicit source/tool/configuration equality before publication; a Git
+SHA alone neither invalidates nor transfers these observations.
 
-After root grants the build slot, format and independently review the integrated
-source, then use the existing shared target/cache, offline/locked settings and
-one Cargo job. Proposed selectors, all **UNRUN** here:
+The focused sequence used the existing shared target/cache, offline/locked
+settings and one Cargo job. The receipt records exact performed commands and
+counts for these selectors; the full checkpoint remains a separate assignment:
 
 1. `build::checked_root_environment::tests::launcher_command_has_closed_static_recipe_without_owner_root_cfg`;
    existing closed-config/tool donors; exact/short/spent/fresh work and relative
