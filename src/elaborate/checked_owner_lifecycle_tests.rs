@@ -1063,3 +1063,6 @@ pub(crate) fn checked_owner_violation_program() -> (
 
 #[path = "checked_output_status_tests.rs"]
 mod checked_output_status_tests;
+
+#[path = "checked_sqlite_policy_tests.rs"]
+mod checked_sqlite_policy_tests;
