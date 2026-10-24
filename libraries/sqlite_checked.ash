@@ -195,8 +195,7 @@ pub resource Statement<H, C, S> {
                         (PreparePublish, true) => Acquired(state, (connection, status))
                         (PreparePublish, false) => Refused InvalidTail
                         _ => {
-                            let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
-                            let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)
+                            let denied = Foreign.checked_quarantine (enclosing, Foreign.UnexpectedStatus status)
                             Refused (PrepareContradiction status)
                         }
                     }
@@ -208,15 +207,13 @@ pub resource Statement<H, C, S> {
                         (PrepareEmpty, false) => Refused InvalidTail
                         (PrepareNativeFailure, _) => Refused (NativePrepareError status)
                         _ => {
-                            let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
-                            let denied = quarantine (enclosing, Foreign.ContradictoryNativeResult(status, 0))
+                            let denied = Foreign.checked_quarantine (enclosing, Foreign.ContradictoryNativeResult(status, 0))
                             Refused (PrepareContradiction status)
                         }
                     }
                 }
                 Foreign.CheckedReturned((status, Foreign.Unreadable, _)) => {
-                    let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
-                    let denied = quarantine (enclosing, Foreign.ContradictoryNativeResult(status, 1))
+                    let denied = Foreign.checked_quarantine (enclosing, Foreign.ContradictoryNativeResult(status, 1))
                     Refused (PrepareContradiction status)
                 }
                 Foreign.CheckedConversionFailed(error) => Refused (PrepareConversion error)
@@ -232,8 +229,7 @@ pub resource Statement<H, C, S> {
                 FinalizeNativeError => Foreign.FinishedConsumed (Foreign.FinishError (NativeFinalizeError status))
                 FinalizeReject => {
                     let enclosing = perform ConnectionOps<Connection<H, C>, ConnectionState<H, C>>.borrow connection
-                    let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
-                    let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)
+                    let denied = Foreign.checked_quarantine (enclosing, Foreign.UnexpectedStatus status)
                     Foreign.FinishedConsumed (Foreign.FinishError (FinalizeContradiction status))
                 }
             }

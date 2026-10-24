@@ -302,3 +302,17 @@ costs), rather than the rejected fourth match at 129. Existing pure tail traces
 also exercise valid/invalid/unreadable/null tails and refused-policy cases,
 with a mutant that wrongly inspects/adopts tails for a contradictory policy.
 These are authored UNRUN controls, not native or negative-offset acceptance.
+
+
+### Direct canonical State denial
+
+Run `3549` passed Clippy and reached canonical source checking after the DATA
+factoring, then failed `Source(Argument)` at the first Statement quarantine call.
+The source had four typed local aliases of the State builtin; existing selector
+17 deliberately rejects that same alias form and admits only the direct
+canonical builtin. The source now calls `Foreign.checked_quarantine` directly
+at all four Statement sites. Fresh/Finish hostile controls follow those exact
+calls, while the existing direct-positive/alias-negative regression is unchanged.
+No compiler authority fence or controlled-State callable rule is widened.
+Core, image and work assertions were not reached; the later 17 selectors remain
+UNRUN. The repaired original 18-selector gate is still pending.

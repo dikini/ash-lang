@@ -99,7 +99,7 @@ fn checked_sqlite_dependent_source_rejects_wrong_host_suspect_finalize_and_fresh
             "perform Prepare<S, C, H>.call (enclosing, sql, length)",
         ),
         (
-            "                        let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)",
+            "                        let denied = Foreign.checked_quarantine (enclosing, Foreign.UnexpectedStatus status)",
             "let denied = perform Finalize<H, C, S>.call state",
         ),
     ] {
@@ -112,8 +112,8 @@ fn checked_sqlite_dependent_source_rejects_wrong_host_suspect_finalize_and_fresh
         );
     }
     // Keep the mutant well typed so only Fresh-vs-Enclosing authority can reject it.
-    let from = "                        let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                        let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)";
-    let to = "                        let quarantine : (StatementState<H, C, S>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                        let denied = quarantine (state, Foreign.UnexpectedStatus status)";
+    let from = "                        let denied = Foreign.checked_quarantine (enclosing, Foreign.UnexpectedStatus status)";
+    let to = "                        let denied = Foreign.checked_quarantine (state, Foreign.UnexpectedStatus status)";
     assert_eq!(SOURCE.matches(from).count(), 1);
     let error = check_graph(&graph_with_entry(&SOURCE.replace(from, to), Some(ENTRY)))
         .expect_err("well-typed Fresh State is not Enclosing quarantine authority");
@@ -141,12 +141,12 @@ fn checked_sqlite_dependent_finish_rejects_duplicate_and_retained_witnesses() {
             "Foreign.FinishedRetained(state, NativeFinalizeError status)",
         ),
         (
-            "                    let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                    let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)",
-            "                    let quarantine : (StatementState<H, C, S>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                    let denied = quarantine (state, Foreign.UnexpectedStatus status)",
+            "let enclosing = perform ConnectionOps<Connection<H, C>, ConnectionState<H, C>>.borrow connection\n                    let denied = Foreign.checked_quarantine (enclosing, Foreign.UnexpectedStatus status)",
+            "let enclosing = perform ConnectionOps<Connection<H, C>, ConnectionState<H, C>>.borrow connection\n                    let denied = Foreign.checked_quarantine (state, Foreign.UnexpectedStatus status)",
         ),
         (
-            "                    let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)\n                    Foreign.FinishedConsumed (Foreign.FinishError (FinalizeContradiction status))",
-            "                    let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)\n                    let duplicate = perform Finalize<H, C, S>.call state\n                    Foreign.FinishedConsumed (Foreign.FinishError (FinalizeContradiction status))",
+            "                    let denied = Foreign.checked_quarantine (enclosing, Foreign.UnexpectedStatus status)\n                    Foreign.FinishedConsumed (Foreign.FinishError (FinalizeContradiction status))",
+            "                    let denied = Foreign.checked_quarantine (enclosing, Foreign.UnexpectedStatus status)\n                    let duplicate = perform Finalize<H, C, S>.call state\n                    Foreign.FinishedConsumed (Foreign.FinishError (FinalizeContradiction status))",
         ),
         (
             "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason",
@@ -154,7 +154,7 @@ fn checked_sqlite_dependent_finish_rejects_duplicate_and_retained_witnesses() {
         ),
         (
             "Foreign.BoundaryFailed(reason) => Foreign.FinishedBoundary reason",
-            "Foreign.BoundaryFailed(reason) => {\n                let enclosing = perform ConnectionOps<Connection<H, C>, ConnectionState<H, C>>.borrow connection\n                let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                let denied = quarantine (enclosing, Foreign.UnexpectedStatus 21)\n                Foreign.FinishedBoundary reason\n            }",
+            "Foreign.BoundaryFailed(reason) => {\n                let enclosing = perform ConnectionOps<Connection<H, C>, ConnectionState<H, C>>.borrow connection\n                let denied = Foreign.checked_quarantine (enclosing, Foreign.UnexpectedStatus 21)\n                Foreign.FinishedBoundary reason\n            }",
         ),
     ] {
         assert_eq!(statement.matches(from).count(), 1);
