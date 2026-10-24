@@ -68,6 +68,7 @@ fn checked_sqlite_dependent_source_preserves_original_parent_core_and_transforms
         &core,
         &provenance,
         crate::build::CheckedDependencyStandalone::Resource,
+        true, // Entry-local H is accounted for only by the boundary host record.
     );
     // Native/runtime admission remains deliberately closed for the same real header.
     crate::foreign::assert_dependent_header_refused_before_entry(parent, child);

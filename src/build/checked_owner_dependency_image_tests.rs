@@ -61,6 +61,7 @@ pub(crate) fn controls(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(super::super::ModuleId, Arc<super::super::SourceFile>)],
     standalone: crate::build::CheckedDependencyStandalone,
+    boundary_only_host_inventory: bool,
 ) {
     // A fixture label selects the same already-authenticated dependent header
     // for hostile mutation; it supplies no binding or restoration authority.
@@ -431,9 +432,11 @@ pub(crate) fn controls(
             }
         }
     }
-    if let Some(slot) = canonical.nodes.iter().position(|node| matches!(
-        node.tag, super::super::NodeTag::NativeInterpret { host: Some(_), .. }
-    )) {
+    if boundary_only_host_inventory {
+        // This fixture's entry-local H is absent from retained template views.
+        let slot = canonical.nodes.iter().position(|node| matches!(
+            node.tag, super::super::NodeTag::NativeInterpret { host: Some(_), .. }
+        )).expect("boundary-only host inventory requires the genuine host binder");
         for mutation in 0..3 {
             let mut hostile_work = startup();
             let mut hostile = PureImage::decode_bytes(&bytes, &mut hostile_work).unwrap();

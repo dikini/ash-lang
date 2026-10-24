@@ -13608,8 +13608,9 @@ pub(crate) fn checked_owner_dependency_image_controls(
     program: &crate::core::ValidatedEffectProgram,
     provenance: &[(ModuleId, Arc<SourceFile>)],
     standalone: super::CheckedDependencyStandalone,
+    boundary_only_host_inventory: bool,
 ) {
-    source_resource_image::checked_owner_dependency_image_controls(program, provenance, standalone);
+    source_resource_image::checked_owner_dependency_image_controls(program, provenance, standalone, boundary_only_host_inventory);
 }
 
 #[cfg(test)]
