@@ -252,3 +252,30 @@ and its paired expected result were removed before any passing execution.
 Negative offsets remain unexercised by these pure traces and required at the
 later common native-offset/Core boundary; no subtraction syntax, builtin or
 new test authority is introduced. All repaired selectors remain UNRUN.
+
+
+### Bounded structural allowance candidate
+
+Run `11599` passed targeted Clippy, then the first dependent selector failed at
+`StructuralDepth { limit: 128 }` before Core/image/work assertions; the remaining
+17 selectors were UNRUN. Lexical and parser diagnostics were empty. The first
+source-order pressure is checked-NUL match (32), Returned block (1), Prepare
+match (32), policy match (32), then tail match attempts 129 weighted units.
+The later six-match Open classifier is estimated at 193, not a measured CST or
+stack peak. Match and nested-pattern weights remain 32 and 8.
+
+The selected bounded candidate changes the shared conservative implementation
+allowance to 256, leaving parser/projection guards, syntax work, source policy,
+State transport and assertions unchanged. Estimated 193 leaves 24.6% headroom.
+This one-constant candidate avoids a DATA helper and lifecycle sequencing
+changes solely to fit 128. It is unverified: existing parser boundary/far-overflow
+and small-stack downstream controls must pass before the same 18 selectors run.
+A stack/safety failure rejects this candidate; there is no automatic second
+increase. DATA-only source flattening remains the alternative. The unchanged historical
+four-match provider fixture is now asserted to project, while a generated
+current-limit-plus-one nested-match source must still refuse with the exact
+StructuralDepth reason before provider checking. The candidate gate includes
+38 existing depth/stack/work controls (including the complete private
+projection test module), this pure syntax regression and the
+18 original selectors, all UNRUN on the new allowance. No result or acceptance
+transfers from the older allowance, and no native or whole F-core gate opens.

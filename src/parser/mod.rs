@@ -29,7 +29,7 @@ use crate::{
 /// interface, `Type`, and `AtomicType` wrappers does not. This is an
 /// implementation resource budget, not an Ash language nesting restriction;
 /// later fully iterative representations may replace it.
-pub const STRUCTURAL_DEPTH_LIMIT: usize = 128;
+pub const STRUCTURAL_DEPTH_LIMIT: usize = 256;
 
 pub(super) const PATTERN_STRUCTURAL_WEIGHT: usize = 8;
 pub(super) const MATCH_STRUCTURAL_WEIGHT: usize = 32;
