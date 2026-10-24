@@ -190,7 +190,7 @@ impl<'program> RootAdmission<'program> {
             charge_entry(work, 2)?;
             return Ok(matches!(&self.program.nodes()[index].kind,
                 crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(authorized))
-                if std::ptr::eq(scope, authorized)));
+                if std::ptr::eq(scope, authorized.as_ref())));
         }
         Ok(false)
     }
