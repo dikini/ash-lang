@@ -83,7 +83,7 @@ pub(crate) enum TargetScalar {
 }
 
 impl TargetScalar {
-    const fn rust_type(self) -> &'static str {
+    pub(super) const fn rust_type(self) -> &'static str {
         match self {
             Self::I8 => "i8",
             Self::U8 => "u8",
@@ -95,7 +95,7 @@ impl TargetScalar {
         }
     }
 
-    const fn value_variant(self) -> &'static str {
+    pub(super) const fn value_variant(self) -> &'static str {
         match self {
             Self::I8 => "I8",
             Self::U8 => "U8",
@@ -324,6 +324,30 @@ impl TargetResolvedForeignBridge {
                 TargetScalar::USize64 => "size_t",
             }
         }
+        // Only this already authenticated independent output shape adds pointer
+        // forms. Inspect its original and target coordinates before rendering;
+        // unsupported offsets/sentinels never inherit a generic pointer grant.
+        let output_acquire = self.call == TargetBridgeCall::OwnerOutputAcquire;
+        if output_acquire {
+            // Twelve original-shape units plus eight fixed target/result and
+            // checked-profile inspections precede all new correspondence work.
+            work.charge(20).map_err(|()| ReceiptFailure::Resource)?;
+            let original_result = match self.symbol.symbol().result() {
+                PreparedAbiResult::Scalar(representation) => TargetResult::Scalar(
+                    target_scalar(representation, self.span)
+                        .map_err(|_| ReceiptFailure::Association)?,
+                ),
+                _ => return Err(ReceiptFailure::Association),
+            };
+            if self.symbol.prepared().checked_contract().is_none()
+                || !crate::foreign::checked_source::independent_output_acquire(self.symbol.symbol())
+                || self.operands.as_ref() != [TargetOperand::Address, TargetOperand::OwnerOutput,
+                    TargetOperand::Scalar(TargetScalar::I32), TargetOperand::Address]
+                || self.result != original_result
+            {
+                return Err(ReceiptFailure::Association);
+            }
+        }
         let result = match self.result {
             TargetResult::Void => "void",
             TargetResult::Scalar(s) => scalar(s),
@@ -336,6 +360,8 @@ impl TargetResolvedForeignBridge {
             }
             args.push_str(match operand {
                 TargetOperand::Scalar(s) => scalar(*s),
+                TargetOperand::Address if output_acquire && matches!(i, 0 | 3) => "const unsigned char *",
+                TargetOperand::OwnerOutput if output_acquire && i == 1 => "void **",
                 TargetOperand::Address => "void *",
                 _ => return Err(ReceiptFailure::Association),
             });
@@ -1190,6 +1216,48 @@ foreign library Memory {
 main : Unit -> Int
 main () = 42
 "#;
+
+    #[test]
+    fn output_header_assertion_binds_original_operands_result_and_exact_work() {
+        use super::super::checked_receipt::ReceiptFailure;
+        let (program, sources) = crate::elaborate::checked_owner_passive_program_for_source(
+            include_str!("../../tests/fixtures/checked-owner-lifecycle/output-status.ash"),
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n",
+        );
+        let mut image = super::super::image::encode_checked_preparation(
+            &program, &sources, super::super::host::NATIVE_TARGET,
+            &mut super::super::gas::preparation(&sources, program.node_count()).unwrap(),
+        ).unwrap();
+        let plan = &mut image.bridges.iter_mut()
+            .find(|bridge| bridge.plan.call == TargetBridgeCall::OwnerOutputAcquire).unwrap().plan;
+        let mut measured = TypeWorkBudget::default();
+        let assertion = plan.c_header_assertion(0, &mut measured).unwrap();
+        assert_eq!(assertion, "_Static_assert(__builtin_types_compatible_p(__typeof__(&sqlite3_open_v2), int32_t (*)(const unsigned char *, void **, int32_t, const unsigned char *)), \"bridge 0 prototype\");\n");
+        let cost = measured.used();
+        for prefix in [0, 7] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            assert_eq!(plan.c_header_assertion(0, &mut exact).unwrap(), assertion);
+            assert_eq!(exact.used(), prefix + cost);
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(plan.c_header_assertion(0, &mut short), Err(ReceiptFailure::Resource));
+        }
+        for replacement in [TargetOperand::OffsetOutput, TargetOperand::FunctionAddressSentinel] {
+            let original = std::mem::replace(&mut plan.operands[1], replacement);
+            assert_eq!(plan.c_header_assertion(0, &mut TypeWorkBudget::default()), Err(ReceiptFailure::Association));
+            plan.operands[1] = original;
+        }
+        let flags = std::mem::replace(&mut plan.operands[2], TargetOperand::Scalar(TargetScalar::U32));
+        assert_eq!(plan.c_header_assertion(0, &mut TypeWorkBudget::default()), Err(ReceiptFailure::Association));
+        plan.operands[2] = flags;
+        for replacement in [TargetResult::Void, TargetResult::Scalar(TargetScalar::U32)] {
+            let original = std::mem::replace(&mut plan.result, replacement);
+            assert_eq!(plan.c_header_assertion(0, &mut TypeWorkBudget::default()), Err(ReceiptFailure::Association));
+            plan.result = original;
+        }
+        assert_eq!(plan.c_header_assertion(0, &mut TypeWorkBudget::default()).unwrap(), assertion);
+    }
 
     #[test]
     fn opaque_owner_bridges_use_separate_readiness_and_consuming_callback_roles() {

@@ -19,6 +19,23 @@ impl Integer {
         self.0.bits().div_ceil(8)
     }
 
+    /// Copy an exact little-endian unsigned magnitude into already funded
+    /// storage. The caller must bound/pay the actual length before invoking.
+    /// No allocation or whole-integer clone occurs here; zero has no digits.
+    pub(crate) fn write_magnitude_le(&self, destination: &mut [u8]) -> Option<bool> {
+        if u64::try_from(destination.len()).ok()? != self.magnitude_byte_length() {
+            return None;
+        }
+        for (word, digit) in self.0.iter_u32_digits().enumerate() {
+            let start = word.checked_mul(4)?;
+            for (offset, byte) in digit.to_le_bytes().into_iter().enumerate() {
+                if let Some(out) = destination.get_mut(start.checked_add(offset)?) { *out = byte; }
+                else if byte != 0 { return None; }
+            }
+        }
+        Some(self.0.sign() == num_bigint::Sign::Minus)
+    }
+
     /// Converts to the signed native 64-bit range without narrowing.
     #[must_use]
     pub fn to_i64(&self) -> Option<i64> {
@@ -101,6 +118,25 @@ impl Mul for &Integer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_magnitude_copy_preserves_full_sign_and_refuses_before_short_write() {
+        let huge = Integer::parse_decimal(&"9".repeat(3000)).unwrap();
+        let negative = &huge * &Integer::from_i64(-1);
+        for (integer, sign) in [(&huge, false), (&negative, true)] {
+            let count = usize::try_from(integer.magnitude_byte_length()).unwrap();
+            let mut short = vec![0x55; count - 1];
+            assert_eq!(integer.write_magnitude_le(&mut short), None);
+            assert!(short.iter().all(|byte| *byte == 0x55));
+            let mut exact = vec![0; count];
+            assert_eq!(integer.write_magnitude_le(&mut exact), Some(sign));
+            let reconstructed = num_bigint::BigInt::from_bytes_le(
+                if sign { num_bigint::Sign::Minus } else { num_bigint::Sign::Plus }, &exact);
+            assert_eq!(&integer.0, &reconstructed);
+        }
+        assert_eq!(Integer::from_i64(0).write_magnitude_le(&mut []), Some(false));
+        assert_eq!(Integer::from_i64(i64::MIN).write_magnitude_le(&mut [0; 8]), Some(true));
+    }
 
     #[test]
     fn checked_host_conversions_reject_negative_and_oversized_integers() {

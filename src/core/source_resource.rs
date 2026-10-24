@@ -859,6 +859,12 @@ impl CheckedSourceResourceHeader {
         ) {
             return Err(invalid());
         }
+        if checked && matches!(acquire.owner_role(), Some(PreparedOwnerCall::OutputAcquire { .. })) {
+            charge(work, 12)?;
+        }
+        if checked && matches!(teardown.owner_role(), Some(PreparedOwnerCall::StatusTeardown { .. })) {
+            charge(work, 12)?;
+        }
         if checked
             && ((!owner.owner().retained_parameters().is_empty()
                 && owner.owner().representation() != PreparedAddressRepresentation::Opaque)
@@ -871,6 +877,9 @@ impl CheckedSourceResourceHeader {
                             ..
                         })
                     ) | (
+                        PreparedAddressRepresentation::Opaque,
+                        Some(PreparedOwnerCall::OutputAcquire { .. })
+                    ) | (
                         PreparedAddressRepresentation::Bytes,
                         Some(PreparedOwnerCall::Acquire {
                             initialized_bytes: Some(_),
@@ -878,14 +887,16 @@ impl CheckedSourceResourceHeader {
                         })
                     )
                 )
-                || !matches!(
-                    teardown.owner_role(),
-                    Some(PreparedOwnerCall::Teardown { .. })
-                )
-                || !matches!(
-                    teardown.symbol().result(),
-                    crate::foreign::source_contract::PreparedAbiResult::Void
-                )
+                || (matches!(acquire.owner_role(), Some(PreparedOwnerCall::OutputAcquire { .. }))
+                    && (!owner.owner().retained_parameters().is_empty()
+                        || !crate::foreign::checked_source::independent_output_acquire(acquire.symbol())))
+                || !match teardown.owner_role() {
+                    Some(PreparedOwnerCall::Teardown { .. }) => matches!(teardown.symbol().result(), crate::foreign::source_contract::PreparedAbiResult::Void),
+                    Some(PreparedOwnerCall::StatusTeardown { .. }) => owner.owner().retained_parameters().is_empty()
+                        && owner.owner().representation() == PreparedAddressRepresentation::Opaque
+                        && crate::foreign::checked_source::independent_status_teardown(teardown.symbol()),
+                    _ => false,
+                }
                 || !checked_finish_pointer_operands(&teardown, work)?)
         {
             return Err(invalid());
@@ -3179,6 +3190,39 @@ fn eval_flow<'a>(
                         header.codec.report,
                         SourceResourceReportCodec::CheckedScope { .. }
                     ) {
+                        if matches!(role, PreparedOwnerCall::StatusTeardown { .. }) {
+                            // Exact original header admission restricts this to
+                            // pointer-only void or independently matched scalar status.
+                            if !checked_finish_pointer_operands(expected, work)? {
+                                return Err(invalid());
+                            }
+                            charge(work, 1)?;
+                            let mut boundary_path = path.copy(work)?;
+                            boundary_path.checked_finish_outcome = Some(CheckedFinishOutcome::Boundary(id));
+                            let boundary = facts.add(FlowFact::FinishBoundary(id), work)?;
+                            let outcome = facts.wrapped(ConstructorId::new(call.call, 2), boundary, work)?;
+                            push(&mut results, (outcome, boundary_path), work)?;
+                            if path.blocked { continue; }
+                            // Each original total outcome supplies its own exact
+                            // request witness. Scalar data never supplies disposition.
+                            for (consumes, readable) in role.dispositions() {
+                                charge(work, 1)?;
+                                if !readable { return Err(invalid()); }
+                                let mut returned = path.copy(work)?;
+                                returned.consumed = consumes;
+                                returned.checked_finish_outcome = Some(if consumes {
+                                    CheckedFinishOutcome::Consumed(id)
+                                } else {
+                                    CheckedFinishOutcome::Retained(id)
+                                });
+                                let disposition = facts.wrapped(
+                                    codec.disposition_constructors()[usize::from(!consumes)], 0, work,
+                                )?;
+                                let outcome = facts.wrapped(call.returned, disposition, work)?;
+                                push(&mut results, (outcome, returned), work)?;
+                            }
+                            continue;
+                        }
                         // The signature has one authenticated Current, optional
                         // declared Enclosing pointers, and a void result. Every
                         // Enclosing operand was checked above against the exact

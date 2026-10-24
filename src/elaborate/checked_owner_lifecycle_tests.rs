@@ -1060,3 +1060,6 @@ pub(crate) fn checked_owner_violation_program() -> (
     checked_owner_passive_program_for_source(&source,
         "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n")
 }
+
+#[path = "checked_output_status_tests.rs"]
+mod checked_output_status_tests;

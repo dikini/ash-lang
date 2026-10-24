@@ -196,6 +196,27 @@ pub(in crate::foreign) fn scalar_observation(
     NativeOwnerStatus { reply, readable: false, valid }.raw_observation()
 }
 
+#[cfg(any(test, ash_checked_owner_root = "v1"))]
+fn leaf_scalar(value: super::super::checked_leaf_transport::RawScalar) -> NativeScalarReply {
+    use super::super::checked_leaf_transport::RawScalar as Raw;
+    NativeScalarReply::Scalar(match value {
+        Raw::I8(n) => NativeScalarValue::I8(n), Raw::U8(n) => NativeScalarValue::U8(n),
+        Raw::I32(n) => NativeScalarValue::I32(n), Raw::U32(n) => NativeScalarValue::U32(n),
+        Raw::I64(n) => NativeScalarValue::I64(n), Raw::U64(n) => NativeScalarValue::U64(n),
+        Raw::USize(n) => NativeScalarValue::USize(n),
+    })
+}
+#[cfg(any(test, ash_checked_owner_root = "v1"))]
+fn leaf_disposal_status(returned: &super::super::checked_leaf_transport::DisposalReturned)
+    -> Option<NativeOwnerStatus> {
+    if returned.disposition().is_none() {
+        return Some(NativeOwnerStatus { reply: NativeScalarReply::Void, readable: false, valid: false });
+    }
+    returned.status().map(|raw| NativeOwnerStatus {
+        reply: leaf_scalar(raw), readable: returned.readable(), valid: true,
+    })
+}
+
 /// Fixed observation data, not invocation permission. Unknown/malformed status
 /// is not known retention; callers must preserve the prior fact and status.
 fn guard_disposal_observation(
@@ -903,37 +924,30 @@ impl NativeOwnerGuard {
         let slot = &mut slots[self.slot];
         #[cfg(any(test, ash_checked_owner_root = "v1"))]
         {
-            use super::super::checked_leaf_transport::FreeObservation;
             let NativeOwnerSlot { leaf, checked, host_attempted, closing_status, last_observed_status, .. } = slot;
-            // Without opaque transport there is no admitted checked dispatcher.
-            // Retain the slot without falling back to a raw callback.
             if leaf.is_none() { return Ok(()); }
-            // Check the physical destination before recording native entry.
-            if !matches!(leaf, Some(CheckedLeafBacking::Cell(cell)) if cell.is_occupied()) {
-                return Err(NativeOwnerAdmissionError::Authority);
-            }
+            let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeOwnerAdmissionError::Authority); };
+            // Prepare against the actual cell before the pending-call transition.
+            // No prepared reference escapes this held RefMut or movable phase.
+            let prepared = cell.prepare_teardown().map_err(|_|NativeOwnerAdmissionError::Authority)?;
             let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
             control.begin_guard_disposal(activation, scope).map_err(control_error)?;
             *host_attempted = true;
-            let Some(CheckedLeafBacking::Cell(cell)) = leaf.take() else {
-                unreachable!("held checked disposal slot");
+            let returned = prepared.invoke();
+            let status = leaf_disposal_status(&returned);
+            let Some((consumed, raw_status)) = guard_disposal_observation(
+                returned.disposition().unwrap_or(false), status) else {
+                control.output_failed();
+                return Err(NativeOwnerAdmissionError::Authority);
             };
-            *leaf = Some(CheckedLeafBacking::Consumed);
-            match cell.free() {
-                FreeObservation::Returned(_) => {
-                    let (consumed, status) = guard_disposal_observation(true, None)
-                        .expect("fixed void release observation");
-                    *closing_status = status;
-                    *last_observed_status = status;
-                    control.guard_disposed(consumed);
-                }
-                FreeObservation::NoOwner => {
-                    // No conforming return fact: preserve the last observation
-                    // and the unresolved attempt; never retry or fabricate K.
-                    control.output_failed();
-                    return Err(NativeOwnerAdmissionError::Authority);
-                }
+            *closing_status = raw_status;
+            *last_observed_status = raw_status;
+            if let Some(status) = status {
+                control.guard_disposed_status(consumed, status.reply);
+            } else {
+                control.guard_disposed(consumed);
             }
+            if consumed { *leaf = Some(CheckedLeafBacking::Consumed); }
             self.initialized_bytes = None;
             Ok(())
         }
@@ -971,7 +985,12 @@ impl NativeOwnerGuard {
         };
         match entry {
             crate::foreign::checked_control::FinishEntry::NativeReady => {
-                Ok(self.finish_with_plan(plan, operands, blocked))
+                let result = self.finish_with_plan(plan, operands, blocked);
+                if result.1.is_some_and(|status| !status.valid) {
+                    Err(NativeOwnerAdmissionError::Authority)
+                } else {
+                    Ok(result)
+                }
             }
             crate::foreign::checked_control::FinishEntry::Synthetic(witness) => Ok((
                 NativeOwnerDisposition::Synthetic { guard: self, witness },
@@ -985,46 +1004,46 @@ impl NativeOwnerGuard {
         self,
         blocked: bool,
     ) -> Result<(NativeOwnerDisposition, Option<NativeOwnerStatus>), NativeOwnerAdmissionError> {
-        use super::super::checked_leaf_transport::FreeObservation;
         let mut slots = self.storage.slots.try_borrow_mut()
             .map_err(|_| NativeOwnerAdmissionError::Authority)?;
         NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
         let blocked = blocked || slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied);
         let slot = slots.get_mut(self.slot).ok_or(NativeOwnerAdmissionError::Authority)?;
-        if !slot.physically_live() || !slot.dependencies.is_empty() {
-            return Err(NativeOwnerAdmissionError::Authority);
-        }
-        let NativeOwnerSlot { leaf, checked, quarantined, closing_status, last_observed_status, .. } = slot;
+        let NativeOwnerSlot { leaf, checked, dependencies, quarantined, closing_status, last_observed_status, .. } = slot;
         let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
-        let entry = control.begin_finish_entry_with_blocked(blocked).map_err(control_error)?;
-        match entry {
-            crate::foreign::checked_control::FinishEntry::Synthetic(witness) => {
+        let leaf_for_preparation = &mut *leaf;
+        let (entry, prepared) = control.begin_finish_entry_prepared(blocked, move || {
+            if !dependencies.is_empty() { return Err(crate::foreign::checked_control::Failure::State); }
+            let Some(CheckedLeafBacking::Cell(cell)) = leaf_for_preparation else { return Err(crate::foreign::checked_control::Failure::State); };
+            cell.prepare_teardown().map_err(|_|crate::foreign::checked_control::Failure::State)
+        }).map_err(control_error)?;
+        match (entry, prepared) {
+            (crate::foreign::checked_control::FinishEntry::Synthetic(witness), None) => {
                 drop(slots);
                 Ok((NativeOwnerDisposition::Synthetic { guard: self, witness }, None))
             }
-            crate::foreign::checked_control::FinishEntry::NativeReady => {
-                let Some(CheckedLeafBacking::Cell(cell)) = leaf.take() else {
+            (crate::foreign::checked_control::FinishEntry::NativeReady, Some(prepared)) => {
+                let returned = prepared.invoke();
+                let status = leaf_disposal_status(&returned);
+                let Some((consumed, raw_status)) = guard_disposal_observation(
+                    returned.disposition().unwrap_or(false), status) else {
+                    *quarantined = true;
                     control.output_failed();
                     return Err(NativeOwnerAdmissionError::Authority);
                 };
-                *leaf = Some(CheckedLeafBacking::Consumed);
-                match cell.free() {
-                    FreeObservation::Returned(_) => {
-                        // Both fields are reserved observations. No storage
-                        // reborrow, allocation or source construction follows C.
-                        *closing_status = None;
-                        *last_observed_status = None;
-                        control.finished(true);
-                    }
-                    FreeObservation::NoOwner => {
-                        *quarantined = true;
-                        control.output_failed();
-                        return Err(NativeOwnerAdmissionError::Authority);
-                    }
+                *closing_status = raw_status;
+                *last_observed_status = raw_status;
+                if let Some(status) = status {
+                    control.finished_status(consumed, status.reply);
+                } else {
+                    control.finished(consumed);
                 }
+                if consumed { *leaf = Some(CheckedLeafBacking::Consumed); }
                 drop(slots);
-                Ok((NativeOwnerDisposition::Consumed(Arc::clone(&self.owner)), None))
+                if consumed { Ok((NativeOwnerDisposition::Consumed(Arc::clone(&self.owner)), status)) }
+                else { Ok((NativeOwnerDisposition::Retained(self), status)) }
             }
+            _ => unreachable!("prepared native entry and exact synthetic witness are exclusive"),
         }
     }
 
@@ -1048,16 +1067,35 @@ impl NativeOwnerGuard {
             let mut slots = self.storage.slots.borrow_mut();
             let slot = &mut slots[self.slot];
             let _address = slot.raw.address.expect("admitted live owner");
+            // A checked native attempt is one-shot even if the original status
+            // retains or establishes no O4. Host close must not dispatch it again.
+            if slot.checked.is_some() { slot.host_attempted = true; }
             (consumes, status) = plan.invoke(operands);
-            // Preserve the actual primitive status alongside the native fact,
-            // before any later source-output/report-capacity refusal.
-            slot.closing_status = status.and_then(NativeOwnerStatus::independent);
+            // No admitted O4 must not overwrite the last observation or turn
+            // an invalid typed reply into known retention. Keep the pending
+            // attempt unresolved, with the same protected backing and no retry.
+            if let Some(checked) = &mut slot.checked
+                && guard_disposal_observation(consumes, status).is_none()
+            {
+                slot.quarantined = true;
+                checked.output_failed();
+                drop(slots);
+                return (NativeOwnerDisposition::Blocked(self), status);
+            }
+            // Preserve raw admitted status independently of optional source E.
+            slot.closing_status = status.and_then(|status| if slot.checked.is_some() {
+                status.raw_observation()
+            } else { status.independent() });
             slot.last_observed_status = slot.closing_status;
             if consumes {
                 NativeOwnerStorage::record_consumed(&mut slots, self.slot);
             }
             if let Some(checked) = &mut slots[self.slot].checked {
-                checked.finished(consumes);
+                if let Some(status) = status {
+                    checked.finished_status(consumes, status.reply);
+                } else {
+                    checked.finished(consumes);
+                }
             }
             if !consumes {
                 NativeOwnerStorage::quarantine(&mut slots, self.slot);
@@ -1752,6 +1790,35 @@ impl NativeOwnerGuardReady {
         })
     }
 
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    pub(in crate::foreign) fn invoke_checked_output_leaf(
+        self, input: &[u8],
+    ) -> Result<NativeOwnerCallReturned, NativeScalarCallError> {
+        let mut slots = self.guard.storage.slots.try_borrow_mut()
+            .map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        let index = self.guard.slot;
+        NativeOwnerStorage::entry_allowed(&mut slots, index, false)
+            .map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        let slot = slots.get_mut(index).ok_or(NativeScalarCallError::ArgumentContract)?;
+        if !slot.dependencies.is_empty() || self.prepared_initialized_bytes.is_some() {
+            return Err(NativeScalarCallError::ArgumentContract);
+        }
+        let NativeOwnerSlot { leaf, checked, closing_status, last_observed_status, .. } = slot;
+        let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeScalarCallError::ArgumentContract); };
+        let control = checked.as_mut().ok_or(NativeScalarCallError::ArgumentContract)?;
+        let prepared = cell.prepare_output_acquire(input).map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        control.begin_acquire().map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        let returned = prepared.invoke(); // first arms the actual destination
+        let scalar = leaf_scalar(returned.status());
+        control.observe_acquisition_status(Some(scalar));
+        *closing_status = control.acquisition_status();
+        *last_observed_status = *closing_status;
+        control.acquired_status(returned.nonnull(), scalar);
+        drop(slots);
+        Ok(NativeOwnerCallReturned { guard: self.guard, prepared_initialized_bytes: None,
+            scalar: Some(scalar), offset: None, recorded: true })
+    }
+
     /// Called immediately by the generated typed wrapper after native return.
     /// It arms already prepared storage without allocation or a work charge.
     /// A null result carries no owner; non-null results are guarded even before
@@ -1827,7 +1894,11 @@ impl NativeOwnerCallReturned {
             slots[index].last_observed_status = self.scalar.and_then(observed_scalar_status);
             if let Some(checked) = &mut slots[index].checked {
                 checked.observe_acquisition_status(self.scalar);
-                checked.acquired(present);
+                if let Some(reply) = self.scalar {
+                    checked.acquired_status(present, reply);
+                } else {
+                    checked.acquired(present);
+                }
                 let status = checked.acquisition_status();
                 slots[index].closing_status = status;
                 slots[index].last_observed_status = status;
@@ -1880,6 +1951,13 @@ impl NativeOwnerGuardReady {
 }
 #[cfg(all(test, not(ash_checked_owner_root = "v1")))]
 impl NativeOwnerGuard {
+    pub(crate) fn mark_leaf_unpreparable_for_test(&mut self) {
+        let mut slots = self.storage.slots.borrow_mut();
+        let Some(CheckedLeafBacking::Cell(cell)) = &mut slots[self.slot].leaf else { panic!("test requires actual leaf backing"); };
+        cell.mark_unresolved_for_test();
+        assert!(cell.is_occupied(), "fault preserves the exact backing");
+        assert!(cell.prepare_teardown().is_err());
+    }
     pub(crate) fn assert_leaf_finish_borrow_refusal_for_test(self) {
         let storage = Rc::clone(&self.storage);
         let index = self.slot;

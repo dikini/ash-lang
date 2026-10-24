@@ -343,6 +343,29 @@ mod tests {
     #[test]
     #[ignore = "assigned generated canonical-root/leaf compile-link slot; output is never executed"]
     fn genuine_root_and_leaf_compile_link_matches_receipt_without_startup() {
+        check_generated_compile_link(
+            include_str!("../../tests/fixtures/checked-owner-runtime/owner.c"),
+            include_bytes!("../../tests/fixtures/checked-owner-runtime/owner.h"),
+            include_str!("../../tests/fixtures/checked-owner-runtime/owner.ash"),
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Producer.CopyProbe, Unit, Unit>\nmain () = Producer.run ()\n",
+            "void ash_checked_owner_release(", "ash_checked_owner_release", "initialized-byte",
+        );
+    }
+
+    #[test]
+    #[ignore = "assigned two-role generated root/leaf compile-link slot; output is never executed"]
+    fn genuine_output_status_root_and_leaf_compile_link_matches_receipt_without_startup() {
+        check_generated_compile_link(
+            include_str!("../../tests/fixtures/checked-owner-runtime/output-status.c"),
+            include_bytes!("../../tests/fixtures/checked-owner-runtime/output-status.h"),
+            include_str!("../../tests/fixtures/checked-owner-lifecycle/output-status.ash"),
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n",
+            "int sqlite3_close(", "sqlite3_close", "independent-output-status",
+        );
+    }
+
+    fn check_generated_compile_link(native_source: &str, native_header: &[u8], producer: &str, entry: &str,
+        release_definition: &str, release_name: &str, profile: &str) {
         let target =
             PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").expect("explicit shared cache"));
         let nonce = std::time::SystemTime::now()
@@ -360,17 +383,16 @@ mod tests {
             .unwrap();
         fs::write(
             directory.join("owner.c"),
-            include_bytes!("../../tests/fixtures/checked-owner-runtime/owner.c"),
+            native_source,
         )
         .unwrap();
         fs::write(
             directory.join("owner.h"),
-            include_bytes!("../../tests/fixtures/checked-owner-runtime/owner.h"),
+            native_header,
         )
         .unwrap();
         let (program, provenance) = crate::elaborate::checked_owner_passive_program_for_source(
-            include_str!("../../tests/fixtures/checked-owner-runtime/owner.ash"),
-            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Producer.CopyProbe, Unit, Unit>\nmain () = Producer.run ()\n",
+            producer, entry,
         );
         // Same explicit private observation profile as the retained actual
         // static-link gate. This is not a startup/default-work allowance.
@@ -532,24 +554,26 @@ mod tests {
         assert_eq!(leaf.as_bytes(), data.leaf);
         assert!(leaf.contains("pub struct Owner"));
         assert!(!leaf.contains("impl Drop"));
+        if profile == "independent-output-status" {
+            assert!(leaf.contains("pub fn prepare_output_acquire"));
+            assert!(leaf.contains("pub fn prepare_teardown"));
+            assert!(leaf.contains("#[link_name = \"sqlite3_open_v2\"]"));
+            assert!(leaf.contains("#[link_name = \"sqlite3_close\"]"));
+        }
         // Build a fresh coherent native observation for the donor rather than
         // changing a source behind an old pin. Header/prototype compilation
         // still succeeds; only the selected release definition is absent.
         let missing = directory.join("missing-release");
         fs::create_dir(&missing).unwrap();
-        let source = include_str!("../../tests/fixtures/checked-owner-runtime/owner.c");
-        assert_eq!(source.matches("void ash_checked_owner_release(").count(), 1);
+        assert_eq!(native_source.matches(release_definition).count(), 1);
         fs::write(
             missing.join("owner.c"),
-            source.replace(
-                "void ash_checked_owner_release(",
-                "void ash_checked_owner_release_missing(",
-            ),
+            native_source.replace(release_name, &format!("{release_name}_missing")),
         )
         .unwrap();
         fs::write(
             missing.join("owner.h"),
-            include_bytes!("../../tests/fixtures/checked-owner-runtime/owner.h"),
+            native_header,
         )
         .unwrap();
         let refused = compile(Request {
@@ -579,13 +603,13 @@ mod tests {
             fs::read_to_string(missing.join("root/checked-link/cargo-0/cargo.stderr")).unwrap();
         assert!(
             link_error.contains("undefined reference")
-                && link_error.contains("ash_checked_owner_release"),
+                && link_error.contains(release_name),
             "{link_error}"
         );
         assert!(!missing.join("program").exists());
         assert!(!missing.join("root/producer-receipt.bin").exists());
         fs::write(directory.join("observation.json"),serde_json::to_vec_pretty(&serde_json::json!({
-            "purpose":"actual canonical-root/leaf compilation and static link; no output startup",
+            "purpose":"actual canonical-root/leaf compilation and static link; no output startup", "profile":profile,
             "executable":artifact.executable,"receipt":artifact.receipt,"request":artifact.request,"project":artifact.project,
             "six_missing":true,"protected_positive":false,"selected_callbacks_executed":false,
             "missing_release":"fresh native closure reaches actual unresolved-symbol root link failure",

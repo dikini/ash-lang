@@ -142,3 +142,71 @@ dependency facts describe both ordinary handles and State. Quarantine now
 independently authenticates applied native State, its complete Type/Row vector,
 host and owned identity before accepting exact Current or declared Enclosing.
 General dependency transport remains unchanged.
+
+
+## Runtime output/status dependency
+
+The platform author is implementing the reviewed independent output/status
+runtime prerequisite under TASK-0053, separate from the common quarantine and
+unpublished void-disposal deliveries. Its initial typed artifact has exactly
+Open-shaped NUL/output/constant/null acquisition and current scalar teardown
+roles. It must arm error/non-null output, preserve the same owner on retention,
+keep raw status independent of source E readability and refuse group-denied
+entry. Actual checked receipts and complete original/witness relations remain
+primary's static/Core join; private runtime models grant none.
+
+This prerequisite alone does not accept the full SQLite library image, its
+Initialize/Prepare/Finalize/Bind/Step calls, E/B functions or native behavior.
+Additional original roles must be implemented and reviewed through the same
+common mechanism before their image can be rendered or activated. Source status
+error payloads require bounded exact Integer output encoding too. No evidence
+from the eight-byte fixture or old approval promotes those dependencies.
+
+
+## Independent output/status admission slice
+
+The common prerequisite is retained at `d66ecd78`
+([PR123](https://github.com/dikini/ash-lang/pull/123)); its partial acceptance is
+complete without closing whole F3/F4/F5 criteria. The next source-only candidate
+starts from that exact retained tree. The published quarantine branch remains
+unchanged. TASK0053's disposal-only delivery has the build lane and must be
+retained before the combined output/status verification freeze.
+
+This first cut admits an independent opaque output owner using exactly the
+original NUL input, nullable output slot, signed-32 constant and null input
+roles needed for Open. It admits Current-only scalar-status Close with the
+original total outcome relation; existing arena direct acquisition and void
+teardown remain unchanged. Complete original Type/Row/H/owned identity and
+request-specific consumed/retained/boundary witnesses remain mandatory. No
+retained owner, offset output, multioperand Borrow or copied-text extension is
+included in this cut.
+
+The ledger must independently join the actual typed native scalar to its
+original result representation and total disposition matcher before committing
+O4. A narrowed number or caller-supplied consumption boolean supplies no such
+authority. All outcome traversal and reporting capacity are funded before entry;
+returned disposition commits before fallible source reporting. Scope preparation
+and raw-result transport are coordinated with the platform's preserved private
+output/status carrier candidate; neither is native activation.
+
+Focused verification will carry the genuine independent Open/Close declarations
+and resource through summaries, linking, independent Core and identity/fold;
+reject switched request witnesses/dispositions and wrong raw scalar tags; check
+null versus nonnull, exact/one-short entry payment, no fabricated publication,
+and preserved void/legacy controls. The current candidate is source-only and
+untested. Reconcile it onto the actual disposal retaining tip before one reviewed
+combined gate. Dependent Prepare/Finalize, full SQLite E/B and copied-input
+policy, whole native/profile acceptance and F-core remain subsequent work under
+the original goal.
+
+
+## Current independent output/status prerequisite
+
+The combined TASK0053 delivery now reconciles runtime and primary static/Core/Ledger source on retained PR124 `862c9ea2`. This updates the older separate-owner status above: the integrator owns the current source join while preserving each reviewed delta. Genuine independent two-role source admission and typed status observation must connect to physical transport and independently rendered root/leaf artifacts before claiming this prerequisite. All new combined controls remain UNRUN. Full SQLite policy/E/B, dependent and multioperand carriers, actual native behavior and complete library acceptance remain separate.
+
+
+## Independent status prerequisite focused result
+
+The [combined TASK0053 evidence](evidence/checked-owner-core-execution/independent-output-status/README.md) supersedes the current prerequisite's UNRUN note: 64 ordinary behavioral controls pass on `45f53d93`/`35186`, with qualified behavior-only transfer across two root-cfg retention casts, and fresh Clippy plus actual two-role/four-role compile-link selectors pass on `c96a1629`/`31191`. Both profiles refresh all code/runtime/input/artifact/receipt/request identities; no old approval transfers and this is not 66 fresh tests. Genuine independent checked status observation/guard/Finish is distinct from the retained legacy accounting models.
+
+The compile-only sqlite-named C fixture is not actual SQLite behavior or Native/Header conformity. This prerequisite does not render or activate the full library image, dependent Prepare/Finalize/offset output/retained-parent roles, multioperand/copied text, whole E/B or native SQLite L2. The separately authored source/dependent admission work needs reconciliation onto the actual retaining tip and its own common physical carrier/evidence joins. Default bootstrap association/six Missing fields, configured deployment, native/F-core and whole F5 acceptance remain open.

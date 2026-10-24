@@ -638,3 +638,50 @@ Session `94828` on `595dda47` passes both-package targeted Clippy and all 42 dis
 The retries repair two private helper imports, a tail-expression lint, and the legacy model's accidental removal of required scalar-readable declarations plus its corresponding metadata assertion. Production admission and runtime postconditions remain unchanged. Delivery04 was never launched. ASHOUT03/ASHOBS03, KAbsent, one-shot disposal before payload copy, shared-denial zero-call behavior and legacy tariffs are covered by the focused controls. Status-accounting evidence does not open checked OutputAcquire/StatusTeardown or establish native L2.
 
 Next: exact unsigned product-equal evidence checkpoint and independent publication review for PR124, then root integration and partial acceptance. Replay the separately parked output/status source and primary typed-status admission only after this actual retaining tip. Configured source/artifacts/approvals must be refreshed before any selected native run; no deployment, six-field conformity or whole F-core claim transfers from this gate.
+
+
+## Next independent output/status runtime slice
+
+After preserving disposal `89d4f798`, the authorized source branch adds the
+reviewed private carriers under TASK-0053/TASK-0054. Keep disposal delivery and
+its actual-common-tip gate separate. Platform owns exact typed emitter/shim,
+opaque slot acquisition/retention/disposition, root projection and bounded
+Integer source-result encoding. Primary owns static/Core/header/witness joins.
+Do not merge or claim checked status support until those real receipts connect.
+
+The first artifact supports the existing four byte roles or exactly two
+independent opaque output/status roles. Refuse offsets/dependencies, additional
+native roles and unsupported ABI operands. Input buffers, original constants,
+null/output slots, scalar conversions, ledger capacity and mandatory reporting
+must be settled before C. Construct prepared values only inside the held actual
+slot RefMut; no self-reference to movable Ready/input storage is retained.
+Acquire first arms nonnull even on error. Teardown borrows without eager take,
+retains the exact owner on admitted retention, and leaves no-O4 unresolved with
+no retry. Shared group denial must still forbid every native entry.
+
+Focused verification proposal: existing initialized-byte render/physical and
+void-disposal regressions; bounded full-sign/magnitude exact/short source codec;
+private transport status/retention/no-O4 controls labeled as models; then genuine
+admitted checked output/status Machine/ledger/witness controls supplied by the
+static join, independently reconstructed role/donor refusals and actual typed
+root/leaf compile/link with a required-symbol negative. Targeted Clippy follows
+on the coherent combined source. No heavy launch during the common gate, no
+fake checked fixture, legacy fallback, approval transfer or native execution.
+Stop on a precise missing static/carrier/closure join, not a broader profile
+exception. Future dependent/copied-multioperand E/B is a separate bounded slice.
+
+
+### Current combined output/status source verification
+
+On retained `862c9ea2`, reconcile the four preserved runtime/admission commits and retain all PR124 test aliases, mandatory-readable legacy fixture, guard status pair and byte reservations. Connect the actual physical and generic returned-call paths to the typed Ledger methods; guard status uses that same original ABI/outcome check without creating source K or a closing witness. Controls must distinguish no-O4 from retained, source-E readability from raw status and Synthetic from NativeReady.
+
+Use the existing finite owned runner/cache after source review and explicit root approval: genuine new status source/Core positives and hostile witnesses, exact/short/spent/fresh payment, connected Machine refusal/guard reports, physical retention/loss/denial, optional Integer sign/magnitude codec, affected void/disposal/legacy regressions, both-package targeted Clippy and both two-role/four-role actual nonexecuting compile/link with donor and missing-symbol refusals. The codec's pure ordinary helper is the same encoder called by the root writer; the root-only wrapper test is not counted as an ordinary executed test. No cap increase, native invocation, public authority, legacy fallback or library-name special case is authorized by this source checkpoint.
+
+
+### Combined independent output/status focused result
+
+The source-only verification proposal above is now completed within its bounded scope; [current evidence](../evidence/checked-owner-core-execution/independent-output-status/README.md) preserves the exact commands, failures, repairs and artifacts. Session `35186` supplies 64 distinct ordinary behavioral passes on `45f53d93`; session `31191` freshly passes both-package targeted Clippy and the two actual generated-profile selectors on `c96a1629`. The sole subsequent source delta is two root-cfg concrete method-pointer probes, so ordinary behavior transfers by independent equality review; all source/runtime/root-code/artifact identities refresh because build.rs includes that file. Never describe this as 66 fresh tests or approval/hash equality.
+
+The fresh two-role and four-role chains independently bind actual C/header/ABI/archive, digest-named leaf and selected artifacts, complete originals/configuration, root ELF/receipt/request and required-symbol negatives. All owned outer/inner groups are reaped; outputs are not executed. The header-helper closure and concrete retention-probe repairs add no public carrier or wider profile. ASHOUT03/ASHOBS03, dual status/42-byte guard/64-byte reservation and bounded shared Integer encoding remain covered.
+
+Next delivery steps are exact unsigned product-equal evidence checkpoint, independent assembled/head/body review, root publication/integration and guarded partial acceptance. Then reconcile separately reviewed dependent static/Core work onto the actual retaining tip before extending physical carriers; do not widen this independent two-role PR. Actual SQLite/arena/dependent/multioperand policy, all six conformity fields/configured protected deployment and native/F-core acceptance remain pending. No further heavy gate is required for docs-only assembly unless an actual watched-input equality or evidence finding demands it.

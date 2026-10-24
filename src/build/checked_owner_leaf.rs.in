@@ -154,3 +154,77 @@ pub fn release(owner: Owner) -> ReleaseReturned {
     unsafe { native_release(address.as_ptr()); }
     ReleaseReturned {_serial: serial}
 }
+
+/// Fixed typed scalar DATA; no owner, address or invocation authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RawScalar {
+    /// Signed eight-bit observation.
+    I8(i8),
+    /// Unsigned eight-bit observation.
+    U8(u8),
+    /// Signed32 observation.
+    I32(i32),
+    /// Unsigned32 observation.
+    U32(u32),
+    /// Signed64 observation.
+    I64(i64),
+    /// Unsigned64 observation.
+    U64(u64),
+    /// Target-resolved size_t observation.
+    USize(usize),
+}
+/// One actual teardown return. Constructor remains private to this leaf.
+pub struct DisposalReturned {
+    disposition: Option<bool>,
+    status: Option<RawScalar>,
+    readable: bool,
+}
+impl DisposalReturned {
+    /// None establishes no admitted O4; it is never known retention.
+    pub fn disposition(&self) -> Option<bool> { self.disposition }
+    /// Only an admitted outcome supplies a new independent status.
+    pub fn status(&self) -> Option<RawScalar> { self.status }
+    /// Source payload readability is independent of the raw observation.
+    pub fn readable(&self) -> bool { self.readable }
+}
+
+/// Unsupported output profile preparation, never a raw callback fallback.
+pub struct PreparedOutputAcquire<'slot, 'input> {
+    _destination: &'slot mut Option<Owner>,
+    _input: &'input [u8],
+}
+/// Fixed output acquisition observations after destination arming.
+pub struct OutputAcquireReturned { nonnull: bool, status: RawScalar }
+impl OutputAcquireReturned {
+    /// Nullness is not a source success classification.
+    pub fn nonnull(&self) -> bool { self.nonnull }
+    /// Actual typed scalar DATA.
+    pub fn status(&self) -> RawScalar { self.status }
+}
+/// This profile has no output acquisition operation.
+pub fn prepare_output_acquire<'slot, 'input>(destination: &'slot mut Option<Owner>, input: &'input [u8])
+    -> Result<PreparedOutputAcquire<'slot, 'input>, Refusal> {
+    let _ = (destination, input); Err(Refusal::Profile)
+}
+impl PreparedOutputAcquire<'_, '_> {
+    /// An unsupported profile cannot construct this preparation.
+    pub fn invoke(self) -> OutputAcquireReturned { unreachable!("unsupported output profile") }
+}
+/// Exact occupied destination loan, retained through C and disposition.
+pub struct PreparedTeardown<'slot> { destination: &'slot mut Option<Owner> }
+/// This byte profile admits only its consuming void release.
+pub fn prepare_teardown(destination: &mut Option<Owner>) -> Result<PreparedTeardown<'_>, Refusal> {
+    if destination.is_none() { return Err(Refusal::Owner); }
+    Ok(PreparedTeardown { destination })
+}
+impl PreparedTeardown<'_> {
+    /// Clears backing only after the actual consuming void call returns.
+    pub fn invoke(self) -> DisposalReturned {
+        let owner = self.destination.take().expect("exclusive prepared owner");
+        let _returned = release(owner);
+        DisposalReturned { disposition: Some(true), status: None, readable: true }
+    }
+}
+
+/// Whether this exact emitted profile has byte view operations.
+pub fn supports_byte_views() -> bool { true }

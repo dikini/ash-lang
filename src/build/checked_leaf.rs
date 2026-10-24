@@ -16,8 +16,15 @@ pub(super) struct LeafEmission {
     pub source: String,
     // Existing NativeBuildImage positions, in acquire/query/length/release order.
     // These are a projection of authenticated bridges, never another registry.
-    pub members: [usize; 4],
+    pub members: Vec<usize>,
+    pub profile: LeafProfile,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LeafProfile { InitializedBytes, OutputStatus }
+impl LeafProfile {
+    fn tag(self) -> u8 { match self { Self::InitializedBytes => 0, Self::OutputStatus => 1 } }
+}
+const OUTPUT_TEMPLATE: &str = include_str!("checked_owner_output_status.rs.in");
 const TEMPLATE: &str = include_str!("checked_owner_leaf.rs.in");
 const ROOT_SHIM: &str = include_str!("checked_owner_root_shim.rs.in");
 
@@ -41,6 +48,8 @@ pub(super) fn render_admitted_root_shim(
 ) -> Result<String, LeafFailure> {
     use std::fmt::Write;
     let [library] = image.libraries.as_slice() else { return Err(LeafFailure::Association); };
+    let count = match leaf.profile { LeafProfile::InitializedBytes => 4, LeafProfile::OutputStatus => 2 };
+    if leaf.members.len() != count { return Err(LeafFailure::Association); }
     let mut source = render_root_shim(work)?;
     // Exactly32 u32 decimal fields (at most10 digits each), punctuation and
     // fixed declaration:1024 bytes bounds all output; prepay formatting/storage.
@@ -48,8 +57,9 @@ pub(super) fn render_admitted_root_shim(
     source.try_reserve_exact(1024).map_err(|_| LeafFailure::Resource)?;
     let start = source.len();
     source.push_str("\n// image-library, library-module, library-ordinal, image-symbol, symbol-index, operation-module, effect, local\n");
-    source.push_str("pub(crate) const CHECKED_ROLES: [[u32; 8]; 4] = [\n");
-    for index in leaf.members {
+    writeln!(&mut source, "pub(crate) const CHECKED_PROFILE: u8 = {};", leaf.profile.tag()).map_err(|_|LeafFailure::Resource)?;
+    writeln!(&mut source, "pub(crate) const CHECKED_ROLES: [[u32; 8]; {}] = [", leaf.members.len()).map_err(|_|LeafFailure::Resource)?;
+    for &index in &leaf.members {
         let member = image.bridges.get(index).ok_or(LeafFailure::Association)?;
         if !library.members.contains(&index) { return Err(LeafFailure::Association); }
         writeln!(&mut source, "[{}, {}, {}, {}, {}, {}, {}, {}],", library.image_library,
@@ -98,6 +108,7 @@ pub(super) fn render(
     work: &mut TypeWorkBudget,
 ) -> Result<LeafEmission, LeafFailure> {
     pay(work, image.bridges.len())?;
+    if image.bridges.len() == 2 { return render_output_status(image, work); }
     if image.bridges.len() != 4 || image.libraries.len() != 1 {
         return Err(LeafFailure::Unsupported);
     }
@@ -229,7 +240,130 @@ pub(super) fn render(
     if source.len() != size {
         return Err(LeafFailure::Association);
     }
-    Ok(LeafEmission { source, members })
+    pay(work, 4)?;
+    let mut retained = Vec::new();
+    retained.try_reserve_exact(4).map_err(|_|LeafFailure::Resource)?;
+    retained.extend_from_slice(&members);
+    Ok(LeafEmission { source, members: retained, profile: LeafProfile::InitializedBytes })
+}
+
+/// The independent opaque output/status profile has exactly two original
+/// members. Operand shape is closed; constants/outcome predicates are emitted
+/// from those originals, never supplied as runtime invocation parameters.
+fn render_output_status(image: &NativeBuildImage, work: &mut TypeWorkBudget) -> Result<LeafEmission, LeafFailure> {
+    use crate::foreign::source_contract::{PreparedAbiResult as Abi, PreparedAddressRepresentation as Address,
+        PreparedNativePosition, PreparedOperandSource as Source, PreparedScalarRepresentation as Repr};
+    use std::fmt::Write;
+    if image.libraries.len() != 1 { return Err(LeafFailure::Unsupported); }
+    let mut acquire = None;
+    let mut teardown = None;
+    for (index, member) in image.bridges.iter().enumerate() {
+        let plan = &member.plan;
+        pay(work, plan.operands().len().checked_add(8).ok_or(LeafFailure::Resource)?)?;
+        if plan.target() != ForeignBridgeTarget::X86_64LinuxGnu || plan.byte_owner()
+            || plan.symbol().prepared().checked_contract().is_none() { return Err(LeafFailure::Unsupported); }
+        let ops = plan.symbol().symbol().operands();
+        match (plan.call(), plan.symbol().owner_role(), plan.operands(), plan.result()) {
+            (TargetBridgeCall::OwnerOutputAcquire, Some(PreparedOwnerCall::OutputAcquire { output_operand: 1, offset: None, .. }),
+                [TargetOperand::Address, TargetOperand::OwnerOutput, TargetOperand::Scalar(TargetScalar::I32), TargetOperand::Address],
+                TargetResult::Scalar(_))
+                if ops.len() == 4 && matches!(ops[0].source(), Source::Nul(_))
+                    && matches!(ops[1].source(), Source::OwnerOutput)
+                    && matches!(ops[2].source(), Source::Constant(_))
+                    && matches!(ops[3].source(), Source::Null) => {
+                if acquire.replace(index).is_some() { return Err(LeafFailure::Association); }
+            }
+            (TargetBridgeCall::OwnerTeardown, Some(PreparedOwnerCall::StatusTeardown { current_operand: 0, .. }),
+                [TargetOperand::Address], TargetResult::Scalar(_))
+                if ops.len() == 1 && matches!(ops[0].source(), Source::Current(_)) => {
+                if teardown.replace(index).is_some() { return Err(LeafFailure::Association); }
+            }
+            _ => return Err(LeafFailure::Unsupported),
+        }
+    }
+    let members = [acquire.ok_or(LeafFailure::Association)?, teardown.ok_or(LeafFailure::Association)?];
+    let open = &image.bridges[members[0]].plan;
+    let close = &image.bridges[members[1]].plan;
+    let owner = open.symbol().owner().ok_or(LeafFailure::Association)?;
+    pay(work, 4)?;
+    if owner.owner().representation() != Address::Opaque || !owner.owner().retained_parameters().is_empty()
+        || open.library() != close.library()
+        || !close.symbol().owner().is_some_and(|other| Arc::ptr_eq(owner, other)) {
+        return Err(LeafFailure::Association);
+    }
+    let Source::Constant(constant) = open.symbol().symbol().operands()[2].source() else { return Err(LeafFailure::Association); };
+    let constant = open.symbol().prepared().constants().get(*constant).ok_or(LeafFailure::Association)?;
+    if constant.representation() != Repr::Signed(32) { return Err(LeafFailure::Unsupported); }
+    let value = constant.value();
+    let flags = if value.negative { -i128::from(value.magnitude) } else { i128::from(value.magnitude) };
+    let flags = i32::try_from(flags).map_err(|_|LeafFailure::Unsupported)?;
+    let TargetResult::Scalar(open_scalar) = open.result() else { return Err(LeafFailure::Association); };
+    let TargetResult::Scalar(close_scalar) = close.result() else { return Err(LeafFailure::Association); };
+    if !matches!(open.symbol().symbol().result(), Abi::Scalar(_)) { return Err(LeafFailure::Association); }
+    let Some(PreparedOwnerCall::StatusTeardown { outcomes, .. }) = close.symbol().owner_role() else { return Err(LeafFailure::Association); };
+    if outcomes.is_empty() || outcomes.len() > 64 { return Err(LeafFailure::Unsupported); }
+    // Each predicate writes at most128 ASCII bytes; final branches at most64.
+    // Charge and reserve before formatting or traversing dynamic predicate lists.
+    let mut outcome_source = String::new();
+    let mut otherwise = false;
+    pay(work, outcomes.len())?;
+    for outcome in outcomes {
+        let count = outcome.predicates.len();
+        if count > 1 || otherwise { return Err(LeafFailure::Unsupported); }
+        pay(work, 512)?;
+        outcome_source.try_reserve(256).map_err(|_|LeafFailure::Resource)?;
+        if let Some(predicate) = outcome.predicates.first() {
+            if predicate.position != PreparedNativePosition::Result { return Err(LeafFailure::Unsupported); }
+            let value = predicate.value;
+            let value = if value.negative { -i128::from(value.magnitude) } else { i128::from(value.magnitude) };
+            if !scalar_contains(close_scalar, value) { return Err(LeafFailure::Association); }
+            write!(&mut outcome_source, "if status == ({value} as {}) {{ Some(({}, {})) }} else ",
+                close_scalar.rust_type(), outcome.consumes, outcome.readable).map_err(|_|LeafFailure::Resource)?;
+        } else {
+            otherwise = true;
+            write!(&mut outcome_source, "{{ Some(({}, {})) }}", outcome.consumes, outcome.readable).map_err(|_|LeafFailure::Resource)?;
+        }
+    }
+    if !otherwise { return Err(LeafFailure::Unsupported); }
+    let acquire_name = quoted(open.symbol().symbol().native_name(), work)?;
+    let release_name = quoted(close.symbol().symbol().native_name(), work)?;
+    pay(work, 128)?;
+    let flags = format!("{flags}_i32");
+    let replacements = [
+        ("__ACQUIRE_NAME__", acquire_name.as_str()), ("__ACQUIRE_TYPE__", open_scalar.rust_type()),
+        ("__RELEASE_NAME__", release_name.as_str()), ("__RELEASE_TYPE__", close_scalar.rust_type()),
+        ("__FLAGS__", flags.as_str()), ("__ACQUIRE_VARIANT__", open_scalar.value_variant()),
+        ("__OUTCOMES__", outcome_source.as_str()), ("__RELEASE_VARIANT__", close_scalar.value_variant()),
+    ];
+    let source = replace_template(OUTPUT_TEMPLATE, &replacements, work)?;
+    pay(work, 2)?;
+    let mut retained = Vec::new(); retained.try_reserve_exact(2).map_err(|_|LeafFailure::Resource)?;
+    retained.extend_from_slice(&members);
+    Ok(LeafEmission { source, members: retained, profile: LeafProfile::OutputStatus })
+}
+fn scalar_contains(scalar: TargetScalar, value: i128) -> bool {
+    match scalar {
+        TargetScalar::I8 => i8::try_from(value).is_ok(), TargetScalar::U8 => u8::try_from(value).is_ok(),
+        TargetScalar::I32 => i32::try_from(value).is_ok(), TargetScalar::U32 => u32::try_from(value).is_ok(),
+        TargetScalar::I64 => i64::try_from(value).is_ok(), TargetScalar::U64 | TargetScalar::USize64 => u64::try_from(value).is_ok(),
+    }
+}
+fn replace_template(template: &str, replacements: &[(&str, &str)], work: &mut TypeWorkBudget) -> Result<String, LeafFailure> {
+    // Separate paid replacements keep each scan/allocation bounded by actual
+    // bytes, and check exactly one occurrence before each mutation.
+    pay(work, template.len())?;
+    let mut source = String::new(); source.try_reserve_exact(template.len()).map_err(|_|LeafFailure::Resource)?;
+    source.push_str(template);
+    for &(marker, value) in replacements {
+        pay(work, source.len().checked_mul(2).and_then(|n|n.checked_add(value.len())).ok_or(LeafFailure::Resource)?)?;
+        if source.matches(marker).count() != 1 { return Err(LeafFailure::Association); }
+        let (left, right) = source.split_once(marker).ok_or(LeafFailure::Association)?;
+        let size = left.len().checked_add(value.len()).and_then(|n|n.checked_add(right.len())).ok_or(LeafFailure::Resource)?;
+        pay(work, size)?;
+        let mut next = String::new(); next.try_reserve_exact(size).map_err(|_|LeafFailure::Resource)?;
+        next.push_str(left); next.push_str(value); next.push_str(right); source = next;
+    }
+    Ok(source)
 }
 
 #[cfg(test)]
@@ -248,6 +382,45 @@ mod tests {
         )
         .unwrap()
     }
+    fn output_status_fixture() -> NativeBuildImage {
+        let (program,sources)=crate::elaborate::checked_owner_passive_program_for_source(
+            include_str!("../../tests/fixtures/checked-owner-lifecycle/output-status.ash"),
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n",
+        );
+        super::super::image::encode_checked_preparation(&program,&sources,super::super::host::NATIVE_TARGET,
+            &mut super::super::gas::preparation(&sources,program.node_count()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn two_role_leaf_binds_total_originals_and_exact_render_work() {
+        let mut image=output_status_fixture();
+        let mut measured=TypeWorkBudget::default();
+        let canonical=render(&image,&mut measured).unwrap();
+        assert_eq!(canonical.members.len(),2);
+        assert!(canonical.source.contains("#[link_name = \"sqlite3_open_v2\"]"));
+        assert!(canonical.source.contains("#[link_name = \"sqlite3_close\"]"));
+        assert!(canonical.source.contains("6_i32"));
+        assert!(canonical.source.contains("context: *const u8"));
+        assert!(canonical.source.contains("6_i32, std::ptr::null()"));
+        assert!(canonical.source.contains("Some((true, true))"));
+        assert!(canonical.source.contains("Some((false, true))"));
+        assert!(!canonical.source.contains("impl Drop"));
+        let cost=measured.used();
+        for prefix in [0,7] {
+            let mut short=TypeWorkBudget::with_limit(prefix+cost-1); short.charge(prefix).unwrap();
+            assert!(matches!(render(&image,&mut short),Err(LeafFailure::Resource)));
+            let mut exact=TypeWorkBudget::with_limit(prefix+cost); exact.charge(prefix).unwrap();
+            assert_eq!(render(&image,&mut exact).unwrap().source,canonical.source);
+            assert_eq!(exact.used(),prefix+cost);
+            assert!(matches!(render(&image,&mut exact),Err(LeafFailure::Resource)));
+        }
+        let root=render_admitted_root_shim(&image,&canonical,&mut TypeWorkBudget::default()).unwrap();
+        assert!(root.contains("const CHECKED_ROLES: [[u32; 8]; 2]"));
+        let mut donor=output_status_fixture();
+        std::mem::swap(&mut image.bridges[canonical.members[1]].plan,&mut donor.bridges[canonical.members[1]].plan);
+        assert!(matches!(render(&image,&mut TypeWorkBudget::default()),Err(LeafFailure::Association)));
+    }
+
     #[test]
     fn root_role_data_binds_original_coordinates_and_paid_rendering() {
         let mut image = fixture();

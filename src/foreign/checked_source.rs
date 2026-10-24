@@ -607,6 +607,35 @@ pub(crate) fn bind_foreign_symbol(
     bind_foreign_symbol_for_profile(library, prepared, symbol_index, effect, context, work)
 }
 
+// Fixed-size shape checks only: callers pay twelve units before inspection.
+// Full original owner/operand/result admission remains mandatory separately.
+pub(crate) fn independent_output_acquire(symbol: &PreparedForeignSymbol) -> bool {
+    use super::source_contract::{PreparedAddressRepresentation as Address,
+        PreparedOwnerCall as Role, PreparedScalarRepresentation as Scalar};
+    let operands = symbol.operands();
+    matches!(symbol.owner_call(), Some(Role::OutputAcquire { output_operand: 1, offset: None, .. }))
+        && operands.len() == 4
+        && matches!(operands[0].source(), PreparedOperandSource::Nul(_))
+        && operands[0].representation() == PreparedRepresentation::Address(Address::Bytes)
+        && matches!(operands[1].source(), PreparedOperandSource::OwnerOutput)
+        && operands[1].representation() == PreparedRepresentation::Address(Address::Opaque)
+        && matches!(operands[2].source(), PreparedOperandSource::Constant(_))
+        && operands[2].representation() == PreparedRepresentation::Scalar(Scalar::Signed(32))
+        && matches!(operands[3].source(), PreparedOperandSource::Null)
+        && operands[3].representation() == PreparedRepresentation::Address(Address::Bytes)
+        && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
+}
+
+pub(crate) fn independent_status_teardown(symbol: &PreparedForeignSymbol) -> bool {
+    use super::source_contract::{PreparedAddressRepresentation as Address, PreparedOwnerCall as Role};
+    let operands = symbol.operands();
+    matches!(symbol.owner_call(), Some(Role::StatusTeardown { current_operand: 0, .. }))
+        && operands.len() == 1
+        && matches!(operands[0].source(), PreparedOperandSource::Current(_))
+        && operands[0].representation() == PreparedRepresentation::Address(Address::Opaque)
+        && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
+}
+
 /// Explicit static checked binding; it grants no executable runtime authority.
 pub(crate) fn bind_checked_foreign_symbol(
     library: NativeLibraryId,
@@ -627,7 +656,7 @@ pub(crate) fn bind_checked_foreign_symbol(
             use super::source_contract::{
                 PreparedAddressRepresentation as Representation, PreparedOwnerCall,
             };
-            charge(work, 1, effect.span)?;
+            charge(work, if matches!(role, PreparedOwnerCall::OutputAcquire { .. } | PreparedOwnerCall::StatusTeardown { .. }) { 12 } else { 1 }, effect.span)?;
             let symbol = &prepared.symbols()[symbol_index];
             prepared.owners().get(role.application().owner()).is_some_and(|owner| {
                 (owner.retained_parameters().is_empty()
@@ -652,6 +681,16 @@ pub(crate) fn bind_checked_foreign_symbol(
                             })
                             && matches!(symbol.result(), PreparedAbiResult::Scalar(_))
                             && owner.representation() == Representation::Opaque
+                    }
+                    PreparedOwnerCall::OutputAcquire { .. } => {
+                        owner.retained_parameters().is_empty()
+                            && owner.representation() == Representation::Opaque
+                            && independent_output_acquire(symbol)
+                    }
+                    PreparedOwnerCall::StatusTeardown { .. } => {
+                        owner.retained_parameters().is_empty()
+                            && owner.representation() == Representation::Opaque
+                            && independent_status_teardown(symbol)
                     }
                     _ => false,
                 }

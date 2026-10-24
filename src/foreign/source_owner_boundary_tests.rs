@@ -1381,7 +1381,7 @@ fn checked_leaf_preentry_null_output_loss_and_synthetic_finish_do_not_invent_rel
     assert!(ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard().is_none());
     assert_eq!(leaf::calls(), [1, 0, 0, 0, 0]);
     assert_eq!(handle.snapshot().native, crate::foreign::checked_control::Native::NoOwner);
-    for synthetic in [false, true] {
+    for (synthetic, blocked, unpreparable) in [(false, false, false), (true, true, false), (true, false, true)] {
         leaf::reset();
         let ready = leaf_ready(&acquire, &mut work);
         let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
@@ -1390,9 +1390,21 @@ fn checked_leaf_preentry_null_output_loss_and_synthetic_finish_do_not_invent_rel
             handle.publish(111, acquire._scope_node, &mut work).unwrap();
             guard.quarantine();
             handle.closing(111, acquire._scope_node, &mut work).unwrap();
-            guard.prepare_checked_finish(&finish, 111, true, &mut work).unwrap();
-            assert!(matches!(guard.finish_checked_admitted(&crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], true).unwrap().0,
-                crate::foreign::source_runtime::NativeOwnerDisposition::Synthetic { .. }));
+            guard.prepare_checked_finish(&finish, 111, blocked, &mut work).unwrap();
+            if unpreparable { guard.mark_leaf_unpreparable_for_test(); }
+            let before = handle.snapshot();
+            let (disposition, status) = guard.finish_checked_admitted(
+                &crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], blocked).unwrap();
+            assert!(matches!(disposition, crate::foreign::source_runtime::NativeOwnerDisposition::Synthetic { .. }));
+            assert!(status.is_none());
+            assert_eq!(handle.snapshot(), before, "K6 delivery changes no native fact, pending state or observation");
+            if unpreparable {
+                // The exact one-shot decision was consumed even though native
+                // preparation could not succeed and invoke-time blocked=false.
+                let guard = disposition.into_retained().unwrap();
+                assert!(guard.finish_checked_admitted(
+                    &crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], false).is_err());
+            }
         } else {
             handle.output_failed();
             drop(guard);
@@ -1533,6 +1545,208 @@ fn checked_violation_request_and_null_observation_identity_are_exact() {
             }
             drop(fixture.guard);
             assert_eq!(DISPOSALS.get(), 0, "suspect guard never invokes fallback disposal");
+        });
+    }
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+fn with_output_status_context(
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, FixtureRequest, FixtureRequest),
+) {
+    let (program, _) = crate::elaborate::checked_owner_passive_program_for_source(
+        include_str!("../../tests/fixtures/checked-owner-lifecycle/output-status.ash"),
+        "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n",
+    );
+    with_program_context(&program, test);
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+fn output_leaf_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> NativeOwnerGuardReady {
+    let mut ready = leaf_authority_ready(acquire, work);
+    ready.prepare_initialized_bytes(None);
+    ready.prepare_checked_boundary(acquire, 111, Some(limits()), work).unwrap();
+    ready
+}
+
+/// Rust physical backing on genuinely admitted output/status Core. This helper
+/// creates neither an executable binding nor protected/native permission.
+#[cfg(not(ash_checked_owner_root = "v1"))]
+pub(crate) fn with_output_status_unpublished_for_test(
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        crate::foreign::source_runtime::NativeOwnerBoundary,
+        Option<crate::foreign::source_runtime::NativeOwnerGuard>),
+) {
+    with_output_status_context(|program, acquire, _| {
+        let mut work = TypeWorkBudget::default();
+        let ready = output_leaf_ready(&acquire, &mut work);
+        let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let guard = ready.invoke_checked_output_leaf(b":memory:\0").unwrap().record().into_guard();
+        test(program, acquire._scope_node, handle, guard);
+    });
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn genuine_output_status_guard_commits_typed_observations_before_reporting() {
+    use crate::foreign::checked_leaf_transport as leaf;
+    use crate::foreign::checked_control::{Native, K};
+    for disposition in [Some(true), Some(false), None] {
+        leaf::reset(); leaf::output_status(-11);
+        leaf::disposal(disposition, disposition.map(|consumed| if consumed { 0 } else { 7 }), true);
+        with_output_status_unpublished_for_test(|_, node, handle, guard| {
+            let mut guard = guard.unwrap();
+            assert_eq!(handle.acquisition_status(), Some(-11));
+            assert_eq!(handle.latest_status(), Some(-11));
+            let result = guard.dispose_unpublished(111, node, false);
+            assert_eq!(result.is_ok(), disposition.is_some());
+            assert_eq!(handle.snapshot().native, if disposition == Some(true) { Native::Consumed } else { Native::Owned });
+            assert_eq!(handle.snapshot().k, K::Absent);
+            assert_eq!(handle.snapshot().unresolved, disposition.is_none());
+            assert_eq!(handle.acquisition_status(), Some(-11));
+            assert_eq!(handle.latest_status(), Some(match disposition { Some(true)=>0, Some(false)=>7, None=>-11 }));
+            handle.output_failed();
+            guard.dispose_unpublished(111, node, false).unwrap();
+            drop(guard);
+            assert_eq!(leaf::calls(), [1,0,0,0,1], "one attempt; no destructor retry after output failure or Drop");
+        });
+    }
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn genuine_output_status_finish_uses_original_disposition_and_preserves_retained_backing() {
+    use crate::foreign::checked_leaf_transport as leaf;
+    use crate::foreign::checked_control::{Native, K};
+    for consumed in [false, true] {
+        leaf::reset(); leaf::output_status(-11);
+        let status = if consumed {0} else {7};
+        leaf::disposal(Some(consumed), Some(status), true);
+        with_output_status_context(|_, acquire, finish| {
+            let mut work = TypeWorkBudget::default();
+            let ready = output_leaf_ready(&acquire, &mut work);
+            let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+            let guard = ready.invoke_checked_output_leaf(b":memory:\0").unwrap().record().into_guard().unwrap();
+            handle.publish(111, acquire._scope_node, &mut work).unwrap();
+            handle.closing(111, acquire._scope_node, &mut work).unwrap();
+            guard.prepare_checked_finish(&finish, 111, false, &mut work).unwrap();
+            let (disposition, observed) = guard.finish_checked_admitted(&crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], false).unwrap();
+            assert_eq!(observed.unwrap().reply, NativeScalarReply::Scalar(NativeScalarValue::I32(status)));
+            assert_eq!(handle.snapshot().native, if consumed {Native::Consumed} else {Native::Owned});
+            assert_eq!(handle.snapshot().k, K::Discharged);
+            assert_eq!(handle.acquisition_status(), Some(-11));
+            if let Some(guard) = disposition.into_retained() {
+                assert!(guard.physically_live(), "same opaque owner remains protected on retention");
+                assert_eq!(handle.latest_status(), Some(7));
+                assert!(guard.prepare_checked_finish(&finish, 111, false, &mut work).is_err(), "same close cannot replay");
+                drop(guard);
+            }
+            assert_eq!(leaf::calls(), [1,0,0,0,1]);
+        });
+    }
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+pub(crate) fn with_output_status_closing_for_test(
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        crate::foreign::source_runtime::NativeOwnerBoundary,
+        Option<crate::foreign::source_runtime::NativeOwnerGuard>),
+) {
+    with_output_status_context(|program, acquire, finish| {
+        let mut work = TypeWorkBudget::default();
+        let ready = output_leaf_ready(&acquire, &mut work);
+        let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let guard = ready.invoke_checked_output_leaf(b":memory:\0").unwrap().record().into_guard().unwrap();
+        handle.publish(111, acquire._scope_node, &mut work).unwrap();
+        handle.closing(111, acquire._scope_node, &mut work).unwrap();
+        guard.prepare_checked_finish(&finish, 111, false, &mut work).unwrap();
+        let (disposition, _) = guard.finish_checked_admitted(&crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], false).unwrap();
+        test(program, acquire._scope_node, handle, disposition.into_retained());
+    });
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn genuine_output_status_preentry_refusals_preserve_native_call_count() {
+    use crate::foreign::checked_leaf_transport as leaf;
+    for input in [&b"missing terminator"[..],&b"embedded\0nul\0"[..]] {
+        leaf::reset();
+        with_output_status_context(|_, acquire, _| {
+            let mut work = TypeWorkBudget::default();
+            let ready = output_leaf_ready(&acquire, &mut work);
+            let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+            let before = handle.snapshot();
+            assert!(ready.invoke_checked_output_leaf(input).is_err());
+            assert_eq!(handle.snapshot(),before);
+            assert_eq!(leaf::calls(),[0;5]);
+        });
+    }
+    leaf::reset(); leaf::output_status(-11); leaf::disposal(Some(true),Some(0),true);
+    with_output_status_unpublished_for_test(|_,node,handle,guard| {
+        let mut guard = guard.unwrap();
+        guard.install_shared_denial_for_test();
+        guard.dispose_unpublished(111,node,false).unwrap();
+        assert_eq!(handle.snapshot().k,crate::foreign::checked_control::K::Absent);
+        assert_eq!(handle.latest_status(),Some(-11));
+        drop(guard);
+        assert_eq!(leaf::calls(),[1,0,0,0,0],"group denial forbids disposal and Drop entry");
+    });
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn genuine_generic_status_finish_never_retries_on_drop_or_explicit_storage_close() {
+    use crate::foreign::checked_control::{Native,K};
+    thread_local! {
+        static STATUS_REPLY: std::cell::Cell<NativeScalarReply> = const { std::cell::Cell::new(NativeScalarReply::Scalar(NativeScalarValue::I32(0))) };
+        static STATUS_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    fn status_call(_: &[NativeOwnerOperand]) -> NativeScalarReply {
+        STATUS_CALLS.set(STATUS_CALLS.get()+1); STATUS_REPLY.get()
+    }
+    for reply in [NativeScalarReply::Scalar(NativeScalarValue::I32(0)),NativeScalarReply::Scalar(NativeScalarValue::I32(7)),NativeScalarReply::Scalar(NativeScalarValue::U32(0))] {
+        STATUS_REPLY.set(reply); STATUS_CALLS.set(0);
+        with_output_status_context(|_,acquire,finish| {
+            let mut work=TypeWorkBudget::default();
+            let storage=Rc::new(NativeOwnerStorage::default());
+            let plan=|| crate::foreign::source_runtime::NativeOwnerDestruction::Status {
+                callback:status_call,symbol:Arc::clone(&finish._scope.header().teardown),
+            };
+            let mut ready=NativeOwnerGuardReady::in_storage_plan(Arc::clone(&acquire._scope.header().owner),plan(),1,0,Rc::clone(&storage)).unwrap();
+            ready.prepare_authority(111,
+                crate::types::IterativeTypeOwner::new(crate::types::clone_type_with_budget(&acquire.state,&mut work).unwrap()),
+                crate::types::IterativeTypeOwner::new(crate::types::clone_type_with_budget(&acquire.access,&mut work).unwrap()),
+                Vec::new(),vec![NativeOwnerOperand::Address(std::ptr::null_mut())],&mut work).unwrap();
+            ready.prepare_checked_boundary(&acquire,111,Some(limits()),&mut work).unwrap();
+            let handle=ready.checked_boundary(&mut work).unwrap().unwrap();
+            ready.begin_checked_acquire().unwrap();
+            let guard=ready.returned_output(std::ptr::NonNull::<u8>::dangling().as_ptr().cast(),NativeScalarValue::I32(-11)).record().into_guard().unwrap();
+            assert_eq!(handle.acquisition_status(),Some(-11));
+            handle.publish(111,acquire._scope_node,&mut work).unwrap();
+            handle.closing(111,acquire._scope_node,&mut work).unwrap();
+            guard.prepare_checked_finish(&finish,111,false,&mut work).unwrap();
+            let before=handle.snapshot();
+            assert_eq!(before.k,K::Closing); assert_eq!(before.native,Native::Owned);
+            assert!(!before.unresolved); assert_eq!(STATUS_CALLS.get(),0);
+            let result=guard.finish_checked_admitted(&plan(),&[NativeOwnerOperand::Address(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())],false);
+            let invalid=matches!(reply,NativeScalarReply::Scalar(NativeScalarValue::U32(_)));
+            let consumed=reply==NativeScalarReply::Scalar(NativeScalarValue::I32(0));
+            assert_eq!(result.is_err(),invalid);
+            assert_eq!(handle.snapshot().native,if consumed {Native::Consumed}else{Native::Owned});
+            assert_eq!(handle.snapshot().unresolved,invalid);
+            assert_eq!(handle.snapshot().k,if invalid {K::Transferred}else{K::Discharged});
+            assert_eq!(handle.latest_status(),Some(if invalid {-11}else if consumed {0}else{7}));
+            assert_eq!(handle.retains_backing(),!consumed);
+            if invalid {
+                // The invalid return terminates through output_failed BEFORE
+                // Err drops its guard: O8/K8 transfers, never completes, K.
+                assert!(handle.snapshot().terminal);
+                assert_eq!(handle.snapshot().observations,1,"only acquisition has an admitted native observation");
+                assert!(handle.closing_record().unwrap().0.is_none());
+                assert!(handle.source_continued(111,acquire._scope_node).is_err());
+            }
+            drop(result);
+            assert_eq!(storage.close(),consumed);
+            assert_eq!(STATUS_CALLS.get(),1,"retained and no-O4 attempts must not replay in Drop or host close");
         });
     }
 }

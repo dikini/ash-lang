@@ -172,6 +172,63 @@ pub(super) enum Observed {
     FinishedRetained,
     GuardConsumed,
     GuardRetained,
+    AcquiredStatus { reply: super::source_runtime::NativeScalarReply, present: bool },
+    FinishedStatus { reply: super::source_runtime::NativeScalarReply, consumed: bool },
+    GuardStatus { reply: super::source_runtime::NativeScalarReply, consumed: bool },
+}
+
+// The typed result is authenticated before any disposition is accepted.
+// This fixed conversion neither allocates nor widens a source value.
+fn original_scalar(
+    symbol: &super::checked_source::CheckedForeignSymbol,
+    reply: super::source_runtime::NativeScalarReply,
+) -> Option<super::source_contract::PreparedScalarValue> {
+    use super::source_contract::{PreparedAbiResult as Abi, PreparedScalarRepresentation as Repr, PreparedScalarValue};
+    use super::source_runtime::{NativeScalarReply::Scalar, NativeScalarValue as Value};
+    let (negative, magnitude) = match (symbol.symbol().result(), reply) {
+        (Abi::Scalar(Repr::Signed(8)), Scalar(Value::I8(v))) => (v < 0, i64::from(v).unsigned_abs()),
+        (Abi::Scalar(Repr::Signed(32)), Scalar(Value::I32(v))) => (v < 0, i64::from(v).unsigned_abs()),
+        (Abi::Scalar(Repr::Signed(64)), Scalar(Value::I64(v))) => (v < 0, v.unsigned_abs()),
+        (Abi::Scalar(Repr::Unsigned(8)), Scalar(Value::U8(v))) => (false, u64::from(v)),
+        (Abi::Scalar(Repr::Unsigned(32)), Scalar(Value::U32(v))) => (false, u64::from(v)),
+        (Abi::Scalar(Repr::Unsigned(64)), Scalar(Value::U64(v))) => (false, v),
+        (Abi::Scalar(Repr::SizeT), Scalar(Value::USize(v))) => (false, u64::try_from(v).ok()?),
+        _ => return None,
+    };
+    Some(PreparedScalarValue { negative, magnitude })
+}
+
+// Fund the complete immutable outcome walk before entry, including matching
+// after return. No allocation or work refusal occurs during observed().
+fn status_observation_work(
+    symbol: &super::checked_source::CheckedForeignSymbol,
+    work: &mut TypeWorkBudget,
+) -> Result<usize, Failure> {
+    use super::source_contract::PreparedOwnerCall as Role;
+    match symbol.owner_role() {
+        Some(Role::OutputAcquire { .. }) => { pay(work, 1)?; Ok(4) }
+        Some(Role::StatusTeardown { outcomes, .. }) => {
+            let mut cost = 4usize;
+            for outcome in outcomes {
+                pay(work, 1)?;
+                cost = cost.checked_add(1).and_then(|n| n.checked_add(outcome.predicates.len())).ok_or(Failure::Resource)?;
+            }
+            Ok(cost)
+        }
+        _ => Ok(0),
+    }
+}
+
+fn status_disposition(
+    symbol: &super::checked_source::CheckedForeignSymbol,
+    reply: super::source_runtime::NativeScalarReply,
+) -> Option<bool> {
+    let scalar = original_scalar(symbol, reply)?;
+    let super::source_contract::PreparedOwnerCall::StatusTeardown { outcomes, .. } = symbol.owner_role()? else { return None; };
+    outcomes.iter().find(|outcome| outcome.predicates.iter().all(|predicate|
+        predicate.position == super::source_contract::PreparedNativePosition::Result
+            && predicate.value == scalar
+    )).map(|outcome| outcome.consumes)
 }
 
 struct GroupState {
@@ -328,16 +385,19 @@ impl<'p> Ledger<'p> {
         {
             return Err(Failure::Resource);
         }
-        // This first increment supports the dependency-free exact void finish.
-        // It does not reinterpret status-dependent contracts as void contracts.
+        // Independent status owners retain their original typed result and
+        // total outcome relation; status never acquires void authority.
         if !header.dependencies.is_empty()
             || header.original.host.is_none()
             || !matches!(
                 header.codec.report,
                 crate::core::source_resource::SourceResourceReportCodec::CheckedScope { .. }
             )
-            || !matches!(header.teardown.owner_role(),
-                Some(super::source_contract::PreparedOwnerCall::Teardown { .. }))
+            || !matches!(
+                header.teardown.owner_role(),
+                Some(super::source_contract::PreparedOwnerCall::Teardown { .. }
+                    | super::source_contract::PreparedOwnerCall::StatusTeardown { .. })
+            )
             || !header
                 .acquire
                 .owner()
@@ -458,6 +518,8 @@ impl<'p> Ledger<'p> {
         if !std::sync::Arc::ptr_eq(expected, original) {
             return Err(Failure::Original);
         }
+        let observation_work = status_observation_work(expected, work)?;
+        pay(work, observation_work)?;
         let serial = record.serial.checked_add(1).ok_or(Failure::Resource)?;
         let call = Call {
             owner,
@@ -528,8 +590,23 @@ impl<'p> Ledger<'p> {
             return Err(Failure::Stale);
         }
         let native = match (call.kind, observation) {
-            (CallKind::Acquire, Observed::Acquired) => Native::Owned,
-            (CallKind::Acquire, Observed::Null) => Native::NoOwner,
+            (CallKind::Acquire, Observed::Acquired)
+                if matches!(record.header.acquire.owner_role(), Some(super::source_contract::PreparedOwnerCall::Acquire { .. })) => Native::Owned,
+            (CallKind::Acquire, Observed::Null)
+                if matches!(record.header.acquire.owner_role(), Some(super::source_contract::PreparedOwnerCall::Acquire { .. })) => Native::NoOwner,
+            (CallKind::Acquire, Observed::AcquiredStatus { reply, present })
+                if matches!(record.header.acquire.owner_role(), Some(super::source_contract::PreparedOwnerCall::OutputAcquire { .. }))
+                    && original_scalar(&record.header.acquire, reply).is_some() => {
+                if present { Native::Owned } else { Native::NoOwner }
+            }
+            (CallKind::Finish, Observed::FinishedStatus { reply, consumed })
+                if status_disposition(&record.header.teardown, reply) == Some(consumed) => {
+                if consumed { Native::Consumed } else { Native::Owned }
+            }
+            (CallKind::GuardDisposal, Observed::GuardStatus { reply, consumed })
+                if status_disposition(&record.header.teardown, reply) == Some(consumed) => {
+                if consumed { Native::Consumed } else { Native::Owned }
+            }
             (CallKind::CopyBytes(_), Observed::Copied) if record.native == Native::Owned => {
                 Native::Owned
             }
@@ -888,10 +965,15 @@ impl RuntimeBoundary {
         }
         // Pay scope/header retention and a bounded set of nonowning slot handles.
         // Future enter/commit/witness operations use only the prepaid meter.
+        let status_work = status_observation_work(&receipt._scope.header().acquire, work)?
+            .checked_add(status_observation_work(&receipt._scope.header().teardown, work)?)
+            .ok_or(Failure::Resource)?;
+        let status_future = limits.observations.checked_mul(status_work.checked_mul(2).ok_or(Failure::Resource)?).ok_or(Failure::Resource)?;
         let future = limits
             .observations
             .checked_mul(14)
             .and_then(|n| n.checked_add(8 + 8 + 4 + 3 + 3 + 8 + 4))
+            .and_then(|n| n.checked_add(status_future))
             .ok_or(Failure::Resource)?;
         // One additional fixed observation cell retains acquisition status
         // independently of the subsequent disposal status in the owner slot.
@@ -952,6 +1034,13 @@ impl RuntimeBoundary {
                 .expect("reserved acquisition observation");
         }
     }
+    pub(super) fn acquired_status(&mut self, present: bool, reply: super::source_runtime::NativeScalarReply) {
+        if let Some(call) = self.pending.take() {
+            self.acquisition_observed = true;
+            self.ledger.observed(call, Observed::AcquiredStatus { reply, present })
+                .expect("reserved typed acquisition observation");
+        }
+    }
     pub(super) fn acquisition_request(&self) -> Option<crate::core::NodeId> {
         self.acquisition_observed.then_some(self.acquire_request)
     }
@@ -1004,6 +1093,11 @@ impl RuntimeBoundary {
         } else {
             Observed::GuardRetained
         }).expect("reserved unpublished disposal observation");
+    }
+    pub(super) fn guard_disposed_status(&mut self, consumed: bool, reply: super::source_runtime::NativeScalarReply) {
+        let call = self.pending.take().expect("entered unpublished status disposal");
+        self.ledger.observed(call, Observed::GuardStatus { reply, consumed })
+            .expect("reserved original unpublished status disposition");
     }
     pub(super) fn publish(
         &mut self,
@@ -1194,21 +1288,33 @@ impl RuntimeBoundary {
         self.begin_finish_entry_with_blocked(false)
     }
     pub(super) fn begin_finish_entry_with_blocked(&mut self, blocked: bool) -> Result<FinishEntry, Failure> {
+        self.begin_finish_entry_prepared(blocked, || Ok(())).map(|(entry, _)| entry)
+    }
+    /// Select and authenticate the existing one-shot decision before requiring
+    /// physical backing. Only NativeReady performs preparation, still before
+    /// ledger entry; Synthetic must deliver its exact witness without C.
+    pub(super) fn begin_finish_entry_prepared<T>(
+        &mut self,
+        blocked: bool,
+        prepare_native: impl FnOnce() -> Result<T, Failure>,
+    ) -> Result<(FinishEntry, Option<T>), Failure> {
         pay(&mut self.prepaid, 3)?;
-        // An invoke-time contradiction cannot record native entry. A genuine
-        // synthetic entry already owns its non-native witness and remains valid.
         if blocked && matches!(self.finish_prepared, Some(FinishEntry::NativeReady)) {
             return Err(Failure::State);
         }
         let entry = self.finish_prepared.take().ok_or(Failure::State)?;
-        match &entry {
+        let prepared = match &entry {
             FinishEntry::NativeReady => {
+                // Preparation may refuse, but cannot leave a fabricated native
+                // pending event or a reusable prepared Finish decision.
+                let prepared = prepare_native()?;
                 self.pending = Some(self.ledger.enter(
                     self.owner,
                     CallKind::Finish,
                     &self.scope.header().teardown,
                     &mut self.prepaid,
                 )?);
+                Some(prepared)
             }
             FinishEntry::Synthetic(witness) => {
                 let record = &self.ledger.records[self.owner.index];
@@ -1219,9 +1325,10 @@ impl RuntimeBoundary {
                 {
                     return Err(Failure::State);
                 }
+                None
             }
-        }
-        Ok(entry)
+        };
+        Ok((entry, prepared))
     }
     /// Legacy teardown dispatch accepts only actual native readiness. The
     /// checked path must consume the complete entry decision instead.
@@ -1243,6 +1350,12 @@ impl RuntimeBoundary {
                     },
                 )
                 .expect("reserved finish observation");
+        }
+    }
+    pub(super) fn finished_status(&mut self, consumed: bool, reply: super::source_runtime::NativeScalarReply) {
+        if let Some(call) = self.pending.take() {
+            self.ledger.observed(call, Observed::FinishedStatus { reply, consumed })
+                .expect("reserved original status disposition");
         }
     }
     pub(super) fn quarantine(&mut self) {
@@ -1369,6 +1482,158 @@ mod tests {
         )
         .unwrap();
         test(&header);
+    }
+
+    fn with_status_header(test: impl FnOnce(&CheckedSourceResourceHeader)) {
+        let (program, _sources) = crate::elaborate::checked_owner_passive_program_for_source(
+            include_str!("../../tests/fixtures/checked-owner-lifecycle/output-status.ash"),
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n",
+        );
+        let original = program.registry().source_resource_facts().find(|fact| fact.spelling == "Probe").unwrap();
+        let header = CheckedSourceResourceHeader::admit(original, program.registry(), &mut TypeWorkBudget::default()).unwrap();
+        test(&header);
+    }
+
+    #[test]
+    fn unpublished_typed_status_disposal_authenticates_original_without_source_k() {
+        use super::super::source_runtime::{NativeScalarReply::Scalar, NativeScalarValue as V};
+        with_status_header(|header| {
+            for (reply, consumed, admitted) in [(Scalar(V::I32(0)),true,true),(Scalar(V::I32(7)),false,true),(Scalar(V::U32(0)),true,false)] {
+                let mut work = TypeWorkBudget::default();
+                let mut ledger = Ledger::reserve(1,1,4,&mut work).unwrap();
+                let group = ledger.group(&mut work).unwrap();
+                let owner = ledger.owner(group,header,&mut work).unwrap();
+                let acquire = ledger.enter(owner,CallKind::Acquire,&header.acquire,&mut work).unwrap();
+                ledger.observed(acquire,Observed::AcquiredStatus {reply:Scalar(V::I32(-11)),present:true}).unwrap();
+                let call = ledger.enter(owner,CallKind::GuardDisposal,&header.teardown,&mut work).unwrap();
+                assert_eq!(ledger.observed(call,Observed::GuardConsumed),Err(Failure::Original));
+                assert_eq!(ledger.observed(call,Observed::GuardRetained),Err(Failure::Original));
+                assert_eq!(ledger.observed(call,Observed::GuardStatus {reply,consumed:!consumed}),Err(Failure::Original));
+                assert_eq!(ledger.observed(call,Observed::GuardStatus {reply,consumed}).is_ok(),admitted);
+                let record = &ledger.records[owner.index];
+                assert_eq!(record.k,K::Absent); assert!(record.closing.is_none());
+                assert_eq!(record.native,if admitted && consumed {Native::Consumed}else{Native::Owned});
+                assert_eq!(record.unresolved,!admitted);
+                assert_eq!(record.access,if admitted {Access::Retired}else{Access::Unpublished});
+                assert!(record.guard_attempted);
+                assert!(ledger.enter(owner,CallKind::GuardDisposal,&header.teardown,&mut work).is_err());
+                assert!(ledger.finish_witness(owner,&mut work).is_err());
+            }
+        });
+    }
+
+    #[test]
+    fn typed_status_observation_requires_original_abi_and_disposition() {
+        use super::super::source_runtime::{NativeScalarReply::Scalar, NativeScalarValue as V};
+        with_status_header(|header| {
+            for (final_status, final_consumed) in [(0, true), (7, false)] {
+            let mut work = TypeWorkBudget::default();
+            let mut ledger = Ledger::reserve(1, 1, 4, &mut work).unwrap();
+            let group = ledger.group(&mut work).unwrap();
+            let owner = ledger.owner(group, header, &mut work).unwrap();
+            let acquire = ledger.enter(owner, CallKind::Acquire, &header.acquire, &mut work).unwrap();
+            assert_eq!(ledger.observed(acquire, Observed::Acquired), Err(Failure::Original));
+            assert_eq!(ledger.observed(acquire, Observed::AcquiredStatus { reply: Scalar(V::U32(0)), present: true }), Err(Failure::Original));
+            assert!(ledger.records[owner.index].unresolved);
+            ledger.observed(acquire, Observed::AcquiredStatus { reply: Scalar(V::I32(7)), present: true }).unwrap();
+            ledger.publish_acquired(owner, &mut work).unwrap();
+            assert_eq!(ledger.close(owner, true, false, &mut work).unwrap(), Close::NativeFinish);
+            let finish = ledger.enter(owner, CallKind::Finish, &header.teardown, &mut work).unwrap();
+            for observed in [
+                Observed::FinishedConsumed,
+                Observed::FinishedStatus { reply: Scalar(V::U32(0)), consumed: true },
+                Observed::FinishedStatus { reply: Scalar(V::I32(7)), consumed: true },
+                Observed::FinishedStatus { reply: Scalar(V::I32(0)), consumed: false },
+            ] {
+                assert_eq!(ledger.observed(finish, observed), Err(Failure::Original));
+                assert_eq!(ledger.records[owner.index].k, K::Closing);
+                assert_eq!(ledger.records[owner.index].native, Native::Owned);
+                assert!(ledger.records[owner.index].unresolved);
+            }
+            ledger.observed(finish, Observed::FinishedStatus { reply: Scalar(V::I32(final_status)), consumed: final_consumed }).unwrap();
+            assert_eq!(ledger.records[owner.index].native, if final_consumed { Native::Consumed } else { Native::Owned });
+            assert_eq!(ledger.records[owner.index].k, K::Discharged);
+            assert_eq!(ledger.observed(finish, Observed::FinishedStatus { reply: Scalar(V::I32(0)), consumed: true }), Err(Failure::Stale));
+            }
+        });
+    }
+
+    #[test]
+    fn status_entry_payment_refuses_atomically_and_null_never_publishes() {
+        use super::super::source_runtime::{NativeScalarReply::Scalar, NativeScalarValue::I32};
+        with_status_header(|header| {
+            let prepare = || {
+                let mut work = TypeWorkBudget::default();
+                let mut ledger = Ledger::reserve(1, 1, 2, &mut work).unwrap();
+                let group = ledger.group(&mut work).unwrap();
+                let owner = ledger.owner(group, header, &mut work).unwrap();
+                (ledger, owner)
+            };
+            let (mut measured, owner) = prepare();
+            let mut work = TypeWorkBudget::default();
+            measured.enter(owner, CallKind::Acquire, &header.acquire, &mut work).unwrap();
+            let exact = work.used();
+            for limit in [0, exact - 1] {
+                let (mut ledger, owner) = prepare();
+                assert_eq!(ledger.enter(owner, CallKind::Acquire, &header.acquire, &mut TypeWorkBudget::with_limit(limit)), Err(Failure::Resource));
+                assert!(ledger.records[owner.index].pending.is_none());
+                assert!(!ledger.records[owner.index].unresolved);
+                assert!(ledger.history.is_empty());
+            }
+            let (mut ledger, owner) = prepare();
+            let call = ledger.enter(owner, CallKind::Acquire, &header.acquire, &mut TypeWorkBudget::with_limit(exact)).unwrap();
+            ledger.observed(call, Observed::AcquiredStatus { reply: Scalar(I32(0)), present: false }).unwrap();
+            assert_eq!(ledger.records[owner.index].native, Native::NoOwner);
+            assert_eq!(ledger.publish_acquired(owner, &mut TypeWorkBudget::default()), Err(Failure::State));
+            assert_eq!(ledger.records[owner.index].k, K::Absent);
+
+            let prepare_finish = || {
+                let (mut ledger, owner) = prepare();
+                let mut work = TypeWorkBudget::default();
+                let acquire = ledger.enter(owner, CallKind::Acquire, &header.acquire, &mut work).unwrap();
+                ledger.observed(acquire, Observed::AcquiredStatus { reply: Scalar(I32(0)), present: true }).unwrap();
+                ledger.publish_acquired(owner, &mut work).unwrap();
+                assert_eq!(ledger.close(owner, true, false, &mut work).unwrap(), Close::NativeFinish);
+                (ledger, owner)
+            };
+            let (mut measured, owner) = prepare_finish();
+            let mut work = TypeWorkBudget::default();
+            measured.enter(owner, CallKind::Finish, &header.teardown, &mut work).unwrap();
+            let finish_exact = work.used();
+            for limit in [0, finish_exact - 1] {
+                let (mut ledger, owner) = prepare_finish();
+                let serial = ledger.records[owner.index].serial;
+                let history = ledger.history.len();
+                assert_eq!(ledger.enter(owner, CallKind::Finish, &header.teardown, &mut TypeWorkBudget::with_limit(limit)), Err(Failure::Resource));
+                let record = &ledger.records[owner.index];
+                assert_eq!(record.serial, serial);
+                assert!(record.pending.is_none());
+                assert!(!record.unresolved);
+                assert_eq!(record.native, Native::Owned);
+                assert_eq!(record.k, K::Closing);
+                assert_eq!(record.continuation, Continuation::Required);
+                assert_eq!(record.access, Access::Retired);
+                assert!(record.closing.is_none());
+                assert!(!record.witness_issued);
+                assert_eq!(ledger.history.len(), history);
+                assert_eq!(ledger.observed_calls, 1);
+                assert_eq!(ledger.in_flight, 0);
+                assert!(matches!(ledger.finish_witness(owner, &mut TypeWorkBudget::default()), Err(Failure::State)));
+                // A fresh exact meter retries the same unchanged closing owner.
+                let mut fresh = TypeWorkBudget::with_limit(finish_exact);
+                let finish = ledger.enter(owner, CallKind::Finish, &header.teardown, &mut fresh).unwrap();
+                assert_eq!(fresh.used(), finish_exact);
+                ledger.observed(finish, Observed::FinishedStatus { reply: Scalar(I32(0)), consumed: true }).unwrap();
+                assert_eq!(ledger.records[owner.index].native, Native::Consumed);
+                assert_eq!(ledger.records[owner.index].k, K::Discharged);
+                let witness = ledger.finish_witness(owner, &mut TypeWorkBudget::default()).unwrap();
+                assert_eq!(witness.0.operation, header.teardown.operation());
+                assert_eq!(witness.0.completion, Completion::Observed(Native::Consumed));
+                assert!(matches!(ledger.finish_witness(owner, &mut TypeWorkBudget::default()), Err(Failure::State)));
+                ledger.source_continued(owner, witness, &mut TypeWorkBudget::default()).unwrap();
+                assert_eq!(ledger.records[owner.index].continuation, Continuation::Completed);
+            }
+        });
     }
 
     fn acquired<'p>(header: &'p CheckedSourceResourceHeader) -> (Ledger<'p>, Owner) {

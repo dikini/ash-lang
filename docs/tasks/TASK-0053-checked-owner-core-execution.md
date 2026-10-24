@@ -443,3 +443,56 @@ approvals/deployment/execution, F-core and whole criteria remain open.
 The genuine void path disposes an admitted unpublished owner before Refused payload copying or discard reporting, preserves KAbsent and never synthesizes source Finish or a closing record. Shared-denied groups remain at zero calls. Separate acquisition and latest-disposal observations survive output failure; invalid/no-O4 attempts preserve the prior observation and unresolved backing without retry. The legacy status controls remain accounting models, not checked status-profile admission.
 
 Fresh actual root/leaf compile/link yields ELF `67f43b5e` (100,547,432 bytes), receipt `ce2e8195` and request `cf13c1b1`; the authenticated configuration chain and independent root identity `cc199c7a` match. The coherent donor controls and fresh missing-release undefined-symbol refusal pass. Two glibc loading warnings and ordinary Rust warnings remain. Original `77443`/`97993` compile/lint failures, `62391` partial 11-pass/one fixture-setup-failure result and superseded delivery04 UNRUN remain separate evidence. No selected native callback or generated application/launcher ran. Six conformity fields remain Missing; configured approvals, genuine status transport, native SQLite L2, F-core and whole criteria remain open. This task/evidence prose was assembled after testing without changing product bytes.
+
+
+## Independent output/status runtime extension in progress
+
+The root-assigned follow-up starts from the preserved, unsigned unpublished
+void-disposal source checkpoint `89d4f798`; that disposal remains a separate
+untested delivery pending common-quarantine retention. The independent runtime
+slice follows AD-0016's common extension mechanism and CP-0024. It adds a closed
+opaque output acquisition with NUL input, original signed32 constant/null/output
+operands, and a current-owner scalar-status teardown. It preserves the existing
+four-role initialized-byte/void profile. No library name selects admission.
+
+The typed emitter, safe shim, physical slot dispatch and independent root role
+projection are being authored. Prepared destination/owner loans are constructed
+and consumed inside the actual held slot borrow, after input/ledger/report
+funding. Every nonnull output is armed before status/source output work;
+admitted retention keeps the same opaque owner. No admitted O4 preserves prior
+observations and unresolved backing without retry. Independent raw acquisition
+and teardown statuses remain separate from optional source payload readability.
+
+The bounded root result codec also needs exact sign/magnitude Integer encoding
+for status-bearing source error payloads, within its existing scratch/traversal
+and prepaid work bounds. Mandatory facts still precede optional result/Trace.
+Code/profile and exact artifact/request/configured approvals must be refreshed;
+old unconfigured evidence does not cover the new code or output tags.
+
+Primary owns genuine static/Core/header admission and request-specific
+Consumed/Retained/Boundary correspondence. Runtime transport and private injected
+controls cannot bypass the current fences or manufacture checked receipts.
+The first emitted output/status image is dependency-free with exactly two
+original roles; additional initialization/scalar/dependent/multioperand roles
+remain unsupported rather than being dropped. Full SQLite E/B, dependent
+Prepare/Finalize, BindText/Transient, native conformity, protected execution and
+F7 isolation remain open. No build or new native execution has run for this
+source work; common verification owns the serialized heavy lane.
+
+
+## Combined independent output/status delivery on retained PR124
+
+The current branch starts from actual retained PR124 `862c9ea2`, preserving its verified void disposal and ASHOUT03/ASHOBS03 records. It replays only the parked runtime `38e25461`/`c8c62384` and primary static/Core/typed-Ledger `5b4f9311`/`57ab2530` deltas. The earlier output/status planning paragraphs describe their historical source checkpoints; disposal is now a separate retained delivery.
+
+The combined source joins exact ABI-tagged replies to acquired_status, finished_status and unpublished guard_disposed_status using the same first matching original total outcome relation. Raw observations remain separate from optional source payload copying. Synthetic Finish selects its existing witness before physical preparation; NativeReady retains the actual slot loan through preparation, native call and commit. No-O4 retains the prior observation and unresolved backing without retry. The complete original role/type/row/H/owner correspondence remains independently checked.
+
+Focused genuine-source, typed-status/guard/payment/witness, Integer-result and existing void/disposal regressions are authored with all results UNRUN. Both the existing four-role and new two-role emitted C/header/archive/root/leaf compile-link discriminators are required, with coherent donors and actual missing-symbol negatives; neither output executes. Full dependent/multioperand/copied-input E/B, real SQLite/arena/native behavior, configured per-image approvals/deployment and F-core remain open. No Cargo/Clippy starts until independent coherent source review and root's explicit frozen-runner assignment.
+
+
+## Independent output/status focused verification complete
+
+The preceding source-only/UNRUN output-status paragraphs are historical. On retained PR124 `862c9ea2`, the combined source now connects genuine independent OutputAcquire/StatusTeardown admission to acquired_status, finished_status and guard_disposed_status through the exact original ABI/total outcome relation. Nonnull backing precedes fallible output; retention/no-O4, separate raw/source observations, KAbsent disposal, Synthetic-before-preparation and shared-denial zero-call behavior remain explicit. No library name grants a profile.
+
+The [current evidence](evidence/checked-owner-core-execution/independent-output-status/README.md) records 64 ordinary behavioral passes plus Clippy on `45f53d93`/session `35186`, then fresh both-package Clippy and both actual two-role/four-role root/leaf canonical/original/donor/missing-symbol compile-link selectors on `c96a1629`/session `31191`. The 64 ordinary controls transfer behavior only across the sole root-cfg retention-typing repair: they are not 66 fresh tests, and build.rs hashes that file, so no old source/runtime/artifact/approval equality transfers. Both new profiles bind their own fresh code identities, ELF, receipt and request. Independent actual review `5849b981` checks physical inputs/tools/artifacts and all cleanup. Earlier four failed/partial actuals and superseded unlaunched metadata remain separate.
+
+The two-role ELF is `f4b530f4` (100,657,792 bytes), receipt `7aa9b8e9`, request `a1c99a43`, identity `72ce3092`; the four-role regression is `60f8c537` (100,666,224 bytes), receipt `d5c5cb32`, request `42e408c9`, identity `10d282c0`. Current leaf source/selected artifact provenance and cache reuse qualifications are retained. Ordinary/glibc warnings remain. No generated application, launcher or selected C callback ran. Default association is None and all six conformity fields remain Missing. Dependent/multioperand/copied-input profiles, full SQLite/arena policy and native behavior, configured approvals/deployment, F-core and whole criteria stay open. This is post-test prose/evidence assembly with tested product/manifests/watched compilation inputs unchanged.

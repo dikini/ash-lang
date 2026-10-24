@@ -20,6 +20,7 @@ mod checked_leaf_transport;
 pub(crate) use checked_leaf_transport::{
     calls as checked_leaf_calls, null_next as checked_leaf_null_next,
     reset as checked_leaf_reset,
+    output_status as checked_leaf_output_status, disposal as checked_leaf_disposal,
 };
 #[cfg(test)]
 pub(crate) use checked_control::assert_dependent_header_refused_before_entry;

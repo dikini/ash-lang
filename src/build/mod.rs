@@ -10,6 +10,8 @@ mod bridge;
 mod checked_admission;
 mod checked_link;
 mod checked_leaf;
+#[cfg(any(test, ash_checked_owner_root = "v1"))]
+mod checked_integer_result;
 #[cfg(ash_checked_owner_root = "v1")]
 pub(crate) mod checked_root_admission;
 #[cfg(ash_checked_owner_root = "v1")]
