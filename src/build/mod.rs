@@ -30,7 +30,7 @@ mod gas;
 mod host;
 mod image;
 
-pub use checked_request::{ApplicabilityRequest, RequestLimits};
+pub use checked_request::{ApplicabilityRequest, RequestLimits, assemble_checked_closure_data};
 
 pub use checked_receipt::{
     ArtifactPin, ProducerReceipt, ProducerReceiptLimits, ProducerRole, ReceiptFailure, ReceiptField,

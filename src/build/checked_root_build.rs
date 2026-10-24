@@ -60,6 +60,162 @@ fn child(root: &Path, name: &str, work: &mut TypeWorkBudget) -> Result<PathBuf, 
     Ok(root.join(name))
 }
 
+pub(super) struct LauncherRequest<'a> {
+    /// Fresh observation directory, not another Cargo package or target cache.
+    pub directory: &'a Path,
+    pub target: &'a Path,
+    pub output: &'a Path,
+    pub limits: super::checked_link::Limits,
+    pub work: usize,
+}
+pub(super) struct LauncherArtifact {
+    pub executable: PathBuf,
+    pub configuration: PathBuf,
+    pub provenance: PathBuf,
+}
+#[derive(serde::Serialize)]
+struct LauncherInput {
+    path: PathBuf,
+    bytes: u64,
+    sha256: [u8; 32],
+}
+#[derive(serde::Serialize)]
+struct LauncherConfiguration<'a> {
+    version: u32,
+    role: &'static str,
+    source_component: &'static str,
+    compiler: &'static str,
+    environment: &'a super::checked_root_environment::Environment,
+    inputs: Vec<LauncherInput>,
+    arguments: Vec<String>,
+}
+fn launcher_configuration(environment: &super::checked_root_environment::Environment,
+    command: &std::process::Command, limits: super::checked_link::Limits,
+    work: &mut TypeWorkBudget) -> Result<Vec<u8>, ReceiptFailure> {
+    let canonical = Path::new(env!("ASH_RUNTIME_CANONICAL_SOURCE_ROOT"));
+    environment.verify(canonical, work).map_err(project_error)?;
+    if cfg!(feature = "resource-calibration") || env!("ASH_RUNTIME_CARGO_PROFILE") != "debug"
+        || env!("ASH_RUNTIME_OPT_LEVEL") != "0" || !cfg!(debug_assertions) || cfg!(panic = "abort") {
+        return Err(ReceiptFailure::Association);
+    }
+    let fixed: [(&str, &[u8]); 6] = [
+        ("Cargo.toml", include_bytes!("../../Cargo.toml")),
+        ("Cargo.lock", include_bytes!("../../Cargo.lock")),
+        ("rust-toolchain.toml", include_bytes!("../../rust-toolchain.toml")),
+        ("trusted-preparation/Cargo.toml", include_bytes!("../../trusted-preparation/Cargo.toml")),
+        ("trusted-preparation/src/bootstrap_association.rs", include_bytes!("../../trusted-preparation/src/bootstrap_association.rs")),
+        ("trusted-preparation/src/bin/ash-checked-launcher.rs", include_bytes!("../../trusted-preparation/src/bin/ash-checked-launcher.rs")),
+    ];
+    work.charge(8 * std::mem::size_of::<LauncherInput>()).map_err(|()| ReceiptFailure::Resource)?;
+    let mut inputs = Vec::new();
+    inputs.try_reserve_exact(8).map_err(|_| ReceiptFailure::Resource)?;
+    for (name, expected) in fixed {
+        let path = child(canonical, name, work)?;
+        let actual = super::checked_receipt::observe_file(&path, limits.file_bytes, work)?;
+        if actual != super::checked_receipt::pin(expected, work)? { return Err(ReceiptFailure::Association); }
+        inputs.push(LauncherInput { path, bytes: actual.bytes, sha256: actual.sha256 });
+    }
+    for path in [&environment.cargo, &environment.rustc] {
+        work.charge(path.as_os_str().len()).map_err(|()| ReceiptFailure::Resource)?;
+        let observed = super::checked_receipt::observe_file(path, limits.file_bytes, work)?;
+        inputs.push(LauncherInput { path: path.clone(), bytes: observed.bytes, sha256: observed.sha256 });
+    }
+    let count = command.get_args().count();
+    work.charge(count.checked_mul(std::mem::size_of::<String>()).ok_or(ReceiptFailure::Resource)?)
+        .map_err(|()| ReceiptFailure::Resource)?;
+    let mut arguments = Vec::new();
+    arguments.try_reserve_exact(count).map_err(|_| ReceiptFailure::Resource)?;
+    for arg in command.get_args() {
+        let text = arg.to_str().ok_or(ReceiptFailure::Association)?;
+        work.charge(text.len()).map_err(|()| ReceiptFailure::Resource)?;
+        arguments.push(text.to_owned());
+    }
+    // Bound integer-array escaping and every path/configuration/argument before
+    // serialization, including a maximally populated admitted Cargo config.
+    let raw = environment.configurations.iter().try_fold(4096usize, |n, c|
+        n.checked_add(c.path.as_os_str().len())?.checked_add(c.bytes.len()))
+        .and_then(|n| n.checked_add(environment.cargo.as_os_str().len()))
+        .and_then(|n| n.checked_add(environment.rustc.as_os_str().len()))
+        .and_then(|n| n.checked_add(environment.cargo_home.as_os_str().len()))
+        .and_then(|n| n.checked_add(environment.rustup_home.as_os_str().len()))
+        .ok_or(ReceiptFailure::Resource)?;
+    let raw = inputs.iter().try_fold(raw, |n, p| n.checked_add(p.path.as_os_str().len())?.checked_add(512))
+        .ok_or(ReceiptFailure::Resource)?;
+    let bound = arguments.iter().try_fold(raw, |n, a| n.checked_add(a.len())?.checked_add(16))
+        .and_then(|n| n.checked_mul(6)).ok_or(ReceiptFailure::Resource)?;
+    if bound > limits.record_bytes { return Err(ReceiptFailure::Resource); }
+    let bytes = super::checked_request::json_bytes(&LauncherConfiguration { version: 1,
+        role: "trusted-static-launcher", source_component: env!("ASH_RUNTIME_SOURCE_COMPONENT"),
+        compiler: env!("ASH_RUNTIME_COMPILER_ID"), environment, inputs, arguments }, bound, work)?;
+    if bytes.len() > bound { return Err(ReceiptFailure::Resource); }
+    Ok(bytes)
+}
+
+/// Build the existing fixed launcher without running it. Uses the same closed
+/// Cargo environment, owned process runner, BFD observation and cleanup-before-
+/// publication path as the generated root. No native archive is supplied.
+pub(super) fn compile_launcher(request: LauncherRequest<'_>) -> Result<LauncherArtifact, ReceiptFailure> {
+    request.limits.validate()?;
+    let mut work = TypeWorkBudget::with_limit(request.work);
+    let canonical = Path::new(env!("ASH_RUNTIME_CANONICAL_SOURCE_ROOT"));
+    let environment = super::checked_root_environment::Environment::discover(canonical, &mut work)
+        .map_err(project_error)?;
+    // Validate output/cache/observation paths before IO.
+    for path in [request.directory, request.target, request.output] {
+        super::checked_root_environment::argument_path(path, &mut work).map_err(project_error)?;
+    }
+    if request.output.file_name().is_none() { return Err(ReceiptFailure::Association); }
+    work.charge(request.output.as_os_str().len()).map_err(|()| ReceiptFailure::Resource)?;
+    use std::os::unix::fs::DirBuilderExt;
+    input(fs::DirBuilder::new().mode(0o700).create(request.directory))?;
+    let log = child(request.directory, "launcher-build.log", &mut work)?;
+    input(fs::File::create(&log))?;
+    let mut capture = super::checked_link::Capture::prepare_launcher(request.directory, request.limits)?;
+    let mut command = environment.launcher_command(canonical, request.target, &capture.linker(), &mut work)
+        .map_err(project_error)?;
+    let configuration = launcher_configuration(&environment, &command, request.limits, &mut work)?;
+    let status = capture.run_cargo(&mut command, &log);
+    let configuration_path = child(request.directory, "launcher-configuration.json", &mut work)?;
+    let provenance_path = child(request.directory, "launcher-provenance.json", &mut work)?;
+    let executable = request.output.to_owned();
+    let mut result = Ok(());
+    let mut state = (capture, work);
+    let finished = super::artifacts::GeneratedArtifacts { project: request.directory,
+        target_directory: request.target, package_name: "ash-checked-launcher",
+        target: super::host::NATIVE_TARGET, profile: "dev", private_target: false }
+        .finish_with_state(status.as_ref().is_ok_and(|s| s.success()), request.output, &log,
+            &mut state, (
+                |linked, (capture, _)| capture.capture(linked)
+                    .map_err(|e| std::io::Error::other(format!("launcher capture: {e:?}"))),
+                |_, (capture, work), log| {
+                    let mut clean = environment.launcher_clean_command(canonical, request.target, work)
+                        .map_err(|e| std::io::Error::other(format!("launcher clean: {e:?}")))?;
+                    if capture.run_cargo(&mut clean, log)?.success() { Ok(()) }
+                    else { Err(std::io::Error::other("launcher cleanup failed")) }
+                },
+                |linked, (capture, work)| {
+                    result = (|| {
+                        let after = launcher_configuration(&environment, &command, request.limits, work)?;
+                        work.charge(configuration.len()).map_err(|()| ReceiptFailure::Resource)?;
+                        if after != configuration { return Err(ReceiptFailure::Association); }
+                        let provenance = capture.finish_launcher(&configuration, linked)?;
+                        let observed = super::checked_link::launcher_matches(&provenance, &configuration, request.limits, work)?;
+                        if super::checked_receipt::observe_static_image(linked, request.limits.file_bytes, work)? != observed {
+                            return Err(ReceiptFailure::Association);
+                        }
+                        input(fs::write(&configuration_path, &configuration))?;
+                        input(fs::write(&provenance_path, provenance))?;
+                        Ok(())
+                    })();
+                    result.map_err(|e| std::io::Error::other(format!("launcher provenance: {e:?}")))
+                },
+            ));
+    if !input(status)?.success() { return Err(ReceiptFailure::Input); }
+    result?;
+    finished.map_err(|_| ReceiptFailure::Input)?;
+    Ok(LauncherArtifact { executable, configuration: configuration_path, provenance: provenance_path })
+}
+
 /// Uses the existing owned Cargo and linker observers. No resulting executable
 /// or selected helper function is started. Failed output never replaces an old
 /// destination, and publication follows root cleanup and receipt admission.
@@ -341,6 +497,37 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "assigned existing-cache static launcher compile/link slot; output is never executed"]
+    fn genuine_fixed_launcher_compile_link_has_separate_provenance_without_startup() {
+        let target = PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").expect("explicit existing shared cache"));
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = target.join(format!("checked-launcher-compile-{}-{nonce}", std::process::id()));
+        let output = directory.join("ash-checked-launcher");
+        let limits = super::super::checked_link::Limits {
+            file_bytes: 2 * 1024 * 1024 * 1024, total_bytes: 4 * 1024 * 1024 * 1024,
+            map_bytes: 256 * 1024 * 1024, output_bytes: 1024 * 1024,
+            record_bytes: 1024 * 1024, paths: 2048, arguments: 65536,
+            seconds: 120, cargo_bytes: 16 * 1024 * 1024, cargo_seconds: 1800,
+            work: 16 * 1024 * 1024 * 1024,
+        };
+        let artifact = compile_launcher(LauncherRequest { directory: &directory, target: &target,
+            output: &output, limits, work: 16 * 1024 * 1024 * 1024 }).unwrap();
+        let configuration = fs::read(&artifact.configuration).unwrap();
+        let provenance = fs::read(&artifact.provenance).unwrap();
+        super::super::checked_link::exercise_launcher_data_for_test(&provenance, &configuration, limits);
+        let actual = super::super::checked_receipt::observe_static_image(&artifact.executable,
+            limits.file_bytes, &mut TypeWorkBudget::with_limit(limits.work)).unwrap();
+        assert_eq!(super::super::checked_link::launcher_matches(&provenance, &configuration, limits,
+            &mut TypeWorkBudget::with_limit(limits.work)).unwrap(), actual);
+        assert!(!directory.join("linked-program").exists());
+        let config: serde_json::Value = serde_json::from_slice(&configuration).unwrap();
+        assert_eq!(config["role"], "trusted-static-launcher");
+        assert!(config["arguments"].as_array().unwrap().iter().any(|a| a == "ash-checked-launcher"));
+        assert!(!String::from_utf8(configuration).unwrap().contains("ash_checked_owner_root"));
+        println!("unexecuted fixed launcher compile retained at {}", directory.display());
+    }
+
+    #[test]
     #[ignore = "assigned generated canonical-root/leaf compile-link slot; output is never executed"]
     fn genuine_root_and_leaf_compile_link_matches_receipt_without_startup() {
         check_generated_compile_link(
@@ -461,6 +648,9 @@ mod tests {
         )
         .unwrap();
         assert!(decoded.linked());
+        if profile == "initialized-byte" {
+            super::super::checked_request::exercise_complete_closure_assembly_for_test(&request);
+        }
         assert_eq!(decoded.missing_fields().len(), 6);
         assert_eq!(
             decoded.check_complete(),

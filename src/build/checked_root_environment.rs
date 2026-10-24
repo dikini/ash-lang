@@ -33,6 +33,9 @@ fn path(path: &Path, work: &mut TypeWorkBudget) -> Result<(), Failure> {
     }
     Ok(())
 }
+pub(super) fn argument_path(value: &Path, work: &mut TypeWorkBudget) -> Result<(), Failure> {
+    path(value, work)
+}
 /// Supported inert aliases and build jobs/wrapper settings only. Wrappers are
 /// explicitly disabled by the controlled command; no [env] or executable/source
 /// remapping is accepted, including unknown future configuration sections.
@@ -126,6 +129,31 @@ fn read_configurations(project: &Path, home: &Path, work: &mut TypeWorkBudget) -
     Ok(configs)
 }
 impl Environment {
+    /// Fixed nonexecuting launcher build recipe. The binary has its own entry;
+    /// the generated owner-root cfg must never reach this target.
+    pub(super) fn launcher_command(&self, project: &Path, target: &Path, linker: &Path,
+        work: &mut TypeWorkBudget) -> Result<Command, Failure> {
+        path(target, work)?;
+        path(linker, work)?;
+        let mut command = self.command(project, "rustc", work)?;
+        command.args(["--locked", "--jobs", "1", "--target", super::host::NATIVE_TARGET,
+            "--package", "ash-trusted-preparation", "--bin", "ash-checked-launcher"]);
+        command.arg("--target-dir").arg(target).arg("--");
+        pay(work, linker.as_os_str().len().checked_mul(2).and_then(|n| n.checked_add(32)).ok_or(Failure::Resource)?)?;
+        command.arg("-C").arg(format!("linker={}", linker.display()));
+        command.args(["-C", "link-arg=-fuse-ld=bfd", "-C", "target-feature=+crt-static",
+            "-C", "relocation-model=static", "-C", "link-arg=-no-pie", "-C", "strip=debuginfo"]);
+        Ok(command)
+    }
+    pub(super) fn launcher_clean_command(&self, project: &Path, target: &Path,
+        work: &mut TypeWorkBudget) -> Result<Command, Failure> {
+        path(target, work)?;
+        let mut command = self.command(project, "clean", work)?;
+        command.args(["--locked", "--package", "ash-trusted-preparation", "--target",
+            super::host::NATIVE_TARGET, "--profile", "dev"]);
+        command.arg("--target-dir").arg(target);
+        Ok(command)
+    }
     pub(super) fn discover(project: &Path, work: &mut TypeWorkBudget) -> Result<Self, Failure> {
         let cargo_home = PathBuf::from(env!("ASH_BUILD_CARGO_HOME"));
         let rustup_home = PathBuf::from(env!("ASH_BUILD_RUSTUP_HOME"));
@@ -187,6 +215,47 @@ impl Environment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn launcher_command_has_closed_static_recipe_without_owner_root_cfg() {
+        let project = Path::new(env!("ASH_RUNTIME_CANONICAL_SOURCE_ROOT"));
+        let target = Path::new("/tmp/owned-existing-target");
+        let linker = Path::new("/tmp/owned-launcher/checked-link/observer.py");
+        let environment = Environment::discover(project, &mut TypeWorkBudget::default()).unwrap();
+        let mut measured = TypeWorkBudget::default();
+        let command = environment.launcher_command(project, target, linker, &mut measured).unwrap();
+        let cost = measured.used();
+        let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();
+        for value in ["--offline", "--locked", "ash-trusted-preparation", "ash-checked-launcher",
+            "target-feature=+crt-static", "relocation-model=static", "link-arg=-no-pie",
+            "link-arg=-fuse-ld=bfd"] { assert!(args.contains(&value)); }
+        assert!(!args.iter().any(|s| s.contains("ash_checked_owner_root")));
+        assert_eq!(command.get_current_dir(), Some(project));
+        assert_eq!(command.get_program(), environment.cargo.as_os_str());
+        let env: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+        for (key, value) in [("CARGO_BUILD_JOBS", "1"), ("CARGO_ENCODED_RUSTFLAGS", ""),
+            ("RUSTC_WRAPPER", ""), ("RUSTC_WORKSPACE_WRAPPER", ""), ("LC_ALL", "C")] {
+            assert_eq!(env.get(std::ffi::OsStr::new(key)), Some(&Some(std::ffi::OsStr::new(value))));
+        }
+        assert!(!env.contains_key(std::ffi::OsStr::new("LD_PRELOAD")));
+        for prefix in [0, 7] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            environment.launcher_command(project, target, linker, &mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + cost);
+            assert!(environment.launcher_command(project, target, linker, &mut exact).is_err());
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(environment.launcher_command(project, target, linker, &mut short), Err(Failure::Resource)));
+            environment.launcher_command(project, target, linker, &mut TypeWorkBudget::with_limit(cost)).unwrap();
+        }
+        let mut donor = environment.clone();
+        donor.cargo = "/tmp/donor-cargo".into();
+        assert!(matches!(donor.launcher_command(project, target, linker, &mut TypeWorkBudget::default()), Err(Failure::Association)));
+        assert!(environment.launcher_command(project, Path::new("relative-target"), linker, &mut TypeWorkBudget::default()).is_err());
+        let clean = environment.launcher_clean_command(project, target, &mut TypeWorkBudget::default()).unwrap();
+        assert!(clean.get_args().any(|a| a == "ash-trusted-preparation"));
+        assert!(!clean.get_args().any(|a| a == "ash-checked-owner-root"));
+    }
     #[test]
     fn closed_configuration_refuses_executable_profile_source_and_forced_env_inputs() {
         let canonical=b"[alias]\nxtask = \"run --package xtask --\"\n[build]\njobs = 1\nrustc-wrapper = \"/observed/disabled-wrapper\"\n";

@@ -193,6 +193,17 @@ struct Record {
     associations: Vec<ArtifactPinData>,
     configuration_before_binding: ArtifactPinData,
 }
+// Separate wire shape and version from root/native receipt provenance. The
+// launcher links no supplied foreign archive, but all actual LOAD/runtime/tool
+// observations remain mandatory under the same observer and BFD checks.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LauncherRecord {
+    version: u32,
+    role: String,
+    configuration: Vec<u8>,
+    link: Record,
+}
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ArtifactPinData {
@@ -350,6 +361,14 @@ impl Capture {
         limits: Limits,
         required: &[super::host::NativeLinkInput],
     ) -> Result<Self, ReceiptFailure> {
+        if required.is_empty() { return Err(ReceiptFailure::Association); }
+        Self::prepare_inner(project, limits, required)
+    }
+    pub(super) fn prepare_launcher(project: &Path, limits: Limits) -> Result<Self, ReceiptFailure> {
+        Self::prepare_inner(project, limits, &[])
+    }
+    fn prepare_inner(project: &Path, limits: Limits,
+        required: &[super::host::NativeLinkInput]) -> Result<Self, ReceiptFailure> {
         limits.validate()?;
         let mut work = TypeWorkBudget::with_limit(limits.work);
         let directory = project.join("checked-link");
@@ -413,7 +432,7 @@ impl Capture {
         fs::write(prefix.join("tool.json"), &tool_bytes).map_err(|_| ReceiptFailure::Input)?;
         let tool_configuration = observe(&prefix.join("tool.json"), 4096, &mut work)?;
         let mut required_inputs = Vec::new();
-        if required.is_empty() || required.len() > limits.paths {
+        if required.len() > limits.paths {
             return Err(ReceiptFailure::Association);
         }
         for input in required {
@@ -573,6 +592,29 @@ impl Capture {
         receipt: &ProducerReceipt,
         linked: &Path,
     ) -> Result<Vec<u8>, ReceiptFailure> {
+        if self.required.is_empty() { return Err(ReceiptFailure::Association); }
+        let record = self.finish_record(1, associations(receipt)?, receipt
+            .pin(ReceiptField::BuildConfiguration).ok_or(ReceiptFailure::Association)?, linked)?;
+        let bytes = super::checked_request::json_bytes(&record, self.limits.record_bytes, &mut self.work)?;
+        if bytes.len() > self.limits.record_bytes { return Err(ReceiptFailure::Resource); }
+        Ok(bytes)
+    }
+    pub(super) fn finish_launcher(&mut self, configuration: &[u8], linked: &Path)
+        -> Result<Vec<u8>, ReceiptFailure> {
+        if !self.required.is_empty() || configuration.is_empty() {
+            return Err(ReceiptFailure::Association);
+        }
+        pay(&mut self.work, configuration.len().checked_mul(5).ok_or(ReceiptFailure::Resource)?)?;
+        let before = super::checked_receipt::pin(configuration, &mut self.work)?;
+        let link = self.finish_record(2, Vec::new(), before, linked)?;
+        let record = LauncherRecord { version: 1, role: "trusted-static-launcher".into(),
+            configuration: configuration.to_vec(), link };
+        let bytes = super::checked_request::json_bytes(&record, self.limits.record_bytes, &mut self.work)?;
+        launcher_matches(&bytes, configuration, self.limits, &mut self.work)?;
+        Ok(bytes)
+    }
+    fn finish_record(&mut self, version: u32, associations: Vec<ArtifactPinData>,
+        before: ArtifactPin, linked: &Path) -> Result<Record, ReceiptFailure> {
         let obs = self.observation.take().ok_or(ReceiptFailure::Association)?;
         if observe(linked, self.limits.file_bytes, &mut self.work)?.pin() != obs.output.pin() {
             return Err(ReceiptFailure::Association);
@@ -581,24 +623,16 @@ impl Capture {
             declared_limits: self.limits,
             tools_before: std::mem::take(&mut self.tools_before),
             required: std::mem::take(&mut self.required),
-            version: 1,
+            version,
             observation: obs,
             observer: self.observer.clone(),
             configuration: self.configuration.clone(),
             proxy: self.proxy.clone(),
             tool_configuration: self.tool_configuration.clone(),
-            associations: associations(receipt)?,
-            configuration_before_binding: receipt
-                .pin(ReceiptField::BuildConfiguration)
-                .ok_or(ReceiptFailure::Association)?
-                .into(),
+            associations,
+            configuration_before_binding: before.into(),
         };
-        pay(&mut self.work, self.limits.record_bytes)?;
-        let bytes = serde_json::to_vec(&record).map_err(|_| ReceiptFailure::Resource)?;
-        if bytes.len() > self.limits.record_bytes {
-            return Err(ReceiptFailure::Resource);
-        }
-        Ok(bytes)
+        Ok(record)
     }
     pub(super) fn limits(&self) -> Limits {
         self.limits
@@ -1167,12 +1201,26 @@ fn validate_record(
     receipt: &ProducerReceipt,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ReceiptFailure> {
+    validate_record_head(r, limits, work)?;
+    required_association(r, receipt, work)?;
+    validate_record_tools(r, limits, work)
+}
+fn validate_record_common(r: &Record, limits: Limits, work: &mut TypeWorkBudget)
+    -> Result<(), ReceiptFailure> {
+    validate_record_head(r, limits, work)?;
+    validate_record_tools(r, limits, work)
+}
+fn validate_record_head(r: &Record, limits: Limits, work: &mut TypeWorkBudget)
+    -> Result<(), ReceiptFailure> {
     validate(&r.observation, limits, work)?;
     if r.required.len() > limits.paths || r.tools_before.len() != 3 {
         return Err(ReceiptFailure::Resource);
     }
     r.declared_limits.validate()?;
-    required_association(r, receipt, work)?;
+    Ok(())
+}
+fn validate_record_tools(r: &Record, limits: Limits, work: &mut TypeWorkBudget)
+    -> Result<(), ReceiptFailure> {
     pay(work, r.tools_before.len())?;
     for (before, after) in r.tools_before.iter().zip(&r.observation.tools) {
         pay(
@@ -1235,6 +1283,60 @@ fn validate_record(
         return Err(ReceiptFailure::Association);
     }
     Ok(())
+}
+/// Independent launcher provenance DATA admission. Root/native validators keep
+/// their distinct version and required-foreign-input association checks.
+pub(super) fn launcher_matches(bytes: &[u8], configuration: &[u8], limits: Limits,
+    work: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
+    limits.validate()?;
+    if bytes.len() > limits.record_bytes { return Err(ReceiptFailure::Resource); }
+    pay(work, bytes.len().checked_mul(4).ok_or(ReceiptFailure::Resource)?)?;
+    let record: LauncherRecord = serde_json::from_slice(bytes).map_err(|_| ReceiptFailure::Malformed)?;
+    if record.version != 1 || record.link.version != 2 { return Err(ReceiptFailure::Version); }
+    pay(work, configuration.len())?;
+    if record.role != "trusted-static-launcher" || record.configuration != configuration
+        || !record.link.required.is_empty() || !record.link.associations.is_empty()
+        || ArtifactPin::from(&record.link.configuration_before_binding)
+            != super::checked_receipt::pin(configuration, work)? {
+        return Err(ReceiptFailure::Association);
+    }
+    validate_record_common(&record.link, limits, work)?;
+    record.link.observation.output.pin().artifact()
+}
+
+#[cfg(test)]
+pub(super) fn exercise_launcher_data_for_test(bytes: &[u8], configuration: &[u8], limits: Limits) {
+    let mut measured = TypeWorkBudget::with_limit(limits.work);
+    let canonical = launcher_matches(bytes, configuration, limits, &mut measured).unwrap();
+    let cost = measured.used();
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost); exact.charge(prefix).unwrap();
+        assert_eq!(launcher_matches(bytes, configuration, limits, &mut exact).unwrap(), canonical);
+        assert_eq!(exact.used(), prefix + cost);
+        assert!(launcher_matches(bytes, configuration, limits, &mut exact).is_err());
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1); short.charge(prefix).unwrap();
+        assert_eq!(launcher_matches(bytes, configuration, limits, &mut short), Err(ReceiptFailure::Resource));
+        assert!(launcher_matches(bytes, configuration, limits, &mut short).is_err());
+        launcher_matches(bytes, configuration, limits, &mut TypeWorkBudget::with_limit(cost)).unwrap();
+    }
+    let base: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    // The standalone launcher envelope cannot be deserialized as a root record.
+    assert!(serde_json::from_slice::<Record>(bytes).is_err());
+    for change in 0..6 {
+        let mut donor = base.clone();
+        match change {
+            0 => donor["role"] = "checked-root".into(),
+            1 => donor["link"]["version"] = 1.into(),
+            2 => donor["configuration"] = serde_json::json!([]),
+            3 => donor["link"]["associations"] = serde_json::json!([{"bytes":1,"sha256":vec![0u8;32]}]),
+            4 => donor["link"]["observation"]["loads"] = serde_json::json!([]),
+            _ => donor["link"]["observation"]["tools"] = serde_json::json!([]),
+        }
+        assert!(launcher_matches(&serde_json::to_vec(&donor).unwrap(), configuration, limits,
+            &mut TypeWorkBudget::with_limit(limits.work)).is_err(), "launcher donor {change}");
+    }
+    let mut donor_configuration = configuration.to_vec(); donor_configuration.push(b' ');
+    assert!(launcher_matches(bytes, &donor_configuration, limits, &mut TypeWorkBudget::with_limit(limits.work)).is_err());
 }
 pub(super) fn binding(
     bytes: &[u8],
@@ -1458,6 +1560,13 @@ pub(super) fn exercise_independent_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn root_link_empty_native_inputs_refuse_before_observation_directory_creation() {
+        let directory = std::env::temp_dir().join(format!("ash-root-no-native-{}", std::process::id()));
+        let result = Capture::prepare(&directory, limits(), &[]);
+        assert!(matches!(result, Err(ReceiptFailure::Association)));
+        assert!(!directory.join("checked-link").exists());
+    }
     fn limits() -> Limits {
         Limits {
             file_bytes: 1024 * 1024,
