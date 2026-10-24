@@ -593,6 +593,55 @@ mod tests {
         )
     }
     #[test]
+    fn dependent_two_scope_policy_and_image_substitution_refusals() {
+        let source = include_str!("../../libraries/sqlite_checked.ash");
+        let entry = include_str!("../../tests/fixtures/checked-sqlite/dependent-physical-entry.ash");
+        let (program, sources) = crate::elaborate::checked_owner_passive_program_for_source(source, entry);
+        let scopes = admitted_scopes(&program, &mut TypeWorkBudget::default()).unwrap();
+        assert_eq!(scopes.len(), 2);
+        assert!(scopes[0].1.header().dependencies.is_empty());
+        assert_eq!(scopes[1].1.header().dependencies.len(), 1);
+        let (build, mut emission) = emitted(&program, &sources);
+        let canonical = seed(&program, &sources, &build, &emission).unwrap();
+        assert_eq!(policy(&program).groups, 1);
+        assert_eq!(policy(&program).owners, 1, "capacity remains local to each boundary");
+        canonical.receipt().matches_checked_policy(emission.payloads.checked_policy().unwrap(), receipt_limits()).unwrap();
+        let (image, facts) = emission.payloads.bytes();
+        let mut work = TypeWorkBudget::with_limit(receipt_limits().work);
+        let image = super::super::checked_receipt::pin(image, &mut work).unwrap();
+        let facts = super::super::checked_receipt::pin(facts, &mut work).unwrap();
+        let bytes = emission.payloads.checked_policy().unwrap();
+        assert_eq!(decode_policy(bytes, image, facts, &mut work).unwrap(), policy(&program));
+        for (offset, value) in [(8, 2), (92, 1), (108, 2), (116, 2)] {
+            let mut changed = bytes.to_vec();
+            changed[offset] = value;
+            assert!(decode_policy(&changed, image, facts, &mut work).is_err(),
+                "mixed version/ordinal/aggregate-capacity interpretation at byte {offset}");
+        }
+        emission.payloads.test_change_policy();
+        assert!(matches!(seed(&program, &sources, &build, &emission), Err(ReceiptFailure::Association)));
+        emission.payloads.test_change_policy();
+        emission.payloads.test_change_image();
+        assert!(matches!(seed(&program, &sources, &build, &emission), Err(ReceiptFailure::Association)));
+        emission.payloads.test_change_image();
+        seed(&program, &sources, &build, &emission).unwrap();
+        // A second genuine graph is not a donor for this image/policy, even
+        // when both have the exact two-scope owner census.
+        let donor_source = source.replace("name \"sqlite3_prepare_v2\"", "name \"donor_prepare\"");
+        assert_ne!(donor_source, source);
+        let (donor, donor_sources) = crate::elaborate::checked_owner_passive_program_for_source(&donor_source, entry);
+        let (donor_build, donor_emission) = emitted(&donor, &donor_sources);
+        seed(&donor, &donor_sources, &donor_build, &donor_emission).unwrap();
+        assert!(matches!(seed(&program, &sources, &build, &donor_emission), Err(ReceiptFailure::Association)));
+        // Adding a third real source scope cannot widen this private profile.
+        let extra_entry = entry.replace("SQLite.prepared_status statement",
+            "resource SQLite.Connection<H, D> extra = \":memory:\" { SQLite.prepared_status statement }")
+            .replace("Foreign.CheckedScope<Foreign.CheckedScope<Int, SQLite.PrepareError, SQLite.FinalizeError>",
+                "Foreign.CheckedScope<Foreign.CheckedScope<Foreign.CheckedScope<Int, SQLite.InitError, SQLite.CloseError>, SQLite.PrepareError, SQLite.FinalizeError>");
+        let (extra, _) = crate::elaborate::checked_owner_passive_program_for_source(source, &extra_entry);
+        assert!(matches!(admitted_scopes(&extra, &mut TypeWorkBudget::default()), Err(ReceiptFailure::Association)));
+    }
+    #[test]
     fn checked_producer_complete_host_and_unsupported_role_census() {
         let (program, sources) = genuine();
         emitted(&program, &sources);

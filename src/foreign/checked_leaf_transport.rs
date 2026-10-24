@@ -44,7 +44,7 @@ mod injected {
     }
     pub(crate) struct PreparedOutputAcquire<'s, 'i> {
         destination: &'s mut OwnerCell, prepared: Option<Owner>, _input: &'i [u8], status: i32,
-        parent: Option<&'s OwnerCell>,
+        parent: Option<&'s OwnerCell>, length: Option<i32>,
     }
     pub(crate) struct PreparedTeardown<'s> { destination: &'s mut OwnerCell }
 
@@ -70,6 +70,7 @@ mod injected {
         static SERIAL: Cell<u64> = const { Cell::new(1) };
         static NULL: Cell<bool> = const { Cell::new(false) };
         static IDENTITY_REFUSAL: Cell<bool> = const { Cell::new(false) };
+        static LAST_LENGTH: Cell<Option<i32>> = const { Cell::new(None) };
         static OUTPUT_STATUS: Cell<i32> = const { Cell::new(0) };
         static DISPOSAL: Cell<(Option<bool>, Option<i32>, bool)> = const { Cell::new((Some(true), None, true)) };
         static CALLS: Cell<[usize; 5]> = const { Cell::new([0; 5]) };
@@ -145,7 +146,7 @@ mod injected {
             let prepared = (!NULL.replace(false)).then(||Owner {
                 serial, bytes: Box::new([0; 8]), opaque: true, unresolved: false,
             });
-            Ok(PreparedOutputAcquire { destination: self, prepared, _input: input, status: OUTPUT_STATUS.get(), parent: None })
+            Ok(PreparedOutputAcquire { destination: self, prepared, _input: input, status: OUTPUT_STATUS.get(), parent: None, length: None })
         }
         pub(crate) fn prepare_dependent_output_acquire<'s, 'i>(&'s mut self, parent: &'s OwnerCell,
             input: &'i [u8], length: i32) -> Result<PreparedOutputAcquire<'s, 'i>, Refusal> {
@@ -154,6 +155,7 @@ mod injected {
             if usize::try_from(length).ok().is_none_or(|length|length > input.len()) { return Err(Refusal::Range); }
             let mut prepared = self.prepare_output_acquire(input)?;
             prepared.parent = Some(parent);
+            prepared.length = Some(length);
             Ok(prepared)
         }
         pub(crate) fn mark_unresolved_for_test(&mut self) {
@@ -229,6 +231,7 @@ mod injected {
     impl PreparedOutputAcquire<'_, '_> {
         pub(crate) fn invoke(self) -> OutputAcquireReturned {
             call(0);
+            LAST_LENGTH.set(self.length);
             self.destination.owner = self.prepared;
             OutputAcquireReturned { nonnull: self.destination.owner.is_some(), status: RawScalar::I32(self.status),
                 offset: (self.parent.is_some() && self.status == 0).then(||self._input.as_ptr().wrapping_add(self._input.len() - 1).cast_mut().cast()) }
@@ -253,6 +256,7 @@ mod injected {
     }
     pub(crate) fn reset() {
         CALLS.set([0; 5]);
+        LAST_LENGTH.set(None);
         OUTPUT_STATUS.set(0);
         DISPOSAL.set((Some(true), None, true));
         NULL.set(false);
@@ -280,10 +284,12 @@ mod injected {
             assert!(child.prepare_dependent_output_acquire(&absent, b"SELECT 1;\0", 10).is_err());
             assert!(child.prepare_dependent_output_acquire(&parent, b"SELECT 1;\0", -1).is_err());
             drop(child.prepare_dependent_output_acquire(&parent, b"SELECT 1;\0", 4).unwrap());
+            assert_eq!(LAST_LENGTH.get(), None);
             assert_eq!(calls()[0], 1);
             assert!(child.prepare_dependent_output_acquire(&parent, b"SELECT 1;\0", 11).is_err());
             let input = b"SELECT 1;\0";
-            let returned = child.prepare_dependent_output_acquire(&parent, input, 10).unwrap().invoke();
+            let returned = child.prepare_dependent_output_acquire(&parent, input, 4).unwrap().invoke();
+            assert_eq!(LAST_LENGTH.get(), Some(4), "original shorter signed source scalar reaches invocation unchanged");
             assert!(returned.nonnull());
             assert!(parent.is_occupied());
             assert_eq!(returned.offset(), Some(input.as_ptr().wrapping_add(9).cast_mut().cast()));

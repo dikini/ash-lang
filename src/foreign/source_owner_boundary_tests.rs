@@ -1922,6 +1922,7 @@ pub(crate) struct DependentViolationBoundaryForTest<'a> {
     pub(crate) child: crate::foreign::source_runtime::NativeOwnerGuard,
     pub(crate) parent_boundary: crate::foreign::source_runtime::NativeOwnerBoundary,
     pub(crate) child_boundary: crate::foreign::source_runtime::NativeOwnerBoundary,
+    pub(crate) leaf_calls: fn() -> [usize; 5],
 }
 
 #[cfg(not(ash_checked_owner_root = "v1"))]
@@ -1964,7 +1965,7 @@ pub(crate) fn with_dependent_violation_boundary_for_test(
     let bindings = SourceNativeBindings { owner_storage: storage, ..SourceNativeBindings::default() };
     test(DependentViolationBoundaryForTest { program: &program, scope: child_acquire._scope_node,
         call: selected.expect("authored Prepare error/non-null Enclosing quarantine"), bindings,
-        parent, child, parent_boundary, child_boundary });
+        parent, child, parent_boundary, child_boundary, leaf_calls: leaf::calls });
 }
 
 #[cfg(not(ash_checked_owner_root = "v1"))]

@@ -757,7 +757,7 @@ mod dependent_violation_controls {
             assert!(machine.checked_reports.is_none(), "quarantine is not local completion");
             assert!(matches!(machine.control, Some(Control::Return(_))));
             drop(machine);
-            assert_eq!(crate::foreign::checked_leaf_transport::calls()[4], 0,
+            assert_eq!((fixture.leaf_calls)()[4], 0,
                 "authored Enclosing quarantine never finalizes suspect output on frame disposal");
         });
     }
