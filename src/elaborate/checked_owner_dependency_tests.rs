@@ -513,6 +513,12 @@ fn checked_quarantine_requires_declared_enclosing_state_and_exact_host() {
     assert_ne!(alias, source);
     source_refuses(&alias);
     // A merely ordinary parent handle is not the descriptor-witnessed State.
-    assert!(source.contains("(dependency, Foreign.UnexpectedNull)"));
-    source_refuses(&source.replace("(dependency, Foreign.UnexpectedNull)", "(parent, Foreign.UnexpectedNull)"));
+    // Constrain the latent H explicitly: this argument contains no controlled
+    // State to select the host before independent lifecycle-flow checking.
+    let call = "Foreign.checked_quarantine (dependency, Foreign.UnexpectedNull)";
+    assert_eq!(source.matches(call).count(), 2);
+    let ordinary = source.replace(call, "ordinary_quarantine (parent, Foreign.UnexpectedNull)")
+        .replacen("let denied = ordinary_quarantine",
+            "let ordinary_quarantine : (Parent<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                let denied = ordinary_quarantine", 1);
+    source_refuses(&ordinary);
 }
