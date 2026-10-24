@@ -638,7 +638,7 @@ mod tests {
         assert!(matches!(seed(&program, &sources, &build, &donor_emission), Err(ReceiptFailure::Association)));
         // Adding a third real source scope cannot widen this private profile.
         let extra_entry = entry.replace("SQLite.prepared_status statement",
-            "resource SQLite.Connection<H, D> extra = \":memory:\" { SQLite.prepared_status statement }")
+            "resource SQLite.Connection<H, D> extra = \":memory:\" {\n SQLite.prepared_status statement\n }")
             .replace("Foreign.CheckedScope<Foreign.CheckedScope<Int, SQLite.PrepareError, SQLite.FinalizeError>",
                 "Foreign.CheckedScope<Foreign.CheckedScope<Foreign.CheckedScope<Int, SQLite.InitError, SQLite.CloseError>, SQLite.PrepareError, SQLite.FinalizeError>");
         let (extra, _) = crate::elaborate::checked_owner_passive_program_for_source(source, &extra_entry);
