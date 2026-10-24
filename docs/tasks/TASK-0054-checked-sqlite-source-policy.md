@@ -233,3 +233,22 @@ Dependent native carriers, retained-parent loans/edges, SQL/offset lifetimes,
 post-observation runtime denial, copied/multioperand support and native SQLite
 E/B remain subsequent work. Static acceptance does not grant native authority,
 configured approval, whole F5/F-core acceptance or the milestone/Main gates.
+
+
+### First retained-tip gate findings
+
+Run `56140` stopped at Clippy with three missing-import errors in the private
+image test helper; all 18 selectors were UNRUN. The existing private record
+import was repaired without a visibility or admission change. Run `72620`
+then passed targeted Clippy and selected the first dependent test, which failed
+at Ash syntax before Core, image or work assertions. The remaining 17 selectors
+were UNRUN. Both runs retained equal source/tool maps and reaped owned groups.
+
+The authored Ash dependencies now use current spelling: no comments, one type
+alternative or match arm per logical line, and line boundaries in generated
+consumer/effect blocks. Mutation anchors follow the same source tokens without
+relaxing the semantic assertions. The unsupported `0 - 1` pure-source tail case
+and its paired expected result were removed before any passing execution.
+Negative offsets remain unexercised by these pure traces and required at the
+later common native-offset/Core boundary; no subtraction syntax, builtin or
+new test authority is introduced. All repaired selectors remain UNRUN.

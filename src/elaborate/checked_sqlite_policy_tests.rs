@@ -14,7 +14,9 @@ main : Unit -> Foreign.CheckedScope<Int, SQLite.InitError, SQLite.CloseError>
 main () = foreign host H {
     match perform SQLite.Initialize<H>.call () {
         Foreign.CheckedReturned(status) => match status == 0 {
-            true => resource SQLite.Connection<H, C> connection = ":memory:" { SQLite.open_status connection }
+            true => resource SQLite.Connection<H, C> connection = ":memory:" {
+                SQLite.open_status connection
+            }
             false => Foreign.CheckedNotAcquired (SQLite.NativeOpenError status)
         }
         Foreign.CheckedConversionFailed(error) => Foreign.CheckedNotAcquired (SQLite.OpenConversion error)
@@ -53,7 +55,7 @@ fn checked_arena_source_links_core_identity_and_fold() {
     let graph = graph_with_entry(
         ARENA,
         Some(
-            "import @builtin.foreign as Foreign\nimport producer as Arena\nmain : Unit -> Foreign.CheckedScope<Int, Arena.InitError, Arena.FinishError>\nmain () = foreign host H { resource Arena.Arena<H, R> arena = 8 { Arena.capacity arena } }\n",
+            "import @builtin.foreign as Foreign\nimport producer as Arena\nmain : Unit -> Foreign.CheckedScope<Int, Arena.InitError, Arena.FinishError>\nmain () = foreign host H {\n    resource Arena.Arena<H, R> arena = 8 {\n        Arena.capacity arena\n    }\n}\n",
         ),
     );
     check_graph(&graph).expect("actual contrasting arena resource");
@@ -77,7 +79,7 @@ fn checked_connection_finish_rejects_switched_disposition_and_boundary() {
         .split_once("pub resource Connection<H, C>")
         .unwrap();
     let (connection, after) = connection
-        .split_once("// Pure classification supplements")
+        .split_once("pub type OpenPolicy")
         .unwrap();
     for (from, to) in [
         (
@@ -95,7 +97,7 @@ fn checked_connection_finish_rejects_switched_disposition_and_boundary() {
     ] {
         assert_eq!(connection.matches(from).count(), 1);
         let changed = format!(
-            "{before}pub resource Connection<H, C>{}// Pure classification supplements{after}",
+            "{before}pub resource Connection<H, C>{}pub type OpenPolicy{after}",
             connection.replace(from, to)
         );
         let error = check_graph(&graph(&changed, false))

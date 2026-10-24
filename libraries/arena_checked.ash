@@ -33,7 +33,8 @@ pub foreign checked library Memory {
     }
 }
 
-pub type InitError = InvalidSize | AllocationRefused
+pub type InitError = InvalidSize
+    | AllocationRefused
 pub type FinishError = ReleaseRefused
 
 pub type Acquire<S, D, I> = Acquired(S, D)
@@ -60,7 +61,10 @@ pub resource Arena<H, R> {
     interpret Allocate<H, R>, Free<H, R>
     acquire size => match Foreign.checked_size_t size {
         Foreign.ConversionFailed(_) => Refused InvalidSize
-        Foreign.Returned(valid) => match perform Allocate<H, R>.call (match valid == 0 { true => 1 false => valid }) {
+        Foreign.Returned(valid) => match perform Allocate<H, R>.call (match valid == 0 {
+            true => 1
+            false => valid
+        }) {
             Foreign.CheckedReturned(Foreign.Readable(Foreign.NonNull(state))) => Acquired(state, size)
             Foreign.CheckedReturned(Foreign.Readable(Foreign.Null)) => Refused AllocationRefused
             Foreign.CheckedReturned(Foreign.Unreadable) => Refused AllocationRefused

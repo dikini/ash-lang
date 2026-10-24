@@ -1,5 +1,3 @@
-// Source-only dependent slice: common dependent output/offset and status carriers remain pending.
-// No generated/native profile closure or whole SQLite acceptance follows from this module.
 import @builtin.foreign as Foreign
 import @builtin.bytes as B
 import @builtin.string as Text
@@ -81,8 +79,6 @@ pub foreign checked library NativeSqlite {
     }
 }
 
-// Initialization is an explicit host responsibility before acquiring Connection.
-// This module never shuts down SQLite's shared host state.
 pub type InitError = NativeOpenError(Int)
     | OpenContradiction(Int)
     | OpenConversion(Foreign.ConversionError)
@@ -90,7 +86,8 @@ pub type InitError = NativeOpenError(Int)
 pub type CloseError = NativeCloseError(Int)
     | CloseBlocked
     | CloseConversion(Foreign.ConversionError)
-pub type Acquire<S, D, I> = Acquired(S, D) | Refused(I)
+pub type Acquire<S, D, I> = Acquired(S, D)
+    | Refused(I)
 
 pub interface ConnectionProvider<Access, State> {
     open_status : Access -> Int ! {ConnectionOps<Access, State>}
@@ -155,8 +152,6 @@ pub resource Connection<H, C> {
     }
 }
 
-// Pending common dependent output/offset and status teardown carriers.
-// Private data retains only the ordinary parent handle, never native State.
 pub type PrepareError = NativePrepareError(Int)
     | PrepareContradiction(Int)
     | EmptySql
@@ -193,8 +188,6 @@ pub resource Statement<H, C, S> {
         Foreign.Returned(()) => {
             let enclosing = perform ConnectionOps<Connection<H, C>, ConnectionState<H, C>>.borrow connection
             let length = Text.byte_length sql + 1
-            // The original contract retains the NUL input allocation through
-            // checked offset extraction; the source receives no native pointer.
             match perform Prepare<H, C, S>.call (enclosing, sql, length) {
                 Foreign.CheckedReturned((status, Foreign.Readable(Foreign.NonNull(state)), tail)) => match prepare_policy (status, true) {
                     PreparePublish => match tail {
@@ -205,8 +198,6 @@ pub resource Statement<H, C, S> {
                         _ => Refused InvalidTail
                     }
                     _ => {
-                        // L8: this established C selects the inherited group.
-                        // The suspect S is neither published nor finalized.
                         let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
                         let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)
                         Refused (PrepareContradiction status)
@@ -244,7 +235,6 @@ pub resource Statement<H, C, S> {
                 FinalizeOk => Foreign.FinishedConsumed Foreign.FinishOk
                 FinalizeNativeError => Foreign.FinishedConsumed (Foreign.FinishError (NativeFinalizeError status))
                 FinalizeReject => {
-                    // Already admitted consumption remains a fact after denial.
                     let enclosing = perform ConnectionOps<Connection<H, C>, ConnectionState<H, C>>.borrow connection
                     let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
                     let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)
@@ -262,12 +252,16 @@ pub resource Statement<H, C, S> {
     }
 }
 
-// Pure classification supplements the resource's direct guarded branches.
-// A partial owner remains unpublished; the common guard owns once-only Close.
-pub type OpenPolicy = PublishConnection | RefusePartial | RefuseNoOwner | RejectOpen
+pub type OpenPolicy = PublishConnection
+    | RefusePartial
+    | RefuseNoOwner
+    | RejectOpen
 pub open_policy : (Int, Bool) -> OpenPolicy
 open_policy (status, nonnull) = match status == 0 {
-    true => match nonnull { true => PublishConnection false => RejectOpen }
+    true => match nonnull {
+        true => PublishConnection
+        false => RejectOpen
+    }
     false => match status == 100 {
         true => RejectOpen
         false => match status == 101 {
@@ -276,21 +270,28 @@ open_policy (status, nonnull) = match status == 0 {
                 true => RejectOpen
                 false => match nonnull {
                     true => RefusePartial
-                    false => match status == 7 { true => RefuseNoOwner false => RejectOpen }
+                    false => match status == 7 {
+                        true => RefuseNoOwner
+                        false => RejectOpen
+                    }
                 }
             }
         }
     }
 }
 
-pub type Execution = Prepared | Row | Done | ExecutionError
-pub type Bindings = Known | Uncertain
-pub type Availability = Usable | Unavailable
+pub type Execution = Prepared
+    | Row
+    | Done
+    | ExecutionError
+pub type Bindings = Known
+    | Uncertain
+pub type Availability = Usable
+    | Unavailable
 pub type Policy = Policy(Execution, Bindings, Availability)
-// ReturnedStatus carries a conforming, operation-specific admitted status only.
-// Statement handlers must reject misuse/contradictions before applying these helpers.
-// This slice does not yet supply those handlers, row generations, or copied text.
-pub type Reply = ReturnedStatus(Int) | PreEntryRefused | BoundaryLost
+pub type Reply = ReturnedStatus(Int)
+    | PreEntryRefused
+    | BoundaryLost
 
 pub initial_policy : Unit -> Policy
 initial_policy () = Policy(Prepared, Known, Usable)
@@ -369,24 +370,34 @@ after_step (Policy(execution, bindings, availability), reply) = match reply {
     BoundaryLost => Policy(execution, bindings, Unavailable)
 }
 
-// Pure classifiers are supplementary source policy, not native lifecycle proof.
-pub type PreparePolicy = PreparePublish | PrepareEmpty | PrepareNativeFailure | PrepareReject
+pub type PreparePolicy = PreparePublish
+    | PrepareEmpty
+    | PrepareNativeFailure
+    | PrepareReject
 pub prepare_policy : (Int, Bool) -> PreparePolicy
 prepare_policy (status, nonnull) = match status == 0 {
-    true => match nonnull { true => PreparePublish false => PrepareEmpty }
+    true => match nonnull {
+        true => PreparePublish
+        false => PrepareEmpty
+    }
     false => match status == 100 {
         true => PrepareReject
         false => match status == 101 {
             true => PrepareReject
             false => match status == 21 {
                 true => PrepareReject
-                false => match nonnull { true => PrepareReject false => PrepareNativeFailure }
+                false => match nonnull {
+                    true => PrepareReject
+                    false => PrepareNativeFailure
+                }
             }
         }
     }
 }
 
-pub type FinalizePolicy = FinalizeOk | FinalizeNativeError | FinalizeReject
+pub type FinalizePolicy = FinalizeOk
+    | FinalizeNativeError
+    | FinalizeReject
 pub finalize_policy : Int -> FinalizePolicy
 finalize_policy status = match status == 0 {
     true => FinalizeOk
@@ -394,7 +405,10 @@ finalize_policy status = match status == 0 {
         true => FinalizeReject
         false => match status == 101 {
             true => FinalizeReject
-            false => match status == 21 { true => FinalizeReject false => FinalizeNativeError }
+            false => match status == 21 {
+                true => FinalizeReject
+                false => FinalizeNativeError
+            }
         }
     }
 }
@@ -408,7 +422,10 @@ ascii_space byte = match byte == 9 {
             true => true
             false => match byte == 12 {
                 true => true
-                false => match byte == 13 { true => true false => byte == 32 }
+                false => match byte == 13 {
+                    true => true
+                    false => byte == 32
+                }
             }
         }
     }

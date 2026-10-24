@@ -46,8 +46,6 @@ pub foreign checked library NativeSqlite {
     }
 }
 
-// Initialization is an explicit host responsibility before acquiring Connection.
-// This module never shuts down SQLite's shared host state.
 pub type InitError = NativeOpenError(Int)
     | OpenContradiction(Int)
     | OpenConversion(Foreign.ConversionError)
@@ -55,7 +53,8 @@ pub type InitError = NativeOpenError(Int)
 pub type CloseError = NativeCloseError(Int)
     | CloseBlocked
     | CloseConversion(Foreign.ConversionError)
-pub type Acquire<S, D, I> = Acquired(S, D) | Refused(I)
+pub type Acquire<S, D, I> = Acquired(S, D)
+    | Refused(I)
 
 pub interface ConnectionProvider<Access> {
     open_status : Access -> Int ! {ConnectionOps<Access>}
@@ -117,12 +116,16 @@ pub resource Connection<H, C> {
     }
 }
 
-// Pure classification supplements the resource's direct guarded branches.
-// A partial owner remains unpublished; the common guard owns once-only Close.
-pub type OpenPolicy = PublishConnection | RefusePartial | RefuseNoOwner | RejectOpen
+pub type OpenPolicy = PublishConnection
+    | RefusePartial
+    | RefuseNoOwner
+    | RejectOpen
 pub open_policy : (Int, Bool) -> OpenPolicy
 open_policy (status, nonnull) = match status == 0 {
-    true => match nonnull { true => PublishConnection false => RejectOpen }
+    true => match nonnull {
+        true => PublishConnection
+        false => RejectOpen
+    }
     false => match status == 100 {
         true => RejectOpen
         false => match status == 101 {
@@ -131,21 +134,28 @@ open_policy (status, nonnull) = match status == 0 {
                 true => RejectOpen
                 false => match nonnull {
                     true => RefusePartial
-                    false => match status == 7 { true => RefuseNoOwner false => RejectOpen }
+                    false => match status == 7 {
+                        true => RefuseNoOwner
+                        false => RejectOpen
+                    }
                 }
             }
         }
     }
 }
 
-pub type Execution = Prepared | Row | Done | ExecutionError
-pub type Bindings = Known | Uncertain
-pub type Availability = Usable | Unavailable
+pub type Execution = Prepared
+    | Row
+    | Done
+    | ExecutionError
+pub type Bindings = Known
+    | Uncertain
+pub type Availability = Usable
+    | Unavailable
 pub type Policy = Policy(Execution, Bindings, Availability)
-// ReturnedStatus carries a conforming, operation-specific admitted status only.
-// Statement handlers must reject misuse/contradictions before applying these helpers.
-// This slice does not yet supply those handlers, row generations, or copied text.
-pub type Reply = ReturnedStatus(Int) | PreEntryRefused | BoundaryLost
+pub type Reply = ReturnedStatus(Int)
+    | PreEntryRefused
+    | BoundaryLost
 
 pub initial_policy : Unit -> Policy
 initial_policy () = Policy(Prepared, Known, Usable)

@@ -1,4 +1,3 @@
-// Pure source controls: no native entry, owner disposition, K, or row-generation proof.
 pub policy_traces : Unit -> Bool
 policy_traces () = {
     let initial = initial_policy ()

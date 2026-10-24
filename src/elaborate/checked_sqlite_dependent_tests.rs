@@ -185,8 +185,8 @@ fn checked_sqlite_dependent_pure_prepare_and_tail_policy_traces() {
     assert!(matches!(result.value, crate::eval::Value::Boolean(true)));
     for (from, to) in [
         (
-            "false => match nonnull { true => PrepareReject false => PrepareNativeFailure }",
-            "false => match nonnull { true => PrepareNativeFailure false => PrepareNativeFailure }",
+            "true => PrepareReject\n                    false => PrepareNativeFailure",
+            "true => PrepareNativeFailure\n                    false => PrepareNativeFailure",
         ),
         ("B.InvalidIndex => false", "B.InvalidIndex => true"),
     ] {
@@ -236,7 +236,7 @@ fn checked_sqlite_dependent_rows_preserve_full_original_vectors() {
             &format!("{name}<{{| Before}}, {args}, {{| After}}>"),
         );
     }
-    let entry = ENTRY.replace("import producer as SQLite", "import producer as SQLite\neffect BeforeMark { before_mark : Unit -> Unit }\neffect AfterMark { after_mark : Unit -> Unit }")
+    let entry = ENTRY.replace("import producer as SQLite", "import producer as SQLite\neffect BeforeMark {\n    before_mark : Unit -> Unit\n}\neffect AfterMark {\n    after_mark : Unit -> Unit\n}")
         .replace("SQLite.Connection<H, C>", "SQLite.Connection<{BeforeMark}, H, C, {AfterMark}>")
         .replace("SQLite.Statement<H, C, S>", "SQLite.Statement<{BeforeMark}, H, C, S, {AfterMark}>");
     let (core, provenance) = checked_owner_passive_program_for_source(&source, &entry);
