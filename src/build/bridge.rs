@@ -83,7 +83,7 @@ pub(crate) enum TargetScalar {
 }
 
 impl TargetScalar {
-    const fn rust_type(self) -> &'static str {
+    pub(super) const fn rust_type(self) -> &'static str {
         match self {
             Self::I8 => "i8",
             Self::U8 => "u8",
@@ -95,7 +95,7 @@ impl TargetScalar {
         }
     }
 
-    const fn value_variant(self) -> &'static str {
+    pub(super) const fn value_variant(self) -> &'static str {
         match self {
             Self::I8 => "I8",
             Self::U8 => "U8",

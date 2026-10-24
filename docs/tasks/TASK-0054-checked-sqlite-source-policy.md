@@ -142,3 +142,22 @@ dependency facts describe both ordinary handles and State. Quarantine now
 independently authenticates applied native State, its complete Type/Row vector,
 host and owned identity before accepting exact Current or declared Enclosing.
 General dependency transport remains unchanged.
+
+
+## Runtime output/status dependency
+
+The platform author is implementing the reviewed independent output/status
+runtime prerequisite under TASK-0053, separate from the common quarantine and
+unpublished void-disposal deliveries. Its initial typed artifact has exactly
+Open-shaped NUL/output/constant/null acquisition and current scalar teardown
+roles. It must arm error/non-null output, preserve the same owner on retention,
+keep raw status independent of source E readability and refuse group-denied
+entry. Actual checked receipts and complete original/witness relations remain
+primary's static/Core join; private runtime models grant none.
+
+This prerequisite alone does not accept the full SQLite library image, its
+Initialize/Prepare/Finalize/Bind/Step calls, E/B functions or native behavior.
+Additional original roles must be implemented and reviewed through the same
+common mechanism before their image can be rendered or activated. Source status
+error payloads require bounded exact Integer output encoding too. No evidence
+from the eight-byte fixture or old approval promotes those dependencies.

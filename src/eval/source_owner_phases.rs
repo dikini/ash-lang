@@ -447,6 +447,12 @@ impl<'binding> OwnerAcquireReady<'binding> {
                 .checked_sub(1)
                 .ok_or(OwnerPhaseFailure::Authority)?;
         }
+        if self.invocation.uses_checked_leaf() {
+            for input in &inputs {
+                work.charge(input.len().saturating_add(1))
+                    .map_err(|()| OwnerPhaseFailure::WorkReservation)?;
+            }
+        }
         self.input_storage = inputs;
         Ok(self)
     }
@@ -460,7 +466,7 @@ impl<'binding> OwnerAcquireReady<'binding> {
             input_storage,
         } = self;
         let (authority, raw) = invocation
-            .invoke(&operands)
+            .invoke(&operands, &input_storage)
             .map_err(OwnerPhaseFailure::Wrapper)?;
         Ok(OwnerAcquireReturned {
             authority,

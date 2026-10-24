@@ -163,6 +163,20 @@ impl<'a> Payload<'a> {
                 stack[length] = Some(task); length += 1; Ok(()) };
             match task {
                 Task::Value(value,heap) => match value {
+                    Value::Integer(integer)=>{
+                        // This fixed scratch/traversal envelope was paid before
+                        // entry. Check the whole magnitude before any copy; no
+                        // narrowing, decimal formatting or BigInt clone.
+                        let size = usize::try_from(integer.magnitude_byte_length()).map_err(|_|RootRefusal::Resource)?;
+                        let end = self.used.checked_add(6).and_then(|n| n.checked_add(size))
+                            .filter(|n| *n <= BYTES).ok_or(RootRefusal::Resource)?;
+                        self.byte(6)?;
+                        let sign_at = self.used; self.byte(0)?;
+                        self.u32(u32::try_from(size).map_err(|_|RootRefusal::Resource)?)?;
+                        let negative = integer.write_magnitude_le(&mut self.bytes[self.used..end])
+                            .ok_or(RootRefusal::Association)?;
+                        self.bytes[sign_at] = u8::from(negative); self.used = end;
+                    },
                     Value::Unit=>self.byte(0)?, Value::Boolean(v)=>{self.byte(1)?;self.byte(u8::from(*v))?;},
                     Value::Bytes(b)=>{self.byte(2)?;self.blob(b)?;}, Value::BytePrefix(b)=>{self.byte(2)?;self.blob(b.as_bytes())?;},
                     Value::String(s)=>{self.byte(3)?;self.blob(s.as_bytes())?;},
@@ -182,5 +196,28 @@ impl<'a> Payload<'a> {
             }
         }
         Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod output_status_tests {
+    use super::*;
+    #[test]
+    fn integer_result_keeps_sign_magnitude_and_scratch_boundary() {
+        let integer = crate::integer::Integer::parse_decimal(&"9".repeat(3000)).unwrap();
+        let negative = &integer * &crate::integer::Integer::from_i64(-1);
+        let mut scratch = [0; BYTES];
+        let mut p = Payload::new(&mut scratch);
+        p.value(&Value::Integer(negative), &[]).unwrap();
+        assert_eq!(p.bytes()[0..2], [6, 1]);
+        let count = u32::from_le_bytes(p.bytes()[2..6].try_into().unwrap()) as usize;
+        assert_eq!(count as u64, integer.magnitude_byte_length());
+        assert_eq!(p.bytes().len(), count + 6);
+        let size = p.used;
+        let mut short = Payload::new(&mut scratch); short.used = BYTES - size + 1;
+        let before = short.used;
+        assert!(short.value(&Value::Integer(integer), &[]).is_err());
+        assert_eq!(short.used, before, "whole integer bound is checked before encoding");
     }
 }

@@ -25,16 +25,22 @@ pub(crate) struct RootProgram {
     limits: CheckedOwnerLimits,
     scope: usize,
     minimum_observations: usize,
-    roles: [[u32; 8]; 4],
+    roles: Vec<[u32; 8]>,
     verified: ash_trusted_preparation::VerifiedRunning,
     work: crate::types::TypeWorkBudget,
 }
 impl RootProgram {
     pub(crate) fn restore(
         verified: ash_trusted_preparation::VerifiedRunning,
-        bytes: &[u8], facts_bytes: &[u8], policy: &[u8], roles: &[[u32; 8]; 4],
+        bytes: &[u8], facts_bytes: &[u8], policy: &[u8], roles: &[[u32; 8]], profile: u8,
     ) -> Result<Self, RootRefusal> {
         let mut work = gas::startup(bytes.len(), facts_bytes.len()).map_err(|()| RootRefusal::Resource)?;
+        let count = match profile { 0 => 4, 1 => 2, _ => return Err(RootRefusal::Association) };
+        if roles.len() != count { return Err(RootRefusal::Association); }
+        work.charge(count * 32 + 8).map_err(|()|RootRefusal::Resource)?;
+        let mut retained_roles = Vec::new();
+        retained_roles.try_reserve_exact(count).map_err(|_|RootRefusal::Resource)?;
+        retained_roles.extend_from_slice(roles);
         let expected = verified.embedded_pins();
         let mut actual = [ArtifactPin { bytes: 0, sha256: [0; 32] }; 4];
         let runtime = super::runtime_fingerprint();
@@ -63,9 +69,20 @@ impl RootProgram {
             || limits.observations < minimum_observations { return Err(RootRefusal::Association); }
         work.charge(4 * 8 * 4 + 32).map_err(|()| RootRefusal::Resource)?;
         let mut bindings = SourceNativeBindings::default();
-        let callbacks = [SourceOwnerCallback::CheckedAcquire, SourceOwnerCallback::CheckedQuery,
-            SourceOwnerCallback::CheckedLength, SourceOwnerCallback::CheckedFree];
-        for (role, callback) in roles.iter().zip(callbacks) {
+        let scope_owner = match &restored.program.nodes().get(scope).ok_or(RootRefusal::Association)?.kind {
+            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) => &scope.header().owner,
+            _ => return Err(RootRefusal::Association),
+        };
+        for (index, role) in roles.iter().enumerate() {
+            let callback = match (profile, index) {
+                (0, 0) => SourceOwnerCallback::CheckedAcquire,
+                (0, 1) => SourceOwnerCallback::CheckedQuery,
+                (0, 2) => SourceOwnerCallback::CheckedLength,
+                (0, 3) => SourceOwnerCallback::CheckedFree,
+                (1, 0) => SourceOwnerCallback::CheckedOutputAcquire,
+                (1, 1) => SourceOwnerCallback::CheckedStatusFree,
+                _ => return Err(RootRefusal::Association),
+            };
             let [library_slot, module, ordinal, symbol_slot, symbol_index, operation_module, effect, local] = *role;
             // This profile has one library and exactly four distinct originals.
             if role[..3] != roles[0][..3] { return Err(RootRefusal::Association); }
@@ -75,6 +92,9 @@ impl RootProgram {
             let checked = check_executable_foreign_library_in_program(identity, Arc::clone(original), &expected,
                 host::NATIVE_TARGET, &restored.program, &mut work).map_err(RootRefusal::Foreign)?;
             let source = restored.symbols.get(symbol_slot as usize).ok_or(RootRefusal::Association)?;
+            if !source.owner().is_some_and(|owner| Arc::ptr_eq(owner, scope_owner)) {
+                return Err(RootRefusal::Association);
+            }
             let operation = restored.relocate_operation(operation_module, effect, local, &mut work)
                 .map_err(RootRefusal::Image)?;
             let symbol = admit_executable_foreign_symbol(&checked, source, symbol_index as usize, operation, &mut work)
@@ -83,7 +103,7 @@ impl RootProgram {
         }
         drop(facts);
         let (program, modules) = restored.into_program_and_modules();
-        Ok(Self { program, modules, bindings, limits, scope, minimum_observations, roles: *roles, verified, work })
+        Ok(Self { program, modules, bindings, limits, scope, minimum_observations, roles: retained_roles, verified, work })
     }
     /// Consumes the real verified context for exactly one evaluator invocation.
     /// Neither a borrowed grant factory nor a replayable run method is exposed.
@@ -126,7 +146,7 @@ pub(crate) struct RootAdmission<'program> {
     host: &'program crate::core::NativeInterpretNode,
     limits: CheckedOwnerLimits,
     minimum_observations: usize,
-    roles: &'program [[u32; 8]; 4],
+    roles: &'program [[u32; 8]],
     _verified: &'program ash_trusted_preparation::VerifiedRunning,
 }
 impl std::fmt::Debug for RootAdmission<'_> {
@@ -144,7 +164,7 @@ impl<'program> RootAdmission<'program> {
         // Pointer equality is only the last exact-borrow check after the complete
         // supported source census, original H/R vectors and four sealed roles.
         Ok(std::ptr::eq(boundary, self.host) && boundary.host() == self.host.host()
-            && boundary.interpretations().is_empty() && self.roles.len() == 4)
+            && boundary.interpretations().is_empty() && matches!(self.roles.len(), 2 | 4))
     }
     pub(crate) fn authorizes_scope(&self, scope: &crate::core::SourceResourceScopeNode,
         work: &mut crate::types::TypeWorkBudget) -> Result<bool, crate::eval::RuntimeFailure> {

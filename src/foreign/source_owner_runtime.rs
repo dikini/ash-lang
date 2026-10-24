@@ -196,6 +196,27 @@ pub(in crate::foreign) fn scalar_observation(
     NativeOwnerStatus { reply, readable: false, valid }.raw_observation()
 }
 
+#[cfg(any(test, ash_checked_owner_root = "v1"))]
+fn leaf_scalar(value: super::super::checked_leaf_transport::RawScalar) -> NativeScalarReply {
+    use super::super::checked_leaf_transport::RawScalar as Raw;
+    NativeScalarReply::Scalar(match value {
+        Raw::I8(n) => NativeScalarValue::I8(n), Raw::U8(n) => NativeScalarValue::U8(n),
+        Raw::I32(n) => NativeScalarValue::I32(n), Raw::U32(n) => NativeScalarValue::U32(n),
+        Raw::I64(n) => NativeScalarValue::I64(n), Raw::U64(n) => NativeScalarValue::U64(n),
+        Raw::USize(n) => NativeScalarValue::USize(n),
+    })
+}
+#[cfg(any(test, ash_checked_owner_root = "v1"))]
+fn leaf_disposal_status(returned: &super::super::checked_leaf_transport::DisposalReturned)
+    -> Option<NativeOwnerStatus> {
+    if returned.disposition().is_none() {
+        return Some(NativeOwnerStatus { reply: NativeScalarReply::Void, readable: false, valid: false });
+    }
+    returned.status().map(|raw| NativeOwnerStatus {
+        reply: leaf_scalar(raw), readable: returned.readable(), valid: true,
+    })
+}
+
 /// Fixed observation data, not invocation permission. Unknown/malformed status
 /// is not known retention; callers must preserve the prior fact and status.
 fn guard_disposal_observation(
@@ -903,37 +924,26 @@ impl NativeOwnerGuard {
         let slot = &mut slots[self.slot];
         #[cfg(any(test, ash_checked_owner_root = "v1"))]
         {
-            use super::super::checked_leaf_transport::FreeObservation;
             let NativeOwnerSlot { leaf, checked, host_attempted, closing_status, last_observed_status, .. } = slot;
-            // Without opaque transport there is no admitted checked dispatcher.
-            // Retain the slot without falling back to a raw callback.
             if leaf.is_none() { return Ok(()); }
-            // Check the physical destination before recording native entry.
-            if !matches!(leaf, Some(CheckedLeafBacking::Cell(cell)) if cell.is_occupied()) {
-                return Err(NativeOwnerAdmissionError::Authority);
-            }
+            let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeOwnerAdmissionError::Authority); };
+            // Prepare against the actual cell before the pending-call transition.
+            // No prepared reference escapes this held RefMut or movable phase.
+            let prepared = cell.prepare_teardown().map_err(|_|NativeOwnerAdmissionError::Authority)?;
             let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
             control.begin_guard_disposal(activation, scope).map_err(control_error)?;
             *host_attempted = true;
-            let Some(CheckedLeafBacking::Cell(cell)) = leaf.take() else {
-                unreachable!("held checked disposal slot");
+            let returned = prepared.invoke();
+            let status = leaf_disposal_status(&returned);
+            let Some((consumed, raw_status)) = guard_disposal_observation(
+                returned.disposition().unwrap_or(false), status) else {
+                control.output_failed();
+                return Err(NativeOwnerAdmissionError::Authority);
             };
-            *leaf = Some(CheckedLeafBacking::Consumed);
-            match cell.free() {
-                FreeObservation::Returned(_) => {
-                    let (consumed, status) = guard_disposal_observation(true, None)
-                        .expect("fixed void release observation");
-                    *closing_status = status;
-                    *last_observed_status = status;
-                    control.guard_disposed(consumed);
-                }
-                FreeObservation::NoOwner => {
-                    // No conforming return fact: preserve the last observation
-                    // and the unresolved attempt; never retry or fabricate K.
-                    control.output_failed();
-                    return Err(NativeOwnerAdmissionError::Authority);
-                }
-            }
+            *closing_status = raw_status;
+            *last_observed_status = raw_status;
+            control.guard_disposed(consumed);
+            if consumed { *leaf = Some(CheckedLeafBacking::Consumed); }
             self.initialized_bytes = None;
             Ok(())
         }
@@ -985,7 +995,6 @@ impl NativeOwnerGuard {
         self,
         blocked: bool,
     ) -> Result<(NativeOwnerDisposition, Option<NativeOwnerStatus>), NativeOwnerAdmissionError> {
-        use super::super::checked_leaf_transport::FreeObservation;
         let mut slots = self.storage.slots.try_borrow_mut()
             .map_err(|_| NativeOwnerAdmissionError::Authority)?;
         NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
@@ -996,34 +1005,38 @@ impl NativeOwnerGuard {
         }
         let NativeOwnerSlot { leaf, checked, quarantined, closing_status, last_observed_status, .. } = slot;
         let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
-        let entry = control.begin_finish_entry_with_blocked(blocked).map_err(control_error)?;
-        match entry {
+        if blocked {
+            return match control.begin_finish_entry_with_blocked(true).map_err(control_error)? {
+                crate::foreign::checked_control::FinishEntry::Synthetic(witness) => {
+                    drop(slots); Ok((NativeOwnerDisposition::Synthetic { guard: self, witness }, None))
+                }
+                crate::foreign::checked_control::FinishEntry::NativeReady => Err(NativeOwnerAdmissionError::Authority),
+            };
+        }
+        let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeOwnerAdmissionError::Authority); };
+        let prepared = cell.prepare_teardown().map_err(|_|NativeOwnerAdmissionError::Authority)?;
+        match control.begin_finish_entry_with_blocked(false).map_err(control_error)? {
             crate::foreign::checked_control::FinishEntry::Synthetic(witness) => {
+                drop(prepared);
                 drop(slots);
                 Ok((NativeOwnerDisposition::Synthetic { guard: self, witness }, None))
             }
             crate::foreign::checked_control::FinishEntry::NativeReady => {
-                let Some(CheckedLeafBacking::Cell(cell)) = leaf.take() else {
+                let returned = prepared.invoke();
+                let status = leaf_disposal_status(&returned);
+                let Some((consumed, raw_status)) = guard_disposal_observation(
+                    returned.disposition().unwrap_or(false), status) else {
+                    *quarantined = true;
                     control.output_failed();
                     return Err(NativeOwnerAdmissionError::Authority);
                 };
-                *leaf = Some(CheckedLeafBacking::Consumed);
-                match cell.free() {
-                    FreeObservation::Returned(_) => {
-                        // Both fields are reserved observations. No storage
-                        // reborrow, allocation or source construction follows C.
-                        *closing_status = None;
-                        *last_observed_status = None;
-                        control.finished(true);
-                    }
-                    FreeObservation::NoOwner => {
-                        *quarantined = true;
-                        control.output_failed();
-                        return Err(NativeOwnerAdmissionError::Authority);
-                    }
-                }
+                *closing_status = raw_status;
+                *last_observed_status = raw_status;
+                control.finished(consumed);
+                if consumed { *leaf = Some(CheckedLeafBacking::Consumed); }
                 drop(slots);
-                Ok((NativeOwnerDisposition::Consumed(Arc::clone(&self.owner)), None))
+                if consumed { Ok((NativeOwnerDisposition::Consumed(Arc::clone(&self.owner)), status)) }
+                else { Ok((NativeOwnerDisposition::Retained(self), status)) }
             }
         }
     }
@@ -1750,6 +1763,35 @@ impl NativeOwnerGuardReady {
             offset: None,
             recorded: true,
         })
+    }
+
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    pub(in crate::foreign) fn invoke_checked_output_leaf(
+        self, input: &[u8],
+    ) -> Result<NativeOwnerCallReturned, NativeScalarCallError> {
+        let mut slots = self.guard.storage.slots.try_borrow_mut()
+            .map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        let index = self.guard.slot;
+        NativeOwnerStorage::entry_allowed(&mut slots, index, false)
+            .map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        let slot = slots.get_mut(index).ok_or(NativeScalarCallError::ArgumentContract)?;
+        if !slot.dependencies.is_empty() || self.prepared_initialized_bytes.is_some() {
+            return Err(NativeScalarCallError::ArgumentContract);
+        }
+        let NativeOwnerSlot { leaf, checked, closing_status, last_observed_status, .. } = slot;
+        let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeScalarCallError::ArgumentContract); };
+        let control = checked.as_mut().ok_or(NativeScalarCallError::ArgumentContract)?;
+        let prepared = cell.prepare_output_acquire(input).map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        control.begin_acquire().map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        let returned = prepared.invoke(); // first arms the actual destination
+        let scalar = leaf_scalar(returned.status());
+        control.observe_acquisition_status(Some(scalar));
+        *closing_status = control.acquisition_status();
+        *last_observed_status = *closing_status;
+        control.acquired(returned.nonnull());
+        drop(slots);
+        Ok(NativeOwnerCallReturned { guard: self.guard, prepared_initialized_bytes: None,
+            scalar: Some(scalar), offset: None, recorded: true })
     }
 
     /// Called immediately by the generated typed wrapper after native return.

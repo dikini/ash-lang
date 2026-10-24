@@ -103,7 +103,11 @@ pub(super) fn observation_minimum(
         if exhausted {
             return Err(ReceiptFailure::Resource);
         }
-        if !supported || copies == 0 {
+        let independent_output = matches!(scope.header().acquire.owner_role(),
+            Some(crate::foreign::source_contract::PreparedOwnerCall::OutputAcquire { offset: None, .. }))
+            && matches!(scope.header().teardown.owner_role(),
+                Some(crate::foreign::source_contract::PreparedOwnerCall::StatusTeardown { .. }));
+        if !supported || (copies == 0 && !independent_output) || (independent_output && (copies != 0 || windows != 0)) {
             return Err(ReceiptFailure::Association);
         }
         let minimum = scope

@@ -638,3 +638,34 @@ Session `94828` on `595dda47` passes both-package targeted Clippy and all 42 dis
 The retries repair two private helper imports, a tail-expression lint, and the legacy model's accidental removal of required scalar-readable declarations plus its corresponding metadata assertion. Production admission and runtime postconditions remain unchanged. Delivery04 was never launched. ASHOUT03/ASHOBS03, KAbsent, one-shot disposal before payload copy, shared-denial zero-call behavior and legacy tariffs are covered by the focused controls. Status-accounting evidence does not open checked OutputAcquire/StatusTeardown or establish native L2.
 
 Next: exact unsigned product-equal evidence checkpoint and independent publication review for PR124, then root integration and partial acceptance. Replay the separately parked output/status source and primary typed-status admission only after this actual retaining tip. Configured source/artifacts/approvals must be refreshed before any selected native run; no deployment, six-field conformity or whole F-core claim transfers from this gate.
+
+
+## Next independent output/status runtime slice
+
+After preserving disposal `89d4f798`, the authorized source branch adds the
+reviewed private carriers under TASK-0053/TASK-0054. Keep disposal delivery and
+its actual-common-tip gate separate. Platform owns exact typed emitter/shim,
+opaque slot acquisition/retention/disposition, root projection and bounded
+Integer source-result encoding. Primary owns static/Core/header/witness joins.
+Do not merge or claim checked status support until those real receipts connect.
+
+The first artifact supports the existing four byte roles or exactly two
+independent opaque output/status roles. Refuse offsets/dependencies, additional
+native roles and unsupported ABI operands. Input buffers, original constants,
+null/output slots, scalar conversions, ledger capacity and mandatory reporting
+must be settled before C. Construct prepared values only inside the held actual
+slot RefMut; no self-reference to movable Ready/input storage is retained.
+Acquire first arms nonnull even on error. Teardown borrows without eager take,
+retains the exact owner on admitted retention, and leaves no-O4 unresolved with
+no retry. Shared group denial must still forbid every native entry.
+
+Focused verification proposal: existing initialized-byte render/physical and
+void-disposal regressions; bounded full-sign/magnitude exact/short source codec;
+private transport status/retention/no-O4 controls labeled as models; then genuine
+admitted checked output/status Machine/ledger/witness controls supplied by the
+static join, independently reconstructed role/donor refusals and actual typed
+root/leaf compile/link with a required-symbol negative. Targeted Clippy follows
+on the coherent combined source. No heavy launch during the common gate, no
+fake checked fixture, legacy fallback, approval transfer or native execution.
+Stop on a precise missing static/carrier/closure join, not a broader profile
+exception. Future dependent/copied-multioperand E/B is a separate bounded slice.

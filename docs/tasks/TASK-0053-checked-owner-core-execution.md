@@ -443,3 +443,38 @@ approvals/deployment/execution, F-core and whole criteria remain open.
 The genuine void path disposes an admitted unpublished owner before Refused payload copying or discard reporting, preserves KAbsent and never synthesizes source Finish or a closing record. Shared-denied groups remain at zero calls. Separate acquisition and latest-disposal observations survive output failure; invalid/no-O4 attempts preserve the prior observation and unresolved backing without retry. The legacy status controls remain accounting models, not checked status-profile admission.
 
 Fresh actual root/leaf compile/link yields ELF `67f43b5e` (100,547,432 bytes), receipt `ce2e8195` and request `cf13c1b1`; the authenticated configuration chain and independent root identity `cc199c7a` match. The coherent donor controls and fresh missing-release undefined-symbol refusal pass. Two glibc loading warnings and ordinary Rust warnings remain. Original `77443`/`97993` compile/lint failures, `62391` partial 11-pass/one fixture-setup-failure result and superseded delivery04 UNRUN remain separate evidence. No selected native callback or generated application/launcher ran. Six conformity fields remain Missing; configured approvals, genuine status transport, native SQLite L2, F-core and whole criteria remain open. This task/evidence prose was assembled after testing without changing product bytes.
+
+
+## Independent output/status runtime extension in progress
+
+The root-assigned follow-up starts from the preserved, unsigned unpublished
+void-disposal source checkpoint `89d4f798`; that disposal remains a separate
+untested delivery pending common-quarantine retention. The independent runtime
+slice follows AD-0016's common extension mechanism and CP-0024. It adds a closed
+opaque output acquisition with NUL input, original signed32 constant/null/output
+operands, and a current-owner scalar-status teardown. It preserves the existing
+four-role initialized-byte/void profile. No library name selects admission.
+
+The typed emitter, safe shim, physical slot dispatch and independent root role
+projection are being authored. Prepared destination/owner loans are constructed
+and consumed inside the actual held slot borrow, after input/ledger/report
+funding. Every nonnull output is armed before status/source output work;
+admitted retention keeps the same opaque owner. No admitted O4 preserves prior
+observations and unresolved backing without retry. Independent raw acquisition
+and teardown statuses remain separate from optional source payload readability.
+
+The bounded root result codec also needs exact sign/magnitude Integer encoding
+for status-bearing source error payloads, within its existing scratch/traversal
+and prepaid work bounds. Mandatory facts still precede optional result/Trace.
+Code/profile and exact artifact/request/configured approvals must be refreshed;
+old unconfigured evidence does not cover the new code or output tags.
+
+Primary owns genuine static/Core/header admission and request-specific
+Consumed/Retained/Boundary correspondence. Runtime transport and private injected
+controls cannot bypass the current fences or manufacture checked receipts.
+The first emitted output/status image is dependency-free with exactly two
+original roles; additional initialization/scalar/dependent/multioperand roles
+remain unsupported rather than being dropped. Full SQLite E/B, dependent
+Prepare/Finalize, BindText/Transient, native conformity, protected execution and
+F7 isolation remain open. No build or new native execution has run for this
+source work; common verification owns the serialized heavy lane.
