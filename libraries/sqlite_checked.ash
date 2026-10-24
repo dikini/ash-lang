@@ -81,8 +81,8 @@ pub resource Connection<H, C> {
             PublishConnection => Acquired(state, status)
             RefusePartial => Refused (NativeOpenError status)
             _ => {
-                let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
-                let denied = quarantine (state, Foreign.UnexpectedStatus status)
+                let reject : Foreign.ViolationCause -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_reject_acquisition
+                let denied = reject (Foreign.UnexpectedStatus status)
                 Refused (OpenContradiction status)
             }
         }

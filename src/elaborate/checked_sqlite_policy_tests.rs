@@ -72,6 +72,10 @@ fn checked_connection_finish_rejects_switched_disposition_and_boundary() {
     check_graph(&graph(SQLITE, false)).expect("genuine library before hostile controls");
     for (from, to) in [
         (
+            "                let reject : Foreign.ViolationCause -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_reject_acquisition\n                let denied = reject (Foreign.UnexpectedStatus status)",
+            "                let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine\n                let denied = quarantine (state, Foreign.UnexpectedStatus status)",
+        ),
+        (
             "Foreign.CheckedReturned(Foreign.Retained(status)) => Foreign.FinishedRetained(state, NativeCloseError status)",
             "Foreign.CheckedReturned(Foreign.Retained(status)) => Foreign.FinishedConsumed Foreign.FinishOk",
         ),
@@ -82,7 +86,7 @@ fn checked_connection_finish_rejects_switched_disposition_and_boundary() {
     ] {
         assert_eq!(SQLITE.matches(from).count(), 1);
         let error = check_graph(&graph(&SQLITE.replace(from, to), false))
-            .expect_err("a different disposition is not a finish witness");
+            .expect_err("source authority rejects Fresh quarantine or a different finish witness");
         assert!(
             matches!(error, TypeError::Source(_)),
             "semantic refusal: {error:?}"
