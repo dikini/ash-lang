@@ -11,6 +11,19 @@
 
 ## Goal and authority
 
+The [configured native preparation plan](plans/checked-owner-configured-native-preparation.md)
+records the portable launcher-build and external closure-DATA transaction and
+its [focused verification](evidence/checked-owner-core-execution/configured-native-preparation/README.md).
+The configured variant, independent conformity/approvals and native/install
+actions remain gated by exact inputs, review and root assignment. Focused
+nonexecuting preparation establishes no F-core execution or protected applicability.
+Its delivery now targets retained PR127 `52d4e122`, where the original F3
+source/static criterion is complete. The [reconciliation readback](evidence/checked-owner-core-execution/configured-native-preparation/reconciliation.json)
+preserves the focused evidence through exact input equality. Earlier pending-F3
+statements below describe their historical checkpoints. Root owns publication,
+retention and the next exact context/private-literal/fresh-artifact assignment;
+F4/F6, configured native execution and full-workspace acceptance remain open.
+
 Deliver the first real F4/F6 vertical path: an explicitly checked in-process
 whole image acquires one dependency-free byte owner, copies its genuinely
 initialized native interval into independent Bytes, executes exact finish and

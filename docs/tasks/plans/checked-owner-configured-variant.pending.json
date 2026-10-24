@@ -1,0 +1,23 @@
+{
+  "status": "PROPOSED_SOURCE_VARIANT_NOT_RUNTIME_CONTEXT_NOT_INSTALLABLE",
+  "default_portable_association": "INSTALLED=None remains unchanged",
+  "future_private_association_source": "trusted-preparation/src/bootstrap_association.rs",
+  "future_fixed_context_path": "/etc/ash/checked-owner-v2/context.json",
+  "known_verified_store_path": "/etc/ash/checked-owner-v2/approvals",
+  "known_verified_store_identity": { "device": 66306, "inode": 26084175 },
+  "context_schema": { "version": 2, "context_version": 2, "premise_version": 1, "launch_version": 2, "stdio": "null-report-request-v2" },
+  "candidate_observed_uid_gid_not_selected_policy": [1000, 1000],
+  "candidate_observed_groups_not_selected_policy": [4, 24, 27, 30, 46, 114, 122, 986, 987, 1000],
+  "candidate_observed_inheritable_capabilities_requires_context_repair": "0000000800000000",
+  "reviewed_unprivileged_invocation_tool_pin_and_exact_argv": null,
+  "actual_invocation_uid_gid_groups_and_namespace_device_inode": null,
+  "actual_uid_map_sha256_and_mountinfo_sha256": null,
+  "reviewed_numeric_request_image_work_and_program_header_limits": null,
+  "exact_context_json_bytes_and_digest": null,
+  "reviewed_identical_app_launcher_association_literal_patch": null,
+  "actual_static_retaining_tip_and_final_frozen_source_configuration_pins": null,
+  "fresh_app_and_launcher_artifacts_and_provenance": null,
+  "six_independent_finite_conformity_reviews": null,
+  "independent_protected_launcher_descriptor_and_per_image_approval": null,
+  "separate_root_installation_and_native_invocation_assignments": null
+}
