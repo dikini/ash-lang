@@ -999,16 +999,19 @@ impl Encoder<'_> {
         self.source_pending_rows = saved_pending;
         let (handler, handler_mapping, handler_inputs) = conditional?;
         let mut ordered: Vec<(
-            &crate::resolved::BinderId,
+            BinderIdentity,
             &crate::types::IterativeTypeOwner,
         )> = Vec::new();
         charge(self.work, original.globals().len())?;
         ordered
             .try_reserve_exact(original.globals().len())
             .map_err(|_| ImageFailure::Resource)?;
-        ordered.extend(original.globals().iter());
+        for (binder, ty) in original.globals().iter() {
+            ordered.push((self.binder_id(*binder)?, ty));
+        }
         // Selection order spends the same comparisons and swaps for every
-        // hash iteration order, keeping canonical bytes and work reproducible.
+        // hash iteration order. Compare relocated wire coordinates: fresh live
+        // ModuleIds need not have the same allocation order after restoration.
         for position in 0..ordered.len() {
             let mut selected = position;
             for candidate in position + 1..ordered.len() {
@@ -1021,8 +1024,7 @@ impl Encoder<'_> {
             ordered.swap(position, selected);
         }
         let mut globals = Vec::new();
-        for (binder, ty) in ordered {
-            let id = self.binder_id(*binder)?;
+        for (id, ty) in ordered {
             let ty = self.encode_type(ty)?;
             // This passive loan uses its resource's causal origin. It never
             // materializes a binder or replaces the global's defining origin.
