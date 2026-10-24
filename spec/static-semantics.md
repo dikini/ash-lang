@@ -994,7 +994,8 @@ main () = true + 1
 Foreign declarations are passive. The explicit static checked foreign profile
 admits `foreign checked library` declarations with owner-free scalar or void
 calls, opaque owner acquisition and void teardown with declared retained
-dependencies, dependency-free initialized-byte owners, and the static checked
+dependencies, independent opaque output acquisition and scalar-status teardown,
+dependency-free initialized-byte owners, and the static checked
 source lifecycle described below. Default source resolution,
 program building and running refuse this checked closure before legacy foreign
 ABI preparation. Erasing the marker is not an available source operation;
@@ -1043,7 +1044,7 @@ with rewritten source cannot supply that authority. Static Core and its ordinary
 transforms preserve the lexical host binder.
 
 Checked owners retain distinct original host and owned formals, exact State
-identity, nullable acquisition and consumed/retained void teardown relations.
+identity, nullable acquisition and consumed/retained teardown relations.
 Passive binding creates no source owner. Legacy binding and source resources
 using `scope` or `acquired_only` still refuse checked contracts.
 
@@ -1060,6 +1061,18 @@ structural Acquired(State,D)/Refused(I) relation. Completion uses canonical
 no codec authority. The resource interprets only its listed exact native
 instances and keeps `NativeHost<H>` through acquisition, calls and completion;
 the lexical host removes that exact obligation and never interprets owner calls.
+
+An independent checked opaque owner additionally admits scalar-status output
+acquisition with one NUL call-borrow input, one nullable opaque owner-output
+slot, one signed-32 constant operand and one null byte-address input, in that
+order. The original output slot has no offset output and the owner retains no
+dependency. The checked result preserves both the independent scalar status and
+nullable output; nonnull does not establish source acquisition success. Current-only
+scalar-status teardown uses the same original opaque owner, has no additional
+input conversions, and retains its total readable consumed/retained outcomes.
+Typed native result representation and the original outcome relation determine
+disposition; a bare status number or consumption flag does not. These additions
+do not admit dependent output acquisition, offset outputs or multioperand Borrow.
 
 A checked opaque owner also admits a scalar Borrow whose source domain is the
 exact State application, with one direct Current operand and no view, Access or
@@ -1084,10 +1097,13 @@ dependency authority. Body-free summaries, linking, copied specializations and
 independent Core/private-image admission reconstruct the original declaration,
 retained positions, current forest and complete argument correspondence.
 
-The admitted checked finish request is a void teardown with the exact Current
-State and, for an opaque dependent owner, its declared Enclosing State operands.
-It has no scalar/NUL operand conversion or native result decoding. Symbolic checking follows its declared consumed or retained
-outcome and its authenticated boundary-failure alternative; generic source arms
+The admitted checked finish request uses void teardown with the exact Current
+State and, for an opaque dependent owner, its declared Enclosing State operands,
+or the independent scalar-status alternative. The scalar-status form has only its exact Current State
+operand and its original total raw-status outcome relation. Neither alternative
+has scalar/NUL input conversion. Symbolic checking follows each declared
+consumed or retained outcome and its authenticated boundary-failure alternative;
+generic source arms
 remain typed and exhaustive. A fallible additional operand cannot borrow this
 refinement. Every returning finish branch must account for one exact request
 and its matching outcome. FinishedConsumed, FinishedRetained and FinishedBoundary

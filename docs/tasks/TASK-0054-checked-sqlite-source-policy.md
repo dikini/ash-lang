@@ -161,3 +161,40 @@ Additional original roles must be implemented and reviewed through the same
 common mechanism before their image can be rendered or activated. Source status
 error payloads require bounded exact Integer output encoding too. No evidence
 from the eight-byte fixture or old approval promotes those dependencies.
+
+
+## Independent output/status admission slice
+
+The common prerequisite is retained at `d66ecd78`
+([PR123](https://github.com/dikini/ash-lang/pull/123)); its partial acceptance is
+complete without closing whole F3/F4/F5 criteria. The next source-only candidate
+starts from that exact retained tree. The published quarantine branch remains
+unchanged. TASK0053's disposal-only delivery has the build lane and must be
+retained before the combined output/status verification freeze.
+
+This first cut admits an independent opaque output owner using exactly the
+original NUL input, nullable output slot, signed-32 constant and null input
+roles needed for Open. It admits Current-only scalar-status Close with the
+original total outcome relation; existing arena direct acquisition and void
+teardown remain unchanged. Complete original Type/Row/H/owned identity and
+request-specific consumed/retained/boundary witnesses remain mandatory. No
+retained owner, offset output, multioperand Borrow or copied-text extension is
+included in this cut.
+
+The ledger must independently join the actual typed native scalar to its
+original result representation and total disposition matcher before committing
+O4. A narrowed number or caller-supplied consumption boolean supplies no such
+authority. All outcome traversal and reporting capacity are funded before entry;
+returned disposition commits before fallible source reporting. Scope preparation
+and raw-result transport are coordinated with the platform's preserved private
+output/status carrier candidate; neither is native activation.
+
+Focused verification will carry the genuine independent Open/Close declarations
+and resource through summaries, linking, independent Core and identity/fold;
+reject switched request witnesses/dispositions and wrong raw scalar tags; check
+null versus nonnull, exact/one-short entry payment, no fabricated publication,
+and preserved void/legacy controls. The current candidate is source-only and
+untested. Reconcile it onto the actual disposal retaining tip before one reviewed
+combined gate. Dependent Prepare/Finalize, full SQLite E/B and copied-input
+policy, whole native/profile acceptance and F-core remain subsequent work under
+the original goal.
