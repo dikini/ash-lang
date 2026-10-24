@@ -20,14 +20,26 @@ TASK-0041 for coordination; the [exact task history](https://github.com/dikini/a
 preserves its work and findings. Supersession does not satisfy the separate Main
 gate or the remaining original acceptance clauses.
 
-The current local Main pin `7949b6d9136b0152ee9104e67bd0451cb9db4727` already
-contains the bounded FFI and generic-cell foundations. The extension program in
-[TASK-0050](tasks/TASK-0050-checked-ffi-regions-control-program.md) proceeds through
-checked FFI, lexical regions, retained local control and two pinned workers.
-[CP-0024](proposals/CP-0024-checked-foreign-host-profile.md) is accepted under the
-user's delegated recommended choices; implementation and Linux profile acceptance
-remain pending. Later milestones remain design/planning work. No new checked
-semantics is current before complete product retention and Main integration.
+The current local Main pin `7949b6d9136b0152ee9104e67bd0451cb9db4727` contains
+bounded FFI and generic-cell foundations. The user's 2026-10-24 correction narrows the M1 FFI delivery in
+[TASK-0050](tasks/TASK-0050-checked-ffi-regions-control-program.md) to bytes and
+opaque raw C addresses, ordinary Ash binding checks/conversions, and existing
+abstract resource behavior. The [S1-S4 plan](tasks/plans/checked-ffi-regions-control.md)
+uses [S1 #131](https://github.com/dikini/ash-lang/issues/131), [S2 #132](https://github.com/dikini/ash-lang/issues/132),
+[S3 #133](https://github.com/dikini/ash-lang/issues/133) and [S4 #134](https://github.com/dikini/ash-lang/issues/134).
+Detailed interface and memory mapping in
+[CP-0024](proposals/CP-0024-checked-foreign-host-profile.md) remain proposed.
+Implementation and product cleanup are held. The previous F1-F8, checked-host,
+protected-launch, isolation and full SQLite assignments are superseded or
+deferred, not completed. This documentation revision changes no normative Main
+semantics or product source.
+
+Overall [program #51](https://github.com/dikini/ash-lang/issues/51) still tracks
+later [M2 #53](https://github.com/dikini/ash-lang/issues/53),
+[M3 #54](https://github.com/dikini/ash-lang/issues/54) and
+[M4 #55](https://github.com/dikini/ash-lang/issues/55). Their regions, retained
+control and worker scope remains unchanged and later; it is not required for the
+initial M1 FFI delivery. Each later milestone owns its scoped design gates.
 
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its

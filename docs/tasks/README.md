@@ -9,14 +9,16 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0054: Checked SQLite Source and State Policy](TASK-0054-checked-sqlite-source-policy.md)
-  implements the authorized opt-in F5 library source/state-policy subset under
-  accepted CP-0024; protected/native and isolated acceptance remain pending.
+The revised work uses [S1 #131](https://github.com/dikini/ash-lang/issues/131), [S2 #132](https://github.com/dikini/ash-lang/issues/132),
+[S3 #133](https://github.com/dikini/ash-lang/issues/133) and [S4 #134](https://github.com/dikini/ash-lang/issues/134).
 
-- [TASK-0050: Checked FFI, Regions, and Scoped Control Program](TASK-0050-checked-ffi-regions-control-program.md)
-  coordinates the staged program. Its [plan](plans/checked-ffi-regions-control.md)
-  retains the complete acceptance map and checkpoint ownership. M1 has an accepted
-  semantic contract; product and Linux realization gates remain pending.
+- [TASK-0050: Smaller foreign-library boundary](TASK-0050-checked-ffi-regions-control-program.md)
+  revises planning and issues. Its [S1-S4 plan](plans/checked-ffi-regions-control.md)
+  keeps technical design review before implementation.
+
+[TASK-0053](TASK-0053-checked-owner-core-execution.md) and
+[TASK-0054](TASK-0054-checked-sqlite-source-policy.md) are superseded active
+assignments, not completed delivery gates. Their history remains in Git.
 
 The generic cell product checkpoint is integrated into local `main`. Its
 [case map, verification and local history](../design/generic-cell/evidence.md)

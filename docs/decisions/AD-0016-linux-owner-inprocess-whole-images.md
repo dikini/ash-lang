@@ -9,6 +9,12 @@
   [TASK-0050](../tasks/TASK-0050-checked-ffi-regions-control-program.md),
   [TASK-0051](../tasks/TASK-0051-checked-ffi-contract-carriers.md)
 
+> Planning scope, 2026-10-24: the user replaced this deployment direction for
+> the current FFI delivery. It supplies no active native/protected/isolation
+> assignment. [TASK-0050](../tasks/TASK-0050-checked-ffi-regions-control-program.md)
+> records the smaller plan. This notice changes neither normative Main behavior
+> nor the scope of historical evidence, and does not complete unfinished gates.
+
 ## Decision
 
 Select an owner/resource extension of the existing GNU in-process whole-image

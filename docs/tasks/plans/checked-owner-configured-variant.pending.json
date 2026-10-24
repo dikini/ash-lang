@@ -1,5 +1,5 @@
 {
-  "status": "PROPOSED_SOURCE_VARIANT_NOT_RUNTIME_CONTEXT_NOT_INSTALLABLE",
+  "status": "HISTORICAL_SUPERSEDED_NOT_AN_ACTIVE_ASSIGNMENT",
   "default_portable_association": "INSTALLED=None remains unchanged",
   "future_private_association_source": "trusted-preparation/src/bootstrap_association.rs",
   "future_fixed_context_path": "/etc/ash/checked-owner-v2/context.json",
