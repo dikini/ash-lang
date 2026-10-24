@@ -64,19 +64,22 @@ pub struct UnpublishedGuardInspection {
     native: ResourceNativeFact,
     unresolved: bool,
     status: Option<i128>,
+    acquisition_status: Option<i128>,
     backing: GuardBackingObservation,
     point: GuardInspectionPoint,
 }
 impl UnpublishedGuardInspection {
-    pub(crate) fn observed(native: ResourceNativeFact, unresolved: bool, status: Option<i128>, backing: GuardBackingObservation, point: GuardInspectionPoint) -> Self {
-        Self { native, unresolved, status, backing, point }
+    pub(crate) fn observed(native: ResourceNativeFact, unresolved: bool, status: Option<i128>, acquisition_status: Option<i128>, backing: GuardBackingObservation, point: GuardInspectionPoint) -> Self {
+        Self { native, unresolved, status, acquisition_status, backing, point }
     }
     /// Last recorded native fact, without source ownership publication.
     pub fn native(&self) -> ResourceNativeFact { self.native }
     /// Whether the native transition remains unresolved.
     pub fn unresolved(&self) -> bool { self.unresolved }
-    /// Exact recorded scalar status or genuine absence.
+    /// Latest admitted native observation's scalar status or genuine absence.
     pub fn status(&self) -> Option<i128> { self.status }
+    /// Acquisition status retained separately from any subsequent disposal.
+    pub fn acquisition_status(&self) -> Option<i128> { self.acquisition_status }
     /// Backing at this observation; not a promise of later disposal.
     pub fn backing(&self) -> GuardBackingObservation { self.backing }
     /// Structural point where these particular backing facts were observed.

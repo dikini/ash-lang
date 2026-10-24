@@ -1,0 +1,3068 @@
+{
+  "qualification": "Tested595dda47 on retainedd66: actual94828 both-package targetedClippy and42distinct tests PASS (41ordinary+one ignored nonexecuting generated-root canonical/donors/missing-release selector). Earlier77443/97993 compile-lint-only failures and62391 Clippy+11ordinaryPASS/one fixture-setupFAIL/later30UNRUN retained separately.04 supersededUNRUN. Exact original scalar-readable metadata restored only in legacy accounting model; not genuine checked status admission. Opaque void disposal is connected through actual Machine Refused/discard and report-failure controls. No generated application/native execution, configured deployment, six-field approval or full F-core claim. Post-test evidence assembly.",
+  "files": [
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/batch-results.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 171862,
+      "sha256": "a85139d398aa07ef512420c4b0f9629a94f1ca9396e797ae363d620616222b03",
+      "payload": "objects/a85139d398aa07ef512420c4b0f9629a94f1ca9396e797ae363d620616222b03.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/cache-after.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 200,
+      "sha256": "f047c4503ccde3a20dbec438191cbe253f04b56d2110437bc0edca2ca96a6e61",
+      "payload": "objects/f047c4503ccde3a20dbec438191cbe253f04b56d2110437bc0edca2ca96a6e61.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/cache-before.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 200,
+      "sha256": "8bb5839755f16c10f2d534cbd5810303bc40a9fafa9190ead314563a494189b9",
+      "payload": "objects/8bb5839755f16c10f2d534cbd5810303bc40a9fafa9190ead314563a494189b9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/phase-01.before.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 1771787,
+      "sha256": "65ec770e21af46e818fb6103691c2ccf9a29decd98793bedbaf10999777e0e8d",
+      "payload": "objects/65ec770e21af46e818fb6103691c2ccf9a29decd98793bedbaf10999777e0e8d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/phase-01.inputs.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 3582002,
+      "sha256": "6c342a467bda0fd78c5a4f3a6140c5602e6a20744db1ecd9fc0f15a5d79c959a",
+      "payload": "objects/6c342a467bda0fd78c5a4f3a6140c5602e6a20744db1ecd9fc0f15a5d79c959a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/phase-01.log",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 167343,
+      "sha256": "d48a086a75918006a59c8d3df6baf9e2bd21bbea82e547d3867ffdbbce0aa10f",
+      "payload": "objects/d48a086a75918006a59c8d3df6baf9e2bd21bbea82e547d3867ffdbbce0aa10f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/phase-01.process.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 423,
+      "sha256": "35031c3c74fae9dab060fc41e638c4e15c7feccf02239ba53f6c9a4f863b3d5e",
+      "payload": "objects/35031c3c74fae9dab060fc41e638c4e15c7feccf02239ba53f6c9a4f863b3d5e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/phase-01.receipt.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 161926,
+      "sha256": "8e4fdfe0ab479255ebb23a34b1d32a21b2559c82eeec5f2033124e734b75798b",
+      "payload": "objects/8e4fdfe0ab479255ebb23a34b1d32a21b2559c82eeec5f2033124e734b75798b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/phase-01.resources.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 15780,
+      "sha256": "4307ae2d78a7d90ba6bf2826285da7e2078e86dbbf3d3f84de8ff71c6173daf8",
+      "payload": "objects/4307ae2d78a7d90ba6bf2826285da7e2078e86dbbf3d3f84de8ff71c6173daf8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/retained-after.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 3859,
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "payload": "objects/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/retained-before.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 3859,
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "payload": "objects/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/runner-process.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 962,
+      "sha256": "e18f871ec0e88c479fcc8fd0bcf18edc88ebb613390f8651976dea26ab4075b8",
+      "payload": "objects/e18f871ec0e88c479fcc8fd0bcf18edc88ebb613390f8651976dea26ab4075b8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/tools-after.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 3110,
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "payload": "objects/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01/tools-before.json",
+      "group": "checked-unpublished-disposal-delivery01",
+      "bytes": 3110,
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "payload": "objects/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/freeze.json",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 1005,
+      "sha256": "cecb35b8ca7c69637a9a8255d41ae46815a8a9379cd67e69ed8253567b3eec02",
+      "payload": "objects/cecb35b8ca7c69637a9a8255d41ae46815a8a9379cd67e69ed8253567b3eec02.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/manifest.json",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 4508086,
+      "sha256": "f9368093d50c0e59a6b4d35af7314a5c49d9d2b169c47dfe97b3aab36138b0b4",
+      "payload": "objects/f9368093d50c0e59a6b4d35af7314a5c49d9d2b169c47dfe97b3aab36138b0b4.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/proposal.json",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 8173,
+      "sha256": "3ab6cd8732735c8b7e646db0225bfce84d7a1979d59765f46e5af1243ecfb170",
+      "payload": "objects/3ab6cd8732735c8b7e646db0225bfce84d7a1979d59765f46e5af1243ecfb170.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/run.py",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 17493,
+      "sha256": "ec96afd2eac1ab6a5cd38330f447ba5640877893f9d6bcdf260c41a86a46ef85",
+      "payload": "objects/ec96afd2eac1ab6a5cd38330f447ba5640877893f9d6bcdf260c41a86a46ef85.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/docs/tasks/TASK-0053-checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 35246,
+      "sha256": "10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757",
+      "payload": "objects/10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/docs/tasks/plans/checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 47296,
+      "sha256": "f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c",
+      "payload": "objects/f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/build/checked_root_outcome.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 12096,
+      "sha256": "e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1",
+      "payload": "objects/e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/eval/checked_reporting.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 11434,
+      "sha256": "da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d",
+      "payload": "objects/da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/eval/checked_reports.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 20330,
+      "sha256": "1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2",
+      "payload": "objects/1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/eval/checked_scope_finish.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 48528,
+      "sha256": "be6246a239577a6ca0beb04d51154edfc69f219f24946e84894355bd02599554",
+      "payload": "objects/be6246a239577a6ca0beb04d51154edfc69f219f24946e84894355bd02599554.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/eval/source_resource_phases.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 107782,
+      "sha256": "41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8",
+      "payload": "objects/41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/foreign/checked_control.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 62632,
+      "sha256": "a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1",
+      "payload": "objects/a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/foreign/source_bindings.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 86662,
+      "sha256": "83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2",
+      "payload": "objects/83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/foreign/source_owner_boundary_tests.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 67241,
+      "sha256": "af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc",
+      "payload": "objects/af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/foreign/source_owner_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 103295,
+      "sha256": "e9f7315fcd8f1e357a265f2c4754459f9468eff340bd89758460ebf8deee8928",
+      "payload": "objects/e9f7315fcd8f1e357a265f2c4754459f9468eff340bd89758460ebf8deee8928.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/src/foreign/source_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 18480,
+      "sha256": "8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519",
+      "payload": "objects/8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/trusted-preparation/src/outcome.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 11281,
+      "sha256": "419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12",
+      "payload": "objects/419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/snapshots/trusted-preparation/src/protected.rs",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 52888,
+      "sha256": "9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c",
+      "payload": "objects/9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery01-freeze/source.patch",
+      "group": "checked-unpublished-disposal-delivery01-freeze",
+      "bytes": 72606,
+      "sha256": "9d56e4ae9169e03dc6ff801e896aa2ec8e3f53b9d3239a38ed59115c6d0ed110",
+      "payload": "objects/9d56e4ae9169e03dc6ff801e896aa2ec8e3f53b9d3239a38ed59115c6d0ed110.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/batch-results.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 171863,
+      "sha256": "d026b3913caf0b7a6c53fb603e596ea44fc334681c28b9858fb692f1b6a90d9a",
+      "payload": "objects/d026b3913caf0b7a6c53fb603e596ea44fc334681c28b9858fb692f1b6a90d9a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/cache-after.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 200,
+      "sha256": "c5262ab54353c3ce82d41024b66a4621619380de7daedf43b73abf978a6597f8",
+      "payload": "objects/c5262ab54353c3ce82d41024b66a4621619380de7daedf43b73abf978a6597f8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/cache-before.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 200,
+      "sha256": "7983d25cddd1b36444a9ffafd6eb0245214f47ad93f90eb9cb553fd6492e4145",
+      "payload": "objects/7983d25cddd1b36444a9ffafd6eb0245214f47ad93f90eb9cb553fd6492e4145.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/phase-01.before.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 1771787,
+      "sha256": "f328914999cdcd725e0764612f7426807b9cc14b573252c2b996810b1f02b5e3",
+      "payload": "objects/f328914999cdcd725e0764612f7426807b9cc14b573252c2b996810b1f02b5e3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/phase-01.inputs.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 3582002,
+      "sha256": "a0bb2401216f3521a92236dbdd843b00527bbba4aaf4b00271f1f4ec786f30db",
+      "payload": "objects/a0bb2401216f3521a92236dbdd843b00527bbba4aaf4b00271f1f4ec786f30db.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/phase-01.log",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 168666,
+      "sha256": "282d98ac6ce7da947f1759754449aafe8b0bc191aac493ec9a5fb6a1c28cedce",
+      "payload": "objects/282d98ac6ce7da947f1759754449aafe8b0bc191aac493ec9a5fb6a1c28cedce.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/phase-01.process.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 421,
+      "sha256": "43dae3981c95f452c557f3813f1ed4f11c2ccd4741d005e0f178d6f6b7bbbee2",
+      "payload": "objects/43dae3981c95f452c557f3813f1ed4f11c2ccd4741d005e0f178d6f6b7bbbee2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/phase-01.receipt.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 161927,
+      "sha256": "4a42b60169c13e112ec6f3f7126361efe34b600afc8b0d48a20388d7adb87648",
+      "payload": "objects/4a42b60169c13e112ec6f3f7126361efe34b600afc8b0d48a20388d7adb87648.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/phase-01.resources.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 14643,
+      "sha256": "e3ed010f692aba446e0bc29fa045c1aa8d14447039cb7f32f13eb50d4ba0fd49",
+      "payload": "objects/e3ed010f692aba446e0bc29fa045c1aa8d14447039cb7f32f13eb50d4ba0fd49.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/retained-after.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 3859,
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "payload": "objects/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/retained-before.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 3859,
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "payload": "objects/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/runner-process.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 962,
+      "sha256": "014753c3ee2510164cd1d3b16724052663d942667c8248c33f8ecd4603ce663b",
+      "payload": "objects/014753c3ee2510164cd1d3b16724052663d942667c8248c33f8ecd4603ce663b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/tools-after.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 3110,
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "payload": "objects/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02/tools-before.json",
+      "group": "checked-unpublished-disposal-delivery02",
+      "bytes": 3110,
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "payload": "objects/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/freeze.json",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 1005,
+      "sha256": "8b44d6ddbb6d8fd3e7155ac28ba41656b8b79c00325add70d7b13283a71ef77f",
+      "payload": "objects/8b44d6ddbb6d8fd3e7155ac28ba41656b8b79c00325add70d7b13283a71ef77f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/manifest.json",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 4508656,
+      "sha256": "345ba171c300365289a1ff608443b36794fab74ad6ef281de6987091abb7ae8d",
+      "payload": "objects/345ba171c300365289a1ff608443b36794fab74ad6ef281de6987091abb7ae8d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/proposal.json",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 8488,
+      "sha256": "12a657fff39f0340f8e2d392a3c19cb1adac50cd4c3afa324a7e1affab65397f",
+      "payload": "objects/12a657fff39f0340f8e2d392a3c19cb1adac50cd4c3afa324a7e1affab65397f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/run.py",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 17493,
+      "sha256": "bc207b07e4f4444fcc2ce788324f5698c9f9406d07ad5305655bb575e9c13f3e",
+      "payload": "objects/bc207b07e4f4444fcc2ce788324f5698c9f9406d07ad5305655bb575e9c13f3e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/docs/tasks/TASK-0053-checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 35246,
+      "sha256": "10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757",
+      "payload": "objects/10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/docs/tasks/plans/checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 47296,
+      "sha256": "f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c",
+      "payload": "objects/f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/build/checked_root_outcome.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 12096,
+      "sha256": "e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1",
+      "payload": "objects/e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/eval/checked_reporting.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 11434,
+      "sha256": "da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d",
+      "payload": "objects/da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/eval/checked_reports.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 20330,
+      "sha256": "1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2",
+      "payload": "objects/1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/eval/checked_scope_finish.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 48648,
+      "sha256": "a095e49393f75c04a0fb451823830f7c64583d072d051124d7c02b76c9108bad",
+      "payload": "objects/a095e49393f75c04a0fb451823830f7c64583d072d051124d7c02b76c9108bad.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/eval/source_resource_phases.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 107782,
+      "sha256": "41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8",
+      "payload": "objects/41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/foreign/checked_control.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 62632,
+      "sha256": "a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1",
+      "payload": "objects/a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/foreign/source_bindings.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 86662,
+      "sha256": "83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2",
+      "payload": "objects/83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/foreign/source_owner_boundary_tests.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 67241,
+      "sha256": "af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc",
+      "payload": "objects/af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/foreign/source_owner_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 103295,
+      "sha256": "e9f7315fcd8f1e357a265f2c4754459f9468eff340bd89758460ebf8deee8928",
+      "payload": "objects/e9f7315fcd8f1e357a265f2c4754459f9468eff340bd89758460ebf8deee8928.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/foreign/source_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 18480,
+      "sha256": "8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519",
+      "payload": "objects/8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/src/foreign.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 93646,
+      "sha256": "9ec4a6cfcf88121f72c7faa8c0b28e71e63426ee1087ea64729ae2587891414d",
+      "payload": "objects/9ec4a6cfcf88121f72c7faa8c0b28e71e63426ee1087ea64729ae2587891414d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/trusted-preparation/src/outcome.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 11281,
+      "sha256": "419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12",
+      "payload": "objects/419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/snapshots/trusted-preparation/src/protected.rs",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 52888,
+      "sha256": "9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c",
+      "payload": "objects/9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery02-freeze/source.patch",
+      "group": "checked-unpublished-disposal-delivery02-freeze",
+      "bytes": 73511,
+      "sha256": "92e70df5a26318cca109e9cb727787d900a1c9e72d3801c0f7da5490161e1060",
+      "payload": "objects/92e70df5a26318cca109e9cb727787d900a1c9e72d3801c0f7da5490161e1060.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/batch-results.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 185028,
+      "sha256": "92968e19ea39b819e8ed70d0fd23854b752f77ecf3691bfa50115dc70952663e",
+      "payload": "objects/92968e19ea39b819e8ed70d0fd23854b752f77ecf3691bfa50115dc70952663e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/cache-after.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 200,
+      "sha256": "79618051f562d704088ce3995a992e114f3ef58fa81064065cd8ac323a9ed0ef",
+      "payload": "objects/79618051f562d704088ce3995a992e114f3ef58fa81064065cd8ac323a9ed0ef.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/cache-before.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 200,
+      "sha256": "19706287be794547b87a03ba75e11f03e179cf7ed7313c659c95edd0c3434f95",
+      "payload": "objects/19706287be794547b87a03ba75e11f03e179cf7ed7313c659c95edd0c3434f95.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-01.before.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 1771787,
+      "sha256": "3f135ad16e8d7b595282ef27a011f8fb921c37b1c303fd5c4352ebcff3eaa474",
+      "payload": "objects/3f135ad16e8d7b595282ef27a011f8fb921c37b1c303fd5c4352ebcff3eaa474.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-01.inputs.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 3582002,
+      "sha256": "98116a3bb655b3ef3c48cf1f802370c01ff762dbf38d0b468babab749bd817fd",
+      "payload": "objects/98116a3bb655b3ef3c48cf1f802370c01ff762dbf38d0b468babab749bd817fd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-01.log",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 168818,
+      "sha256": "8fde8ccd46891de244b057a36757eafb85ea3991d104fb6a2b09ec9f90993e33",
+      "payload": "objects/8fde8ccd46891de244b057a36757eafb85ea3991d104fb6a2b09ec9f90993e33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-01.process.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 422,
+      "sha256": "34eaa1a88f128f7230483c3b0ebbe462e263b404779ebb4fb4dea6651308c0bb",
+      "payload": "objects/34eaa1a88f128f7230483c3b0ebbe462e263b404779ebb4fb4dea6651308c0bb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-01.receipt.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 162981,
+      "sha256": "304ad7eaaa6ae6221f0f3b5874f75f30bfa7301641eba47bbd743eb258c1e4c7",
+      "payload": "objects/304ad7eaaa6ae6221f0f3b5874f75f30bfa7301641eba47bbd743eb258c1e4c7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-01.resources.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 15082,
+      "sha256": "43fa369116046bf7969b3d48f7690d6f748ecc1092fbc6d5f0afefd44e7345f8",
+      "payload": "objects/43fa369116046bf7969b3d48f7690d6f748ecc1092fbc6d5f0afefd44e7345f8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-02.before.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 1771787,
+      "sha256": "3f135ad16e8d7b595282ef27a011f8fb921c37b1c303fd5c4352ebcff3eaa474",
+      "payload": "objects/3f135ad16e8d7b595282ef27a011f8fb921c37b1c303fd5c4352ebcff3eaa474.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-02.inputs.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 3582002,
+      "sha256": "98116a3bb655b3ef3c48cf1f802370c01ff762dbf38d0b468babab749bd817fd",
+      "payload": "objects/98116a3bb655b3ef3c48cf1f802370c01ff762dbf38d0b468babab749bd817fd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-02.log",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 59921,
+      "sha256": "64bac17e42b2bea4602e4d2f7ac3fc385a1a71e6710c8751fa506d0577069833",
+      "payload": "objects/64bac17e42b2bea4602e4d2f7ac3fc385a1a71e6710c8751fa506d0577069833.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-02.process.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 374,
+      "sha256": "2ef747e74f4341d89dd7e9e53f121cdffd12217e703249f346c21afed962a026",
+      "payload": "objects/2ef747e74f4341d89dd7e9e53f121cdffd12217e703249f346c21afed962a026.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-02.receipt.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 5670,
+      "sha256": "8591e802d70b2260c471ef266f88269c63e1ea2f49946ca9c6f587c6f646b8c9",
+      "payload": "objects/8591e802d70b2260c471ef266f88269c63e1ea2f49946ca9c6f587c6f646b8c9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-02.resources.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 32253,
+      "sha256": "4ff50ecd1786c18a81d7e8129dc39ef31148dfb99542eaf5a67a080c7b131f0b",
+      "payload": "objects/4ff50ecd1786c18a81d7e8129dc39ef31148dfb99542eaf5a67a080c7b131f0b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-03.before.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 1771787,
+      "sha256": "3f135ad16e8d7b595282ef27a011f8fb921c37b1c303fd5c4352ebcff3eaa474",
+      "payload": "objects/3f135ad16e8d7b595282ef27a011f8fb921c37b1c303fd5c4352ebcff3eaa474.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-03.inputs.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 3582002,
+      "sha256": "98116a3bb655b3ef3c48cf1f802370c01ff762dbf38d0b468babab749bd817fd",
+      "payload": "objects/98116a3bb655b3ef3c48cf1f802370c01ff762dbf38d0b468babab749bd817fd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-03.log",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 68393,
+      "sha256": "9094428e8bc19b3ed0dd6b8b6a46b24621300acdf230e95d4e5dc2baf9b3e4b0",
+      "payload": "objects/9094428e8bc19b3ed0dd6b8b6a46b24621300acdf230e95d4e5dc2baf9b3e4b0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-03.process.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 382,
+      "sha256": "89be39e428bba01f69f0aa00e354d6e2cff699f40d4b540e3f82524a5cc5448b",
+      "payload": "objects/89be39e428bba01f69f0aa00e354d6e2cff699f40d4b540e3f82524a5cc5448b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-03.receipt.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 5667,
+      "sha256": "976c5d43e8a5b064bbc64b5e60e0b201574111cf50afa0cea7017e2aab961393",
+      "payload": "objects/976c5d43e8a5b064bbc64b5e60e0b201574111cf50afa0cea7017e2aab961393.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/phase-03.resources.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 769,
+      "sha256": "8856cb869877d791f0158408d01b35230a189ca85374667ae5b3cfcd8b9bb682",
+      "payload": "objects/8856cb869877d791f0158408d01b35230a189ca85374667ae5b3cfcd8b9bb682.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/retained-after.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 3859,
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "payload": "objects/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/retained-before.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 3859,
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "payload": "objects/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/runner-process.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 962,
+      "sha256": "a1e3d982d9e76ec3b6ab5b0ce329398233a9c726222ca5b652f79a6460f0784c",
+      "payload": "objects/a1e3d982d9e76ec3b6ab5b0ce329398233a9c726222ca5b652f79a6460f0784c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/tools-after.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 3110,
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "payload": "objects/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03/tools-before.json",
+      "group": "checked-unpublished-disposal-delivery03",
+      "bytes": 3110,
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "payload": "objects/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/freeze.json",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 1005,
+      "sha256": "e10c285ab5b74bb73e180487cc9d1172b0ecb7287a993a6a56b580e49db07ecb",
+      "payload": "objects/e10c285ab5b74bb73e180487cc9d1172b0ecb7287a993a6a56b580e49db07ecb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/manifest.json",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 4508656,
+      "sha256": "942dd04c5c1b3b64b0aae6bef659f1f90204f5f3ce8e63e88f9133dfa4272294",
+      "payload": "objects/942dd04c5c1b3b64b0aae6bef659f1f90204f5f3ce8e63e88f9133dfa4272294.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/proposal.json",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 8812,
+      "sha256": "092fcd6a7d8b1a1849a5f31c8d15dfed06b4496ef5bd6f21c89f11f02a687bf9",
+      "payload": "objects/092fcd6a7d8b1a1849a5f31c8d15dfed06b4496ef5bd6f21c89f11f02a687bf9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/run.py",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 17493,
+      "sha256": "30aa9ddaf1ab1f78ee2122a86955271f4f2092f7b43aef7fb007491861380029",
+      "payload": "objects/30aa9ddaf1ab1f78ee2122a86955271f4f2092f7b43aef7fb007491861380029.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/docs/tasks/TASK-0053-checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 35246,
+      "sha256": "10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757",
+      "payload": "objects/10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/docs/tasks/plans/checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 47296,
+      "sha256": "f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c",
+      "payload": "objects/f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/build/checked_root_outcome.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 12096,
+      "sha256": "e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1",
+      "payload": "objects/e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/eval/checked_reporting.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 11434,
+      "sha256": "da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d",
+      "payload": "objects/da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/eval/checked_reports.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 20330,
+      "sha256": "1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2",
+      "payload": "objects/1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/eval/checked_scope_finish.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 48648,
+      "sha256": "a095e49393f75c04a0fb451823830f7c64583d072d051124d7c02b76c9108bad",
+      "payload": "objects/a095e49393f75c04a0fb451823830f7c64583d072d051124d7c02b76c9108bad.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/eval/source_resource_phases.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 107782,
+      "sha256": "41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8",
+      "payload": "objects/41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/foreign/checked_control.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 62632,
+      "sha256": "a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1",
+      "payload": "objects/a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/foreign/source_bindings.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 86662,
+      "sha256": "83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2",
+      "payload": "objects/83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/foreign/source_owner_boundary_tests.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 67241,
+      "sha256": "af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc",
+      "payload": "objects/af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/foreign/source_owner_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 103287,
+      "sha256": "8d4eacd5e3e549753219c184c10b787d0eca4c149466ee327d97c047b7520fd7",
+      "payload": "objects/8d4eacd5e3e549753219c184c10b787d0eca4c149466ee327d97c047b7520fd7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/foreign/source_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 18480,
+      "sha256": "8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519",
+      "payload": "objects/8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/src/foreign.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 93646,
+      "sha256": "9ec4a6cfcf88121f72c7faa8c0b28e71e63426ee1087ea64729ae2587891414d",
+      "payload": "objects/9ec4a6cfcf88121f72c7faa8c0b28e71e63426ee1087ea64729ae2587891414d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/trusted-preparation/src/outcome.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 11281,
+      "sha256": "419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12",
+      "payload": "objects/419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/snapshots/trusted-preparation/src/protected.rs",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 52888,
+      "sha256": "9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c",
+      "payload": "objects/9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery03-freeze/source.patch",
+      "group": "checked-unpublished-disposal-delivery03-freeze",
+      "bytes": 73503,
+      "sha256": "17f778a0291b8fd7a5c95a44aaca0efc7e415602db4d21760f94066ee808fbf5",
+      "payload": "objects/17f778a0291b8fd7a5c95a44aaca0efc7e415602db4d21760f94066ee808fbf5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/freeze.json",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 1005,
+      "sha256": "a8d306d5fe11b4ad3944a7d7e847c6d2d8d090a6ecf17e0a19aecbfddb5702a8",
+      "payload": "objects/a8d306d5fe11b4ad3944a7d7e847c6d2d8d090a6ecf17e0a19aecbfddb5702a8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/manifest.json",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 4508656,
+      "sha256": "9d9418c26e7b00535cf75bbc7e2a08d102d0c4b541cca798f8d4d70fa1b253a1",
+      "payload": "objects/9d9418c26e7b00535cf75bbc7e2a08d102d0c4b541cca798f8d4d70fa1b253a1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/proposal.json",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 9183,
+      "sha256": "5949de9850f6189787b3b6dbd12796fbdd6297935cf7e3265d5f251aad3bc86e",
+      "payload": "objects/5949de9850f6189787b3b6dbd12796fbdd6297935cf7e3265d5f251aad3bc86e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/run.py",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 17493,
+      "sha256": "cdd92248901d4977050231c4823bb798d237bfb479cde48ae2c97a132ff176cc",
+      "payload": "objects/cdd92248901d4977050231c4823bb798d237bfb479cde48ae2c97a132ff176cc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/docs/tasks/TASK-0053-checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 35246,
+      "sha256": "10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757",
+      "payload": "objects/10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/docs/tasks/plans/checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 47296,
+      "sha256": "f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c",
+      "payload": "objects/f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/build/checked_root_outcome.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 12096,
+      "sha256": "e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1",
+      "payload": "objects/e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/eval/checked_reporting.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 11434,
+      "sha256": "da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d",
+      "payload": "objects/da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/eval/checked_reports.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 20330,
+      "sha256": "1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2",
+      "payload": "objects/1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/eval/checked_scope_finish.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 48648,
+      "sha256": "a095e49393f75c04a0fb451823830f7c64583d072d051124d7c02b76c9108bad",
+      "payload": "objects/a095e49393f75c04a0fb451823830f7c64583d072d051124d7c02b76c9108bad.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/eval/source_resource_phases.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 107782,
+      "sha256": "41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8",
+      "payload": "objects/41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/foreign/checked_control.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 62632,
+      "sha256": "a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1",
+      "payload": "objects/a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/foreign/source_bindings.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 86662,
+      "sha256": "83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2",
+      "payload": "objects/83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/foreign/source_owner_boundary_tests.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 67241,
+      "sha256": "af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc",
+      "payload": "objects/af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/foreign/source_owner_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 103255,
+      "sha256": "40d31ecce63323021a584c7c16e7d4d7ce0f651c1eb012c93898828ab2c82907",
+      "payload": "objects/40d31ecce63323021a584c7c16e7d4d7ce0f651c1eb012c93898828ab2c82907.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/foreign/source_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 18480,
+      "sha256": "8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519",
+      "payload": "objects/8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/src/foreign.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 93646,
+      "sha256": "9ec4a6cfcf88121f72c7faa8c0b28e71e63426ee1087ea64729ae2587891414d",
+      "payload": "objects/9ec4a6cfcf88121f72c7faa8c0b28e71e63426ee1087ea64729ae2587891414d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/trusted-preparation/src/outcome.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 11281,
+      "sha256": "419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12",
+      "payload": "objects/419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/snapshots/trusted-preparation/src/protected.rs",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 52888,
+      "sha256": "9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c",
+      "payload": "objects/9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery04-freeze/source.patch",
+      "group": "checked-unpublished-disposal-delivery04-freeze",
+      "bytes": 73471,
+      "sha256": "011087b33c0fb9647de889f088bd179c62dc5e32baae625e60b08c644afd91aa",
+      "payload": "objects/011087b33c0fb9647de889f088bd179c62dc5e32baae625e60b08c644afd91aa.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/batch-results.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 258198,
+      "sha256": "9df624f02d048cc179d7f6f04ace2bc547d0ccd21c62e712e715cea44b50f7f0",
+      "payload": "objects/9df624f02d048cc179d7f6f04ace2bc547d0ccd21c62e712e715cea44b50f7f0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/cache-after.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 200,
+      "sha256": "fb638093d4301187d93f9ed3e71063551ddee63faf7dca05670acd4da113776f",
+      "payload": "objects/fb638093d4301187d93f9ed3e71063551ddee63faf7dca05670acd4da113776f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/cache-before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 200,
+      "sha256": "c26fe9ebd6646fcf3c75d576935f0d344a6327c294b5e1ad977d799fa6ce557a",
+      "payload": "objects/c26fe9ebd6646fcf3c75d576935f0d344a6327c294b5e1ad977d799fa6ce557a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-01.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-01.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-01.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59745,
+      "sha256": "edcf79d5d22e940032edf8569c89f1deeb9cacaf34bb7fc6a6b9e4d2ef664358",
+      "payload": "objects/edcf79d5d22e940032edf8569c89f1deeb9cacaf34bb7fc6a6b9e4d2ef664358.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-01.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 378,
+      "sha256": "6f5890976f09100601d163f4069ea12e942c9dad0c849a76d8dd85518ca882cd",
+      "payload": "objects/6f5890976f09100601d163f4069ea12e942c9dad0c849a76d8dd85518ca882cd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-01.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5673,
+      "sha256": "307ebe7d61c8dbda23f65a10439ba5102a71cd985cc1293afe2150a87bc4675c",
+      "payload": "objects/307ebe7d61c8dbda23f65a10439ba5102a71cd985cc1293afe2150a87bc4675c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-01.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5176,
+      "sha256": "b434072e15a999b9e665617f37b268d428d0dcabe13d4a0d75ac765a96f18cbb",
+      "payload": "objects/b434072e15a999b9e665617f37b268d428d0dcabe13d4a0d75ac765a96f18cbb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-02.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-02.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-02.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 168818,
+      "sha256": "4b1ba9cd5af380ebe48a8355e361f0d476b1372b83b25fb3f4510a4e53eedf67",
+      "payload": "objects/4b1ba9cd5af380ebe48a8355e361f0d476b1372b83b25fb3f4510a4e53eedf67.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-02.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 425,
+      "sha256": "0f38163d5182455b9e7788028dc1d9ba8a9f541790c1d9d32b74044c5e01ddac",
+      "payload": "objects/0f38163d5182455b9e7788028dc1d9ba8a9f541790c1d9d32b74044c5e01ddac.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-02.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 162980,
+      "sha256": "af4336e281c5ba2985d0b15f55d210a71581c011f6d46b9e396d96058f03bf31",
+      "payload": "objects/af4336e281c5ba2985d0b15f55d210a71581c011f6d46b9e396d96058f03bf31.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-02.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 11143,
+      "sha256": "fc7f8cbf5e6343fb85f3acfb3da0ad53563fc8520a495c4162f2770ab1a1c578",
+      "payload": "objects/fc7f8cbf5e6343fb85f3acfb3da0ad53563fc8520a495c4162f2770ab1a1c578.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-03.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-03.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-03.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59707,
+      "sha256": "f41156792f7d6448f8030b0db2fb756b4c233f9475e5749a0bda65048df4b8a2",
+      "payload": "objects/f41156792f7d6448f8030b0db2fb756b4c233f9475e5749a0bda65048df4b8a2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-03.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 376,
+      "sha256": "253d0e7b80315bc008c311c65d727c3778365f38fa2dbf5686c9bdf4e05923f8",
+      "payload": "objects/253d0e7b80315bc008c311c65d727c3778365f38fa2dbf5686c9bdf4e05923f8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-03.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5660,
+      "sha256": "347043f69338ed35a8c97bfeb74ea3e37b22b666e10c973158acd26aa2c07846",
+      "payload": "objects/347043f69338ed35a8c97bfeb74ea3e37b22b666e10c973158acd26aa2c07846.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-03.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 772,
+      "sha256": "856ac0d8c0b1d33fd0e4b98f3d73a865df287614b545911c2adee199e974e0cd",
+      "payload": "objects/856ac0d8c0b1d33fd0e4b98f3d73a865df287614b545911c2adee199e974e0cd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-04.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-04.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-04.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 60663,
+      "sha256": "38ff6e74fd66672cf10a02521462bd4520ac9079cadab20060ca1e600e908d27",
+      "payload": "objects/38ff6e74fd66672cf10a02521462bd4520ac9079cadab20060ca1e600e908d27.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-04.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 386,
+      "sha256": "a3f86fcca9b3fa1aa64ba616caf0dd05ff491842e231eda58b7e2e35ba862c49",
+      "payload": "objects/a3f86fcca9b3fa1aa64ba616caf0dd05ff491842e231eda58b7e2e35ba862c49.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-04.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5677,
+      "sha256": "1d96559f4ed8720c2d727937861b8d51aaf7b2a9686d1ca865927d328c01cef9",
+      "payload": "objects/1d96559f4ed8720c2d727937861b8d51aaf7b2a9686d1ca865927d328c01cef9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-04.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1238,
+      "sha256": "007ddca52e507ec60883d0807248057cf9d797be1773abb8e93986f34d622483",
+      "payload": "objects/007ddca52e507ec60883d0807248057cf9d797be1773abb8e93986f34d622483.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-05.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-05.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-05.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 56676,
+      "sha256": "158d7910be9aa94936d5e8a57d7b3b5997fa5f3d06130658f30c52057dff751e",
+      "payload": "objects/158d7910be9aa94936d5e8a57d7b3b5997fa5f3d06130658f30c52057dff751e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-05.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 406,
+      "sha256": "9c0585fa9b3acb0bcf0f457f37517b26b2c1493016c648c125e9a820f6922ba3",
+      "payload": "objects/9c0585fa9b3acb0bcf0f457f37517b26b2c1493016c648c125e9a820f6922ba3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-05.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5850,
+      "sha256": "ef4a15812b9ab8020914c1d751ca155352456fa5e669d839a06e5fec6bcf108c",
+      "payload": "objects/ef4a15812b9ab8020914c1d751ca155352456fa5e669d839a06e5fec6bcf108c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-05.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 770,
+      "sha256": "7b10097e62c41d9818e3769440cf9e88a0fed3c20588dc15b3ad38b57dcbf954",
+      "payload": "objects/7b10097e62c41d9818e3769440cf9e88a0fed3c20588dc15b3ad38b57dcbf954.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-06.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-06.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-06.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59023,
+      "sha256": "39d3e14f6f781c9df3ec46280a91bd5f713e030569664eaf90208425c48a4606",
+      "payload": "objects/39d3e14f6f781c9df3ec46280a91bd5f713e030569664eaf90208425c48a4606.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-06.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 465,
+      "sha256": "72e256e5715db92a9cc6b8b1405e46c3ea5f85d6baae40517828113462a35fee",
+      "payload": "objects/72e256e5715db92a9cc6b8b1405e46c3ea5f85d6baae40517828113462a35fee.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-06.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5749,
+      "sha256": "b7cbb2c1cf8066a03ee9deb85d86ca9cc3b20084c46300f283d17bbb58d01398",
+      "payload": "objects/b7cbb2c1cf8066a03ee9deb85d86ca9cc3b20084c46300f283d17bbb58d01398.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-06.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 770,
+      "sha256": "baf0d475f0ca1b85ed4b841639b226deaf1305b2e0e47afeb0767c40ea7e46a5",
+      "payload": "objects/baf0d475f0ca1b85ed4b841639b226deaf1305b2e0e47afeb0767c40ea7e46a5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-07.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-07.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-07.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59025,
+      "sha256": "fa3e41aad180f7b16997b70f5f6623027ee1fac157677e66aa6550d58b571da8",
+      "payload": "objects/fa3e41aad180f7b16997b70f5f6623027ee1fac157677e66aa6550d58b571da8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-07.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 467,
+      "sha256": "e871b2ac561291d65f25589c20c7aa65f6e303d860470978893c383b174dbd43",
+      "payload": "objects/e871b2ac561291d65f25589c20c7aa65f6e303d860470978893c383b174dbd43.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-07.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5751,
+      "sha256": "d15141628d60214d88b6f07634bacd7ed627adcbab07b1daf27a0deda5b7eb6c",
+      "payload": "objects/d15141628d60214d88b6f07634bacd7ed627adcbab07b1daf27a0deda5b7eb6c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-07.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 770,
+      "sha256": "0a48d038f527d32f50084e41faefaaad5762e4e5b8832252da1f97e1e6baa1d2",
+      "payload": "objects/0a48d038f527d32f50084e41faefaaad5762e4e5b8832252da1f97e1e6baa1d2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-08.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-08.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-08.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59038,
+      "sha256": "d8933c3b7d425926a0cf5550a3c6419f16e0b878f54fcd21de05d14cb3afe05b",
+      "payload": "objects/d8933c3b7d425926a0cf5550a3c6419f16e0b878f54fcd21de05d14cb3afe05b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-08.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 480,
+      "sha256": "c8f6dc4742ca7af65982df04e354ff693b236b5dcca94f6319806a3c7428f10e",
+      "payload": "objects/c8f6dc4742ca7af65982df04e354ff693b236b5dcca94f6319806a3c7428f10e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-08.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5764,
+      "sha256": "00f2ff26d86ce344448e9b43062e4b6279747b1e6a54286b4fd3566ad554801f",
+      "payload": "objects/00f2ff26d86ce344448e9b43062e4b6279747b1e6a54286b4fd3566ad554801f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-08.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 772,
+      "sha256": "351013622da114bc02a6e9617d5aaee9f938d07ab3433d26d7171c167555f75b",
+      "payload": "objects/351013622da114bc02a6e9617d5aaee9f938d07ab3433d26d7171c167555f75b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-09.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-09.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-09.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59039,
+      "sha256": "acc1b1632768d72ab09d674ff7ac38012d80d81a692c606799f0177c21184d8a",
+      "payload": "objects/acc1b1632768d72ab09d674ff7ac38012d80d81a692c606799f0177c21184d8a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-09.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 480,
+      "sha256": "4a7e919d5cc6be946f750005cd4af3887ccf92d5db48360c9cccacdb54558cbf",
+      "payload": "objects/4a7e919d5cc6be946f750005cd4af3887ccf92d5db48360c9cccacdb54558cbf.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-09.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5765,
+      "sha256": "c992b306142195787b539f6d427a1910ab59f3cf062ee8a2d1028a9e8e789bf5",
+      "payload": "objects/c992b306142195787b539f6d427a1910ab59f3cf062ee8a2d1028a9e8e789bf5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-09.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 772,
+      "sha256": "c5be5072bcfdcdbbac5997ee76aa3f6f3a60cb9c32f56fc587a140eca815db78",
+      "payload": "objects/c5be5072bcfdcdbbac5997ee76aa3f6f3a60cb9c32f56fc587a140eca815db78.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-10.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-10.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-10.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59127,
+      "sha256": "fcfb1f6db3e68318a0220b9b34728612dfce2cf119a493a6628240034ce0f4ae",
+      "payload": "objects/fcfb1f6db3e68318a0220b9b34728612dfce2cf119a493a6628240034ce0f4ae.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-10.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 373,
+      "sha256": "5dd7ddcae0a976458efc630dd62538e00b6f605d39e71b03187c04813b7deb80",
+      "payload": "objects/5dd7ddcae0a976458efc630dd62538e00b6f605d39e71b03187c04813b7deb80.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-10.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5657,
+      "sha256": "6f12e15ad600c3b82de60f6e49d79c65ba5a415a202a8d4e077e8ad1fadfcf84",
+      "payload": "objects/6f12e15ad600c3b82de60f6e49d79c65ba5a415a202a8d4e077e8ad1fadfcf84.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-10.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 772,
+      "sha256": "fa063cbfd8e44791a2d1d58dccad0d5fbdce097cbe3a4e1eb6f42283e7c2b58f",
+      "payload": "objects/fa063cbfd8e44791a2d1d58dccad0d5fbdce097cbe3a4e1eb6f42283e7c2b58f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-11.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-11.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-11.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59024,
+      "sha256": "5f37cb130b69a0c142874865a33aa963174cbc66a8e8c8840aa0d44f3d167fbc",
+      "payload": "objects/5f37cb130b69a0c142874865a33aa963174cbc66a8e8c8840aa0d44f3d167fbc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-11.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 465,
+      "sha256": "e495a195a805b0857190d2ec6bdef9d66dbc80b1b456c41b1539838db0e4f92f",
+      "payload": "objects/e495a195a805b0857190d2ec6bdef9d66dbc80b1b456c41b1539838db0e4f92f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-11.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5750,
+      "sha256": "81604608842ec16ce21e3b905b88c172532acbb3a611aca8bee4a2761b7e2491",
+      "payload": "objects/81604608842ec16ce21e3b905b88c172532acbb3a611aca8bee4a2761b7e2491.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-11.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 770,
+      "sha256": "f0d6e4b539dd958ebfac563eb70ef741391a48da1ee8aad95cecc396cb85dcfa",
+      "payload": "objects/f0d6e4b539dd958ebfac563eb70ef741391a48da1ee8aad95cecc396cb85dcfa.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-12.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-12.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-12.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59011,
+      "sha256": "b5e5035e590d02ad135b4a908b0cf27e73c86af6f20df78a56bb90447be6362f",
+      "payload": "objects/b5e5035e590d02ad135b4a908b0cf27e73c86af6f20df78a56bb90447be6362f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-12.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 453,
+      "sha256": "1ca9ba53ef6c6a8f88ff648f47cec0b34a2f05d877cad1495fca2f7e0a614e1f",
+      "payload": "objects/1ca9ba53ef6c6a8f88ff648f47cec0b34a2f05d877cad1495fca2f7e0a614e1f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-12.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5737,
+      "sha256": "492b69faa38697ea56def11820c26f745d353703e0cd9b728b2096eba9ee33c3",
+      "payload": "objects/492b69faa38697ea56def11820c26f745d353703e0cd9b728b2096eba9ee33c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-12.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 772,
+      "sha256": "83f8c85adfb975023a08038caf047eb03a153b45bb936a3bedc1ef5d369c5280",
+      "payload": "objects/83f8c85adfb975023a08038caf047eb03a153b45bb936a3bedc1ef5d369c5280.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-13.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-13.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-13.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 60010,
+      "sha256": "b70eb2805e7c1fee42b50b590dd6c53311bfedbe1b83e663175cac65dff7b37c",
+      "payload": "objects/b70eb2805e7c1fee42b50b590dd6c53311bfedbe1b83e663175cac65dff7b37c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-13.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 496,
+      "sha256": "6e847fab5c3c281e97b87f618569f1c308cf333cba4ed5a34f57a874e3a0ab07",
+      "payload": "objects/6e847fab5c3c281e97b87f618569f1c308cf333cba4ed5a34f57a874e3a0ab07.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-13.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5780,
+      "sha256": "1795b7d02e743a14b4550362685c98315c4f8137d655dc640dccbf7640d3abc3",
+      "payload": "objects/1795b7d02e743a14b4550362685c98315c4f8137d655dc640dccbf7640d3abc3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-13.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 772,
+      "sha256": "8793047ea696016d36583c4339ee65a448cab1eb5c349bfbf3c3a3d6471c89bd",
+      "payload": "objects/8793047ea696016d36583c4339ee65a448cab1eb5c349bfbf3c3a3d6471c89bd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-14.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-14.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-14.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59158,
+      "sha256": "0a95e237231fba737814a193ed5fc5633750333167d9c437dcc5e994b4d90726",
+      "payload": "objects/0a95e237231fba737814a193ed5fc5633750333167d9c437dcc5e994b4d90726.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-14.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 390,
+      "sha256": "0ae6f6d33d5ec9dd8c1001f5684f61f898bbd71800c3eadcf956be56d43c4e55",
+      "payload": "objects/0ae6f6d33d5ec9dd8c1001f5684f61f898bbd71800c3eadcf956be56d43c4e55.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-14.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5674,
+      "sha256": "7f41a0ba47999df07b2f29541aeb696311ae953195e50e369da673c0a02bbc9f",
+      "payload": "objects/7f41a0ba47999df07b2f29541aeb696311ae953195e50e369da673c0a02bbc9f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-14.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 771,
+      "sha256": "7d0905dc990375b72d5d5bff6ce4b43f43f351ac45cda311163ea7455901058e",
+      "payload": "objects/7d0905dc990375b72d5d5bff6ce4b43f43f351ac45cda311163ea7455901058e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-15.before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 1771787,
+      "sha256": "6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305",
+      "payload": "objects/6060d08f0ae14fdf9df0a11d3d367b42bd6d10d5dc36325d874bd811f9f97305.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-15.inputs.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3582002,
+      "sha256": "c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f",
+      "payload": "objects/c5c92f98b496aa6a87b4e9dcc3aa2b35b71ba045ccc233f91b742cc7f6fced2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-15.log",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 59168,
+      "sha256": "62999bb2ef4c64b9e8b75386976d9eabfa24df2fa99dbf5ea5637ca6d28fab2c",
+      "payload": "objects/62999bb2ef4c64b9e8b75386976d9eabfa24df2fa99dbf5ea5637ca6d28fab2c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-15.process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 475,
+      "sha256": "f3d9e2cb50e50d4d06c8e7adde2ffdec47a5e8819574ea22999b1a986bb6a37a",
+      "payload": "objects/f3d9e2cb50e50d4d06c8e7adde2ffdec47a5e8819574ea22999b1a986bb6a37a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-15.receipt.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 5763,
+      "sha256": "87372907978f58c41f6d7bd406a7454910265b467c6b26af51033288915bbf57",
+      "payload": "objects/87372907978f58c41f6d7bd406a7454910265b467c6b26af51033288915bbf57.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/phase-15.resources.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 34399,
+      "sha256": "500e516b6465b08d98225a97b9d8141c9bb797e92b6bd7be8b4d92c33934dc8c",
+      "payload": "objects/500e516b6465b08d98225a97b9d8141c9bb797e92b6bd7be8b4d92c33934dc8c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/retained-after.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3859,
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "payload": "objects/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/retained-before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3859,
+      "sha256": "f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7",
+      "payload": "objects/f08bd43c33dcf0587a69a5905a4e880ae61b980a7c29ad6c9342145b4a76c9b7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/runner-process.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 962,
+      "sha256": "fd98a4632399da489b8d4b49a1f504cae085cbc9cea2ef32c75000c0ffb6d46d",
+      "payload": "objects/fd98a4632399da489b8d4b49a1f504cae085cbc9cea2ef32c75000c0ffb6d46d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/tools-after.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3110,
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "payload": "objects/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05/tools-before.json",
+      "group": "checked-unpublished-disposal-delivery05",
+      "bytes": 3110,
+      "sha256": "316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3",
+      "payload": "objects/316fd7a8e41520bec308969423f532ae3d60d8caa1cd399a6056e2d5831f98c3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/freeze.json",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 1005,
+      "sha256": "af179c568c0e439e16030efe5df305b33913b3b944b6a454ab5c71e5b53f1e43",
+      "payload": "objects/af179c568c0e439e16030efe5df305b33913b3b944b6a454ab5c71e5b53f1e43.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/manifest.json",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 4508656,
+      "sha256": "8e1c8560fd8007d90e86b221ab0387981daf9ba9394dd25497301a46dbc07743",
+      "payload": "objects/8e1c8560fd8007d90e86b221ab0387981daf9ba9394dd25497301a46dbc07743.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/proposal.json",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 9241,
+      "sha256": "1add5c76e8d733878414699564cd1d12f8039433d113c1e1c06a5566793392b4",
+      "payload": "objects/1add5c76e8d733878414699564cd1d12f8039433d113c1e1c06a5566793392b4.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/run.py",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 17493,
+      "sha256": "dc8e08f98db3ce26c2abca7f3fe3a07b251012290b058962360c054dda672ac9",
+      "payload": "objects/dc8e08f98db3ce26c2abca7f3fe3a07b251012290b058962360c054dda672ac9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/docs/tasks/TASK-0053-checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 35246,
+      "sha256": "10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757",
+      "payload": "objects/10809d5e042872c2daa6a93fdc92871d350ad58d2d68655a7fb36416b9a8c757.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/docs/tasks/plans/checked-owner-core-execution.md",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 47296,
+      "sha256": "f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c",
+      "payload": "objects/f72ff0ba467f4c0aba4b3436b0802cac183a0f63d3645f150bdc6cabe2646d0c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/build/checked_root_outcome.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 12096,
+      "sha256": "e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1",
+      "payload": "objects/e5cdc401193c3a88d8108904555736438a3ef75799b133532a63b533765775c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/eval/checked_reporting.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 11434,
+      "sha256": "da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d",
+      "payload": "objects/da20a4451955db1d8e7f80d80928cde1498895f155193545bcac19229d298c4d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/eval/checked_reports.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 20330,
+      "sha256": "1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2",
+      "payload": "objects/1565bf43d5b5e2d3e0ca06d51da075ce119a684f1cd0983ebd42689786d493c2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/eval/checked_scope_finish.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 48648,
+      "sha256": "a095e49393f75c04a0fb451823830f7c64583d072d051124d7c02b76c9108bad",
+      "payload": "objects/a095e49393f75c04a0fb451823830f7c64583d072d051124d7c02b76c9108bad.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/eval/source_resource_phases.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 107782,
+      "sha256": "41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8",
+      "payload": "objects/41ffb88a6b91fa77524c3d30857efa056193bf46e0d5031c429bdd6de5714eb8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/foreign/checked_control.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 62632,
+      "sha256": "a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1",
+      "payload": "objects/a5d4349415f901cb2516dfbbf13467176d4ff620757faa4a588b3c53976847b1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/foreign/source_bindings.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 86662,
+      "sha256": "83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2",
+      "payload": "objects/83ba8d028203a8af215d2ee08bc92d7cc2dfe96acb8296f657ef4c3d13b47db2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/foreign/source_owner_boundary_tests.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 67241,
+      "sha256": "af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc",
+      "payload": "objects/af6a232f116565077b05feb5a8cf81141e30ee82029687d7b921aa0faaa435fc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/foreign/source_owner_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 103255,
+      "sha256": "b021acbada3570eb3e35f763b31e441b65ca5b9af0ee666c28b2f618c5174f87",
+      "payload": "objects/b021acbada3570eb3e35f763b31e441b65ca5b9af0ee666c28b2f618c5174f87.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/foreign/source_runtime.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 18480,
+      "sha256": "8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519",
+      "payload": "objects/8950d7098044a47a339c81b4f65b6ee9477c6f20b6c27cde952107c449a5f519.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/src/foreign.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 93646,
+      "sha256": "9ec4a6cfcf88121f72c7faa8c0b28e71e63426ee1087ea64729ae2587891414d",
+      "payload": "objects/9ec4a6cfcf88121f72c7faa8c0b28e71e63426ee1087ea64729ae2587891414d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/trusted-preparation/src/outcome.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 11281,
+      "sha256": "419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12",
+      "payload": "objects/419919245d76205a9ec43764bc9fdcfe80ca11fd2eccf16ad6a4664c97d33f12.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/snapshots/trusted-preparation/src/protected.rs",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 52888,
+      "sha256": "9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c",
+      "payload": "objects/9762e0f44e6fd775e35fd6e658e883096d30bbbee1e96a9603f4e9336a3f5b9c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-unpublished-disposal-delivery05-freeze/source.patch",
+      "group": "checked-unpublished-disposal-delivery05-freeze",
+      "bytes": 73471,
+      "sha256": "818f1151cebef6c4f7f5e1e84e438aceb65cde57fdc18344943ab0b8fb2b13ec",
+      "payload": "objects/818f1151cebef6c4f7f5e1e84e438aceb65cde57fdc18344943ab0b8fb2b13ec.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/abi.c",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 802,
+      "sha256": "109df7581c2dffeae7738f2cc6583c291fe100abdf9582e8c7924a23ae4fd91c",
+      "payload": "objects/109df7581c2dffeae7738f2cc6583c291fe100abdf9582e8c7924a23ae4fd91c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/actual-0.d",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1516,
+      "sha256": "6ed2997054007661eeca1ace973462e3b5a3c8a153a4da080e99771db6deea80",
+      "payload": "objects/6ed2997054007661eeca1ace973462e3b5a3c8a153a4da080e99771db6deea80.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/actual-1.d",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1375,
+      "sha256": "49dc38dc215edf2289944a0051febb5055d55a2c1ddbca601cf7f6e73b7bb74f",
+      "payload": "objects/49dc38dc215edf2289944a0051febb5055d55a2c1ddbca601cf7f6e73b7bb74f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-0.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "06d78948313236ace976aa0d7422b81e8fe351363170888ce495c43ed7cb0227",
+      "payload": "objects/06d78948313236ace976aa0d7422b81e8fe351363170888ce495c43ed7cb0227.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-0.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-0.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 17,
+      "sha256": "08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989",
+      "payload": "objects/08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-1.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "00e70be366c92efdef72e065492bece46063d0799d8ca4ecf187f71b23954360",
+      "payload": "objects/00e70be366c92efdef72e065492bece46063d0799d8ca4ecf187f71b23954360.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-1.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-1.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 7,
+      "sha256": "a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9",
+      "payload": "objects/a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-10.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "f52619f23594a781ee2e3ecb6bc7e71f4e7d1eec4b5c4dca643ca2a159192b6d",
+      "payload": "objects/f52619f23594a781ee2e3ecb6bc7e71f4e7d1eec4b5c4dca643ca2a159192b6d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-10.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-10.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-11.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "75c64e3edd2519bf84302e9038627857326274e675b7d8c1c9a3d4690c2485b9",
+      "payload": "objects/75c64e3edd2519bf84302e9038627857326274e675b7d8c1c9a3d4690c2485b9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-11.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-11.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-2.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "9c91949341712381c7383a278be769b18d90f75ccbeee923d101cbaefe940bb8",
+      "payload": "objects/9c91949341712381c7383a278be769b18d90f75ccbeee923d101cbaefe940bb8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-2.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-2.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-3.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "5c58fb32f0b827be3c7d02b3982abf618fdf241799050f20bd8cddf6be54e00e",
+      "payload": "objects/5c58fb32f0b827be3c7d02b3982abf618fdf241799050f20bd8cddf6be54e00e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-3.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-3.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1194,
+      "sha256": "46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462",
+      "payload": "objects/46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-4.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "2b2229fbee836b6485237e15329d25cae92d80c1ea182e1922d1e8bc82263635",
+      "payload": "objects/2b2229fbee836b6485237e15329d25cae92d80c1ea182e1922d1e8bc82263635.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-4.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-4.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 11345,
+      "sha256": "f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70",
+      "payload": "objects/f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-5.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "0d80e714ad240b21dcc9c6ad2ee5ae9bad706727fdea8f6309c07f1fc8c23b7b",
+      "payload": "objects/0d80e714ad240b21dcc9c6ad2ee5ae9bad706727fdea8f6309c07f1fc8c23b7b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-5.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-5.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 41,
+      "sha256": "2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67",
+      "payload": "objects/2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-6.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "76af27d5b680f8f35b5498fe216944a7fcc753ca7b9473c6483218af951af351",
+      "payload": "objects/76af27d5b680f8f35b5498fe216944a7fcc753ca7b9473c6483218af951af351.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-6.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-6.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-7.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "ba42b10c4d6670c87980cfe5029e5348ad8e3d4a751e86fec4ab16318be7b800",
+      "payload": "objects/ba42b10c4d6670c87980cfe5029e5348ad8e3d4a751e86fec4ab16318be7b800.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-7.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-7.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-8.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "d03aa376a04c256288c6b41a8b53e6347b9aa1cac62a8d7af0d622e71ab50e58",
+      "payload": "objects/d03aa376a04c256288c6b41a8b53e6347b9aa1cac62a8d7af0d622e71ab50e58.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-8.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 4237,
+      "sha256": "69847b3d5c961a9d76a2cf0ac56d13b383826fbcf42551374f954172f6edce92",
+      "payload": "objects/69847b3d5c961a9d76a2cf0ac56d13b383826fbcf42551374f954172f6edce92.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-8.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 28630,
+      "sha256": "08996ce5edb32d9ee396c830780e26fa507b16617c2689e71013dfa8ef0d8393",
+      "payload": "objects/08996ce5edb32d9ee396c830780e26fa507b16617c2689e71013dfa8ef0d8393.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-9.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "28fe10ee804753f1f7b99d428bda1f9c0ef26a09cc351677de9b8d9f9e626916",
+      "payload": "objects/28fe10ee804753f1f7b99d428bda1f9c0ef26a09cc351677de9b8d9f9e626916.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-9.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/command-9.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/discover-0.d",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1516,
+      "sha256": "6ed2997054007661eeca1ace973462e3b5a3c8a153a4da080e99771db6deea80",
+      "payload": "objects/6ed2997054007661eeca1ace973462e3b5a3c8a153a4da080e99771db6deea80.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/discover-1.d",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1375,
+      "sha256": "49dc38dc215edf2289944a0051febb5055d55a2c1ddbca601cf7f6e73b7bb74f",
+      "payload": "objects/49dc38dc215edf2289944a0051febb5055d55a2c1ddbca601cf7f6e73b7bb74f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/helper.c",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 851,
+      "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac",
+      "payload": "objects/1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/owner.h",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 333,
+      "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3",
+      "payload": "objects/a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/abi.c",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 802,
+      "sha256": "109df7581c2dffeae7738f2cc6583c291fe100abdf9582e8c7924a23ae4fd91c",
+      "payload": "objects/109df7581c2dffeae7738f2cc6583c291fe100abdf9582e8c7924a23ae4fd91c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/actual-0.d",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1564,
+      "sha256": "be4a65b56a008830dd133ed509619bdb71f75857020b88209cff3b11252d7f83",
+      "payload": "objects/be4a65b56a008830dd133ed509619bdb71f75857020b88209cff3b11252d7f83.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/actual-1.d",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1407,
+      "sha256": "e0e1ed90c7a21149c24ae06ff935a2ea4f98f27a0e1e214213b78470d66b2bfe",
+      "payload": "objects/e0e1ed90c7a21149c24ae06ff935a2ea4f98f27a0e1e214213b78470d66b2bfe.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-0.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "ae31ac9f8a2e79bfea03b2794f256f16caef0f0557ff9cd7f8cf5ac1f00e5e7b",
+      "payload": "objects/ae31ac9f8a2e79bfea03b2794f256f16caef0f0557ff9cd7f8cf5ac1f00e5e7b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-0.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-0.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 17,
+      "sha256": "08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989",
+      "payload": "objects/08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-1.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "514acc9cbd66472b7a7f653bd98cd055c33d051736f7cf361c4877b4d8e2a9d3",
+      "payload": "objects/514acc9cbd66472b7a7f653bd98cd055c33d051736f7cf361c4877b4d8e2a9d3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-1.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-1.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 7,
+      "sha256": "a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9",
+      "payload": "objects/a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-10.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "2fdfeea736752c41c0ca8817b51ba618927a14842dff7a898abec810d4e4a7d1",
+      "payload": "objects/2fdfeea736752c41c0ca8817b51ba618927a14842dff7a898abec810d4e4a7d1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-10.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-10.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-11.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "11be64f22c0ce9d2a2828f86e3c2a67b5c48dd7f4deb5ce51c1327e868dc1c12",
+      "payload": "objects/11be64f22c0ce9d2a2828f86e3c2a67b5c48dd7f4deb5ce51c1327e868dc1c12.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-11.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-11.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-2.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "bc385d09b9ceb92747c2e160c5023be43ea06696b7e2a5c8b37b8136877b34a2",
+      "payload": "objects/bc385d09b9ceb92747c2e160c5023be43ea06696b7e2a5c8b37b8136877b34a2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-2.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-2.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-3.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "cd11ad0cb2953202d7027643c8014a700ba4aa912b3846510f02b891ec01e7b2",
+      "payload": "objects/cd11ad0cb2953202d7027643c8014a700ba4aa912b3846510f02b891ec01e7b2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-3.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-3.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1194,
+      "sha256": "46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462",
+      "payload": "objects/46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-4.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "7cef8ec25eefb11412cc003086df5bd49370467c77bdde4481b8572468888e48",
+      "payload": "objects/7cef8ec25eefb11412cc003086df5bd49370467c77bdde4481b8572468888e48.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-4.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-4.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 11345,
+      "sha256": "f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70",
+      "payload": "objects/f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-5.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "0bf9743ee88ce48a3f1bb8a23140d14387d1473a1d08288506e1a282d54e4bd7",
+      "payload": "objects/0bf9743ee88ce48a3f1bb8a23140d14387d1473a1d08288506e1a282d54e4bd7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-5.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-5.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 41,
+      "sha256": "2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67",
+      "payload": "objects/2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-6.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "2474933c221192cdb360a116f91e3d541e9636f42738c43b77ba99258c456c36",
+      "payload": "objects/2474933c221192cdb360a116f91e3d541e9636f42738c43b77ba99258c456c36.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-6.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-6.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-7.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "29bd8c689a4e97cd6248e273a3e8c662d699162f7ff001d5df9c72a6f2207119",
+      "payload": "objects/29bd8c689a4e97cd6248e273a3e8c662d699162f7ff001d5df9c72a6f2207119.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-7.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-7.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-8.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "2b0da7fc59cbb076705fa56354d04ce4078c3c8c8f8e6670fbf415280a696148",
+      "payload": "objects/2b0da7fc59cbb076705fa56354d04ce4078c3c8c8f8e6670fbf415280a696148.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-8.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 4365,
+      "sha256": "6f780161fe7a1e203cffbcab9e5a0957fde5b2209d6eea2a0a316d3386a41bd4",
+      "payload": "objects/6f780161fe7a1e203cffbcab9e5a0957fde5b2209d6eea2a0a316d3386a41bd4.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-8.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 28630,
+      "sha256": "08996ce5edb32d9ee396c830780e26fa507b16617c2689e71013dfa8ef0d8393",
+      "payload": "objects/08996ce5edb32d9ee396c830780e26fa507b16617c2689e71013dfa8ef0d8393.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-9.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 85,
+      "sha256": "01aeb17f94b61058342092736d3c117a12161808c3d1631c3a35c9bab6ca7c72",
+      "payload": "objects/01aeb17f94b61058342092736d3c117a12161808c3d1631c3a35c9bab6ca7c72.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-9.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/command-9.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/discover-0.d",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1564,
+      "sha256": "be4a65b56a008830dd133ed509619bdb71f75857020b88209cff3b11252d7f83",
+      "payload": "objects/be4a65b56a008830dd133ed509619bdb71f75857020b88209cff3b11252d7f83.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/discover-1.d",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1407,
+      "sha256": "e0e1ed90c7a21149c24ae06ff935a2ea4f98f27a0e1e214213b78470d66b2bfe",
+      "payload": "objects/e0e1ed90c7a21149c24ae06ff935a2ea4f98f27a0e1e214213b78470d66b2bfe.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/helper.c",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 859,
+      "sha256": "0f77fce79cbc09bf16dd3cb8af1ad3307790ea5f4cb3e241371ce1531dc40393",
+      "payload": "objects/0f77fce79cbc09bf16dd3cb8af1ad3307790ea5f4cb3e241371ce1531dc40393.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/owner.h",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 333,
+      "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3",
+      "payload": "objects/a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/owner.c",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 859,
+      "sha256": "0f77fce79cbc09bf16dd3cb8af1ad3307790ea5f4cb3e241371ce1531dc40393",
+      "payload": "objects/0f77fce79cbc09bf16dd3cb8af1ad3307790ea5f4cb3e241371ce1531dc40393.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/owner.h",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 333,
+      "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3",
+      "payload": "objects/a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/Cargo.lock",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 10485,
+      "sha256": "979dc8fc06ed99565ab152bd273cadc5521ff28d2ba19ece2fdeaaecb85cfec2",
+      "payload": "objects/979dc8fc06ed99565ab152bd273cadc5521ff28d2ba19ece2fdeaaecb85cfec2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/Cargo.toml",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 999,
+      "sha256": "ad30fe2e446437acfddf82e4c41aa737cf9671bfc06a609c53b72c7062e6780e",
+      "payload": "objects/ad30fe2e446437acfddf82e4c41aa737cf9671bfc06a609c53b72c7062e6780e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/build.rs",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 12318,
+      "sha256": "c6d29317f134dd66b4e98ad9a440456434fec16ca8fa5d5d7359a50ba1f01989",
+      "payload": "objects/c6d29317f134dd66b4e98ad9a440456434fec16ca8fa5d5d7359a50ba1f01989.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/cargo-0/cargo.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 110,
+      "sha256": "b106baafef51a510258b749b4e52b083a645fdf1fc076d02d8d880e31669db1b",
+      "payload": "objects/b106baafef51a510258b749b4e52b083a645fdf1fc076d02d8d880e31669db1b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/cargo-0/cargo.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 37553,
+      "sha256": "e153eee1da03ec009e41645b2ed4083d48395ade5b3d086979995359c637a7f0",
+      "payload": "objects/e153eee1da03ec009e41645b2ed4083d48395ade5b3d086979995359c637a7f0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/cargo-0/cargo.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/cargo-1/cargo.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 106,
+      "sha256": "ddd5a51ce338585657c2b560c561b3d63e3928052f95e71b6b6423c729851f6a",
+      "payload": "objects/ddd5a51ce338585657c2b560c561b3d63e3928052f95e71b6b6423c729851f6a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/cargo-1/cargo.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 38,
+      "sha256": "2f7fa44eaf521c594a739061a457a92975408b44ebdd4cecd47ed8b19a66b2e5",
+      "payload": "objects/2f7fa44eaf521c594a739061a457a92975408b44ebdd4cecd47ed8b19a66b2e5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/cargo-1/cargo.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/invocation.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 23499,
+      "sha256": "fe537bf98887e64f7ecf4a08a575b852e3d5bef7521dd20695ae418649a958d9",
+      "payload": "objects/fe537bf98887e64f7ecf4a08a575b852e3d5bef7521dd20695ae418649a958d9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/limits.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 226,
+      "sha256": "e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335",
+      "payload": "objects/e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/link.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 18034,
+      "sha256": "7c0e5e1e462cb218b6ac5bf4f75ac5e4d4a6cd95c34317fa4f3542416d2c870d",
+      "payload": "objects/7c0e5e1e462cb218b6ac5bf4f75ac5e4d4a6cd95c34317fa4f3542416d2c870d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/observer.py",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 19565,
+      "sha256": "c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e",
+      "payload": "objects/c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/output.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 150,
+      "sha256": "4ae650561165378a42d7c06dbcb1ebaeebb758f34769f0f8071d5237ff384986",
+      "payload": "objects/4ae650561165378a42d7c06dbcb1ebaeebb758f34769f0f8071d5237ff384986.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/selected-bfd/invocation.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 13699,
+      "sha256": "5e279e6ec23f4430db9f3ac2e8bcd24744c1050fbe3e833a1f37555c3d25065e",
+      "payload": "objects/5e279e6ec23f4430db9f3ac2e8bcd24744c1050fbe3e833a1f37555c3d25065e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/selected-bfd/ld.bfd",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 4194,
+      "sha256": "46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a",
+      "payload": "objects/46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/checked-link/selected-bfd/tool.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 810,
+      "sha256": "c6d61f844d09d1079efccf28c6e25ecfebc89751ad65711eaf2c0be5b398e145",
+      "payload": "objects/c6d61f844d09d1079efccf28c6e25ecfebc89751ad65711eaf2c0be5b398e145.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/leaf/Cargo.toml",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 268,
+      "sha256": "4a746f12d45425177da56acf7a8c95ff39fe559c8aa4a1d7ec2af57f5228c7b0",
+      "payload": "objects/4a746f12d45425177da56acf7a8c95ff39fe559c8aa4a1d7ec2af57f5228c7b0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/leaf/src/leaf-b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1.rs",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 7489,
+      "sha256": "b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1",
+      "payload": "objects/b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/lock-cargo/cargo.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 106,
+      "sha256": "78a7341202191743accb0ce4891c8f6b3bb6b81b062d7ff7f244518ff700d0e0",
+      "payload": "objects/78a7341202191743accb0ce4891c8f6b3bb6b81b062d7ff7f244518ff700d0e0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/lock-cargo/cargo.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 67,
+      "sha256": "a3436cb2ce3aebb7b3d7010022b6fdd3120db70fabedd4f1f7af7ec0f736db09",
+      "payload": "objects/a3436cb2ce3aebb7b3d7010022b6fdd3120db70fabedd4f1f7af7ec0f736db09.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/lock-cargo/cargo.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/lock_policy.rs",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 8913,
+      "sha256": "0372a70dd69497e7b803313b482f1f09a94db40386ee275892053148c689479d",
+      "payload": "objects/0372a70dd69497e7b803313b482f1f09a94db40386ee275892053148c689479d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/native-build.log",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 37658,
+      "sha256": "d4206fa53f897251fbcd68030d498de2cb97dd3044d39332509c86edb5990970",
+      "payload": "objects/d4206fa53f897251fbcd68030d498de2cb97dd3044d39332509c86edb5990970.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/root-config.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1630,
+      "sha256": "1900a7debba4a13f173d2de38fc6e3d0bd01aafcf7ef419a508c7adff0e34fad",
+      "payload": "objects/1900a7debba4a13f173d2de38fc6e3d0bd01aafcf7ef419a508c7adff0e34fad.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/root-shim.rs",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 4013,
+      "sha256": "9f56c5ea90238e076d6f696af5d98c60ad4e5f21c988eb9a2527ce27564eaa89",
+      "payload": "objects/9f56c5ea90238e076d6f696af5d98c60ad4e5f21c988eb9a2527ce27564eaa89.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/rust-toolchain.toml",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "payload": "objects/cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/src/checked-policy.bin",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 156,
+      "sha256": "498d3e4eb8d6f993b2806a8aeb837c44d5e5450ed7d02dc9f715c00835a6f9b0",
+      "payload": "objects/498d3e4eb8d6f993b2806a8aeb837c44d5e5450ed7d02dc9f715c00835a6f9b0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/src/expected-facts.bin",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 19245,
+      "sha256": "36d70a238198ed979c7415831e1ad6a20c6c0dc7d0366913f2110ee73608abaa",
+      "payload": "objects/36d70a238198ed979c7415831e1ad6a20c6c0dc7d0366913f2110ee73608abaa.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/root/src/program-image.bin",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 29757,
+      "sha256": "cdb94c1839c0c0170f99beec04469336cb869efe88c2e91b397c8a68df4b8439",
+      "payload": "objects/cdb94c1839c0c0170f99beec04469336cb869efe88c2e91b397c8a68df4b8439.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/observation.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 852,
+      "sha256": "e8253193a697c908c790a2acc1700803d1e6d2aa7b8a2e805b51299fe8e64fc6",
+      "payload": "objects/e8253193a697c908c790a2acc1700803d1e6d2aa7b8a2e805b51299fe8e64fc6.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/owner.c",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 851,
+      "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac",
+      "payload": "objects/1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/owner.h",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 333,
+      "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3",
+      "payload": "objects/a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/Cargo.lock",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 10485,
+      "sha256": "979dc8fc06ed99565ab152bd273cadc5521ff28d2ba19ece2fdeaaecb85cfec2",
+      "payload": "objects/979dc8fc06ed99565ab152bd273cadc5521ff28d2ba19ece2fdeaaecb85cfec2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/Cargo.toml",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 999,
+      "sha256": "ad30fe2e446437acfddf82e4c41aa737cf9671bfc06a609c53b72c7062e6780e",
+      "payload": "objects/ad30fe2e446437acfddf82e4c41aa737cf9671bfc06a609c53b72c7062e6780e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/applicability-request.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 737359,
+      "sha256": "cf13c1b130440a2ad4765d8acb5823ccc75ce9ae856b24792e9f8fca49db76d2",
+      "payload": "objects/cf13c1b130440a2ad4765d8acb5823ccc75ce9ae856b24792e9f8fca49db76d2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/build.rs",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 12318,
+      "sha256": "c6d29317f134dd66b4e98ad9a440456434fec16ca8fa5d5d7359a50ba1f01989",
+      "payload": "objects/c6d29317f134dd66b4e98ad9a440456434fec16ca8fa5d5d7359a50ba1f01989.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/cargo-0/cargo.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 106,
+      "sha256": "13c986e06cf70214f7ee1e6b46a29d4e5de83fd9779233aed2d93a4d42d334ec",
+      "payload": "objects/13c986e06cf70214f7ee1e6b46a29d4e5de83fd9779233aed2d93a4d42d334ec.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/cargo-0/cargo.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 34348,
+      "sha256": "8db33b2f196d7b0c5ebc645268bc70dece39f5a659bdc603d9878933c1806081",
+      "payload": "objects/8db33b2f196d7b0c5ebc645268bc70dece39f5a659bdc603d9878933c1806081.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/cargo-0/cargo.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/cargo-1/cargo.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 106,
+      "sha256": "d1d852d1bde26adff0d1e05b16952807eabe6c90f9d7bf4cb72982a1e0b11f2f",
+      "payload": "objects/d1d852d1bde26adff0d1e05b16952807eabe6c90f9d7bf4cb72982a1e0b11f2f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/cargo-1/cargo.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 38,
+      "sha256": "77791c4de9ebfba927b89c16e1e3b49e7f27c6a405fa31008bebaa67f703af55",
+      "payload": "objects/77791c4de9ebfba927b89c16e1e3b49e7f27c6a405fa31008bebaa67f703af55.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/cargo-1/cargo.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/invocation.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 23467,
+      "sha256": "e0708fb39a39858c62fbbfa534f8127d4d2e6d7daa6fd5e8a928698cd5141631",
+      "payload": "objects/e0708fb39a39858c62fbbfa534f8127d4d2e6d7daa6fd5e8a928698cd5141631.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/limits.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 226,
+      "sha256": "e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335",
+      "payload": "objects/e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/link.map",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 158185519,
+      "sha256": "d5bcf7623f4f25c58bf38808e231d18dd4e2d51be9cfd9508e1bd321e8ce1b13",
+      "payload": "objects/d5bcf7623f4f25c58bf38808e231d18dd4e2d51be9cfd9508e1bd321e8ce1b13.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/link.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 18231,
+      "sha256": "a462b6847cd0a136a7f57448f9c4202c05ee065f84fccdacaa198e477e2f791f",
+      "payload": "objects/a462b6847cd0a136a7f57448f9c4202c05ee065f84fccdacaa198e477e2f791f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/observer.py",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 19565,
+      "sha256": "c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e",
+      "payload": "objects/c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/output.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 150,
+      "sha256": "c1540d0fdfb6b41631fcc705c1f347bfc2428b2ffef573228aae0e3c9f526fba",
+      "payload": "objects/c1540d0fdfb6b41631fcc705c1f347bfc2428b2ffef573228aae0e3c9f526fba.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/record.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 112658,
+      "sha256": "f265effe07db648f16a410c57ac5ce095a96fc01a9a3d713c6bd94d6bc65e011",
+      "payload": "objects/f265effe07db648f16a410c57ac5ce095a96fc01a9a3d713c6bd94d6bc65e011.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/selected-bfd/invocation.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 13635,
+      "sha256": "57dbc29965cb89db2e0f0b51e456c547afef639cd37156326c310c9e7852872f",
+      "payload": "objects/57dbc29965cb89db2e0f0b51e456c547afef639cd37156326c310c9e7852872f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/selected-bfd/ld.bfd",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 4194,
+      "sha256": "46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a",
+      "payload": "objects/46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/checked-link/selected-bfd/tool.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 778,
+      "sha256": "a86375d26a3bc00f7e141a8e59462ff23ae37cf6872af564b4d285409032c001",
+      "payload": "objects/a86375d26a3bc00f7e141a8e59462ff23ae37cf6872af564b4d285409032c001.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/leaf/Cargo.toml",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 268,
+      "sha256": "4a746f12d45425177da56acf7a8c95ff39fe559c8aa4a1d7ec2af57f5228c7b0",
+      "payload": "objects/4a746f12d45425177da56acf7a8c95ff39fe559c8aa4a1d7ec2af57f5228c7b0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/leaf/src/leaf-b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1.rs",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 7489,
+      "sha256": "b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1",
+      "payload": "objects/b9ec7e1d145a64dbf14f29cddfef97eb4b465aed169e416515f0e212dd51f8c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/link-provenance.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 115956,
+      "sha256": "83a4b8ab431f302bb10804c96a3a2bbce6a251e2f8229c2d142835af0277d3df",
+      "payload": "objects/83a4b8ab431f302bb10804c96a3a2bbce6a251e2f8229c2d142835af0277d3df.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/lock-cargo/cargo.lifecycle.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 106,
+      "sha256": "940ac56324005fa6e0381d20994c400852ad12645f0871babc6133a6e739f26e",
+      "payload": "objects/940ac56324005fa6e0381d20994c400852ad12645f0871babc6133a6e739f26e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/lock-cargo/cargo.stderr",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 67,
+      "sha256": "a3436cb2ce3aebb7b3d7010022b6fdd3120db70fabedd4f1f7af7ec0f736db09",
+      "payload": "objects/a3436cb2ce3aebb7b3d7010022b6fdd3120db70fabedd4f1f7af7ec0f736db09.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/lock-cargo/cargo.stdout",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/lock_policy.rs",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 8913,
+      "sha256": "0372a70dd69497e7b803313b482f1f09a94db40386ee275892053148c689479d",
+      "payload": "objects/0372a70dd69497e7b803313b482f1f09a94db40386ee275892053148c689479d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/native-build.log",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 34453,
+      "sha256": "00c740031ac51c57daccd3453b37461ac60496fd7f93eb5b7d8e50ac4e513c73",
+      "payload": "objects/00c740031ac51c57daccd3453b37461ac60496fd7f93eb5b7d8e50ac4e513c73.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/native-provenance.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 21075,
+      "sha256": "a3599fdffaa64d39fbf264c2e65f27b3d73a78412100b682adedb942069a98c9",
+      "payload": "objects/a3599fdffaa64d39fbf264c2e65f27b3d73a78412100b682adedb942069a98c9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/producer-receipt.bin",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 750,
+      "sha256": "ce2e819509a7c9ba3bd1a28d25339681e2de5380b180d94692e2a7e53252aeec",
+      "payload": "objects/ce2e819509a7c9ba3bd1a28d25339681e2de5380b180d94692e2a7e53252aeec.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/root-config.json",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 1614,
+      "sha256": "d13e4370dc2cf11529f019ebc838ed651c5513931d0be9750e2314ceaaa9d5d1",
+      "payload": "objects/d13e4370dc2cf11529f019ebc838ed651c5513931d0be9750e2314ceaaa9d5d1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/root-shim.rs",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 4013,
+      "sha256": "9f56c5ea90238e076d6f696af5d98c60ad4e5f21c988eb9a2527ce27564eaa89",
+      "payload": "objects/9f56c5ea90238e076d6f696af5d98c60ad4e5f21c988eb9a2527ce27564eaa89.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/rust-toolchain.toml",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "payload": "objects/cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/src/checked-policy.bin",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 156,
+      "sha256": "498d3e4eb8d6f993b2806a8aeb837c44d5e5450ed7d02dc9f715c00835a6f9b0",
+      "payload": "objects/498d3e4eb8d6f993b2806a8aeb837c44d5e5450ed7d02dc9f715c00835a6f9b0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/src/expected-facts.bin",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 19245,
+      "sha256": "36d70a238198ed979c7415831e1ad6a20c6c0dc7d0366913f2110ee73608abaa",
+      "payload": "objects/36d70a238198ed979c7415831e1ad6a20c6c0dc7d0366913f2110ee73608abaa.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/root/src/program-image.bin",
+      "group": "actual94828-canonical-donors-missing-release",
+      "bytes": 29757,
+      "sha256": "cdb94c1839c0c0170f99beec04469336cb869efe88c2e91b397c8a68df4b8439",
+      "payload": "objects/cdb94c1839c0c0170f99beec04469336cb869efe88c2e91b397c8a68df4b8439.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-d66-replay-independent-source-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 3137,
+      "sha256": "7f584321a3fca8488d1d1d156f7e3df34a195c7594142964727f7679e0e06316",
+      "payload": "objects/7f584321a3fca8488d1d1d156f7e3df34a195c7594142964727f7679e0e06316.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-delivery01-independent-freeze-checks.json",
+      "group": "source-or-actual-review",
+      "bytes": 6793,
+      "sha256": "068ec44aa0754e6f754fa0f3e6e6532e30398cb3e022d69ee2acd02a0bf28483",
+      "payload": "objects/068ec44aa0754e6f754fa0f3e6e6532e30398cb3e022d69ee2acd02a0bf28483.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-delivery01-independent-freeze-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 3882,
+      "sha256": "e87b2d63a1d92e5040fccefc86768870bafb3eb8af983627e6dc1d1d81ab7421",
+      "payload": "objects/e87b2d63a1d92e5040fccefc86768870bafb3eb8af983627e6dc1d1d81ab7421.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-delivery02-independent-freeze-checks.json",
+      "group": "source-or-actual-review",
+      "bytes": 6177,
+      "sha256": "303a2536b9895e9ecc8bab5baf6d162db70705bc3bc80a5d2bfcbc29a9d63c2e",
+      "payload": "objects/303a2536b9895e9ecc8bab5baf6d162db70705bc3bc80a5d2bfcbc29a9d63c2e.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-delivery02-independent-freeze-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 2802,
+      "sha256": "7cee0afb70ecf51c2b3362862bca8817dda6f5a79d6adf9c0433d55a4727d50d",
+      "payload": "objects/7cee0afb70ecf51c2b3362862bca8817dda6f5a79d6adf9c0433d55a4727d50d.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-delivery03-independent-freeze-and-draft-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 3310,
+      "sha256": "73058b2c369fd8ac0e45aa6a32eff8be466a2fc7884c58e1ba5e8f0488e00c72",
+      "payload": "objects/73058b2c369fd8ac0e45aa6a32eff8be466a2fc7884c58e1ba5e8f0488e00c72.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-delivery03-independent-freeze-checks.json",
+      "group": "source-or-actual-review",
+      "bytes": 1306,
+      "sha256": "f3e4d318576bcac4188f48dd580f9e53d13eec951a167550456a585d87631d3d",
+      "payload": "objects/f3e4d318576bcac4188f48dd580f9e53d13eec951a167550456a585d87631d3d.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-delivery05-independent-freeze-checks.json",
+      "group": "source-or-actual-review",
+      "bytes": 1772,
+      "sha256": "eba9e264f840f1a9ff96a569fe6aacbcd5cd2d9137311e987206a3416849ef76",
+      "payload": "objects/eba9e264f840f1a9ff96a569fe6aacbcd5cd2d9137311e987206a3416849ef76.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-delivery05-independent-source-freeze-draft-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 3421,
+      "sha256": "ca3f68285a721ff518d1ccf920bc532cc85473e479404293e5e69c844a34b269",
+      "payload": "objects/ca3f68285a721ff518d1ccf920bc532cc85473e479404293e5e69c844a34b269.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-draft-independent-publication-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 1607,
+      "sha256": "1f662f2630971cac9c7063e8b5901bd8603e142629227a5ecba10dd3c4d70c47",
+      "payload": "objects/1f662f2630971cac9c7063e8b5901bd8603e142629227a5ecba10dd3c4d70c47.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-e0603-independent-source-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 1365,
+      "sha256": "51649ab497e9f133534abbbf12c5c88e04604d1e442cf16c3212938fb053a3dd",
+      "payload": "objects/51649ab497e9f133534abbbf12c5c88e04604d1e442cf16c3212938fb053a3dd.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-independent-source-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 2887,
+      "sha256": "ec8a8389620995be1ba98738bca0ef6fc88dcadf0fb968d2ae92584e6141508f",
+      "payload": "objects/ec8a8389620995be1ba98738bca0ef6fc88dcadf0fb968d2ae92584e6141508f.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-tail-expression-independent-source-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 1000,
+      "sha256": "6957a1a0296e202cce246cb49313d1e1db25d4223d74b17e8e767c2f10ff3616",
+      "payload": "objects/6957a1a0296e202cce246cb49313d1e1db25d4223d74b17e8e767c2f10ff3616.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal62391-independent-actual-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 4975,
+      "sha256": "0e3bf1b9b562ca329e4279e7cf5221568a20c6a91ea26cab71c30093cd87f435",
+      "payload": "objects/0e3bf1b9b562ca329e4279e7cf5221568a20c6a91ea26cab71c30093cd87f435.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal77443-independent-actual-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 2204,
+      "sha256": "f20cd070082ed48d9032a30f537abd76f95d90358cf6383ff0fea950cb1f4f29",
+      "payload": "objects/f20cd070082ed48d9032a30f537abd76f95d90358cf6383ff0fea950cb1f4f29.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal94828-independent-actual-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 21845,
+      "sha256": "5bcfda37c0b0e8a33f8282b6dd44f2c250d9a681ed15a16b478fc6ea19d8d30e",
+      "payload": "objects/5bcfda37c0b0e8a33f8282b6dd44f2c250d9a681ed15a16b478fc6ea19d8d30e.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal94828-independent-completed-receipts.json",
+      "group": "source-or-actual-review",
+      "bytes": 18623,
+      "sha256": "2a19b96ef6e4bbd3788be93e9a32b480e07ebdb7952d01438d0f677d36065ef3",
+      "payload": "objects/2a19b96ef6e4bbd3788be93e9a32b480e07ebdb7952d01438d0f677d36065ef3.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal94828-independent-physical-inputs.json",
+      "group": "source-or-actual-review",
+      "bytes": 346,
+      "sha256": "2f154682b2c292e0d43660f83402a0e0c075f315cb93c93fa5acaac43ffe6151",
+      "payload": "objects/2f154682b2c292e0d43660f83402a0e0c075f315cb93c93fa5acaac43ffe6151.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal97993-independent-actual-review.json",
+      "group": "source-or-actual-review",
+      "bytes": 2156,
+      "sha256": "6c4b9026b940299450f3f6d9dc3e62cd33c43f6f59e1aee5eadfea0f09754d62",
+      "payload": "objects/6c4b9026b940299450f3f6d9dc3e62cd33c43f6f59e1aee5eadfea0f09754d62.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal62391-author-preservation.json",
+      "group": "source-or-actual-review",
+      "bytes": 1727,
+      "sha256": "f9cfae13bc05ec8c7c1d5a78763b0366a14b55f5c08853b346bd68ee9a28a79c",
+      "payload": "objects/f9cfae13bc05ec8c7c1d5a78763b0366a14b55f5c08853b346bd68ee9a28a79c.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal77443-author-preservation.json",
+      "group": "source-or-actual-review",
+      "bytes": 2495,
+      "sha256": "9ae0e297794baf89bcd56d3d6af3c8e134d50a972fa93561817ef7d51bdb3e6d",
+      "payload": "objects/9ae0e297794baf89bcd56d3d6af3c8e134d50a972fa93561817ef7d51bdb3e6d.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal94828-author-preservation.json",
+      "group": "source-or-actual-review",
+      "bytes": 5285,
+      "sha256": "0efc36b056b7ed784e6741a758a469678720d4f586bae6f9f54955ae0cffc0a7",
+      "payload": "objects/0efc36b056b7ed784e6741a758a469678720d4f586bae6f9f54955ae0cffc0a7.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal97993-author-preservation.json",
+      "group": "source-or-actual-review",
+      "bytes": 1021,
+      "sha256": "75ef231eaf920d588ba94c9ed8c70ab65f742ca2c4a25e5b5b6a9fb47cc394ac",
+      "payload": "objects/75ef231eaf920d588ba94c9ed8c70ab65f742ca2c4a25e5b5b6a9fb47cc394ac.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-source-reviewed-handoff.json",
+      "group": "source-or-actual-review",
+      "bytes": 5662,
+      "sha256": "c00e209631f2a38529eff768f3278426cbc176241152bdf20ba646a69cfa1c31",
+      "payload": "objects/c00e209631f2a38529eff768f3278426cbc176241152bdf20ba646a69cfa1c31.gz"
+    },
+    {
+      "origin": "/tmp/ash-unpublished-disposal-d66-replay-handoff.json",
+      "group": "source-or-actual-review",
+      "bytes": 4815,
+      "sha256": "0be9021ffb5ee3279e4389e1f3c5783afabaefd134cc203117743fa5fe6ccacd",
+      "payload": "objects/0be9021ffb5ee3279e4389e1f3c5783afabaefd134cc203117743fa5fe6ccacd.gz"
+    }
+  ],
+  "external_binary_omissions": [
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/helper.o",
+      "bytes": 2128,
+      "sha256": "1ec0835d19205b3183d47ef2d6bada5f89d511b6a4f77c5053c4218d3d8cfb92",
+      "qualification": "external binary retained/observed only; no application execution or approval"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/inputs/native-1835-0/libchecked-owner.a",
+      "bytes": 2376,
+      "sha256": "e05aae49579f3f204cb7dc01b35148b9554af7e317fd5e5fa9bf65dd7800fc41",
+      "qualification": "external binary retained/observed only; no application execution or approval"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/helper.o",
+      "bytes": 2136,
+      "sha256": "2e8526a51e64507ae288f1f92ea47d3537ba39a0af3a596e387834f51f1c5fe0",
+      "qualification": "external binary retained/observed only; no application execution or approval"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/missing-release/inputs/native-1835-1/libchecked-owner.a",
+      "bytes": 2392,
+      "sha256": "c9058f8daa746649aec2b46d06b75b8bb3d4ee0d8794c5f89a41518e781d0b4b",
+      "qualification": "external binary retained/observed only; no application execution or approval"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-1835-1792806330851860740/program",
+      "bytes": 100547432,
+      "sha256": "67f43b5e02ebb666f31f48cc3e5254ce65f58d1dbb82b905d7699e3e84300953",
+      "qualification": "external binary retained/observed only; no application execution or approval"
+    }
+  ]
+}

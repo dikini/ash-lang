@@ -755,6 +755,44 @@ fn eight_byte_fixture_for_program(program: crate::core::ValidatedEffectProgram) 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ClosingStage { Reserved, Armed, Body, Consumed, Retained, Synthetic, SyntheticNotRequested }
 
+#[cfg(not(ash_checked_owner_root = "v1"))]
+pub(crate) fn with_unpublished_leaf_for_test(
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        crate::foreign::source_runtime::NativeOwnerBoundary,
+        Option<crate::foreign::source_runtime::NativeOwnerGuard>),
+) {
+    with_unpublished_leaf_program_for_test(eight_byte_program(), test)
+}
+#[cfg(not(ash_checked_owner_root = "v1"))]
+pub(crate) fn with_unpublished_int_refusal_for_test(
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        crate::foreign::source_runtime::NativeOwnerBoundary,
+        Option<crate::foreign::source_runtime::NativeOwnerGuard>),
+) {
+    let source = include_str!("../../tests/fixtures/checked-owner-runtime/owner.ash")
+        .replace("acquisition Acquire<State<H, R>, Unit, Unit>", "acquisition Acquire<State<H, R>, Unit, Int>")
+        .replace("Foreign.CheckedScope<Answer, Unit, Unit>", "Foreign.CheckedScope<Answer, Int, Unit>")
+        .replace("Foreign.CheckedScope<CopyProbe, Unit, Unit>", "Foreign.CheckedScope<CopyProbe, Int, Unit>")
+        .replace("Refused ()", "Refused 0");
+    let (program, _) = crate::elaborate::checked_owner_passive_program_for_source(&source,
+        "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Producer.CopyProbe, Int, Unit>\nmain () = Producer.run ()\n");
+    with_unpublished_leaf_program_for_test(program, test)
+}
+#[cfg(not(ash_checked_owner_root = "v1"))]
+fn with_unpublished_leaf_program_for_test(
+    program: crate::core::ValidatedEffectProgram,
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        crate::foreign::source_runtime::NativeOwnerBoundary,
+        Option<crate::foreign::source_runtime::NativeOwnerGuard>),
+) {
+    let (program, acquire, _, _, _) = eight_byte_fixture_for_program(program);
+    let mut work = TypeWorkBudget::default();
+    let ready = leaf_ready(&acquire, &mut work);
+    let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+    let guard = ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard();
+    test(&program, acquire._scope_node, handle, guard);
+}
+
 pub(crate) fn with_eight_byte_closing_for_test(
     stage: ClosingStage,
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,

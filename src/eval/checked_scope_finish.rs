@@ -531,6 +531,120 @@ mod tests {
         }
     }
 
+    #[cfg(not(ash_checked_owner_root = "v1"))]
+    #[test]
+    fn unpublished_leaf_refusal_discard_and_output_failure_dispose_before_reporting() {
+        use crate::foreign::{checked_leaf_calls as leaf_calls, checked_leaf_reset as leaf_reset,
+            checked_leaf_null_next as leaf_null_next,
+            source_bindings::with_unpublished_leaf_for_test};
+        for (discarded, output_failed, blocked, shared_denied, null) in [
+            (false, false, false, false, false), (true, false, false, false, false),
+            (false, true, false, false, false), (false, false, true, false, false),
+            (false, false, false, true, false), (false, false, false, false, true),
+        ] {
+            leaf_reset();
+            if null { leaf_null_next(); }
+            with_unpublished_leaf_for_test(|program, node, checked, owner| {
+                if shared_denied { owner.as_ref().unwrap().install_shared_denial_for_test(); }
+                let mut machine = Machine::new_effect(program);
+                machine.control = None;
+                machine.live_resources = 1;
+                let mut setup = TypeWorkBudget::default();
+                let mut reports = crate::eval::checked_reports::ResourceReports::reserve(1, &mut setup).unwrap();
+                let slot = reports.reserve_owner(&mut setup).unwrap();
+                machine.checked_reports = Some(reports);
+                let codec = machine.source_resource_scope(node).unwrap().header().codec;
+                let value = if discarded { Value::Unit } else {
+                    machine.foreign_constructor(codec.acquire[1], Some(Value::Unit), RuntimePhase::Acquisition).unwrap()
+                };
+                if output_failed {
+                    let Value::Location(location) = &value else { unreachable!() };
+                    let mut probe = TypeWorkBudget::default();
+                    super::super::resolve_location_with_work(&machine.heap, *location, &mut probe).unwrap();
+                    machine.instantiation_work = TypeWorkBudget::with_limit(probe.used());
+                }
+                let boundary = Box::new(SourceResourceBoundary {
+                    checked: Some(checked.prepaid_scope_observer()), report_slot: Some(slot), node,
+                    key: super::super::ActivationKey(111), environment: super::super::Environment::new(),
+                    owner, dependencies: Vec::new(), phase: super::super::ProviderPhase::Acquire,
+                    payload: None, saved: None, consumed: false, blocked, discarded,
+                });
+                let result = machine.return_source_resource(boundary, value);
+                assert_eq!(result.is_err(), output_failed);
+                let called = !blocked && !shared_denied && !null;
+                assert_eq!(leaf_calls(), [1, 0, 0, 0, usize::from(called)]);
+                let snapshot = checked.snapshot();
+                assert_eq!(snapshot.k, K::Absent);
+                assert_eq!(snapshot.native, if null { Native::NoOwner } else if called { Native::Consumed } else { Native::Owned });
+                assert!(!snapshot.unresolved);
+                assert_eq!(snapshot.continuation, CheckedOwnerContinuation::Absent);
+                let (scope, guards) = machine.checked_reports.take().unwrap().into_inspections();
+                assert!(scope.is_empty());
+                assert_eq!(guards.len(), usize::from(!null));
+                if let Some(guard) = guards.first() {
+                    assert_eq!(guard.native(), if called { ResourceNativeFact::Consumed } else { ResourceNativeFact::Owned });
+                    assert_eq!(guard.status(), None);
+                    assert_eq!(guard.acquisition_status(), None);
+                }
+                assert_eq!(checked.retains_backing(), blocked || shared_denied);
+                // Dropping remaining evaluator metadata cannot retry Free.
+                drop(machine);
+                assert_eq!(leaf_calls()[4], usize::from(called));
+            });
+        }
+    }
+
+    #[cfg(not(ash_checked_owner_root = "v1"))]
+    #[test]
+    fn huge_typed_refusal_copy_is_funded_after_disposal_and_survives_one_short() {
+        use crate::foreign::{checked_leaf_calls as leaf_calls, checked_leaf_reset as leaf_reset,
+            source_bindings::with_unpublished_int_refusal_for_test};
+        let mut measured = 0;
+        for pass in 0..4 {
+            leaf_reset();
+            with_unpublished_int_refusal_for_test(|program, node, checked, owner| {
+                let mut machine = Machine::new_effect(program);
+                machine.control = None; machine.live_resources = 1;
+                let mut setup = TypeWorkBudget::default();
+                let mut reports = crate::eval::checked_reports::ResourceReports::reserve(1, &mut setup).unwrap();
+                let slot = reports.reserve_owner(&mut setup).unwrap();
+                machine.checked_reports = Some(reports);
+                let codec = machine.source_resource_scope(node).unwrap().header().codec;
+                let huge = huge_integer();
+                let Value::Integer(integer) = &huge else { unreachable!() };
+                let magnitude = usize::try_from(integer.magnitude_byte_length()).unwrap();
+                let value = machine.foreign_constructor(codec.acquire[1], Some(huge), RuntimePhase::Acquisition).unwrap();
+                let prefix = usize::from(pass == 3) * 7;
+                machine.instantiation_work = TypeWorkBudget::with_limit(match pass {
+                    0 => 327_680, 1 => measured - 1, _ => measured + prefix,
+                });
+                machine.instantiation_work.charge(prefix).unwrap();
+                let boundary = Box::new(SourceResourceBoundary {
+                    checked: Some(checked.prepaid_scope_observer()), report_slot: Some(slot), node,
+                    key: super::super::ActivationKey(111), environment: super::super::Environment::new(),
+                    owner, dependencies: Vec::new(), phase: super::super::ProviderPhase::Acquire,
+                    payload: None, saved: None, consumed: false, blocked: false, discarded: false,
+                });
+                let result = machine.return_source_resource(boundary, value);
+                assert_eq!(result.is_err(), pass == 1);
+                if pass == 0 {
+                    measured = machine.instantiation_work.used();
+                    assert!(measured > magnitude, "magnitude copy is funded, not only its field slot");
+                } else if pass != 1 {
+                    assert_eq!(machine.instantiation_work.used(), measured + prefix);
+                }
+                assert_eq!(checked.snapshot().native, Native::Consumed);
+                assert_eq!(checked.snapshot().k, K::Absent);
+                assert!(!checked.snapshot().unresolved);
+                let (scope, guards) = machine.checked_reports.take().unwrap().into_inspections();
+                assert!(scope.is_empty()); assert_eq!(guards.len(), 1);
+                assert_eq!(guards[0].native(), ResourceNativeFact::Consumed);
+                drop(machine);
+                assert_eq!(leaf_calls(), [1, 0, 0, 0, 1]);
+            });
+        }
+    }
+
     #[test]
     fn failed_unpublished_return_has_after_disposal_point_and_no_scope_closing() {
         with_case(ClosingStage::Armed, |mut machine, mut boundary, _finish| {

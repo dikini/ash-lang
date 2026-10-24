@@ -44,6 +44,8 @@ pub(super) enum CallKind {
     Acquire,
     Borrow,
     Finish,
+    // Physical disposal of a never-published guard; never a source K close.
+    GuardDisposal,
     CopyBytes(super::source_bindings::SourceOwnerCopyIdentity),
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,6 +170,8 @@ pub(super) enum Observed {
     Borrowed,
     FinishedConsumed,
     FinishedRetained,
+    GuardConsumed,
+    GuardRetained,
 }
 
 struct GroupState {
@@ -205,6 +209,7 @@ struct Record<'p> {
     completion: Option<Completion>,
     closing: Option<ClosingSnapshot>,
     witness_issued: bool,
+    guard_attempted: bool,
 }
 
 pub(super) struct Ledger<'p> {
@@ -234,7 +239,7 @@ impl<'p> Ledger<'p> {
         // Fixed owner cells include pending, observation, K, report and source
         // continuation. Terminal transfer and native-return writes are prepaid.
         let cells = owners
-            .checked_mul(24)
+            .checked_mul(25)
             .and_then(|n| n.checked_add(groups.checked_mul(3)?))
             .and_then(|n| n.checked_add(calls.checked_mul(6)?))
             .and_then(|n| n.checked_add(groups.checked_mul(owners)?.checked_mul(4)?))
@@ -331,10 +336,8 @@ impl<'p> Ledger<'p> {
                 header.codec.report,
                 crate::core::source_resource::SourceResourceReportCodec::CheckedScope { .. }
             )
-            || !matches!(
-                header.teardown.owner_role(),
-                Some(super::source_contract::PreparedOwnerCall::Teardown { .. })
-            )
+            || !matches!(header.teardown.owner_role(),
+                Some(super::source_contract::PreparedOwnerCall::Teardown { .. }))
             || !header
                 .acquire
                 .owner()
@@ -366,6 +369,7 @@ impl<'p> Ledger<'p> {
             completion: None,
             closing: None,
             witness_issued: false,
+            guard_attempted: false,
         });
         self.groups[group_index].owner_bound = true;
         Ok(owner)
@@ -428,6 +432,14 @@ impl<'p> Ledger<'p> {
             CallKind::Finish if record.k == K::Closing && record.native == Native::Owned => {
                 &record.header.teardown
             }
+            CallKind::GuardDisposal
+                if record.k == K::Absent
+                    && record.access == Access::Unpublished
+                    && record.native == Native::Owned
+                    && !record.guard_attempted =>
+            {
+                &record.header.teardown
+            }
             CallKind::Borrow
                 if record.native == Native::Owned
                     && matches!(record.k, K::Pending | K::Closing)
@@ -453,6 +465,9 @@ impl<'p> Ledger<'p> {
             kind,
         };
         record.serial = serial;
+        if kind == CallKind::GuardDisposal {
+            record.guard_attempted = true;
+        }
         self.in_flight += 1;
         record.pending = Some(call);
         record.unresolved = true;
@@ -543,6 +558,16 @@ impl<'p> Ledger<'p> {
             {
                 Native::Owned
             }
+            (CallKind::GuardDisposal, Observed::GuardConsumed)
+                if matches!(
+                    record.header.teardown.owner_role(),
+                    Some(super::source_contract::PreparedOwnerCall::Teardown { consumes: true, .. })
+                ) => Native::Consumed,
+            (CallKind::GuardDisposal, Observed::GuardRetained)
+                if matches!(
+                    record.header.teardown.owner_role(),
+                    Some(super::source_contract::PreparedOwnerCall::Teardown { consumes: false, .. })
+                ) => Native::Owned,
             _ => return Err(Failure::Original),
         };
         // O4 and K3: no allocation, conversion, reporting or callback intervenes.
@@ -556,6 +581,7 @@ impl<'p> Ledger<'p> {
         record.unresolved = false;
         record.pending = None;
         record.delivery = Delivery::Pending;
+        if call.kind == CallKind::GuardDisposal { record.access = Access::Retired; }
         if call.kind == CallKind::Finish {
             record.completion = Some(Completion::Observed(native));
             let snapshot = ClosingSnapshot {
@@ -589,6 +615,7 @@ impl<'p> Ledger<'p> {
             || record.native != Native::Owned
             || record.k != K::Absent
             || record.serial == 0
+            || record.guard_attempted
         {
             return Err(Failure::State);
         }
@@ -780,6 +807,7 @@ pub(super) struct RuntimeBoundary {
     acquisition_observed: bool,
     finish_prepared: Option<FinishEntry>,
     finish_claimed: bool,
+    acquisition_status: Option<i128>,
     // These fixed future ledger operations were paid before native entry.
     prepaid: TypeWorkBudget,
 }
@@ -865,7 +893,9 @@ impl RuntimeBoundary {
             .checked_mul(14)
             .and_then(|n| n.checked_add(8 + 8 + 4 + 3 + 3 + 8 + 4))
             .ok_or(Failure::Resource)?;
-        pay(work, future.checked_add(2 + 3).ok_or(Failure::Resource)?)?;
+        // One additional fixed observation cell retains acquisition status
+        // independently of the subsequent disposal status in the owner slot.
+        pay(work, future.checked_add(2 + 3 + 1).ok_or(Failure::Resource)?)?;
         let mut ledger = Ledger::reserve(limits.groups, limits.owners, limits.observations, work)?;
         let group = ledger.group(work)?;
         let owner = ledger.owner_header(
@@ -885,6 +915,7 @@ impl RuntimeBoundary {
             acquisition_observed: false,
             finish_prepared: None,
             finish_claimed: false,
+            acquisition_status: None,
             prepaid: TypeWorkBudget::with_limit(future),
         })
     }
@@ -938,6 +969,41 @@ impl RuntimeBoundary {
             || record.delivery == Delivery::Published || self.ledger.terminal
         { return Err(Failure::Original); }
         Ok(())
+    }
+    pub(super) fn observe_acquisition_status(&mut self, reply: Option<super::source_runtime::NativeScalarReply>) {
+        // Called under the already held acquisition slot borrow, before source
+        // conversion. A later disposal status never replaces this observation.
+        self.acquisition_status = reply.and_then(|reply| super::source_runtime::scalar_observation(
+            reply, self.scope.header().acquire.symbol().result(),
+        ));
+    }
+    pub(super) fn acquisition_status(&self) -> Option<i128> { self.acquisition_status }
+    /// The unpublished guard uses its original sealed teardown, never the
+    /// authored Finish transition. The caller holds the physical slot borrow
+    /// across this pre-entry check, invocation and infallible observation.
+    pub(super) fn begin_guard_disposal(
+        &mut self,
+        activation: usize,
+        scope: crate::core::NodeId,
+    ) -> Result<(), Failure> {
+        if activation != self.activation || scope != self.scope_node || self.pending.is_some() {
+            return Err(Failure::Original);
+        }
+        self.pending = Some(self.ledger.enter(
+            self.owner,
+            CallKind::GuardDisposal,
+            &self.scope.header().teardown,
+            &mut self.prepaid,
+        )?);
+        Ok(())
+    }
+    pub(super) fn guard_disposed(&mut self, consumed: bool) {
+        let call = self.pending.take().expect("entered unpublished disposal");
+        self.ledger.observed(call, if consumed {
+            Observed::GuardConsumed
+        } else {
+            Observed::GuardRetained
+        }).expect("reserved unpublished disposal observation");
     }
     pub(super) fn publish(
         &mut self,
@@ -1476,6 +1542,41 @@ mod tests {
                 ledger.observed(call, Observed::FinishedConsumed),
                 Err(Failure::Stale)
             );
+        });
+    }
+
+    #[test]
+    fn unpublished_disposal_is_one_shot_and_never_creates_source_k() {
+        with_header(|header| {
+            for denied in [false, true] {
+                let mut work = TypeWorkBudget::default();
+                let mut ledger = Ledger::reserve(1, 1, 2, &mut work).unwrap();
+                let group = ledger.group(&mut work).unwrap();
+                let owner = ledger.owner(group, header, &mut work).unwrap();
+                let acquire = ledger.enter(owner, CallKind::Acquire, &header.acquire, &mut work).unwrap();
+                ledger.observed(acquire, Observed::Acquired).unwrap();
+                if denied { ledger.lose_group(group, true).unwrap(); }
+                let entry = ledger.enter(owner, CallKind::GuardDisposal, &header.teardown, &mut work);
+                if denied {
+                    assert!(entry.is_err());
+                    assert_eq!(ledger.observed_calls, 1);
+                    assert_eq!(ledger.records[owner.index].native, Native::Owned);
+                } else {
+                    ledger.observed(entry.unwrap(), Observed::GuardConsumed).unwrap();
+                    let record = &ledger.records[owner.index];
+                    assert_eq!(record.native, Native::Consumed);
+                    assert!(record.guard_attempted);
+                    assert!(record.closing.is_none());
+                    assert!(record.completion.is_none());
+                    assert_eq!(record.continuation, Continuation::Absent);
+                    assert!(ledger.enter(owner, CallKind::GuardDisposal, &header.teardown, &mut work).is_err());
+                    assert!(ledger.publish_acquired(owner, &mut work).is_err());
+                    ledger.output_failed();
+                    assert_eq!(ledger.records[owner.index].native, Native::Consumed);
+                }
+                assert_eq!(ledger.records[owner.index].k, K::Absent);
+                assert!(ledger.records[owner.index].closing.is_none());
+            }
         });
     }
 

@@ -419,3 +419,27 @@ The [provider evidence](evidence/checked-owner-core-execution/protected-root-pro
 The connected source consumes actual verification into private root admission, restores exact originals, reserves mandatory reports before Machine entry and preserves runtime-error closings/trace. Fixed parent/child same-FD ingress and bounded post-reap DATA publication are implemented. The measured 157,968,330-byte BFD map justifies the fixture's supported 256 MiB selection (41.15% headroom); original 128 MiB failure and separate passive measurement remain qualified. Product maxima/defaults and meters are unchanged. Ordinary warnings and two glibc loading warnings remain.
 
 No launcher/application/native callback executed. Default bootstrap association remains None and all six conformity fields remain Missing. Next is administrator-established store identity, configured source/artifact freshness, a separately closed static launcher build/descriptor, complete finite approvals and the exact one-shot deployment/run handoff. Actual acquire/copy/Finish/Trace and independent reports, root-owned formatting/full F-core verification and whole F4/F6 acceptance remain open.
+
+## Next bounded runtime dependency: unpublished guard disposal
+
+The next [planned runtime slice](plans/checked-owner-core-execution.md#next-runtime-slice-admitted-unpublished-guard-disposal) supplies the private admitted guard-disposal mechanism needed by TASK0054 / [F5 #61](https://github.com/dikini/ash-lang/issues/61). Current checked Acquire refusal safely retains opaque backing but does not establish L2 once-close. The proposed implementation preserves KAbsent and separate guard inspection, admits no Fresh source Close or public primitive, and must keep shared group denial/L8 at zero C calls. It remains separate from the current common-quarantine delivery and uses its actual retaining tip for final implementation verification. Void/status teardown and the missing genuine status-leaf/profile dependency remain explicit; no native L2 or whole F5 acceptance is claimed.
+
+
+## Unpublished disposal delivery on the retained common base
+
+The delivery branch replays only the three reviewed disposal commits onto PR123's
+actual retaining tip `d66ecd78`. Clean unsigned source checkpoint `4d6d2300`
+contains all twelve implementation files byte-equal to `89d4f798`, covered by
+independent source review `ec8a8389`. Task/plan append conflicts preserve the
+current retained history; the separate conformity-readiness checkpoint is not
+silently imported. The candidate `2d5a1f7a` discussion in the plan is historical.
+
+The [disposal evidence](evidence/checked-owner-core-execution/unpublished-disposal/README.md) records session `94828`: both-package targeted Clippy and all 42 distinct tests PASS (41 ordinary and one ignored nonexecuting generated-root selector), including all six new controls, on exact source `595dda47`. Independent actual review `5bcfda37` verifies all 15 commands, 9,599 input files, 15 snapshots, physical tools/artifacts and owned cleanup. The earlier replay checkpoint above is source history; this result supersedes its unrun status. ASHOUT03/ASHOBS03 require fresh code/request/artifact association.
+The independent output/status source `c8c62384` remains parked on its own branch
+and is excluded. Status-profile/Core/emission and native SQLite L2, configured
+approvals/deployment/execution, F-core and whole criteria remain open.
+
+
+The genuine void path disposes an admitted unpublished owner before Refused payload copying or discard reporting, preserves KAbsent and never synthesizes source Finish or a closing record. Shared-denied groups remain at zero calls. Separate acquisition and latest-disposal observations survive output failure; invalid/no-O4 attempts preserve the prior observation and unresolved backing without retry. The legacy status controls remain accounting models, not checked status-profile admission.
+
+Fresh actual root/leaf compile/link yields ELF `67f43b5e` (100,547,432 bytes), receipt `ce2e8195` and request `cf13c1b1`; the authenticated configuration chain and independent root identity `cc199c7a` match. The coherent donor controls and fresh missing-release undefined-symbol refusal pass. Two glibc loading warnings and ordinary Rust warnings remain. Original `77443`/`97993` compile/lint failures, `62391` partial 11-pass/one fixture-setup-failure result and superseded delivery04 UNRUN remain separate evidence. No selected native callback or generated application/launcher ran. Six conformity fields remain Missing; configured approvals, genuine status transport, native SQLite L2, F-core and whole criteria remain open. This task/evidence prose was assembled after testing without changing product bytes.

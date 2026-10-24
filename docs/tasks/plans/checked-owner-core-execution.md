@@ -447,3 +447,194 @@ The [provider evidence](../evidence/checked-owner-core-execution/protected-root-
 The connected source consumes actual verification into private root admission, restores exact originals, reserves mandatory reports before Machine entry and preserves runtime-error closings/trace. Fixed parent/child same-FD ingress and bounded post-reap DATA publication are implemented. The measured 157,968,330-byte BFD map justifies the fixture's supported 256 MiB selection (41.15% headroom); original 128 MiB failure and separate passive measurement remain qualified. Product maxima/defaults and meters are unchanged. Ordinary warnings and two glibc loading warnings remain.
 
 No launcher/application/native callback executed. Default bootstrap association remains None and all six conformity fields remain Missing. Next is administrator-established store identity, configured source/artifact freshness, a separately closed static launcher build/descriptor, complete finite approvals and the exact one-shot deployment/run handoff. Actual acquire/copy/Finish/Trace and independent reports, root-owned formatting/full F-core verification and whole F4/F6 acceptance remain open.
+
+## Next runtime slice: admitted unpublished-guard disposal
+
+Authority is accepted CP0024 guard/supervisor disposal, O4/O6/O8, L2/L9 and the
+adopted lifecycle table; an unpublished owner has KAbsent and no authored Finish
+obligation. TASK0053 supplies the runtime component needed by TASK0054 / F5 #61.
+This plan adds no public primitive, new semantics or SQLite-name dispatch.
+
+### Current behavior and exact gap
+
+At retained 14f, source_resource_phases.rs Acquire/Refused and discarded Acquire
+drop the pending guard, then publish separate UnpublishedGuard inspection.
+source_owner_runtime.rs::destroy never invokes C for checked leaf backing: it
+protects/retains that backing. Ordinary legacy void/status destruction exists,
+but is not a checked unpublished-disposal authority. Core source_resource.rs
+rejects another non-borrow owner request after Fresh acquisition, and published
+finish admission requires the Finish phase/KClosing. Therefore no existing
+source Close or synthetic Finish may be used to claim L2 once-close. Current
+safe retention can satisfy admitted O6 retention, not L2's partial-owner disposal.
+
+### Minimum private boundary
+
+Reserve a distinct one-shot guard-disposal entry before irreversible acquisition
+from the already sealed teardown plan, actual scope/activation, owner slot and
+acquire request. It is private/non-Clone and cannot come from a raw address,
+caller bool, generic value, handler name or merely compatible State. Invocation
+requires that same slot/generation's conforming returned-owner observation,
+KAbsent, no published source owner, no earlier disposal attempt, a still-allowed
+shared group, and an admitted compatible teardown operand/dependency plan.
+Null/no-owner, lost/unresolved/rejected control and group-denied cases never
+invoke C. L8's suspect output is retained/protected, never finalized.
+
+The structural Acquire refusal/discard seam may select that admitted guard-only
+path; it does not allow Fresh source Close. Inspect the source constructor by
+borrow before fallible payload copying/publication. Prepare all checks, mutable
+slot borrow, operands, ledger call and required report/history capacity before C.
+The guard path may reuse the existing funded final native-attempt capacity
+because published Finish and unpublished disposal are mutually exclusive; it
+cannot depend on a spare slot checked after acquisition. Mark the one-shot attempt before entry; after return commit exact native
+consume/retain/unknown and genuine status presence before any fallible refusal
+output. The held slot must not be reborrowed after return. No second teardown
+is attempted after retained/unknown/failed output or Drop.
+
+Keep acquisition status and disposal status separate where both exist: L2 must
+not lose the captured open error when recording the close result. Existing
+acquired(bool) alone is not an exact numeric-status history. Reuse the already
+admitted fixed scalar reply/contract decoding and pre-funded observation storage;
+add only the fixed scalar slots/transition actually missing. Never infer status 0
+from void or an unobserved malformed reply. A valid numeric observation stays
+independent of source payload readability. Invalid/unmatched status control is
+not known Retained/O4: keep the prior admitted native fact/status plus an
+unresolved attempted disposal, retain backing, revoke access and never retry.
+Use a private fixed raw-observation extraction for valid status outcomes rather
+than erasing it through the existing source-readable-only helper. Retained/unknown outcomes keep backing edges
+and access restrictions. Physical disposition is committed without a source K,
+source Finish effect, witness, ScopeClosing report or completion success.
+Publish the existing typed UnpublishedGuard inspection with actual last facts;
+keep its category distinct from scope-closing records. Source/refusal output may
+still fail after the physical fact; the record/fact cannot be erased or replayed.
+
+### Ownership and scope
+
+Platform owns the private ledger/control entry and reserve path in
+src/foreign/checked_control.rs; checked owner storage/physical attempt path in
+src/foreign/source_owner_runtime.rs; and the structural refusal/discard join in
+src/eval/source_resource_phases.rs plus directly affected private Rust controls.
+Coordinate any observation record field with src/eval/checked_reports.rs and checked_reporting.rs only
+if exact acquisition/disposal scalar distinction cannot fit existing storage.
+No Core role relaxation, public token, primitive syntax, source policy body or
+SQLite static validator edit belongs here. Primary retains common quarantine,
+Core/static-role and actual Ash policy ownership. Do not edit its frozen tree.
+
+Author only in the platform tree after this boundary review. Coordinate the
+exact frozen common interfaces without editing the primary tree. Rebase/replay
+the clean conformity checkpoint and new source onto the actual common-quarantine
+retaining tip before final implementation freeze, preserving both sets of shared
+group-denial/retention changes. The current F5 common gate is unchanged.
+Do not infer a tested combined source or reuse an old artifact fingerprint.
+
+### Void/status interface and concrete artifact dependency
+
+The common interface must preserve existing admitted NativeOwnerDestruction::Void
+and ::Status semantics, including the descriptor-derived status/disposition,
+compatible exact operands and retained backing. Current checked opaque leaf
+emission has only the fixed four-operation eight-byte profile and void release;
+it cannot perform or establish a genuine SQLite status-returning close/open.
+The runtime slice can prove private void/status admission, once-only accounting,
+retention and fault behavior with existing injected Rust callbacks/opaque test
+backing. Genuine status-returning C disposal needs a separately reviewed closed
+leaf/profile emission and protected RootProvider role installation, preserving
+opaque ownership on retained/unknown results. Report that dependency explicitly;
+this slice cannot claim native L2/SQLite or whole F5 completion. Do not widen the
+fixed leaf surface or the public checked binding fence to hide the missing path.
+
+### Decisive controls and completion
+
+- Valid non-null unpublished owner plus admitted void teardown: exactly one C
+  callback, actual consumed fact before refusal output, KAbsent, no Finish/Trace
+  body/witness/ScopeClosing, one guard inspection. A second disposal and later
+  Drop/host traversal make zero extra C calls.
+- Admitted status teardown: preserve acquisition error and close status separately;
+  consumed and retained outcomes differ; retained/unknown keep backing and never
+  retry. Void status stays genuinely absent.
+- Null/no-owner, wrong scope/activation/slot/plan, stale/replayed ticket, published
+  owner and lost/unresolved control refuse before C. No fake native fact/witness.
+- Shared group denial before explicit disposal and after aliases/Drop/host close
+  makes zero C calls, preserving L8 quarantine and backing.
+- Report/ticket/operand capacity one-short refuses before acquisition. Force
+  refusal-output/error allocation after returned disposal: committed physical
+  status/disposition and inspection survive once, without source K or replay.
+- Preserve original published NativeReady Finish, synthetic/lost closing and
+  ordinary legacy void/status regression controls; no public guard opens.
+
+Measured deliverable is the connected structural runtime path plus these
+ordinary Rust controls, affected Clippy, actual root-cfg type/compile verification
+and exact source/result review on the actual common retaining base. If the
+configured artifact build is ready, use it for the cfg obligation; otherwise
+record a finite non-executing generated-root cfg check without claiming a new
+final ELF or repeating old native/link evidence. No selected native invocation, deployment or
+whole-F-core claim is part of this gate. Reuse the existing owned runner/cache
+and serial heavy lane. Stop and return a precise dependency if the sealed
+teardown plan/status cannot be established without changing emitted profile or
+Source/Core authority; do not fabricate one.
+
+Estimated complexity (0–5): ledger/reservation 2, storage/void-status 3,
+structural/report join 3, focused controls 2. Coarse source work 2–4 hours plus one
+finite compile/control gate and causal repairs. Criterion gain is the missing
+L2/L9 runtime disposal mechanism; actual status-leaf/profile/native evidence is
+a visible later dependency, not counted as delivered here. No optimization or
+new observation framework is proposed.
+
+The source checkpoint connects actual Machine Acquire/Refused and discarded
+Acquire to the checked opaque void guard path before refusal payload copying.
+Its private status controls are explicitly accounting/classification models over
+exact admitted legacy output/status-symbol metadata and the shared fixed raw
+observation/disposition code. Core rejects checked OutputAcquire and
+StatusTeardown before a genuine checked receipt exists, so no test constructor
+bypasses that fence or fabricates a checked ScopeRequest. Production status
+profile admission and emitted status transport remain unsupported.
+Acquisition status is preserved separately from the latest admitted native
+observation. Invalid disposal leaves the prior observation and backing with an
+unresolved one-shot attempt; source payload readability does not erase a valid
+raw numeric observation.
+
+The added status pair changes the guard observation payload to at most42 bytes.
+ASHOUT03 and ASHOBS03 explicitly distinguish it from retained version2 evidence;
+fixed bootstrap ingress remains version2. Mandatory byte reservation uses64 bytes
+per record, while scope-closing payloads remain bounded by32 and total/frame caps
+are unchanged. Existing code/config/artifact/request associations and configured
+approval must be refreshed for this source and wire shape. The conformity
+readiness checkpoint and old unconfigured ELF remain qualified historical data.
+
+These source controls are authored but not yet compiled or run. The next source
+join uses the exact common-quarantine candidate solely for the shared-root denial
+API; final freeze and focused verification require the actual retaining tip.
+
+Source reconciliation now uses common candidate2d5a1f7a, preserving its explicit
+shared-group denial and last-observation storage. Disposal invokes the common
+entry barrier under the same held slot borrow before native entry; denied shared
+roots retain backing and never call the destructor. Acquisition status remains
+separate from that common latest-observation field. Three overlap resolutions
+preserve both scalar helpers, the existing borrowed fixture-program helper and
+the common acquisition/rejection authority methods. This candidate is not a
+retaining tip and supplies no combined verification claim.
+
+
+### Current disposal delivery replay
+
+The candidate reconciliation paragraphs above describe preserved source history.
+The current separate delivery now starts from actual retained common PR123
+`d66ecd78`; replay source `4d6d2300` keeps all twelve reviewed implementation
+files exactly equal to `89d4f798`/`ec8a8389`. Only Task53/plan append conflicts
+needed resolution, preserving the retained history and excluding unrelated
+readiness evidence. Output/status `c8c62384` is parked separately and excluded.
+
+The six new controls remain unrun. Freeze one finite gate containing targeted
+both-package Clippy, all six new controls, necessary void/legacy/shared-denial,
+mandatory-report/prepaid-wire regressions and the existing actual root/leaf
+compile/link with coherent-donor and missing-symbol controls. No generated
+application/launcher executes. Use fresh exact source/tool/artifact pins and
+owned process cleanup; independent operator review precedes the once-only run.
+No old configured identity/approval, status-profile or native acceptance transfers.
+
+
+### Disposal focused gate complete; retention pending
+
+Session `94828` on `595dda47` passes both-package targeted Clippy and all 42 distinct planned tests, including the six new controls and actual nonexecuting root/leaf canonical/donor/missing-release compile/link. The [evidence index](../evidence/checked-owner-core-execution/unpublished-disposal/index.json) preserves all frozen inputs, original failures and exact current results. Independent actual review `5bcfda37` verifies physical source/tool/artifact and owned cleanup associations. The preceding unrun/candidate paragraphs are historical.
+
+The retries repair two private helper imports, a tail-expression lint, and the legacy model's accidental removal of required scalar-readable declarations plus its corresponding metadata assertion. Production admission and runtime postconditions remain unchanged. Delivery04 was never launched. ASHOUT03/ASHOBS03, KAbsent, one-shot disposal before payload copy, shared-denial zero-call behavior and legacy tariffs are covered by the focused controls. Status-accounting evidence does not open checked OutputAcquire/StatusTeardown or establish native L2.
+
+Next: exact unsigned product-equal evidence checkpoint and independent publication review for PR124, then root integration and partial acceptance. Replay the separately parked output/status source and primary typed-status admission only after this actual retaining tip. Configured source/artifacts/approvals must be refreshed before any selected native run; no deployment, six-field conformity or whole F-core claim transfers from this gate.

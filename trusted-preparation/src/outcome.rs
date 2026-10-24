@@ -1,15 +1,15 @@
-//! Fixed v2 report framing. Frames are observations, never activation grants.
+//! Fixed v3 report framing. Frames are observations, never activation grants.
 use crate::{Refusal, io};
 use std::{fs::File, io::Write};
-const MAGIC: &[u8; 8] = b"ASHOUT02";
+const MAGIC: &[u8; 8] = b"ASHOUT03";
 const HEADER: usize = 24;
-// These are the fixed v2 wire profile, bound by the approved code identity.
+// These are the fixed v3 wire profile, bound by the approved code identity.
 const MAX_PAYLOAD: usize = 4096;
 const MAX_FRAMES: usize = 1024;
 pub(crate) const STREAM_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BYTES: usize = STREAM_BYTES;
 
-/// Closed v2 observation channels; no variant conveys admission authority.
+/// Closed v3 observation channels; no variant conveys admission authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum OutcomeFrameKind {
@@ -60,7 +60,7 @@ impl ReportWriter {
     pub(crate) fn reserve_closings(&mut self, count: usize) -> Result<(), Refusal> {
         if self.prepared || self.sequence != 0 { return Err(Refusal::Association); }
         let frames = count.checked_add(1).ok_or(Refusal::Resource)?;
-        let bytes = count.checked_mul(HEADER + 32).and_then(|n| n.checked_add(HEADER)).ok_or(Refusal::Resource)?;
+        let bytes = count.checked_mul(HEADER + 64).and_then(|n| n.checked_add(HEADER)).ok_or(Refusal::Resource)?;
         if frames > MAX_FRAMES || bytes > MAX_BYTES { return Err(Refusal::Resource); }
         self.reserved_frames = frames;
         self.reserved_bytes = bytes;
@@ -84,7 +84,8 @@ impl ReportWriter {
         if self.sequence >= MAX_FRAMES as u64 || bytes > MAX_BYTES { return Err(Refusal::Resource); }
         let closing = matches!(kind, OutcomeFrameKind::ScopeClosing | OutcomeFrameKind::UnpublishedGuard);
         let mandatory = closing || kind == OutcomeFrameKind::Terminal;
-        if closing && (self.closings_finished || payload.len() > 32 || self.reserved_frames <= 1) {
+        let closing_bound = if kind == OutcomeFrameKind::UnpublishedGuard { 64 } else { 32 };
+        if closing && (self.closings_finished || payload.len() > closing_bound || self.reserved_frames <= 1) {
             return Err(Refusal::Association);
         }
         if kind == OutcomeFrameKind::Terminal && !self.closings_finished { return Err(Refusal::Association); }
@@ -145,6 +146,24 @@ impl FrameReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn guard_status_pair_has_prepaid_bytes_and_old_wire_magic_is_refused() {
+        let dir = crate::test_directory("guard-status-pair");
+        let file = std::fs::File::create(dir.join("frames")).unwrap();
+        let mut writer = ReportWriter::new(file);
+        writer.reserve_closings(1).unwrap();
+        assert_eq!(writer.reserved_bytes, HEADER * 2 + 64);
+        assert_eq!(writer.write(OutcomeFrameKind::ScopeClosing, &[0; 33]), Err(Refusal::Association));
+        writer.write(OutcomeFrameKind::UnpublishedGuard, &[0; 42]).unwrap();
+        writer.finish_closings().unwrap();
+        writer.write(OutcomeFrameKind::Terminal, &[]).unwrap();
+        let mut old = header(0, OutcomeFrameKind::UnpublishedGuard, 42).unwrap().to_vec();
+        old.extend_from_slice(&[0; 42]);
+        old[..8].copy_from_slice(b"ASHOUT02");
+        assert!(FrameReader::new().next(&old).is_err());
+        drop(writer);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn mandatory_closings_and_terminal_survive_optional_frame_exhaustion() {
         let dir = crate::test_directory("report-reservation"); let path = dir.join("frames");

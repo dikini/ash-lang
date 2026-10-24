@@ -151,20 +151,14 @@ impl NativeOwnerStatus {
     /// Fixed-size observation only; unreadable or invalid output is absence,
     /// never a fabricated numeric status. No allocation or narrowing occurs.
     pub(crate) fn independent(self) -> Option<i128> {
-        if !self.readable || !self.valid { return None; }
-        match self.reply {
-            NativeScalarReply::Void => None,
-            NativeScalarReply::Scalar(value) => match value {
-                NativeScalarValue::I8(value) => Some(i128::from(value)),
-                NativeScalarValue::U8(value) => Some(i128::from(value)),
-                NativeScalarValue::I32(value) => Some(i128::from(value)),
-                NativeScalarValue::U32(value) => Some(i128::from(value)),
-                NativeScalarValue::I64(value) => Some(i128::from(value)),
-                NativeScalarValue::U64(value) => Some(i128::from(value)),
-                NativeScalarValue::USize(value) => Some(value as i128),
-                NativeScalarValue::FunctionAddressAllBitsOne => None,
-            },
-        }
+        if !self.readable { return None; }
+        self.raw_observation()
+    }
+    /// A valid primitive observation is independent of permission to expose
+    /// its payload to source code. Invalid replies establish no new fact.
+    fn raw_observation(self) -> Option<i128> {
+        if !self.valid { return None; }
+        observed_scalar_status(self.reply)
     }
 }
 
@@ -181,6 +175,37 @@ fn observed_scalar_status(reply: NativeScalarReply) -> Option<i128> {
             NativeScalarValue::USize(value) => Some(value as i128),
             NativeScalarValue::FunctionAddressAllBitsOne => None,
         },
+    }
+}
+
+/// A primitive return is an independent observation only at its exact admitted
+/// ABI representation. This does not grant source payload readability.
+pub(in crate::foreign) fn scalar_observation(
+    reply: NativeScalarReply,
+    result: crate::foreign::source_contract::PreparedAbiResult,
+) -> Option<i128> {
+    use crate::foreign::source_contract::{PreparedAbiResult as Result, PreparedScalarRepresentation as Repr};
+    let valid = matches!((result, reply),
+        (Result::Scalar(Repr::Signed(8)), NativeScalarReply::Scalar(NativeScalarValue::I8(_)))
+        | (Result::Scalar(Repr::Signed(32)), NativeScalarReply::Scalar(NativeScalarValue::I32(_)))
+        | (Result::Scalar(Repr::Signed(64)), NativeScalarReply::Scalar(NativeScalarValue::I64(_)))
+        | (Result::Scalar(Repr::Unsigned(8)), NativeScalarReply::Scalar(NativeScalarValue::U8(_)))
+        | (Result::Scalar(Repr::Unsigned(32)), NativeScalarReply::Scalar(NativeScalarValue::U32(_)))
+        | (Result::Scalar(Repr::Unsigned(64)), NativeScalarReply::Scalar(NativeScalarValue::U64(_)))
+        | (Result::Scalar(Repr::SizeT), NativeScalarReply::Scalar(NativeScalarValue::USize(_))));
+    NativeOwnerStatus { reply, readable: false, valid }.raw_observation()
+}
+
+/// Fixed observation data, not invocation permission. Unknown/malformed status
+/// is not known retention; callers must preserve the prior fact and status.
+fn guard_disposal_observation(
+    consumed: bool,
+    status: Option<NativeOwnerStatus>,
+) -> Option<(bool, Option<i128>)> {
+    match status {
+        None => Some((consumed, None)),
+        Some(status) if status.valid => status.raw_observation().map(|raw| (consumed, Some(raw))),
+        Some(_) => None,
     }
 }
 
@@ -846,6 +871,79 @@ impl NativeOwnerGuard {
         .0
     }
 
+    /// Dispose only the unpublished checked guard through its sealed original
+    /// teardown. This does not run authored Finish or create a source K event.
+    pub(crate) fn dispose_unpublished(
+        &mut self,
+        activation: usize,
+        scope: crate::core::NodeId,
+        blocked: bool,
+    ) -> Result<(), NativeOwnerAdmissionError> {
+        let mut slots = self.storage.slots.try_borrow_mut()
+            .map_err(|_| NativeOwnerAdmissionError::Authority)?;
+        let slot = slots.get(self.slot).ok_or(NativeOwnerAdmissionError::Authority)?;
+        // Legacy destruction remains on its existing path. A checked guard
+        // never falls back to an address-based callback when transport is absent.
+        if slot.checked.is_none() { return Ok(()); }
+        if blocked || slot.quarantined || slot.host_attempted || !slot.physically_live() {
+            return Ok(());
+        }
+        if slot.live_dependents != 0 || !slot.dependencies.is_empty() {
+            return Ok(());
+        }
+        // Use the common entry barrier under this same held borrow. Its fixed
+        // query debit is prepaid with every final native-attempt slot.
+        match NativeOwnerStorage::entry_allowed(&mut slots, self.slot, true) {
+            Ok(()) => {}
+            // A denied entry supplies no disposal fact. Keep the backing for
+            // inspection; a capacity/work error is still a distinct failure.
+            Err(NativeOwnerAdmissionError::Authority) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        let slot = &mut slots[self.slot];
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        {
+            use super::super::checked_leaf_transport::FreeObservation;
+            let NativeOwnerSlot { leaf, checked, host_attempted, closing_status, last_observed_status, .. } = slot;
+            // Without opaque transport there is no admitted checked dispatcher.
+            // Retain the slot without falling back to a raw callback.
+            if leaf.is_none() { return Ok(()); }
+            // Check the physical destination before recording native entry.
+            if !matches!(leaf, Some(CheckedLeafBacking::Cell(cell)) if cell.is_occupied()) {
+                return Err(NativeOwnerAdmissionError::Authority);
+            }
+            let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
+            control.begin_guard_disposal(activation, scope).map_err(control_error)?;
+            *host_attempted = true;
+            let Some(CheckedLeafBacking::Cell(cell)) = leaf.take() else {
+                unreachable!("held checked disposal slot");
+            };
+            *leaf = Some(CheckedLeafBacking::Consumed);
+            match cell.free() {
+                FreeObservation::Returned(_) => {
+                    let (consumed, status) = guard_disposal_observation(true, None)
+                        .expect("fixed void release observation");
+                    *closing_status = status;
+                    *last_observed_status = status;
+                    control.guard_disposed(consumed);
+                }
+                FreeObservation::NoOwner => {
+                    // No conforming return fact: preserve the last observation
+                    // and the unresolved attempt; never retry or fabricate K.
+                    control.output_failed();
+                    return Err(NativeOwnerAdmissionError::Authority);
+                }
+            }
+            self.initialized_bytes = None;
+            Ok(())
+        }
+        #[cfg(not(any(test, ash_checked_owner_root = "v1")))]
+        {
+            let _ = (activation, scope);
+            Err(NativeOwnerAdmissionError::Authority)
+        }
+    }
+
     /// Consume the preflighted one-shot decision before dispatch. A synthetic
     /// return retains the exact physical owner and closing witness, and never
     /// invokes the native plan or fabricates a scalar status.
@@ -1042,6 +1140,13 @@ impl NativeOwnerBoundary {
     }
     pub(crate) fn closing_status(&self) -> Option<i128> {
         self.storage.slots.borrow()[self.slot].closing_status
+    }
+    pub(crate) fn latest_status(&self) -> Option<i128> {
+        self.storage.slots.borrow()[self.slot].last_observed_status
+    }
+    pub(crate) fn acquisition_status(&self) -> Option<i128> {
+        self.storage.slots.borrow()[self.slot].checked.as_ref()
+            .and_then(crate::foreign::checked_control::RuntimeBoundary::acquisition_status)
     }
     pub(crate) fn closing_record(&self) -> Result<(
         Option<crate::foreign::checked_control::Completion>,
@@ -1721,7 +1826,11 @@ impl NativeOwnerCallReturned {
             let present = slots[index].raw.address.is_some();
             slots[index].last_observed_status = self.scalar.and_then(observed_scalar_status);
             if let Some(checked) = &mut slots[index].checked {
+                checked.observe_acquisition_status(self.scalar);
                 checked.acquired(present);
+                let status = checked.acquisition_status();
+                slots[index].closing_status = status;
+                slots[index].last_observed_status = status;
             }
         }
         }
@@ -1792,6 +1901,90 @@ mod tests {
 
     static DESTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
 
+    #[test]
+    fn unreadable_valid_status_is_independent_but_invalid_status_is_absent() {
+        use super::{NativeOwnerStatus, NativeScalarReply, NativeScalarValue};
+        let valid = NativeOwnerStatus { reply: NativeScalarReply::Scalar(NativeScalarValue::I32(-7)), readable: false, valid: true };
+        assert_eq!(valid.independent(), None, "source readability remains closed");
+        assert_eq!(valid.raw_observation(), Some(-7));
+        assert_eq!(NativeOwnerStatus { valid: false, ..valid }.raw_observation(), None);
+        use crate::foreign::source_contract::{PreparedAbiResult as Result, PreparedScalarRepresentation as Repr};
+        assert_eq!(super::scalar_observation(valid.reply, Result::Scalar(Repr::Signed(32))), Some(-7));
+        assert_eq!(super::scalar_observation(valid.reply, Result::Scalar(Repr::Unsigned(32))), None);
+    }
+
+    /// This is a private accounting model over admitted legacy metadata, not
+    /// a checked status ScopeRequest, native leaf or evaluator admission.
+    #[test]
+    fn unpublished_status_disposal_accounting_model_uses_exact_legacy_metadata() {
+        use super::{NativeOwnerDestruction, NativeScalarReply as Reply, NativeScalarValue as Scalar};
+        use crate::foreign::{checked_control::Native, source_contract::PreparedOwnerCall};
+        thread_local! {
+            static REPLY: std::cell::Cell<Reply> = const { std::cell::Cell::new(Reply::Scalar(Scalar::I32(0))) };
+            static CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+        fn reply(_: &[super::NativeOwnerOperand]) -> Reply {
+            CALLS.set(CALLS.get() + 1);
+            REPLY.get()
+        }
+        struct InjectedBacking {
+            plan: NativeOwnerDestruction,
+            native: Native,
+            backing: bool,
+            attempted: bool,
+            unresolved: bool,
+            acquisition_status: Option<i128>,
+            latest_status: Option<i128>,
+        }
+        impl InjectedBacking {
+            fn dispose(&mut self, denied: bool) {
+                if denied || self.attempted || !self.backing { return; }
+                self.attempted = true;
+                let (consumed, status) = self.plan.invoke(&[]);
+                if let Some((consumed, status)) = super::guard_disposal_observation(consumed, status) {
+                    self.native = if consumed { Native::Consumed } else { Native::Owned };
+                    self.backing = !consumed;
+                    self.latest_status = status;
+                } else {
+                    self.unresolved = true;
+                }
+            }
+        }
+        let (acquire, teardown) = legacy_status_model_symbols();
+        assert!(std::sync::Arc::ptr_eq(acquire.owner().unwrap(), teardown.owner().unwrap()));
+        assert!(matches!(acquire.owner_role(), Some(PreparedOwnerCall::OutputAcquire { .. })));
+        assert!(matches!(teardown.owner_role(), Some(PreparedOwnerCall::StatusTeardown { .. })));
+        let Some(PreparedOwnerCall::StatusTeardown { outcomes, .. }) = teardown.owner_role() else { unreachable!() };
+        assert!(outcomes.iter().all(|outcome| outcome.readable), "admitted scalar outcomes retain their required source readability");
+        let acquisition = super::scalar_observation(Reply::Scalar(Scalar::I32(-11)), acquire.symbol().result());
+        assert_eq!(acquisition, Some(-11));
+        for (observed, denied) in [
+            (Reply::Scalar(Scalar::I32(0)), false),
+            (Reply::Scalar(Scalar::I32(7)), false),
+            (Reply::Scalar(Scalar::U64(99)), false),
+            (Reply::Scalar(Scalar::I32(0)), true),
+        ] {
+            REPLY.set(observed); CALLS.set(0);
+            let mut slot = InjectedBacking {
+                plan: NativeOwnerDestruction::Status { callback: reply, symbol: std::sync::Arc::clone(&teardown) },
+                native: Native::Owned, backing: true, attempted: false, unresolved: false,
+                acquisition_status: acquisition, latest_status: acquisition,
+            };
+            slot.dispose(denied); slot.dispose(denied);
+            let invalid = !denied && matches!(observed, Reply::Scalar(Scalar::U64(_)));
+            let consumed = !denied && matches!(observed, Reply::Scalar(Scalar::I32(0)));
+            assert_eq!(CALLS.get(), usize::from(!denied));
+            assert_eq!(slot.acquisition_status, Some(-11));
+            assert_eq!(slot.latest_status, Some(if invalid || denied { -11 } else if consumed { 0 } else { 7 }));
+            assert_eq!(slot.native, if consumed { Native::Consumed } else { Native::Owned });
+            assert_eq!(slot.unresolved, invalid);
+            assert_eq!(slot.backing, !consumed);
+            drop(slot);
+            assert_eq!(CALLS.get(), usize::from(!denied));
+        }
+        assert_eq!(super::guard_disposal_observation(true, None), Some((true, None)), "void disposal has genuine status absence");
+    }
+
     thread_local! {
         static HOST_ORDER: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
         static SOURCE_FINISHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -1837,6 +2030,53 @@ mod tests {
         };
         std::fs::remove_dir_all(path).unwrap();
         owner
+    }
+
+    fn legacy_status_model_symbols() -> (
+        std::sync::Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+        std::sync::Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
+    ) {
+        static NEXT_MODEL: AtomicUsize = AtomicUsize::new(0);
+        let original = include_str!("../../tests/fixtures/source-owner/status_owner.ash");
+        let allocate = original.find("    symbol Allocate").unwrap();
+        let free = original.find("    symbol Free").unwrap();
+        let acquire = original.find("    acquire size =>").unwrap();
+        let finish = original.find("    finish (state, data)").unwrap();
+        let source = format!("{}{}{}{}{}", &original[..allocate], r#"
+    symbol Allocate<Before : EffectRow, R, After : EffectRow> : Int -> Foreign.Call<(Int, Foreign.Output<Foreign.Nullable<State<R>>>)> {
+        name "status_model_acquire"
+        abi (Size, out(pointer(Address))) -> Status
+        operand 0 from 0 scalar
+        output result as scalar
+        output 1 as owner(State<R>)
+        outcome otherwise { readable result, readable 1 }
+    }
+"#, &original[free..acquire], r#"
+    acquire size => match perform Allocate<{| Before}, R, {| After}>.call size {
+        Foreign.Returned((_, Foreign.Readable(Foreign.NonNull(state)))) => Acquired(state, size)
+        Foreign.Returned((_, _)) => Refused ()
+        Foreign.ConversionFailed(_) => Refused ()
+    }
+"#, &original[finish..]);
+        let path = std::env::temp_dir().join(format!("ash-guard-status-model-{}-{}",
+            std::process::id(), NEXT_MODEL.fetch_add(1, Ordering::Relaxed)));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("owner.ash"), source).unwrap();
+        std::fs::write(path.join("entry.ash"), "import owner as Owner\nmain : Unit -> Owner.Scope<Unit, Int, Int>\nmain () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {\n    Owner.read owner\n}\n").unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: path.join("entry.ash"), roots: crate::module::ModuleRoots::empty(),
+        }).expect("admitted legacy output/status contracts; not checked profile admission");
+        let (program, _) = compiled.effect_build_input().unwrap();
+        let mut pending = vec![program.root()];
+        let symbols = loop {
+            let node = program.node(pending.pop().unwrap()).unwrap();
+            if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) = &node.kind {
+                break (std::sync::Arc::clone(&scope.header().acquire), std::sync::Arc::clone(&scope.header().teardown));
+            }
+            pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+        };
+        std::fs::remove_dir_all(path).unwrap();
+        symbols
     }
 
     // These injected slots use distinct sentinel addresses and deliberately

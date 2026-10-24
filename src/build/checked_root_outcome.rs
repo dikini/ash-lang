@@ -1,4 +1,4 @@
-//! Prepaid fixed v2 outcome encoding. No arbitrary Display/JSON/value cloning.
+//! Prepaid fixed v3 outcome encoding. No arbitrary Display/JSON/value cloning.
 use super::checked_root_admission::RootRefusal;
 use crate::{eval::{CheckedEvaluation, EffectTraceEvent, ResourceDiagnostic, ResourceNativeFact, Value},
     module::ModuleId, types::TypeWorkBudget};
@@ -10,9 +10,11 @@ const VALUE_STEPS: usize = 64;
 pub(super) struct RootReportPlan { scratch: [u8; BYTES] }
 impl RootReportPlan {
     pub(super) fn reserve(capacity: usize, modules: usize, work: &mut TypeWorkBudget) -> Result<Self, RootRefusal> {
-        // Mandatory records are fixed32-byte payloads; optional result/trace has
+        // Mandatory records fit fixed64-byte payloads; optional result/trace has
         // a separate fixed prefix allowance. All scans/copies/storage are paid
         // before Machine entry, including bounded module-identity searches.
+        // The largest guard payload is42 bytes: encoding+write copies84 bytes
+        // plus its24-byte header fit the128-per-record prepaid envelope.
         let cost = capacity.checked_mul(128).and_then(|n| n.checked_add((TRACE_PREFIX + 1) * BYTES * 2))
             .and_then(|n| n.checked_add(modules.checked_mul((VALUE_STEPS + TRACE_PREFIX) * 2)?))
             .and_then(|n| n.checked_add(VALUE_STEPS * 4 + BYTES)).ok_or(RootRefusal::Resource)?;
@@ -43,6 +45,7 @@ impl RootReportPlan {
         for (index, record) in outcome.unpublished_guards().iter().enumerate() {
             let mut p = Payload::new(&mut self.scratch); p.u32(index as u32)?;
             p.native(record.native())?; p.byte(u8::from(record.unresolved()))?; p.status(record.status())?;
+            p.status(record.acquisition_status())?;
             p.byte(match record.backing() { crate::eval::GuardBackingObservation::Retained=>0, crate::eval::GuardBackingObservation::Unknown=>1 })?;
             p.byte(match record.point() { crate::eval::GuardInspectionPoint::AfterUnpublishedDisposal=>0,
                 crate::eval::GuardInspectionPoint::TerminalBeforeQuarantine=>1, crate::eval::GuardInspectionPoint::ReturnFailureAfterDisposal=>2 })?;
