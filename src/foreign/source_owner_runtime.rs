@@ -2051,7 +2051,7 @@ mod tests {
         output 1 as owner(State<R>)
         outcome otherwise { readable result, readable 1 }
     }
-"#, original[free..acquire].replace("readable result, ", ""), r#"
+"#, &original[free..acquire], r#"
     acquire size => match perform Allocate<{| Before}, R, {| After}>.call size {
         Foreign.Returned((_, Foreign.Readable(Foreign.NonNull(state)))) => Acquired(state, size)
         Foreign.Returned((_, _)) => Refused ()
