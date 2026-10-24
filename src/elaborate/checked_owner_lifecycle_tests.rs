@@ -1066,3 +1066,6 @@ mod checked_output_status_tests;
 
 #[path = "checked_sqlite_policy_tests.rs"]
 mod checked_sqlite_policy_tests;
+
+#[path = "checked_sqlite_dependent_tests.rs"]
+mod checked_sqlite_dependent_tests;
