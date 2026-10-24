@@ -1194,21 +1194,33 @@ impl RuntimeBoundary {
         self.begin_finish_entry_with_blocked(false)
     }
     pub(super) fn begin_finish_entry_with_blocked(&mut self, blocked: bool) -> Result<FinishEntry, Failure> {
+        self.begin_finish_entry_prepared(blocked, || Ok(())).map(|(entry, _)| entry)
+    }
+    /// Select and authenticate the existing one-shot decision before requiring
+    /// physical backing. Only NativeReady performs preparation, still before
+    /// ledger entry; Synthetic must deliver its exact witness without C.
+    pub(super) fn begin_finish_entry_prepared<T>(
+        &mut self,
+        blocked: bool,
+        prepare_native: impl FnOnce() -> Result<T, Failure>,
+    ) -> Result<(FinishEntry, Option<T>), Failure> {
         pay(&mut self.prepaid, 3)?;
-        // An invoke-time contradiction cannot record native entry. A genuine
-        // synthetic entry already owns its non-native witness and remains valid.
         if blocked && matches!(self.finish_prepared, Some(FinishEntry::NativeReady)) {
             return Err(Failure::State);
         }
         let entry = self.finish_prepared.take().ok_or(Failure::State)?;
-        match &entry {
+        let prepared = match &entry {
             FinishEntry::NativeReady => {
+                // Preparation may refuse, but cannot leave a fabricated native
+                // pending event or a reusable prepared Finish decision.
+                let prepared = prepare_native()?;
                 self.pending = Some(self.ledger.enter(
                     self.owner,
                     CallKind::Finish,
                     &self.scope.header().teardown,
                     &mut self.prepaid,
                 )?);
+                Some(prepared)
             }
             FinishEntry::Synthetic(witness) => {
                 let record = &self.ledger.records[self.owner.index];
@@ -1219,9 +1231,10 @@ impl RuntimeBoundary {
                 {
                     return Err(Failure::State);
                 }
+                None
             }
-        }
-        Ok(entry)
+        };
+        Ok((entry, prepared))
     }
     /// Legacy teardown dispatch accepts only actual native readiness. The
     /// checked path must consume the complete entry decision instead.

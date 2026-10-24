@@ -1381,7 +1381,7 @@ fn checked_leaf_preentry_null_output_loss_and_synthetic_finish_do_not_invent_rel
     assert!(ready.invoke_checked_leaf(8, 8).unwrap().record().into_guard().is_none());
     assert_eq!(leaf::calls(), [1, 0, 0, 0, 0]);
     assert_eq!(handle.snapshot().native, crate::foreign::checked_control::Native::NoOwner);
-    for synthetic in [false, true] {
+    for (synthetic, blocked, unpreparable) in [(false, false, false), (true, true, false), (true, false, true)] {
         leaf::reset();
         let ready = leaf_ready(&acquire, &mut work);
         let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
@@ -1390,9 +1390,21 @@ fn checked_leaf_preentry_null_output_loss_and_synthetic_finish_do_not_invent_rel
             handle.publish(111, acquire._scope_node, &mut work).unwrap();
             guard.quarantine();
             handle.closing(111, acquire._scope_node, &mut work).unwrap();
-            guard.prepare_checked_finish(&finish, 111, true, &mut work).unwrap();
-            assert!(matches!(guard.finish_checked_admitted(&crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], true).unwrap().0,
-                crate::foreign::source_runtime::NativeOwnerDisposition::Synthetic { .. }));
+            guard.prepare_checked_finish(&finish, 111, blocked, &mut work).unwrap();
+            if unpreparable { guard.mark_leaf_unpreparable_for_test(); }
+            let before = handle.snapshot();
+            let (disposition, status) = guard.finish_checked_admitted(
+                &crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], blocked).unwrap();
+            assert!(matches!(disposition, crate::foreign::source_runtime::NativeOwnerDisposition::Synthetic { .. }));
+            assert!(status.is_none());
+            assert_eq!(handle.snapshot(), before, "K6 delivery changes no native fact, pending state or observation");
+            if unpreparable {
+                // The exact one-shot decision was consumed even though native
+                // preparation could not succeed and invoke-time blocked=false.
+                let guard = disposition.into_retained().unwrap();
+                assert!(guard.finish_checked_admitted(
+                    &crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], false).is_err());
+            }
         } else {
             handle.output_failed();
             drop(guard);

@@ -1000,28 +1000,20 @@ impl NativeOwnerGuard {
         NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
         let blocked = blocked || slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied);
         let slot = slots.get_mut(self.slot).ok_or(NativeOwnerAdmissionError::Authority)?;
-        if !slot.physically_live() || !slot.dependencies.is_empty() {
-            return Err(NativeOwnerAdmissionError::Authority);
-        }
-        let NativeOwnerSlot { leaf, checked, quarantined, closing_status, last_observed_status, .. } = slot;
+        let NativeOwnerSlot { leaf, checked, dependencies, quarantined, closing_status, last_observed_status, .. } = slot;
         let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
-        if blocked {
-            return match control.begin_finish_entry_with_blocked(true).map_err(control_error)? {
-                crate::foreign::checked_control::FinishEntry::Synthetic(witness) => {
-                    drop(slots); Ok((NativeOwnerDisposition::Synthetic { guard: self, witness }, None))
-                }
-                crate::foreign::checked_control::FinishEntry::NativeReady => Err(NativeOwnerAdmissionError::Authority),
-            };
-        }
-        let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeOwnerAdmissionError::Authority); };
-        let prepared = cell.prepare_teardown().map_err(|_|NativeOwnerAdmissionError::Authority)?;
-        match control.begin_finish_entry_with_blocked(false).map_err(control_error)? {
-            crate::foreign::checked_control::FinishEntry::Synthetic(witness) => {
-                drop(prepared);
+        let leaf_for_preparation = &mut *leaf;
+        let (entry, prepared) = control.begin_finish_entry_prepared(blocked, move || {
+            if !dependencies.is_empty() { return Err(crate::foreign::checked_control::Failure::State); }
+            let Some(CheckedLeafBacking::Cell(cell)) = leaf_for_preparation else { return Err(crate::foreign::checked_control::Failure::State); };
+            cell.prepare_teardown().map_err(|_|crate::foreign::checked_control::Failure::State)
+        }).map_err(control_error)?;
+        match (entry, prepared) {
+            (crate::foreign::checked_control::FinishEntry::Synthetic(witness), None) => {
                 drop(slots);
                 Ok((NativeOwnerDisposition::Synthetic { guard: self, witness }, None))
             }
-            crate::foreign::checked_control::FinishEntry::NativeReady => {
+            (crate::foreign::checked_control::FinishEntry::NativeReady, Some(prepared)) => {
                 let returned = prepared.invoke();
                 let status = leaf_disposal_status(&returned);
                 let Some((consumed, raw_status)) = guard_disposal_observation(
@@ -1038,6 +1030,7 @@ impl NativeOwnerGuard {
                 if consumed { Ok((NativeOwnerDisposition::Consumed(Arc::clone(&self.owner)), status)) }
                 else { Ok((NativeOwnerDisposition::Retained(self), status)) }
             }
+            _ => unreachable!("prepared native entry and exact synthetic witness are exclusive"),
         }
     }
 
@@ -1922,6 +1915,13 @@ impl NativeOwnerGuardReady {
 }
 #[cfg(all(test, not(ash_checked_owner_root = "v1")))]
 impl NativeOwnerGuard {
+    pub(crate) fn mark_leaf_unpreparable_for_test(&mut self) {
+        let mut slots = self.storage.slots.borrow_mut();
+        let Some(CheckedLeafBacking::Cell(cell)) = &mut slots[self.slot].leaf else { panic!("test requires actual leaf backing"); };
+        cell.mark_unresolved_for_test();
+        assert!(cell.is_occupied(), "fault preserves the exact backing");
+        assert!(cell.prepare_teardown().is_err());
+    }
     pub(crate) fn assert_leaf_finish_borrow_refusal_for_test(self) {
         let storage = Rc::clone(&self.storage);
         let index = self.slot;

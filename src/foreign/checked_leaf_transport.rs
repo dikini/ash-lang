@@ -145,6 +145,9 @@ mod injected {
             });
             Ok(PreparedOutputAcquire { destination: self, prepared, _input: input, status: OUTPUT_STATUS.get() })
         }
+        pub(crate) fn mark_unresolved_for_test(&mut self) {
+            self.owner.as_mut().expect("injected occupied owner").unresolved = true;
+        }
         pub(crate) fn prepare_teardown(&mut self) -> Result<PreparedTeardown<'_>, Refusal> {
             if self.owner.as_ref().is_none_or(|owner|owner.unresolved) { return Err(Refusal::Owner); }
             Ok(PreparedTeardown { destination: self })
