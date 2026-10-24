@@ -2577,9 +2577,24 @@ fn eval_flow<'a>(
                                     if fields.len() != 2 || !facts.independent(fields[1], work)? {
                                         return Err(invalid());
                                     }
+                                    // Inspect the original application and its
+                                    // fixed H/State argument vector separately.
+                                    charge(work, 3)?;
+                                    let EffectExprKind::Pure(PureExprKind::Computation(
+                                        PureComputation::TypeApplication(applied),
+                                    )) = &program.node(selected_application).ok_or_else(invalid)?.kind
+                                    else { return Err(invalid()); };
+                                    let [host, state] = applied.arguments() else {
+                                        return Err(invalid());
+                                    };
+                                    let identity = quarantine_state_identity(
+                                        state, host, &program.registry, work,
+                                    )?;
                                     let allowed = match facts.fact(fields[0])? {
-                                        FlowFact::Current => phase != SourceResourcePhase::Acquire,
-                                        FlowFact::Enclosing(_) => facts.borrowed(fields[0], false, header, work)?,
+                                        FlowFact::Current => phase != SourceResourcePhase::Acquire
+                                            && same(state, &header.original.state.ty, work)?,
+                                        FlowFact::Enclosing(selected) => *selected == identity
+                                            && facts.borrowed(fields[0], false, header, work)?,
                                         // Pending Fresh may be suspect: select its
                                         // request group through reject, never S.
                                         _ => false,
@@ -3386,6 +3401,58 @@ fn primitive_host_offset(
     } else {
         Ok(0)
     }
+}
+
+/// Quarantine selects native State, while ordinary dependency input tracking
+/// also admits resource handles. Keep that broader input fact unchanged.
+fn quarantine_state_identity(
+    state: &Type,
+    host: &Type,
+    registry: &ResolvedRegistry,
+    work: &mut TypeWorkBudget,
+) -> Result<crate::types::TypeVariableId, ValidationError> {
+    use crate::foreign::source_owner::{
+        StateArgument, authenticate_source_owner_candidate, state_arguments,
+    };
+    let mut head = state;
+    let nominal = loop {
+        charge(work, 1)?;
+        match head {
+            Type::Application(function, _) => head = function,
+            Type::Nominal(nominal) | Type::ForeignOwnerApply(nominal, _) => break *nominal,
+            _ => return Err(invalid()),
+        }
+    };
+    charge(work, registry.source_owner_candidate_count())?;
+    let (prepared, index, _, parameters) = registry
+        .source_owner_candidates()
+        .find(|(_, _, candidate, _)| *candidate == nominal)
+        .ok_or_else(invalid)?;
+    let map = |error: crate::foreign::checked_source::ForeignAdmissionError| {
+        if error.is_resource_exhaustion() { resource() } else { invalid() }
+    };
+    authenticate_source_owner_candidate(prepared, index, nominal, parameters, registry, work)
+        .map_err(map)?;
+    charge(work, 2)?;
+    let owner = prepared.owners().get(index).ok_or_else(invalid)?;
+    let selected = prepared.checked_contract().and_then(|contract| contract.owners().get(index))
+        .ok_or_else(invalid)?;
+    if selected.member_index() != owner.member_index() {
+        return Err(invalid());
+    }
+    let arguments = state_arguments(
+        state, nominal, parameters, prepared.origin().primary_span(), work,
+    ).map_err(map)?;
+    let Some(StateArgument::Type(actual_host)) = arguments.get(selected.host_parameter()) else {
+        return Err(invalid());
+    };
+    if !same(actual_host, host, work)? {
+        return Err(invalid());
+    }
+    let Some(StateArgument::Type(Type::Variable(identity))) =
+        arguments.get(owner.owned_parameter())
+    else { return Err(invalid()); };
+    Ok(*identity)
 }
 
 fn admit_view_primitive(
