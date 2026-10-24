@@ -1644,3 +1644,97 @@ fn genuine_output_status_finish_uses_original_disposition_and_preserves_retained
         });
     }
 }
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+pub(crate) fn with_output_status_closing_for_test(
+    test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
+        crate::foreign::source_runtime::NativeOwnerBoundary,
+        Option<crate::foreign::source_runtime::NativeOwnerGuard>),
+) {
+    with_output_status_context(|program, acquire, finish| {
+        let mut work = TypeWorkBudget::default();
+        let ready = output_leaf_ready(&acquire, &mut work);
+        let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+        let guard = ready.invoke_checked_output_leaf(b":memory:\0").unwrap().record().into_guard().unwrap();
+        handle.publish(111, acquire._scope_node, &mut work).unwrap();
+        handle.closing(111, acquire._scope_node, &mut work).unwrap();
+        guard.prepare_checked_finish(&finish, 111, false, &mut work).unwrap();
+        let (disposition, _) = guard.finish_checked_admitted(&crate::foreign::source_runtime::NativeOwnerDestruction::CheckedLeaf, &[], false).unwrap();
+        test(program, acquire._scope_node, handle, disposition.into_retained());
+    });
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn genuine_output_status_preentry_refusals_preserve_native_call_count() {
+    use crate::foreign::checked_leaf_transport as leaf;
+    for input in [&b"missing terminator"[..],&b"embedded\0nul\0"[..]] {
+        leaf::reset();
+        with_output_status_context(|_, acquire, _| {
+            let mut work = TypeWorkBudget::default();
+            let ready = output_leaf_ready(&acquire, &mut work);
+            let handle = ready.checked_boundary(&mut work).unwrap().unwrap();
+            let before = handle.snapshot();
+            assert!(ready.invoke_checked_output_leaf(input).is_err());
+            assert_eq!(handle.snapshot(),before);
+            assert_eq!(leaf::calls(),[0;5]);
+        });
+    }
+    leaf::reset(); leaf::output_status(-11); leaf::disposal(Some(true),Some(0),true);
+    with_output_status_unpublished_for_test(|_,node,handle,guard| {
+        let mut guard = guard.unwrap();
+        guard.install_shared_denial_for_test();
+        guard.dispose_unpublished(111,node,false).unwrap();
+        assert_eq!(handle.snapshot().k,crate::foreign::checked_control::K::Absent);
+        assert_eq!(handle.latest_status(),Some(-11));
+        drop(guard);
+        assert_eq!(leaf::calls(),[1,0,0,0,0],"group denial forbids disposal and Drop entry");
+    });
+}
+
+#[cfg(not(ash_checked_owner_root = "v1"))]
+#[test]
+fn genuine_generic_status_finish_never_retries_on_drop_or_explicit_storage_close() {
+    use crate::foreign::checked_control::{Native,K};
+    thread_local! {
+        static STATUS_REPLY: std::cell::Cell<NativeScalarReply> = const { std::cell::Cell::new(NativeScalarReply::Scalar(NativeScalarValue::I32(0))) };
+        static STATUS_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    fn status_call(_: &[NativeOwnerOperand]) -> NativeScalarReply {
+        STATUS_CALLS.set(STATUS_CALLS.get()+1); STATUS_REPLY.get()
+    }
+    for reply in [NativeScalarReply::Scalar(NativeScalarValue::I32(0)),NativeScalarReply::Scalar(NativeScalarValue::I32(7)),NativeScalarReply::Scalar(NativeScalarValue::U32(0))] {
+        STATUS_REPLY.set(reply); STATUS_CALLS.set(0);
+        with_output_status_context(|_,acquire,finish| {
+            let mut work=TypeWorkBudget::default();
+            let storage=Rc::new(NativeOwnerStorage::default());
+            let plan=|| crate::foreign::source_runtime::NativeOwnerDestruction::Status {
+                callback:status_call,symbol:Arc::clone(&finish._scope.header().teardown),
+            };
+            let mut ready=NativeOwnerGuardReady::in_storage_plan(Arc::clone(&acquire._scope.header().owner),plan(),1,0,Rc::clone(&storage)).unwrap();
+            ready.prepare_authority(111,
+                crate::types::IterativeTypeOwner::new(crate::types::clone_type_with_budget(&acquire.state,&mut work).unwrap()),
+                crate::types::IterativeTypeOwner::new(crate::types::clone_type_with_budget(&acquire.access,&mut work).unwrap()),
+                Vec::new(),vec![NativeOwnerOperand::Address(std::ptr::null_mut())],&mut work).unwrap();
+            ready.prepare_checked_boundary(&acquire,111,Some(limits()),&mut work).unwrap();
+            let handle=ready.checked_boundary(&mut work).unwrap().unwrap();
+            ready.begin_checked_acquire().unwrap();
+            let guard=ready.returned_output(std::ptr::NonNull::<u8>::dangling().as_ptr().cast(),NativeScalarValue::I32(-11)).record().into_guard().unwrap();
+            assert_eq!(handle.acquisition_status(),Some(-11));
+            handle.publish(111,acquire._scope_node,&mut work).unwrap();
+            handle.closing(111,acquire._scope_node,&mut work).unwrap();
+            guard.prepare_checked_finish(&finish,111,false,&mut work).unwrap();
+            let result=guard.finish_checked_admitted(&plan(),&[NativeOwnerOperand::Address(std::ptr::NonNull::<u8>::dangling().as_ptr().cast())],false);
+            let invalid=matches!(reply,NativeScalarReply::Scalar(NativeScalarValue::U32(_)));
+            let consumed=reply==NativeScalarReply::Scalar(NativeScalarValue::I32(0));
+            assert_eq!(result.is_err(),invalid);
+            assert_eq!(handle.snapshot().native,if consumed {Native::Consumed}else{Native::Owned});
+            assert_eq!(handle.snapshot().unresolved,invalid);
+            assert_eq!(handle.snapshot().k,if invalid {K::Closing}else{K::Discharged});
+            assert_eq!(handle.latest_status(),Some(if invalid {-11}else if consumed {0}else{7}));
+            drop(result);
+            assert_eq!(storage.close(),consumed);
+            assert_eq!(STATUS_CALLS.get(),1,"retained and no-O4 attempts must not replay in Drop or host close");
+        });
+    }
+}

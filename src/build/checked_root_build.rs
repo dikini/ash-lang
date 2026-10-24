@@ -554,6 +554,12 @@ mod tests {
         assert_eq!(leaf.as_bytes(), data.leaf);
         assert!(leaf.contains("pub struct Owner"));
         assert!(!leaf.contains("impl Drop"));
+        if profile == "independent-output-status" {
+            assert!(leaf.contains("pub fn prepare_output_acquire"));
+            assert!(leaf.contains("pub fn prepare_teardown"));
+            assert!(leaf.contains("#[link_name = \"sqlite3_open_v2\"]"));
+            assert!(leaf.contains("#[link_name = \"sqlite3_close\"]"));
+        }
         // Build a fresh coherent native observation for the donor rather than
         // changing a source behind an old pin. Header/prototype compilation
         // still succeeds; only the selected release definition is absent.

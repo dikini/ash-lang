@@ -1067,6 +1067,9 @@ impl NativeOwnerGuard {
             let mut slots = self.storage.slots.borrow_mut();
             let slot = &mut slots[self.slot];
             let _address = slot.raw.address.expect("admitted live owner");
+            // A checked native attempt is one-shot even if the original status
+            // retains or establishes no O4. Host close must not dispatch it again.
+            if slot.checked.is_some() { slot.host_attempted = true; }
             (consumes, status) = plan.invoke(operands);
             // No admitted O4 must not overwrite the last observation or turn
             // an invalid typed reply into known retention. Keep the pending

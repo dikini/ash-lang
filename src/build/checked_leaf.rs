@@ -382,6 +382,43 @@ mod tests {
         )
         .unwrap()
     }
+    fn output_status_fixture() -> NativeBuildImage {
+        let (program,sources)=crate::elaborate::checked_owner_passive_program_for_source(
+            include_str!("../../tests/fixtures/checked-owner-lifecycle/output-status.ash"),
+            "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Int, Unit, Unit>\nmain () = Producer.run ()\n",
+        );
+        super::super::image::encode_checked_preparation(&program,&sources,super::super::host::NATIVE_TARGET,
+            &mut super::super::gas::preparation(&sources,program.node_count()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn two_role_leaf_binds_total_originals_and_exact_render_work() {
+        let mut image=output_status_fixture();
+        let mut measured=TypeWorkBudget::default();
+        let canonical=render(&image,&mut measured).unwrap();
+        assert_eq!(canonical.members.len(),2);
+        assert!(canonical.source.contains("#[link_name = \"sqlite3_open_v2\"]"));
+        assert!(canonical.source.contains("#[link_name = \"sqlite3_close\"]"));
+        assert!(canonical.source.contains("6_i32"));
+        assert!(canonical.source.contains("Some((true, true))"));
+        assert!(canonical.source.contains("Some((false, true))"));
+        assert!(!canonical.source.contains("impl Drop"));
+        let cost=measured.used();
+        for prefix in [0,7] {
+            let mut short=TypeWorkBudget::with_limit(prefix+cost-1); short.charge(prefix).unwrap();
+            assert!(matches!(render(&image,&mut short),Err(LeafFailure::Resource)));
+            let mut exact=TypeWorkBudget::with_limit(prefix+cost); exact.charge(prefix).unwrap();
+            assert_eq!(render(&image,&mut exact).unwrap().source,canonical.source);
+            assert_eq!(exact.used(),prefix+cost);
+            assert!(matches!(render(&image,&mut exact),Err(LeafFailure::Resource)));
+        }
+        let root=render_admitted_root_shim(&image,&canonical,&mut TypeWorkBudget::default()).unwrap();
+        assert!(root.contains("const CHECKED_ROLES: [[u32; 8]; 2]"));
+        let mut donor=output_status_fixture();
+        std::mem::swap(&mut image.bridges[canonical.members[1]].plan,&mut donor.bridges[canonical.members[1]].plan);
+        assert!(matches!(render(&image,&mut TypeWorkBudget::default()),Err(LeafFailure::Association)));
+    }
+
     #[test]
     fn root_role_data_binds_original_coordinates_and_paid_rendering() {
         let mut image = fixture();

@@ -535,6 +535,42 @@ mod tests {
         }
     }
 
+    #[cfg(not(ash_checked_owner_root = "v1"))]
+    #[test]
+    fn genuine_status_finish_codec_requires_actual_closing_and_completes_once() {
+        use crate::foreign::{checked_leaf_reset as reset, checked_leaf_output_status as output_status,
+            checked_leaf_disposal as disposal, checked_leaf_calls as calls,
+            source_bindings::with_output_status_closing_for_test};
+        for consumed in [false,true] {
+            reset(); output_status(-11); disposal(Some(consumed),Some(if consumed {0}else{7}),true);
+            with_output_status_closing_for_test(|program,node,checked,owner| {
+                let mut machine = Machine::new_effect(program); machine.control=None; machine.live_resources=1;
+                let mut setup=TypeWorkBudget::default();
+                let mut reports=crate::eval::checked_reports::ResourceReports::reserve(1,&mut setup).unwrap();
+                let slot=reports.reserve_owner(&mut setup).unwrap(); let observer=slot.observer();
+                let (completion,k,native,unresolved)=checked.closing_record().unwrap();
+                reports.commit_owner(&slot,crate::eval::ResourceReport::closing_facts(completion,k,native,unresolved,checked.closing_status()).unwrap());
+                machine.checked_reports=Some(reports);
+                let finish=machine.source_resource_scope(node).unwrap().header().codec.finish;
+                let boundary=Box::new(SourceResourceBoundary {
+                    checked:Some(checked.prepaid_scope_observer()),report_slot:Some(slot),node,
+                    key:super::super::ActivationKey(111),environment:super::super::Environment::new(),owner,
+                    dependencies:Vec::new(),phase:super::super::ProviderPhase::Finish,payload:None,saved:Some(Value::Unit),
+                    consumed,blocked:false,discarded:false,
+                });
+                let value=outcome(&mut machine,&boundary,finish);
+                machine.return_source_resource(boundary,value).unwrap();
+                assert_eq!(checked.snapshot().k,K::Discharged);
+                assert_eq!(checked.snapshot().continuation,CheckedOwnerContinuation::Completed);
+                assert_eq!(checked.acquisition_status(),Some(-11));
+                let record=machine.checked_reports.as_ref().unwrap().record_for(&observer).unwrap();
+                assert_eq!(record.status(),Some(if consumed {0}else{7}));
+                assert!(checked.source_continued(111,node).is_err());
+                assert_eq!(calls(),[1,0,0,0,1]);
+            });
+        }
+    }
+
     #[test]
     fn successful_unpublished_refusal_and_discard_keep_separate_guard_inspection() {
         for discarded in [false, true] {

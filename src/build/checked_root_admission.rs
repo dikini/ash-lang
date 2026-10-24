@@ -84,7 +84,7 @@ impl RootProgram {
                 _ => return Err(RootRefusal::Association),
             };
             let [library_slot, module, ordinal, symbol_slot, symbol_index, operation_module, effect, local] = *role;
-            // This profile has one library and exactly four distinct originals.
+            // This profile has one library and its complete distinct role originals.
             if role[..3] != roles[0][..3] { return Err(RootRefusal::Association); }
             let original = restored.prepared.get(library_slot as usize).ok_or(RootRefusal::Association)?;
             let expected = facts.library(library_slot, &restored, &mut work).map_err(RootRefusal::Image)?;
