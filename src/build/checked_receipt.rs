@@ -90,6 +90,29 @@ pub(super) fn pin(bytes: &[u8], work: &mut TypeWorkBudget) -> Result<ArtifactPin
 }
 
 impl ProducerReceipt {
+    // Producer DATA completion only: the six previously absent claim pins can
+    // be attached without changing any original/native/root/image association.
+    // The request assembler independently decodes all bodies after this join.
+    pub(super) fn with_closure_data(
+        &self,
+        closures: [ArtifactPin; 6],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ReceiptFailure> {
+        pay(work, FIELDS * RECORD_BYTES + 6 * RECORD_BYTES)?;
+        if self.role != ProducerRole::CheckedPreparation {
+            return Err(ReceiptFailure::Association);
+        }
+        let mut data = self.clone();
+        for (field, observed) in [ReceiptField::NativeClosure, ReceiptField::HeaderClosure,
+            ReceiptField::ToolClosure, ReceiptField::RuntimeClosure,
+            ReceiptField::Premises, ReceiptField::Context].into_iter().zip(closures)
+        {
+            if data.fields[field as usize].replace(observed).is_some() {
+                return Err(ReceiptFailure::Association);
+            }
+        }
+        Ok(data)
+    }
     #[cfg(test)]
     pub(super) fn substituted_configuration_data_for_test(&self, pin: ArtifactPin) -> Self {
         let mut data = self.clone();
@@ -893,12 +916,18 @@ impl ReceiptSeed {
 /// A bounded observation of one opened regular object. No immutable-file,
 /// compilation/link correspondence or future pathname identity is asserted.
 #[cfg(unix)]
-fn observe_file(
+pub(super) fn observe_file(
     path: &Path,
     cap: usize,
     work: &mut TypeWorkBudget,
 ) -> Result<ArtifactPin, ReceiptFailure> {
     observe_object(path, cap, work, false, false)
+}
+/// Reuse strict bounded same-object ELF inspection for the separate launcher
+/// transaction. This is an observed file pin, never executable approval.
+pub(super) fn observe_static_image(path: &Path, cap: usize, work: &mut TypeWorkBudget)
+    -> Result<ArtifactPin, ReceiptFailure> {
+    observe_object(path, cap, work, true, true)
 }
 #[cfg(unix)]
 fn observe_elf(
@@ -909,7 +938,7 @@ fn observe_elf(
     observe_object(path, cap, work, true, false)
 }
 #[cfg(not(unix))]
-fn observe_file(_: &Path, _: usize, _: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
+pub(super) fn observe_file(_: &Path, _: usize, _: &mut TypeWorkBudget) -> Result<ArtifactPin, ReceiptFailure> {
     Err(ReceiptFailure::Input)
 }
 #[cfg(not(unix))]

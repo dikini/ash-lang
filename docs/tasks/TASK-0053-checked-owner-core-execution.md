@@ -11,6 +11,12 @@
 
 ## Goal and authority
 
+The [configured native preparation plan](plans/checked-owner-configured-native-preparation.md)
+records the current source-only launcher-build and external closure-DATA
+transaction. Its configured variant and every build/native/install action stay
+pending separate exact inputs, review and root assignment. No F-core execution
+or protected applicability is established by this source preparation.
+
 Deliver the first real F4/F6 vertical path: an explicitly checked in-process
 whole image acquires one dependency-free byte owner, copies its genuinely
 initialized native interval into independent Bytes, executes exact finish and

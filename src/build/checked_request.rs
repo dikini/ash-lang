@@ -265,6 +265,26 @@ impl ApplicabilityRequest {
 fn pay(work: &mut TypeWorkBudget, n: usize) -> Result<(), ReceiptFailure> {
     work.charge(n).map_err(|()| ReceiptFailure::Resource)
 }
+// Prepaid bounded JSON sink for new producer transactions. Refuse before a
+// serializer can grow output past its declared allocation/encoding allowance.
+pub(super) fn json_bytes<T: Serialize>(value: &T, bound: usize, work: &mut TypeWorkBudget)
+    -> Result<Vec<u8>, ReceiptFailure> {
+    struct Sink { bytes: Vec<u8>, bound: usize }
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.bytes.len().checked_add(bytes.len()).is_none_or(|n| n > self.bound) {
+                return Err(std::io::Error::other("bounded JSON output"));
+            }
+            self.bytes.extend_from_slice(bytes); Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    pay(work, bound)?;
+    let mut sink = Sink { bytes: Vec::new(), bound };
+    sink.bytes.try_reserve_exact(bound).map_err(|_| ReceiptFailure::Resource)?;
+    serde_json::to_writer(&mut sink, value).map_err(|_| ReceiptFailure::Resource)?;
+    Ok(sink.bytes)
+}
 fn image_error(e: super::image::ImageFailure) -> ReceiptFailure {
     use super::image::ImageFailure;
     match e {
@@ -627,6 +647,57 @@ fn encode_kind(
     decode_with_work(&bytes, limits, work)?;
     Ok(bytes)
 }
+
+/// Assemble external finite closure claims into an existing linked request.
+/// `closures` are native, header, tool, runtime, premises and context bodies,
+/// respectively. Every body remains untrusted DATA; even a complete result
+/// requires six independent conformity reviews and protected per-image approval.
+/// No claim, digest, parsing result or caller status grants execution authority.
+///
+/// # Errors
+/// Refuses unlinked/already-completed input, malformed or donor bodies, and
+/// exhausted byte/work bounds. Encoding and independent decoding share `work`.
+pub fn assemble_checked_closure_data(
+    linked: &[u8],
+    closures: [&[u8]; 6],
+    limits: RequestLimits,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<u8>, ReceiptFailure> {
+    let original = decode_with_work(linked, limits, work)?;
+    if !original.linked || original.missing_fields() != CLOSURES.as_slice() {
+        return Err(ReceiptFailure::IncompleteClosure);
+    }
+    let raw = closures.iter().try_fold(linked.len(), |n, body| n.checked_add(body.len()))
+        .ok_or(ReceiptFailure::Resource)?;
+    let upper = raw.checked_mul(4).and_then(|n| n.checked_add(32768))
+        .ok_or(ReceiptFailure::Resource)?;
+    if upper > limits.bytes { return Err(ReceiptFailure::Resource); }
+    // Fund parsing/copies and worst-case JSON integer-array encoding before
+    // allocating. Independent admission below charges its own actual work.
+    pay(work, upper.checked_mul(2).ok_or(ReceiptFailure::Resource)?)?;
+    let mut record: Record = serde_json::from_slice(linked).map_err(|_| ReceiptFailure::Malformed)?;
+    let premises: Vec<Premise> = serde_json::from_slice(closures[4]).map_err(|_| ReceiptFailure::Malformed)?;
+    if premises.len() != PREMISES.len() { return Err(ReceiptFailure::Association); }
+    // External status strings are preserved, never changed to reviewed here.
+    record.premises = premises;
+    let receipt_part = record.parts.iter_mut().find(|p| p.id == 1)
+        .ok_or(ReceiptFailure::Malformed)?;
+    let receipt_limits = ProducerReceiptLimits {
+        artifact_bytes: 2usize.pow(31), receipt_bytes: 4096, records: 64,
+        work: 64 * 1024 * 1024 * 1024,
+    };
+    let receipt = ProducerReceipt::decode_with_work(&receipt_part.bytes, receipt_limits, work)?;
+    let mut pins = [ArtifactPin { bytes: 0, sha256: [0; 32] }; 6];
+    for (out, body) in pins.iter_mut().zip(closures) { *out = pin(body, work)?; }
+    receipt_part.bytes = receipt.with_closure_data(pins, work)?.encode(work, receipt_limits)?;
+    record.parts.try_reserve_exact(6).map_err(|_| ReceiptFailure::Resource)?;
+    for (index, body) in closures.into_iter().enumerate() {
+        record.parts.push(Part { id: index as u32 + 9, bytes: body.to_vec() });
+    }
+    let bytes = json_bytes(&record, upper, work)?;
+    decode_with_work(&bytes, limits, work)?.check_complete()?;
+    Ok(bytes)
+}
 fn encode(
     parts: [&[u8]; 5], native: Option<(&[u8], &[u8], super::checked_native_build::Limits)>,
     limits: RequestLimits, work: &mut TypeWorkBudget,
@@ -710,6 +781,7 @@ pub(super) fn from_linked_files(
 // protected context, approval, complete closure truth, or a PreparedImage.
 #[cfg(test)]
 pub(super) fn exercise_linked_request_data_for_test(bytes: &[u8]) {
+    exercise_complete_closure_assembly_for_test(bytes);
     let limits = RequestLimits::default();
     let actual = ApplicabilityRequest::decode(bytes, limits).unwrap();
     assert!(actual.linked());
@@ -898,9 +970,102 @@ pub(super) fn exercise_linked_request_data_for_test(bytes: &[u8]) {
     );
 }
 
+// Called only with a genuinely linked four-role fixture request. Claims/context
+// below are deliberately synthetic DATA; they install no context or approval.
+#[cfg(test)]
+pub(super) fn exercise_complete_closure_assembly_for_test(bytes: &[u8]) {
+    let limits = RequestLimits { bytes: 64 * 1024 * 1024, work: 1024 * 1024 * 1024 };
+    let base: Record = serde_json::from_slice(bytes).unwrap();
+    let part = |id| base.parts.iter().find(|p| p.id == id).unwrap().bytes.clone();
+    let mut premises = base.premises.clone();
+    for premise in &mut premises { premise.status = "reviewed-claim".into(); }
+    let context = serde_json::to_vec(&serde_json::json!({
+        "version": 2, "uid": 1000, "gid": 1000, "groups": [],
+        "user_namespace": {"device": 1, "inode": 2}, "mount_namespace": {"device": 1, "inode": 3},
+        "uid_map_sha256": "0".repeat(64), "mountinfo_sha256": "0".repeat(64),
+        "store": "/untrusted-closure-test-only/store", "store_identity": {"device": 1, "inode": 4},
+        "stdio": "null-report-request-v2", "context_version": 2, "premise_version": 1, "launch_version": 2,
+        "request_bytes": limits.bytes, "request_work": limits.work,
+        "image_bytes": 2usize.pow(31), "image_work": 16 * 1024 * 1024 * 1024usize, "program_headers": 64
+    })).unwrap();
+    let mut bodies: [Vec<u8>; 6] = std::array::from_fn(|_| Vec::new());
+    for (slot, name) in ["native", "header", "tool", "runtime"].into_iter().enumerate() {
+        bodies[slot] = serde_json::to_vec(&ConformityAddendum { version: 1, category: name.into(),
+            profile: "linux-x86_64-gnu-static-initialized8-owner-v1".into(),
+            program: part(2), facts: part(3), policy: part(4), native_build: part(6), root_link: part(7),
+            premises: premises.clone(), context: context.clone() }).unwrap();
+    }
+    bodies[4] = serde_json::to_vec(&premises).unwrap(); bodies[5] = context;
+    let mut measured = TypeWorkBudget::with_limit(limits.work);
+    let completed = assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut measured).unwrap();
+    let cost = measured.used();
+    ApplicabilityRequest::decode(&completed, limits).unwrap().check_complete().unwrap();
+    let record: Record = serde_json::from_slice(&completed).unwrap();
+    assert_eq!(serde_json::to_value(&record.root_build).unwrap(), serde_json::to_value(&base.root_build).unwrap());
+    for original in base.parts.iter().filter(|p| p.id != 1) {
+        assert_eq!(record.parts.iter().find(|p| p.id == original.id).unwrap().bytes, original.bytes);
+    }
+    let rlimits = ProducerReceiptLimits { artifact_bytes: 2usize.pow(31), receipt_bytes: 4096,
+        records: 64, work: 64 * 1024 * 1024 * 1024 };
+    let before = ProducerReceipt::decode(&part(1), rlimits).unwrap();
+    let after = ProducerReceipt::decode(&record.parts.iter().find(|p| p.id == 1).unwrap().bytes, rlimits).unwrap();
+    for field in [ReceiptField::ProgramImage, ReceiptField::ExpectedFacts, ReceiptField::GeneratedRust,
+        ReceiptField::OriginalMappings, ReceiptField::RuntimeFingerprint, ReceiptField::BuildConfiguration,
+        ReceiptField::DeclaredNativeInputs, ReceiptField::FinalElf, ReceiptField::CheckedContracts, ReceiptField::Policy] {
+        assert_eq!(before.pin(field), after.pin(field));
+    }
+    assert_eq!(after.activate(), Err(ReceiptFailure::ProtectedAuthorityUnavailable));
+    assert!(assemble_checked_closure_data(&completed, bodies.each_ref().map(Vec::as_slice), limits,
+        &mut TypeWorkBudget::with_limit(limits.work)).is_err());
+    for prefix in [0, 7] {
+        let mut exact = TypeWorkBudget::with_limit(prefix + cost); exact.charge(prefix).unwrap();
+        assert_eq!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut exact).unwrap(), completed);
+        assert_eq!(exact.used(), prefix + cost);
+        assert!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut exact).is_err());
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1); short.charge(prefix).unwrap();
+        assert_eq!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut short), Err(ReceiptFailure::Resource));
+        assert!(assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut short).is_err());
+        assemble_checked_closure_data(bytes, bodies.each_ref().map(Vec::as_slice), limits, &mut TypeWorkBudget::with_limit(cost)).unwrap();
+    }
+    for field in ["category", "program", "facts", "policy", "native_build", "root_link", "premises", "context"] {
+        let mut donor = bodies.clone();
+        let mut value: serde_json::Value = serde_json::from_slice(&donor[0]).unwrap();
+        if field == "category" { value[field] = "header".into(); }
+        else { value[field] = serde_json::json!([]); }
+        donor[0] = serde_json::to_vec(&value).unwrap();
+        assert!(assemble_checked_closure_data(bytes, donor.each_ref().map(Vec::as_slice), limits,
+            &mut TypeWorkBudget::with_limit(limits.work)).is_err(), "donor {field}");
+    }
+    for slot in [4, 5] {
+        let mut donor = bodies.clone();
+        donor[slot] = b"{}".to_vec();
+        assert!(assemble_checked_closure_data(bytes, donor.each_ref().map(Vec::as_slice), limits,
+            &mut TypeWorkBudget::with_limit(limits.work)).is_err());
+    }
+    let mut duplicate = base.clone(); duplicate.parts.push(duplicate.parts[0].clone());
+    let mut reserved = base.clone(); reserved.parts.push(Part { id: 8, bytes: vec![] });
+    for donor in [duplicate, reserved] {
+        assert!(assemble_checked_closure_data(&serde_json::to_vec(&donor).unwrap(), bodies.each_ref().map(Vec::as_slice), limits,
+            &mut TypeWorkBudget::with_limit(limits.work)).is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bounded_json_storage_encoding_exact_short_spent_and_fresh() {
+        let value = vec![0u8, 255, 42];
+        let expected = b"[0,255,42]";
+        let cost = expected.len();
+        let mut exact = TypeWorkBudget::with_limit(cost);
+        assert_eq!(json_bytes(&value, cost, &mut exact).unwrap(), expected);
+        assert_eq!(exact.used(), cost);
+        assert_eq!(json_bytes(&value, cost, &mut exact), Err(ReceiptFailure::Resource));
+        assert_eq!(json_bytes(&value, cost, &mut TypeWorkBudget::with_limit(cost - 1)), Err(ReceiptFailure::Resource));
+        assert_eq!(json_bytes(&value, cost - 1, &mut TypeWorkBudget::with_limit(cost)), Err(ReceiptFailure::Resource));
+        assert_eq!(json_bytes(&value, cost, &mut TypeWorkBudget::with_limit(cost)).unwrap(), expected);
+    }
     #[test]
     fn resource_adapters_preserve_actual_bridge_emission_and_validation_cuts() {
         use super::super::{
@@ -1152,6 +1317,8 @@ mod tests {
         let encoded = encode_preparation(parts, RequestLimits::default()).unwrap();
         let summary = ApplicabilityRequest::decode(&encoded, RequestLimits::default()).unwrap();
         assert!(!summary.linked());
+        assert_eq!(assemble_checked_closure_data(&encoded, [b"{}".as_slice(); 6], RequestLimits::default(),
+            &mut TypeWorkBudget::with_limit(RequestLimits::default().work)), Err(ReceiptFailure::IncompleteClosure));
         assert_eq!(summary.missing_fields().len(), 6);
         assert_eq!(
             summary.check_complete(),
