@@ -5708,13 +5708,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         };
 
         let source_sealed = |interface| -> Result<bool, ValidationError> {
+            // Census every fact so the paid lookup does not depend on HashMap order.
+            let mut found = false;
             for header in self.program.registry.source_resource_facts() {
                 self.charge_type_work(1)?;
-                if header.provider.interface.id == interface {
-                    return Ok(true);
-                }
+                found |= header.provider.interface.id == interface;
             }
-            Ok(false)
+            Ok(found)
         };
         for owner in catalog.implementation_owners() {
             if owner.application.interface().module().is_builtin_resource()
