@@ -174,10 +174,21 @@ pub(super) fn compile_launcher(request: LauncherRequest<'_>) -> Result<LauncherA
     let mut command = environment.launcher_command(canonical, request.target, &capture.linker(), &mut work)
         .map_err(project_error)?;
     let configuration = launcher_configuration(&environment, &command, request.limits, &mut work)?;
-    let status = capture.run_cargo(&mut command, &log);
+    // Prepare every result path and reserve the entire independent cleanup run
+    // before Cargo starts. Neither build/capture nor postbuild exhaustion can
+    // spend this reservation or bypass the cleanup callback below.
     let configuration_path = child(request.directory, "launcher-configuration.json", &mut work)?;
     let provenance_path = child(request.directory, "launcher-provenance.json", &mut work)?;
     let executable = request.output.to_owned();
+    let cleanup_directory = child(request.directory, "launcher-clean", &mut work)?;
+    input(fs::create_dir(&cleanup_directory))?;
+    let mut clean = environment.launcher_clean_command(canonical, request.target, &mut work)
+        .map_err(project_error)?;
+    let cleanup_allowance = super::checked_native_build::root_cargo_work(&clean, request.limits)?;
+    work.charge(cleanup_allowance).map_err(|()| ReceiptFailure::Resource)?;
+    let mut cleanup_work = TypeWorkBudget::with_limit(cleanup_allowance);
+    let status = capture.run_cargo(&mut command, &log);
+    // No fallible setup or early return is permitted between start and finish.
     let mut result = Ok(());
     let mut state = (capture, work);
     let finished = super::artifacts::GeneratedArtifacts { project: request.directory,
@@ -187,10 +198,11 @@ pub(super) fn compile_launcher(request: LauncherRequest<'_>) -> Result<LauncherA
             &mut state, (
                 |linked, (capture, _)| capture.capture(linked)
                     .map_err(|e| std::io::Error::other(format!("launcher capture: {e:?}"))),
-                |_, (capture, work), log| {
-                    let mut clean = environment.launcher_clean_command(canonical, request.target, work)
+                |_, _, log| {
+                    let status = super::checked_native_build::run_root_cargo(&mut clean,
+                        &cleanup_directory, log, request.limits, &mut cleanup_work)
                         .map_err(|e| std::io::Error::other(format!("launcher clean: {e:?}")))?;
-                    if capture.run_cargo(&mut clean, log)?.success() { Ok(()) }
+                    if status.success() { Ok(()) }
                     else { Err(std::io::Error::other("launcher cleanup failed")) }
                 },
                 |linked, (capture, work)| {
@@ -495,6 +507,63 @@ pub(super) fn compile(request: Request<'_>) -> Result<Artifact, ReceiptFailure> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launcher_postbuild_exhaustion_and_capture_failure_keep_funded_cleanup() {
+        let canonical = Path::new(env!("ASH_RUNTIME_CANONICAL_SOURCE_ROOT"));
+        let environment = super::super::checked_root_environment::Environment::discover(canonical,
+            &mut TypeWorkBudget::default()).unwrap();
+        let limits = super::super::checked_link::Limits {
+            file_bytes: 1024, total_bytes: 4096, map_bytes: 1024, output_bytes: 1024,
+            record_bytes: 4096, paths: 16, arguments: 256, seconds: 1,
+            cargo_bytes: 1024, cargo_seconds: 1, work: 1024 * 1024,
+        };
+        for stage in 0..2 {
+            let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let directory = std::env::temp_dir().join(format!("ash-launcher-cleanup-{}-{nonce}-{stage}", std::process::id()));
+            let target = directory.join("target");
+            let source = target.join(super::super::host::NATIVE_TARGET).join("debug/ash-checked-launcher");
+            fs::create_dir_all(source.parent().unwrap()).unwrap();
+            // Inert fixture bytes stand for Cargo output; no executable is built
+            // or started. Exercise the actual shared publication/cleanup path.
+            fs::write(&source, b"inert-build-output").unwrap();
+            let output = directory.join("destination");
+            fs::write(&output, b"old-destination").unwrap();
+            let log = directory.join("cleanup.log"); fs::File::create(&log).unwrap();
+            let clean = environment.launcher_clean_command(canonical, &target,
+                &mut TypeWorkBudget::default()).unwrap();
+            assert!(matches!(environment.launcher_clean_command(canonical, &target,
+                &mut TypeWorkBudget::with_limit(0)), Err(super::super::checked_root_identity::Failure::Resource)));
+            let allowance = super::super::checked_native_build::root_cargo_work(&clean, limits).unwrap();
+            let mut state = (TypeWorkBudget::with_limit(0), TypeWorkBudget::with_limit(allowance), 0);
+            let finished = super::super::artifacts::GeneratedArtifacts { project: &directory,
+                target_directory: &target, package_name: "ash-checked-launcher",
+                target: super::super::host::NATIVE_TARGET, profile: "dev", private_target: false }
+                .finish_with_state(true, &output, &log, &mut state, (
+                    |_, (postbuild, _, _)| {
+                        if stage == 0 { postbuild.charge(1).map_err(|()| std::io::Error::other("injected capture exhaustion")) }
+                        else { Ok(()) }
+                    },
+                    |_, (_, cleanup, calls), _| {
+                        // Consume the exact separately reserved runner funding;
+                        // inspect the already-built clean command, never run it.
+                        cleanup.charge(super::super::checked_native_build::root_cargo_work(&clean, limits)
+                            .map_err(|e| std::io::Error::other(format!("cleanup reserve: {e:?}")))?)
+                            .map_err(|()| std::io::Error::other("cleanup funding lost"))?;
+                        assert!(clean.get_args().any(|arg| arg == "ash-trusted-preparation"));
+                        *calls += 1; Ok(())
+                    },
+                    |_, (postbuild, _, _)| postbuild.charge(1)
+                        .map_err(|()| std::io::Error::other("injected postbuild exhaustion")),
+                ));
+            assert!(finished.is_err());
+            assert_eq!(state.2, 1);
+            assert_eq!(state.1.used(), allowance);
+            assert_eq!(fs::read(&output).unwrap(), b"old-destination");
+            assert!(!directory.join("linked-program").exists());
+            fs::remove_dir_all(&directory).unwrap();
+        }
+    }
 
     #[test]
     #[ignore = "assigned existing-cache static launcher compile/link slot; output is never executed"]

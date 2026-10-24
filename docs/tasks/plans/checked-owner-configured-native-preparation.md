@@ -51,6 +51,13 @@ The function never changes status strings to `reviewed-claim`; supplied claims
 remain data. Parsing/copies/reserves/encoding are paid before allocation;
 bounded serialization and independent complete decoding share the caller's
 single meter. A complete result creates no approval or running-image token.
+The public API accepts `RequestLimits` and creates one private meter; only the
+internal implementation/tests accept an existing cumulative meter. External
+callers need no crate-private type. Result paths, output ownership and the
+closed cleanup command are prepared before Cargo starts. Its complete runner
+allowance is charged in advance and retained in a separate cleanup meter;
+build/capture/postbuild exhaustion cannot consume cleanup funding. Every
+post-start result enters the existing cleanup-before-publication path.
 
 ## Configured source variant remains pending
 
@@ -108,6 +115,13 @@ one Cargo job. Proposed selectors, all **UNRUN** here:
    and existing root-link map/BFD/provenance/cleanup controls.
 3. `build::checked_request::tests::bounded_json_storage_encoding_exact_short_spent_and_fresh`
    and genuine request reconstruction/unlinked/malformed/donor controls.
+   External integration test `checked_closure_assembly_api` uses only public
+   DATA types and checks malformed/byte/work refusals. Internal exact/prefixed/
+   short/spent/fresh controls still share one cumulative meter. Also run
+   `build::checked_root_build::tests::launcher_postbuild_exhaustion_and_capture_failure_keep_funded_cleanup`:
+   inert output plus injected capture/postbuild exhaustion must invoke funded
+   cleanup once, retain the old destination and remove staging. Its cleanup
+   command-construction exhaustion control starts no process.
 4. Assigned compile/link-only ignored selector
    `build::checked_root_build::tests::genuine_fixed_launcher_compile_link_has_separate_provenance_without_startup`.
    Its actual launcher record exercises separate-envelope/root rejection,
