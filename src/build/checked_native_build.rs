@@ -517,6 +517,16 @@ pub(super) fn root_cargo_work(
         .ok_or(ReceiptFailure::Resource)?;
     Ok(reserve)
 }
+// Total prepaid submeter allowance, distinct from the opening runner charge.
+// Each bounded stdout/stderr byte pays twice in read() and once on log copy.
+pub(super) fn root_cargo_total_work(
+    command: &Command,
+    limits: super::checked_link::Limits,
+) -> Result<usize, ReceiptFailure> {
+    root_cargo_work(command, limits)?.checked_add(
+        limits.cargo_bytes.checked_mul(6).ok_or(ReceiptFailure::Resource)?)
+        .ok_or(ReceiptFailure::Resource)
+}
 pub(super) fn run_root_cargo(
     command: &mut Command,
     directory: &Path,
@@ -604,8 +614,20 @@ pub(super) fn run_root_cargo(
     let lifecycle=serde_json::to_vec(&serde_json::json!({"group":owned.group,"child_reaped":owned.child.try_wait().ok().flatten().is_some(),"owned_group_empty":owned.settled,"result":format!("{settled:?}")})).map_err(|_|ReceiptFailure::Resource)?;
     io(fs::write(directory.join("cargo.lifecycle.json"), lifecycle))?;
     // Read/write only after all descendants and pipe owners have settled.
-    let stdout = read(&out, limits.cargo_bytes, work)?;
-    let stderr = read(&err, limits.cargo_bytes, work)?;
+    record_root_cargo_output(&out, &err, log, limits.cargo_bytes, work)?;
+    settled
+}
+// Same paid post-process accounting for the real runner and inert-output
+// cleanup controls. This helper never starts or inspects a native executable.
+pub(super) fn record_root_cargo_output(
+    out: &Path,
+    err: &Path,
+    log: &Path,
+    cap: usize,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ReceiptFailure> {
+    let stdout = read(out, cap, work)?;
+    let stderr = read(err, cap, work)?;
     pay(
         work,
         stdout
@@ -617,7 +639,7 @@ pub(super) fn run_root_cargo(
     let mut output = io(fs::OpenOptions::new().create(true).append(true).open(log))?;
     io(output.write_all(&stdout))?;
     io(output.write_all(&stderr))?;
-    settled
+    Ok(())
 }
 
 static IDS: AtomicU64 = AtomicU64::new(0);
