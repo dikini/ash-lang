@@ -10878,31 +10878,58 @@ fn admit_native_interpretation_instance(
     host: Option<crate::core::effect::ForeignHostIdentity>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ImageFailure> {
-    let Some(host) = host else { return admit_closed_native_instance(instance, work); };
+    let Some(host) = host else {
+        return admit_closed_native_instance(instance, work);
+    };
     charge(work, 3)?;
-    if symbol.owner().is_some() || !matches!(
-        symbol.symbol().call(), crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
-    ) { return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata)); }
+    if symbol.owner().is_some()
+        || !matches!(
+            symbol.symbol().call(),
+            crate::foreign::source_contract::PreparedForeignCall::Scalar { .. }
+        )
+    {
+        return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
+    }
     let selected = crate::foreign::checked_source::checked_host_instance(symbol, instance, work)
-        .map_err(|error| if error.is_resource_exhaustion() {
-            ImageFailure::Resource
-        } else { ImageFailure::RegistryAdmission })?
+        .map_err(|error| {
+            if error.is_resource_exhaustion() {
+                ImageFailure::Resource
+            } else {
+                ImageFailure::RegistryAdmission
+            }
+        })?
         .ok_or(ImageFailure::InvalidRecord)?;
     if selected.effect() != host.effect()
         || !matches!(selected.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == host.identity())
-    { return Err(ImageFailure::InvalidRecord); }
-    let contract = symbol.prepared().checked_contract().ok_or(ImageFailure::InvalidRecord)?;
-    let position = contract.symbols().get(symbol.symbol_index())
-        .ok_or(ImageFailure::InvalidRecord)?.host_parameter();
+    {
+        return Err(ImageFailure::InvalidRecord);
+    }
+    let contract = symbol
+        .prepared()
+        .checked_contract()
+        .ok_or(ImageFailure::InvalidRecord)?;
+    let position = contract
+        .symbols()
+        .get(symbol.symbol_index())
+        .ok_or(ImageFailure::InvalidRecord)?
+        .host_parameter();
     charge(work, instance.arguments().len())?;
     for (index, argument) in instance.arguments().iter().enumerate() {
-        if index == position { continue; }
-        let open = crate::types::visit_argument_structure_with_budget(argument, work, |component, _| {
-            Ok(matches!(component,
-                crate::types::TypeStructureNode::Type(Type::Variable(_) | Type::Inference(_))
-                    | crate::types::TypeStructureNode::Tail(_)))
-        }).map_err(|()| ImageFailure::Resource)?;
-        if open { return Err(ImageFailure::Unsupported(Unsupported::OpenNativeInstance)); }
+        if index == position {
+            continue;
+        }
+        let open =
+            crate::types::visit_argument_structure_with_budget(argument, work, |component, _| {
+                Ok(matches!(
+                    component,
+                    crate::types::TypeStructureNode::Type(Type::Variable(_) | Type::Inference(_))
+                        | crate::types::TypeStructureNode::Tail(_)
+                ))
+            })
+            .map_err(|()| ImageFailure::Resource)?;
+        if open {
+            return Err(ImageFailure::Unsupported(Unsupported::OpenNativeInstance));
+        }
     }
     Ok(())
 }

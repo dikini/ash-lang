@@ -87,54 +87,215 @@ pub(crate) fn controls(
             Unsupported::EffectOperation
         )))
     ));
-    // Real lexical-host scalar boundaries use their independently checked H;
-    // no owner-bearing or ordinary interpreter gains this representation rule.
-    for node in program.nodes() {
-        let crate::core::EffectExprKind::Operation(
-            crate::core::EffectOperation::NativeInterpret(boundary),
-        ) = &node.kind else { continue; };
-        let Some(host) = boundary.host() else { continue; };
-        for original in boundary.interpretations() {
-            let mut measured = TypeWorkBudget::default();
-            admit_native_interpretation_instance(original.effect(), original.symbol(), Some(host), &mut measured).unwrap();
-            let cost = measured.used();
-            for prefix in [0, 7] {
-                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
-                exact.charge(prefix).unwrap();
-                admit_native_interpretation_instance(original.effect(), original.symbol(), Some(host), &mut exact).unwrap();
-                assert_eq!(exact.used(), prefix + cost);
-                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
-                short.charge(prefix).unwrap();
-                assert!(matches!(admit_native_interpretation_instance(original.effect(), original.symbol(), Some(host), &mut short), Err(ImageFailure::Resource)));
-            }
-            let wrong_host = crate::core::effect::ForeignHostIdentity {
-                identity: crate::types::TypeVariableId::generated(u32::MAX),
-                effect: host.effect(),
+    // Add genuine declared non-host Type/Row slots, keeping the same checked
+    // source/Core builder and scalar ABI. These are not arity-only donors.
+    let extended = program
+        .nodes()
+        .iter()
+        .any(|node| {
+            matches!(
+                &node.kind, crate::core::EffectExprKind::Operation(
+                    crate::core::EffectOperation::NativeInterpret(boundary)
+                ) if boundary.host().is_some()
+            )
+        })
+        .then(|| {
+            let source = include_str!("../../libraries/sqlite_checked.ash");
+            let entry = include_str!("../../tests/fixtures/checked-sqlite/dependent-entry.ash");
+            assert_eq!(source.matches("symbol Initialize<H>").count(), 1);
+            assert_eq!(entry.matches("Initialize<H>.call").count(), 1);
+            crate::elaborate::checked_owner_passive_program_for_source(
+                &source.replace(
+                    "symbol Initialize<H>",
+                    "symbol Initialize<H, Extra, Delta : EffectRow>",
+                ),
+                &entry.replace("Initialize<H>.call", "Initialize<H, Int, {}>.call"),
+            )
+        });
+    for program in std::iter::once(program).chain(extended.iter().map(|(program, _)| program)) {
+        // Real lexical-host scalar boundaries use their independently checked H;
+        // no owner-bearing or ordinary interpreter gains this representation rule.
+        for node in program.nodes() {
+            let crate::core::EffectExprKind::Operation(
+                crate::core::EffectOperation::NativeInterpret(boundary),
+            ) = &node.kind
+            else {
+                continue;
             };
-            assert_ne!(wrong_host.identity(), host.identity());
-            assert!(admit_native_interpretation_instance(original.effect(), original.symbol(), Some(wrong_host), &mut TypeWorkBudget::default()).is_err());
-            assert!(matches!(admit_native_interpretation_instance(original.effect(), original.symbol(), None, &mut TypeWorkBudget::default()), Err(ImageFailure::Unsupported(Unsupported::OpenNativeInstance))));
-            use crate::types::{EffectInstance, EffectRow, EffectRowVariable, KindedArgument};
-            let arguments = original.effect().arguments();
-            let wrong_type = Type::Variable(wrong_host.identity());
-            let open_row = EffectRow::open(EffectRowVariable::rigid(wrong_host.identity()), Box::new([]));
-            // Wrong and nested host, non-host extra Type and Row actuals all
-            // retain exact original-vector/closed-actual refusal.
-            let donors = [
-                vec![KindedArgument::TypeArg(wrong_type.clone())],
-                vec![KindedArgument::TypeArg(Type::Tuple(Box::new([Type::Variable(host.identity())])))],
-                arguments.iter().cloned().chain([KindedArgument::TypeArg(wrong_type)]).collect(),
-                arguments.iter().cloned().chain([KindedArgument::RowArg(open_row)]).collect(),
-            ];
-            for donor in donors {
-                let donor = EffectInstance::new_kinded(original.effect().effect(), donor.into_boxed_slice());
-                assert!(admit_native_interpretation_instance(&donor, original.symbol(), Some(host), &mut TypeWorkBudget::default()).is_err());
+            let Some(host) = boundary.host() else {
+                continue;
+            };
+            for original in boundary.interpretations() {
+                let mut measured = TypeWorkBudget::default();
+                admit_native_interpretation_instance(
+                    original.effect(),
+                    original.symbol(),
+                    Some(host),
+                    &mut measured,
+                )
+                .unwrap();
+                let cost = measured.used();
+                for prefix in [0, 7] {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                    exact.charge(prefix).unwrap();
+                    admit_native_interpretation_instance(
+                        original.effect(),
+                        original.symbol(),
+                        Some(host),
+                        &mut exact,
+                    )
+                    .unwrap();
+                    assert_eq!(exact.used(), prefix + cost);
+                    let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                    short.charge(prefix).unwrap();
+                    assert!(matches!(
+                        admit_native_interpretation_instance(
+                            original.effect(),
+                            original.symbol(),
+                            Some(host),
+                            &mut short
+                        ),
+                        Err(ImageFailure::Resource)
+                    ));
+                }
+                let wrong_host = crate::core::effect::ForeignHostIdentity {
+                    identity: crate::types::TypeVariableId::generated(u32::MAX),
+                    effect: host.effect(),
+                };
+                assert_ne!(wrong_host.identity(), host.identity());
+                assert!(matches!(
+                    admit_native_interpretation_instance(
+                        original.effect(),
+                        original.symbol(),
+                        Some(wrong_host),
+                        &mut TypeWorkBudget::default()
+                    ),
+                    Err(ImageFailure::InvalidRecord)
+                ));
+                assert!(matches!(
+                    admit_native_interpretation_instance(
+                        original.effect(),
+                        original.symbol(),
+                        None,
+                        &mut TypeWorkBudget::default()
+                    ),
+                    Err(ImageFailure::Unsupported(Unsupported::OpenNativeInstance))
+                ));
+                use crate::types::{EffectInstance, EffectRow, EffectRowVariable, KindedArgument};
+                let arguments = original.effect().arguments();
+                let wrong_type = Type::Variable(wrong_host.identity());
+                let open_row = EffectRow::open(
+                    EffectRowVariable::rigid(wrong_host.identity()),
+                    Box::new([]),
+                );
+                // Wrong and nested host, non-host extra Type and Row actuals all
+                // retain exact original-vector/closed-actual refusal.
+                for replacement in [
+                    wrong_type.clone(),
+                    Type::Tuple(Box::new([Type::Variable(host.identity())])),
+                ] {
+                    let mut donor = arguments.to_vec();
+                    donor[0] = KindedArgument::TypeArg(replacement);
+                    let donor = EffectInstance::new_kinded(
+                        original.effect().effect(),
+                        donor.into_boxed_slice(),
+                    );
+                    assert!(matches!(
+                        admit_native_interpretation_instance(
+                            &donor,
+                            original.symbol(),
+                            Some(host),
+                            &mut TypeWorkBudget::default()
+                        ),
+                        Err(ImageFailure::InvalidRecord)
+                    ));
+                }
+                for extra in [
+                    KindedArgument::TypeArg(wrong_type.clone()),
+                    KindedArgument::RowArg(open_row.clone()),
+                ] {
+                    let donor = EffectInstance::new_kinded(
+                        original.effect().effect(),
+                        arguments.iter().cloned().chain([extra]).collect(),
+                    );
+                    assert!(matches!(
+                        admit_native_interpretation_instance(
+                            &donor,
+                            original.symbol(),
+                            Some(host),
+                            &mut TypeWorkBudget::default()
+                        ),
+                        Err(ImageFailure::RegistryAdmission)
+                    ));
+                }
+                if arguments.len() == 3 {
+                    assert!(matches!(&arguments[1], KindedArgument::TypeArg(Type::Int)));
+                    assert!(matches!(&arguments[2], KindedArgument::RowArg(row) if row.is_empty()));
+                    for replacement in [
+                        Type::Variable(host.identity()),
+                        Type::Inference(crate::types::InferenceVariableId::new(u32::MAX)),
+                    ] {
+                        let mut donor = arguments.to_vec();
+                        donor[1] = KindedArgument::TypeArg(replacement);
+                        let donor = EffectInstance::new_kinded(
+                            original.effect().effect(),
+                            donor.into_boxed_slice(),
+                        );
+                        assert!(matches!(
+                            admit_native_interpretation_instance(
+                                &donor,
+                                original.symbol(),
+                                Some(host),
+                                &mut TypeWorkBudget::default()
+                            ),
+                            Err(ImageFailure::Unsupported(Unsupported::OpenNativeInstance))
+                        ));
+                    }
+                    let mut donor = arguments.to_vec();
+                    donor[2] = KindedArgument::RowArg(EffectRow::open(
+                        EffectRowVariable::rigid(original.symbol().parameter_ids()[2]),
+                        Box::new([]),
+                    ));
+                    let donor = EffectInstance::new_kinded(
+                        original.effect().effect(),
+                        donor.into_boxed_slice(),
+                    );
+                    assert!(matches!(
+                        admit_native_interpretation_instance(
+                            &donor,
+                            original.symbol(),
+                            Some(host),
+                            &mut TypeWorkBudget::default()
+                        ),
+                        Err(ImageFailure::Unsupported(Unsupported::OpenNativeInstance))
+                    ));
+                }
+                let owner = program
+                    .nodes()
+                    .iter()
+                    .find_map(|node| {
+                        let crate::core::EffectExprKind::Operation(
+                            crate::core::EffectOperation::SourceResourceScope(scope),
+                        ) = &node.kind
+                        else {
+                            return None;
+                        };
+                        scope
+                            .native_interpretations()
+                            .iter()
+                            .find(|interpretation| interpretation.symbol().owner().is_some())
+                    })
+                    .expect("genuine source owner interpreter donor");
+                assert!(matches!(
+                    admit_native_interpretation_instance(
+                        owner.effect(),
+                        owner.symbol(),
+                        Some(host),
+                        &mut TypeWorkBudget::default()
+                    ),
+                    Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata))
+                ));
             }
-            let owner = program.nodes().iter().find_map(|node| {
-                let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) = &node.kind else { return None; };
-                scope.native_interpretations().iter().find(|interpretation| interpretation.symbol().owner().is_some())
-            }).expect("genuine source owner interpreter donor");
-            assert!(admit_native_interpretation_instance(owner.effect(), owner.symbol(), Some(host), &mut TypeWorkBudget::default()).is_err());
         }
     }
     let mut encoding = TypeWorkBudget::default();
@@ -159,7 +320,11 @@ pub(crate) fn controls(
     );
     if encoded.is_err() {
         let error = encoded.err().expect("checked failed encoding");
-        panic!("dependency encoding failed used={} limit={} actual={error:?}", encoding.used(), encoding.limit());
+        panic!(
+            "dependency encoding failed used={} limit={} actual={error:?}",
+            encoding.used(),
+            encoding.limit()
+        );
     }
     let encoder = encoded.expect("checked successful encoding");
     let image = encoder.image;
@@ -217,7 +382,11 @@ pub(crate) fn controls(
             );
         }
         (_, Err(error)) => {
-            panic!("smaller baseline must fit unchanged standalone default: used={} limit={} actual={error:?}", standalone_work.used(), standalone_work.limit())
+            panic!(
+                "smaller baseline must fit unchanged standalone default: used={} limit={} actual={error:?}",
+                standalone_work.used(),
+                standalone_work.limit()
+            )
         }
         (_, Ok(restored)) => {
             drop(restored);
