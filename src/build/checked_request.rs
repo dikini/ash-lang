@@ -1200,6 +1200,61 @@ mod tests {
     }
 
     #[test]
+    fn dependent_root_request_reconstructs_exact_two_scope_data_without_native_entry() {
+        let (program, provenance) = crate::elaborate::checked_owner_passive_program_for_source(
+            include_str!("../../libraries/sqlite_checked.ash"),
+            include_str!("../../tests/fixtures/checked-sqlite/dependent-physical-entry.ash"),
+        );
+        let limits = RequestLimits::default();
+        let mut work = TypeWorkBudget::with_limit(limits.work);
+        let build = super::super::image::encode_checked_preparation(&program, &provenance,
+            super::super::host::NATIVE_TARGET, &mut work).unwrap();
+        let policy = crate::foreign::source_runtime::CheckedOwnerLimits {
+            groups: 1, owners: 1, pending: 1, observations: 5, history: 6, continuations: 1,
+        };
+        let root = super::super::emit::checked_root_host(&build, &program, policy, &mut work).unwrap();
+        assert!(root.host.rust_source.contains("const CHECKED_PROFILE: u8 = 2"));
+        let (image, facts) = root.host.payloads.bytes();
+        let decoded_image = super::super::image::PureImage::decode_bytes(image, &mut work).unwrap();
+        decoded_image.admit_expected_native_facts(facts, &mut work).unwrap();
+        let restored = decoded_image.restore_effect(&mut work).unwrap();
+        let (rebuilt, _) = restored.reencode_checked_data(&mut work).unwrap();
+        let regenerated = super::super::emit::checked_root_host(&rebuilt, &restored.program, policy, &mut work).unwrap();
+        assert_eq!(root.leaf.source, regenerated.leaf.source, "dependent typed leaf regenerates from restored originals");
+        assert_eq!(root.host.rust_source, regenerated.host.rust_source, "tag2 role coordinates and shim regenerate exactly");
+        assert_eq!(root.host.payloads.bytes(), regenerated.host.payloads.bytes(), "immutable image and facts regenerate exactly");
+        assert_eq!(root.host.payloads.checked_policy(), regenerated.host.payloads.checked_policy(), "two-scope policy regenerates exactly");
+        // Existing closed lock/configuration DATA; no compiler, native call,
+        // protected verifier result or executable admission is manufactured.
+        let data = super::super::checked_root_project::fixture_data(&root.leaf.source, &root.host.rust_source, &mut work);
+        let identity = data.reconstruct(&root.leaf.source, &root.host.rust_source, &mut work).unwrap();
+        let configuration = serde_json::to_vec(&data).unwrap();
+        let receipt_limits = ProducerReceiptLimits { artifact_bytes: limits.bytes,
+            receipt_bytes: 4096, records: 64, work: limits.work };
+        let seed = super::super::checked_receipt::ReceiptSeed::from_root_emission(
+            &build, &program, &provenance, &root.host, &configuration, receipt_limits, (&identity, policy)).unwrap();
+        let receipt = seed.receipt().encode(&mut work, receipt_limits).unwrap();
+        let (image, facts) = root.host.payloads.bytes();
+        let parts = [receipt.as_slice(), image, facts, root.host.payloads.checked_policy().unwrap(), root.host.rust_source.as_bytes()];
+        let bytes = encode_root(parts, None, data, limits, &mut TypeWorkBudget::with_limit(limits.work)).unwrap();
+        let decoded = decode_with_work(&bytes, limits, &mut TypeWorkBudget::with_limit(limits.work)).unwrap();
+        assert!(!decoded.linked());
+        assert_eq!(decoded.check_complete(), Err(ReceiptFailure::IncompleteClosure));
+        // Change generated profile/role DATA without changing the bound image.
+        // Independent regeneration must refuse it, before any root startup.
+        for (from, to) in [("const CHECKED_PROFILE: u8 = 2", "const CHECKED_PROFILE: u8 = 255"),
+            ("const CHECKED_ROLES: [[u32; 8]; 4]", "const CHECKED_ROLES: [[u32; 8]; 3]")] {
+            let mut donor: Record = serde_json::from_slice(&bytes).unwrap();
+            let data = donor.root_build.as_mut().unwrap();
+            let changed = std::str::from_utf8(&data.shim).unwrap().replace(from, to);
+            assert_ne!(changed.as_bytes(), data.shim.as_slice());
+            data.shim = changed.into_bytes();
+            let changed = serde_json::to_vec(&donor).unwrap();
+            assert!(matches!(decode_with_work(&changed, limits, &mut TypeWorkBudget::with_limit(limits.work)),
+                Err(ReceiptFailure::Association)));
+        }
+    }
+    #[test]
     fn root_request_reconstructs_genuine_originals_and_refuses_rebound_code_data() {
         let (program, provenance) = crate::elaborate::checked_owner_passive_program_for_source(
             include_str!("../../tests/fixtures/checked-owner-runtime/owner.ash"),
