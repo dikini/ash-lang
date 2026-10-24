@@ -1,0 +1,97 @@
+{
+  "status": "DOCS_ONLY_RECONCILIATION_INPUT_EQUALITY_CONFIRMED_NO_NEW_EXECUTION",
+  "checked_at_utc": "2026-10-24T11:07:42.012350+00:00",
+  "retaining_base": "52d4e122b7330cf29b7283bd4f5696704e64d4aa",
+  "original_retained_base": "8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5",
+  "archived_delivery_head": "fe3e1a7eb996e82d48a5a3c69e662276a28f67a2",
+  "archive_ref": "refs/heads/archive/native-preparation-before-52d-fe3e1a7e",
+  "rebased_assembly_head": "ad46133a3363e486d5e887dc19c7732f1cbb1081",
+  "tested_source": "531e76778e438b26dafdee63a5d05af7aec2997b",
+  "range_diff": [
+    "1:  0ba56044 = 1:  8d047017 Prepare owned static launcher build and external closure data assembly",
+    "2:  afda3044 = 2:  35e1d731 Repair external closure API and reserve launcher cleanup before Cargo",
+    "3:  b6995b2d = 3:  b82e2606 Prepay complete cleanup output accounting and exercise nonempty streams",
+    "4:  4e13cbba = 4:  64c36b23 Format external closure preparation API control",
+    "5:  531e7677 = 5:  b41ded02 Keep external API compile control without redundant complex annotation",
+    "6:  fe3e1a7e = 6:  ad46133a Record focused native preparation gates and preserve selected artifacts"
+  ],
+  "actual_explicit_tracked_inputs_equal": 316,
+  "dependency_readback_sha256": "fd0d48d37f9e397f90e409914470e8a1f7a276a0507b0e1845e74709242b2744",
+  "earlier_source_slice_equal": 250,
+  "build_script_watched_files_equal": 245,
+  "watched_path_set_equal": true,
+  "physical_tool_pins_equal": {
+    "cargo": {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+      "bytes": 42839824,
+      "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953"
+    },
+    "rustc": {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+      "bytes": 645000,
+      "sha256": "d3a664c970a9fd8361b64194861bebc1ae37b9054e5ee3400dc1c9e691797eea"
+    },
+    "rustfmt": {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustfmt",
+      "bytes": 5268472,
+      "sha256": "30de9e1efcd8f8fe7750e00d0c45ff8f4c480608ef1be5baf9ab6f1b4556e8f8"
+    },
+    "clippy-driver": {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/clippy-driver",
+      "bytes": 22412784,
+      "sha256": "e8fa6ad666c353e4c9248fc67074cf160ff2a5dbd97debd20416b81d7f917373"
+    },
+    "/usr/bin/cc": {
+      "path": "/usr/bin/x86_64-linux-gnu-gcc-15",
+      "bytes": 1305304,
+      "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88"
+    },
+    "/usr/bin/ld.bfd": {
+      "path": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+      "bytes": 1890472,
+      "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+    },
+    "/usr/bin/python3": {
+      "path": "/usr/bin/python3.14",
+      "bytes": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    }
+  },
+  "closed_cargo_configurations_equal": [
+    {
+      "path": "/home/dikini/.cargo/config.toml",
+      "bytes": 63,
+      "sha256": "13ed130670278614272c1fca1af627d4e427b8d306cd530a96f0d7555dbcd6a5",
+      "equals_before": true
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.cargo/config.toml",
+      "bytes": 59,
+      "sha256": "c7d5610250d3bfb8f5060e4339a45ff53a7dec34d77af83573926761f58bc0be",
+      "equals_before": true
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/.cargo/config.toml",
+      "bytes": 82,
+      "sha256": "2eb887744ac35113f513a449e09d637cf4ae0e08e8361bd7b3401e41e37051f9",
+      "equals_before": true
+    }
+  ],
+  "ambient_build_overrides_equal": {
+    "RUSTC_WRAPPER": null,
+    "RUSTC_WORKSPACE_WRAPPER": null,
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "CARGO_HOME": null,
+    "RUSTUP_HOME": null,
+    "CARGO_TARGET_DIR": null
+  },
+  "guarded_artifact_files_preserved_equal": 350,
+  "guarded_artifact_bytes": 650852983,
+  "preserved_packet_sha256": "0e56abe0fd6b10c9b81d42de22c043d224fd281f850788be772cdf7222cc7d97",
+  "source_component_preserved": "645103d09017e0926203effe8a20bb26f05fe2d1a570bd74d7008f1721a67574",
+  "canonical_source_root_preserved": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "transfer": "36 distinct focused passes / 38 occurrences and targeted Clippy transfer within the recorded tested-source/tool/configuration equality. No new build/test/native execution; historical source, cache and missing-transient qualifications remain. Original F3 source/static acceptance retained by PR127 is separate from pending F-core/full-workspace and configured native obligations.",
+  "review": "Independent focused source/actual review cleared fe3e1a7e and released docs-only reconciliation. Independent reconciliation review and retained-result verification are pending. Guarded case artifacts and caches remain preserved.",
+  "original_F3_final_acceptance_receipt_sha256": "9cf944b4c9f71b5afb4d14325f111aadbf2f4cd09b86cc35e950d1c1842384ed"
+}

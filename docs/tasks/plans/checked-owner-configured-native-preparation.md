@@ -2,8 +2,11 @@
 
 Owned by [TASK-0053](../TASK-0053-checked-owner-core-execution.md) under
 [AD-0016](../../decisions/AD-0016-linux-owner-inprocess-whole-images.md).
-This source-only transaction starts at actual retained
-`15128ba49f4467bbb41b498058e9de056392d913`. It does not import the older product
+This source-only transaction originally started at retained
+`15128ba49f4467bbb41b498058e9de056392d913`. Its delivery now targets actual retained
+PR127 `52d4e122b7330cf29b7283bd4f5696704e64d4aa`, including the completed original
+F3 source/static acceptance; that completion supplies no native/F-core result.
+It does not import the older product
 ancestor of parked docs-only readiness `04625326`. That record's conditional
 native/header findings require exact-input equality or separately reviewed
 deltas. Runtime/tool/premise/context conformity and protected activation remain
@@ -110,9 +113,12 @@ records 36 distinct passing tests, targeted Ash Clippy and the three actual
 nonexecuting compile/link selectors on frozen source `531e7677`. It keeps
 ignored selectors, baseline formatting/warnings, cache reuse and transient-input
 limits explicit. No prepared output/native callback, helper/context probe,
-installation or protected approval ran. Later docs-only `52d4e122` reconciliation
-requires explicit source/tool/configuration equality before publication; a Git
-SHA alone neither invalidates nor transfers these observations.
+installation or protected approval ran. The docs-only `52d4e122` reconciliation
+is complete. The [equality readback](../evidence/checked-owner-core-execution/configured-native-preparation/reconciliation.json)
+records all six equal patches, 316 dependency inputs, 245 watched files, the
+earlier 250-entry slice, seven tools, closed Cargo configuration and all
+350 preserved guarded artifact files. Focused evidence transfers within these
+unchanged inputs; reconciliation review and actual retention remain pending.
 
 The focused sequence used the existing shared target/cache, offline/locked
 settings and one Cargo job. The receipt records exact performed commands and
@@ -163,8 +169,21 @@ Prepare a separate post-build `approvals/checked-launcher-v2.json` descriptor
 using actual launcher pin/context digest; keep it outside baked context to avoid
 a digest cycle. Only then prepare exact per-image approval and installation
 bytes/paths/modes/readback for root's separate administrator action. Exact
-one-shot native invocation needs its own review and grant. No F-core positive,
-isolation, SQLite, full F2/F6/F7 or M1 acceptance follows from this transaction.
+one-shot native invocation needs its own reviewed root operator assignment.
+No F-core positive, isolation, SQLite, full F2/F6/F7 or M1 acceptance follows
+from this transaction.
+
+The next operator assignment belongs to root: select and review the existing
+unprivileged capability-drop tool and exact argv; obtain the actual invocation
+UID/GID/groups, namespace device/inode pairs, uid_map and mountinfo bytes, and
+select numeric runtime budgets against the supported bounds. Freeze the exact
+context JSON/digest, then assign the identical private app/launcher association
+literal for source review. After that review, assign fresh configured app and
+launcher builds with frozen inputs and the existing cache, followed by the six
+finite conformity reviews and descriptor/per-image approval preparation above.
+The pending variant record lists the missing values. No current compile-only
+artifact substitutes for these fresh configured artifacts. Installation and
+native invocation retain their separately assigned actions.
 
 Root owns publication, integration and acceptance. Developer supplies a clean
 unsigned source candidate; independent reviewer checks that source and the next
