@@ -691,3 +691,12 @@ cost, allowance and exact/short/spent/fresh outcomes without changing limits.
 The genuine dependent header must still refuse runtime Ledger and executable
 admission. This delivery grants no dependent physical/native authority or whole
 SQLite/F-core acceptance; those connected carriers and evidence remain pending.
+
+
+TASK-0054's measured Statement standalone classification is Resource under the
+unchanged generic default (70839); its former Fits label was an unmeasured
+premise. Preserve the smaller Child Fits baseline and the complete existing
+startup decode/fact-admission/restoration work controls. Record actual startup
+cost and margin before claiming this dependent reconstruction segment passes;
+this observation changes no allowance, supported runtime profile or acceptance
+criterion.

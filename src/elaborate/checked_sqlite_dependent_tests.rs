@@ -67,7 +67,7 @@ fn checked_sqlite_dependent_source_preserves_original_parent_core_and_transforms
     crate::build::checked_owner_dependency_image_controls(
         &core,
         &provenance,
-        crate::build::CheckedDependencyStandalone::Fits,
+        crate::build::CheckedDependencyStandalone::Resource,
     );
     // Native/runtime admission remains deliberately closed for the same real header.
     crate::foreign::assert_dependent_header_refused_before_entry(parent, child);

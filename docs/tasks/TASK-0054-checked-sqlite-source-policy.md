@@ -393,3 +393,24 @@ records must still refuse the private image inventory. The temporary diagnostic
 is retained on its own branch and excluded from the product delivery. All
 current-candidate image fit, startup work and remaining focused controls still
 require actual execution.
+
+
+### Actual standalone classification for Statement
+
+Run 70839 cleared the image inventory refusal and reached real standalone
+resource exhaustion: `CoreAdmission(TypeWorkExceeded)` at 327,064 used of
+327,680, with 616 units remaining before the denied request. This does not
+measure complete demand. Statement's independent Core validation still fits
+that allowance at 118,436 units; the composite private image restoration is a
+different operation. Clippy and the other 17 selectors were unrun after this
+canonical-first failure.
+
+The plan requires recording actual standalone fit, not promising it. The
+Statement caller now selects the existing `Standalone::Resource` observation;
+its assertions still reject every semantic/setup error. The smaller Child
+baseline remains `Fits`. No default or production allowance changes. The same
+complete startup decode/fact-admission/restoration path and exact, prefixed,
+one-short, spent and fresh controls remain mandatory. For the observed
+73,351-byte image and 36,737 expectation bytes, the existing startup formula
+supplies 2,421,936 units. Complete cost and headroom still require execution;
+classification alone is not a passing gate or runtime/native evidence.
