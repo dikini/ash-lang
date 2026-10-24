@@ -1,5 +1,7 @@
 //! Real private checked dependency reconstruction, without executable admission.
-use super::super::{NativeImageFailure, PureImage, encode_effect_for_build, encode_program};
+use super::super::{
+    NativeImageFailure, PreparedOwnerCallRecord, PureImage, encode_effect_for_build, encode_program,
+};
 use super::*;
 
 fn retain_encoded_inputs(bytes: &[u8], expectations: &[u8]) {
