@@ -1955,7 +1955,7 @@ mod tests {
         assert!(matches!(acquire.owner_role(), Some(PreparedOwnerCall::OutputAcquire { .. })));
         assert!(matches!(teardown.owner_role(), Some(PreparedOwnerCall::StatusTeardown { .. })));
         let Some(PreparedOwnerCall::StatusTeardown { outcomes, .. }) = teardown.owner_role() else { unreachable!() };
-        assert!(outcomes.iter().all(|outcome| !outcome.readable), "raw observation is exercised independently of source readability");
+        assert!(outcomes.iter().all(|outcome| outcome.readable), "admitted scalar outcomes retain their required source readability");
         let acquisition = super::scalar_observation(Reply::Scalar(Scalar::I32(-11)), acquire.symbol().result());
         assert_eq!(acquisition, Some(-11));
         for (observed, denied) in [
