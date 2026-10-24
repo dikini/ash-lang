@@ -947,9 +947,9 @@ impl NativeOwnerGuard {
             Err(NativeOwnerAdmissionError::Authority) => return Ok(()),
             Err(error) => return Err(error),
         }
-        let slot = &mut slots[self.slot];
         #[cfg(any(test, ash_checked_owner_root = "v1"))]
         {
+            let slot = &mut slots[self.slot];
             let NativeOwnerSlot { leaf, checked, host_attempted, closing_status, last_observed_status, .. } = slot;
             if leaf.is_none() { return Ok(()); }
             let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeOwnerAdmissionError::Authority); };

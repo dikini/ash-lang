@@ -126,7 +126,7 @@ pub(super) fn admitted_scopes<'a>(program: &'a ValidatedEffectProgram, work: &mu
     for (slot, node) in program.nodes().iter().enumerate() {
         if let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &node.kind {
             if scopes.len() == 2 || scope.header().original.host.is_none() { return Err(ReceiptFailure::Association); }
-            scopes.push((slot, scope));
+            scopes.push((slot, scope.as_ref()));
         }
     }
     if scopes.is_empty() { return Err(ReceiptFailure::Association); }
