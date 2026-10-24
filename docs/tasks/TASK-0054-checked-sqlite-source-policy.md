@@ -367,3 +367,29 @@ guard and did not establish the intended lifecycle refusal. The original Source
 refusal assertion and canonical positive remain. These changes and all required
 focused controls await current-candidate execution; no standalone fit or image
 allowance result is inferred from the passing Core measurement.
+
+
+### Lexical host identity in the private registry inventory
+
+Run 71238 passed the new lexical-host controls and encoded a 73,353-byte image
+with 36,739 expectation bytes. Standalone restoration then refused
+`Unsupported(RegistryMetadata)` after 138,025 of 327,680 work units. This was a
+semantic refusal, not exhaustion; standalone fit and startup reconstruction
+cost remained unmeasured.
+
+The preserved inventory diagnostic 16477 identified the exact cause. The actual
+mapped lexical host had module provenance and kind Type but was absent from the
+two supplied scope identities. Adding only that host to a separate diagnostic
+inventory made the unchanged subset query succeed with three identities; the
+real query and refusal remained unchanged. Diagnostic work was 2,390 units on a
+separate bounded meter.
+
+Encoder preparation and restoration now inventory mapped lexical host binders
+from actual NativeInterpret nodes alongside the existing scope/window/cell
+binders. The registry's exact count, uniqueness, module and Type-kind checks
+remain unchanged, as do independent Core host authentication/non-escape and
+ordinary executable admission restrictions. Missing, aliased and duplicate host
+records must still refuse the private image inventory. The temporary diagnostic
+is retained on its own branch and excluded from the product delivery. All
+current-candidate image fit, startup work and remaining focused controls still
+require actual execution.

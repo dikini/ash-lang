@@ -12363,6 +12363,12 @@ impl Decoder<'_> {
                 let acquisition = self.cell_acquisition(acquisition)?;
                 push(&mut identities, acquisition.identity, self.work)?;
             }
+            if let NodeTag::NativeInterpret { host: Some(host), .. } = node.tag {
+                let identity = self.type_variable(host.identity)?;
+                if identity.module().is_some() {
+                    push(&mut identities, identity, self.work)?;
+                }
+            }
         }
         if !registry
             .native_image_subset_with_source_scopes(&identities, &original_variables, self.work)
@@ -13394,6 +13400,13 @@ fn encode_native_preparation(
                     {
                         push(&mut identities, variable.id, work)?;
                     }
+                }
+            }
+            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::NativeInterpret(boundary)) => {
+                if let Some(host) = boundary.host()
+                    && host.identity().module().is_some()
+                {
+                    push(&mut identities, host.identity(), work)?;
                 }
             }
             crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resource(

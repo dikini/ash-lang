@@ -431,6 +431,32 @@ pub(crate) fn controls(
             }
         }
     }
+    if let Some(slot) = canonical.nodes.iter().position(|node| matches!(
+        node.tag, super::super::NodeTag::NativeInterpret { host: Some(_), .. }
+    )) {
+        for mutation in 0..3 {
+            let mut hostile_work = startup();
+            let mut hostile = PureImage::decode_bytes(&bytes, &mut hostile_work).unwrap();
+            {
+                let _facts = hostile.admit_expected_native_facts(&expectations, &mut hostile_work).unwrap();
+            }
+            match mutation {
+                0 => {
+                    let super::super::NodeTag::NativeInterpret { host, .. } = &mut hostile.nodes[slot].tag else { unreachable!() };
+                    *host = None;
+                }
+                1 => {
+                    let owned = hostile.source_scopes[0].identity;
+                    let super::super::NodeTag::NativeInterpret { host: Some(host), .. } = &mut hostile.nodes[slot].tag else { unreachable!() };
+                    host.identity = owned;
+                }
+                _ => hostile.nodes.push(hostile.nodes[slot]),
+            }
+            assert!(matches!(hostile.restore_effect(&mut hostile_work),
+                Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata))
+            ), "missing, aliased or duplicate host binder cannot change the exact inventory");
+        }
+    }
     for mutation in 0..3 + 2 * usize::from(has_offset) {
         let mut hostile_work = startup();
         let mut hostile = PureImage::decode_bytes(&bytes, &mut hostile_work).unwrap();
