@@ -30,7 +30,7 @@ pub(crate) use owner::{
 #[doc(hidden)]
 pub use owner::{
     NativeByteReadCallback, NativeByteWriteCallback, NativeOwnerAcquireCallback,
-    NativeOwnerCallReturned, NativeOwnerGuardReady, NativeOwnerOperand,
+    CheckedParentLocator, NativeOwnerCallReturned, NativeOwnerGuardReady, NativeOwnerOperand,
     NativeOwnerStatusTeardownCallback, NativeOwnerTeardownCallback,
 };
 

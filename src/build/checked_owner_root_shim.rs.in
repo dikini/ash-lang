@@ -89,6 +89,10 @@ impl OwnerCell {
         -> Result<leaf::PreparedOutputAcquire<'s, 'i>, Refusal> {
         leaf::prepare_output_acquire(&mut self.owner, input)
     }
+    pub(crate) fn prepare_dependent_output_acquire<'s, 'i>(&'s mut self, parent: &'s OwnerCell,
+        input: &'i [u8], length: i32) -> Result<leaf::PreparedOutputAcquire<'s, 'i>, Refusal> {
+        leaf::prepare_dependent_output_acquire(&mut self.owner, parent.owner.as_ref().ok_or(Refusal::Owner)?, input, length)
+    }
     pub(crate) fn prepare_teardown(&mut self) -> Result<leaf::PreparedTeardown<'_>, Refusal> {
         leaf::prepare_teardown(&mut self.owner)
     }

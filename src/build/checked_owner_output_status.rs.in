@@ -77,6 +77,8 @@ impl OutputAcquireReturned {
     pub fn nonnull(&self) -> bool { self.nonnull }
     /// Actual typed return, independent of source output construction.
     pub fn status(&self) -> RawScalar { self.status }
+    /// No offset belongs to the independent acquisition profile.
+    pub fn offset(&self) -> Option<*mut std::ffi::c_void> { None }
 }
 /// Validate vacancy/NUL and reserve identity before the ledger enters C.
 pub fn prepare_output_acquire<'slot, 'input>(destination: &'slot mut Option<Owner>, input: &'input [u8])
@@ -153,3 +155,7 @@ pub fn copy(_: &View<'_>, _: usize, _: &mut [u8]) -> Result<(), Refusal> { Err(R
 
 /// Whether this exact emitted profile has byte view operations.
 pub fn supports_byte_views() -> bool { false }
+
+/// Dependent output acquisition is outside this emitted profile.
+pub fn prepare_dependent_output_acquire<'s, 'i>(_: &'s mut Option<Owner>, _: &'s Owner,
+    _: &'i [u8], _: i32) -> Result<PreparedOutputAcquire<'s, 'i>, Refusal> { Err(Refusal::Profile) }

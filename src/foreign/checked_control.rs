@@ -362,19 +362,20 @@ impl<'p> Ledger<'p> {
         header: &'p CheckedSourceResourceHeader,
         work: &mut TypeWorkBudget,
     ) -> Result<Owner, Failure> {
-        self.owner_header(group, Header::Borrowed(header), work)
+        self.owner_header(group, Header::Borrowed(header), None, work)
     }
 
     fn owner_header(
         &mut self,
         group: Group,
         header: Header<'p>,
+        parent: Option<&RuntimeBoundary>,
         work: &mut TypeWorkBudget,
     ) -> Result<Owner, Failure> {
         pay(work, 10)?;
         let group_index = self.group_index(group)?;
-        // An independent owner consumes one fresh provisional group, even if
-        // another owner uses the same source H/header. Dependencies are unsupported.
+        // The group index here is local transition accounting. Dependent native
+        // lineage is inherited only through the authenticated parent boundary.
         if self.groups[group_index].owner_bound {
             return Err(Failure::State);
         }
@@ -387,7 +388,17 @@ impl<'p> Ledger<'p> {
         }
         // Independent status owners retain their original typed result and
         // total outcome relation; status never acquires void authority.
-        if !header.dependencies.is_empty()
+        let inherited = match parent {
+            None => header.dependencies.is_empty(),
+            Some(parent) => {
+                pay(work, 24)?; // fixed complete dependent acquisition and teardown shapes
+                parent.parent_loan_live()
+                    && header.dependencies.len() == 1
+                    && super::checked_source::dependent_output_acquire(header.owner.prepared(), header.acquire.symbol())
+                    && super::checked_source::dependent_status_teardown(header.owner.prepared(), header.teardown.symbol())
+            }
+        };
+        if !inherited
             || header.original.host.is_none()
             || !matches!(
                 header.codec.report,
@@ -876,6 +887,9 @@ pub(super) struct RuntimeBoundary {
     ledger: Ledger<'static>,
     owner: Owner,
     group: Group,
+    // Nonowning exact root lineage. Local ledger groups never create a second
+    // native domain for a dependent owner. Storage authenticates this token.
+    lineage: Group,
     scope: std::sync::Arc<crate::core::source_resource::CheckedSourceResourceTemplate>,
     scope_node: crate::core::NodeId,
     activation: usize,
@@ -928,10 +942,21 @@ impl BoundarySnapshot {
     }
 }
 impl RuntimeBoundary {
+    pub(super) fn lineage(&self) -> Group { self.lineage }
+    pub(super) fn parent_loan_live(&self) -> bool {
+        let record = &self.ledger.records[self.owner.index];
+        let group = &self.ledger.groups[self.group.index];
+        record.native == Native::Owned && record.access == Access::Usable
+            && record.k == K::Pending && record.pending.is_none() && !record.unresolved
+            && !self.ledger.terminal && !group.quarantined && !group.lost
+    }
+
+
     pub(super) fn reserve(
         receipt: &super::source_bindings::SourceOwnerScopeRequest,
         activation: usize,
         limits: BoundaryLimits,
+        parent: Option<&RuntimeBoundary>,
         work: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         pay(work, 6)?;
@@ -978,17 +1003,20 @@ impl RuntimeBoundary {
         // One additional fixed observation cell retains acquisition status
         // independently of the subsequent disposal status in the owner slot.
         pay(work, future.checked_add(2 + 3 + 1).ok_or(Failure::Resource)?)?;
-        let mut ledger = Ledger::reserve(limits.groups, limits.owners, limits.observations, work)?;
+        let mut ledger = Ledger::reserve(1, 1, limits.observations, work)?;
         let group = ledger.group(work)?;
         let owner = ledger.owner_header(
             group,
             Header::Owned(std::sync::Arc::clone(receipt._scope.header())),
+            parent,
             work,
         )?;
+        let lineage = parent.map_or(group, |parent| parent.lineage);
         Ok(Self {
             ledger,
             owner,
             group,
+            lineage,
             scope: std::sync::Arc::clone(&receipt._scope),
             scope_node: receipt._scope_node,
             activation,

@@ -257,6 +257,7 @@ impl SourceNativeBindings {
             (SourceOwnerCallback::CheckedAcquire | SourceOwnerCallback::CheckedOutputAcquire | SourceOwnerCallback::CheckedQuery
                 | SourceOwnerCallback::CheckedLength | SourceOwnerCallback::CheckedFree | SourceOwnerCallback::CheckedStatusFree, _) => {
                 paid(work, 6)?; // fixed profile/role/ordered operand/result checks
+                if !owner.owner().retained_parameters().is_empty() { paid(work, 12)?; }
                 checked_leaf_shape(&callback, &symbol)
             }
             (
@@ -1634,14 +1635,16 @@ impl<'bindings> AdmittedSourceOwnerAcquireInvocation<'bindings> {
         #[cfg(any(test, ash_checked_owner_root = "v1"))]
         if matches!(self.binding.callback, SourceOwnerCallback::CheckedOutputAcquire) {
             let [input] = inputs else { return Err(NativeScalarCallError::ArgumentContract); };
-            let [NativeOwnerOperand::Address(address), NativeOwnerOperand::OwnerOutput,
-                NativeOwnerOperand::Scalar(NativeScalarValue::I32(_)), NativeOwnerOperand::Address(null)] = values else {
-                return Err(NativeScalarCallError::ArgumentContract);
+            let (input_address, parent) = match values {
+                [NativeOwnerOperand::Address(address), NativeOwnerOperand::OwnerOutput,
+                    NativeOwnerOperand::Scalar(NativeScalarValue::I32(_)), NativeOwnerOperand::Address(null)] if null.is_null() => (*address, None),
+                [NativeOwnerOperand::CheckedParent(parent), NativeOwnerOperand::Address(address),
+                    NativeOwnerOperand::Scalar(NativeScalarValue::I32(length)), NativeOwnerOperand::OwnerOutput,
+                    NativeOwnerOperand::OffsetOutput] => (*address, Some((*parent, *length))),
+                _ => return Err(NativeScalarCallError::ArgumentContract),
             };
-            if *address != input.as_ptr().cast_mut().cast() || !null.is_null() {
-                return Err(NativeScalarCallError::ArgumentContract);
-            }
-            let raw = self.readiness.invoke_checked_output_leaf(input)?;
+            if input_address != input.as_ptr().cast_mut().cast() { return Err(NativeScalarCallError::ArgumentContract); }
+            let raw = self.readiness.invoke_checked_output_leaf_with_parent(input, parent)?;
             return Ok((SourceOwnerReturnedAuthority {
                 checked: None, _symbol: &self.binding.symbol, _receipt: self.receipt,
             }, raw));
@@ -2110,6 +2113,8 @@ fn checked_leaf_shape(callback: &SourceOwnerCallback, symbol: &CheckedForeignSym
                     && matches!(operands[3].source(), Source::Null)
                     && operands[3].representation() == Repr::Address(Address::Bytes)
                     && matches!(symbol.symbol().result(), Result::Scalar(_)),
+            (SourceOwnerCallback::CheckedOutputAcquire, Some(Role::OutputAcquire { .. })) =>
+                super::checked_source::dependent_output_acquire(symbol.prepared(), symbol.symbol()),
             (SourceOwnerCallback::CheckedStatusFree, Some(Role::StatusTeardown { current_operand: 0, .. })) =>
                 operands.len() == 1 && matches!(operands[0].source(), Source::Current(_))
                     && operands[0].representation() == Repr::Address(Address::Opaque)

@@ -20,9 +20,9 @@ pub(super) struct LeafEmission {
     pub profile: LeafProfile,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum LeafProfile { InitializedBytes, OutputStatus }
+pub(super) enum LeafProfile { InitializedBytes, OutputStatus, DependentOutputStatus }
 impl LeafProfile {
-    fn tag(self) -> u8 { match self { Self::InitializedBytes => 0, Self::OutputStatus => 1 } }
+    fn tag(self) -> u8 { match self { Self::InitializedBytes => 0, Self::OutputStatus => 1, Self::DependentOutputStatus => 2 } }
 }
 const OUTPUT_TEMPLATE: &str = include_str!("checked_owner_output_status.rs.in");
 const TEMPLATE: &str = include_str!("checked_owner_leaf.rs.in");
@@ -48,7 +48,7 @@ pub(super) fn render_admitted_root_shim(
 ) -> Result<String, LeafFailure> {
     use std::fmt::Write;
     let [library] = image.libraries.as_slice() else { return Err(LeafFailure::Association); };
-    let count = match leaf.profile { LeafProfile::InitializedBytes => 4, LeafProfile::OutputStatus => 2 };
+    let count = match leaf.profile { LeafProfile::InitializedBytes => 4, LeafProfile::OutputStatus => 2, LeafProfile::DependentOutputStatus => 4 };
     if leaf.members.len() != count { return Err(LeafFailure::Association); }
     let mut source = render_root_shim(work)?;
     // Exactly32 u32 decimal fields (at most10 digits each), punctuation and
@@ -109,6 +109,10 @@ pub(super) fn render(
 ) -> Result<LeafEmission, LeafFailure> {
     pay(work, image.bridges.len())?;
     if image.bridges.len() == 2 { return render_output_status(image, work); }
+    if image.bridges.len() == 4 && image.bridges.iter().any(|member|
+        matches!(member.plan.symbol().owner_role(), Some(PreparedOwnerCall::OutputAcquire { offset: Some(_), .. }))) {
+        return render_dependent_output_status(image, work);
+    }
     if image.bridges.len() != 4 || image.libraries.len() != 1 {
         return Err(LeafFailure::Unsupported);
     }
@@ -341,6 +345,98 @@ fn render_output_status(image: &NativeBuildImage, work: &mut TypeWorkBudget) -> 
     retained.extend_from_slice(&members);
     Ok(LeafEmission { source, members: retained, profile: LeafProfile::OutputStatus })
 }
+// The two-owner profile selects exact existing originals, never native names.
+fn render_dependent_output_status(image: &NativeBuildImage, work: &mut TypeWorkBudget) -> Result<LeafEmission, LeafFailure> {
+    use crate::foreign::{checked_source, source_contract::{PreparedOwnerCall as Role, PreparedOperandSource as Source,
+        PreparedScalarRepresentation as Scalar}};
+    if image.libraries.len() != 1 || image.bridges.len() != 4 { return Err(LeafFailure::Unsupported); }
+    let mut members = [None; 4];
+    for (index, member) in image.bridges.iter().enumerate() {
+        let plan = &member.plan;
+        pay(work, 24)?;
+        if plan.target() != ForeignBridgeTarget::X86_64LinuxGnu || plan.byte_owner()
+            || plan.symbol().prepared().checked_contract().is_none()
+            || plan.result() != TargetResult::Scalar(TargetScalar::I32) { return Err(LeafFailure::Unsupported); }
+        let role = match plan.symbol().owner_role() {
+            Some(Role::OutputAcquire { .. }) if checked_source::independent_output_acquire(plan.symbol().symbol()) => 0,
+            Some(Role::StatusTeardown { .. }) if plan.symbol().owner().is_some_and(|owner|owner.owner().retained_parameters().is_empty())
+                && checked_source::independent_status_teardown(plan.symbol().symbol()) => 1,
+            Some(Role::OutputAcquire { .. }) if checked_source::dependent_output_acquire(plan.symbol().prepared(), plan.symbol().symbol()) => 2,
+            Some(Role::StatusTeardown { .. }) if checked_source::dependent_status_teardown(plan.symbol().prepared(), plan.symbol().symbol()) => 3,
+            _ => return Err(LeafFailure::Unsupported),
+        };
+        let expected: &[TargetOperand] = match role {
+            0 => &[TargetOperand::Address, TargetOperand::OwnerOutput, TargetOperand::Scalar(TargetScalar::I32), TargetOperand::Address],
+            2 => &[TargetOperand::Address, TargetOperand::Address, TargetOperand::Scalar(TargetScalar::I32), TargetOperand::OwnerOutput, TargetOperand::OffsetOutput],
+            _ => &[TargetOperand::Address],
+        };
+        if plan.operands() != expected || members[role].replace(index).is_some() { return Err(LeafFailure::Association); }
+    }
+    let [Some(parent_acquire), Some(parent_teardown), Some(child_acquire), Some(child_teardown)] = members
+        else { return Err(LeafFailure::Association); };
+    let members = [parent_acquire, parent_teardown, child_acquire, child_teardown];
+    let plans = members.map(|index|&image.bridges[index].plan);
+    pay(work, 16)?;
+    let parent = plans[0].symbol().owner().ok_or(LeafFailure::Association)?;
+    let child = plans[2].symbol().owner().ok_or(LeafFailure::Association)?;
+    if Arc::ptr_eq(parent, child)
+        || !plans[1].symbol().owner().is_some_and(|owner|Arc::ptr_eq(owner, parent))
+        || !plans[3].symbol().owner().is_some_and(|owner|Arc::ptr_eq(owner, child))
+        || plans.iter().any(|plan|plan.library() != plans[0].library()
+            || !Arc::ptr_eq(plan.symbol().prepared(), plans[0].symbol().prepared())) { return Err(LeafFailure::Association); }
+    let Source::Constant(constant) = plans[0].symbol().symbol().operands()[2].source() else { return Err(LeafFailure::Association); };
+    let constant = plans[0].symbol().prepared().constants().get(*constant).ok_or(LeafFailure::Association)?;
+    if constant.representation() != Scalar::Signed(32) { return Err(LeafFailure::Unsupported); }
+    let value = constant.value();
+    let flags = if value.negative { -i128::from(value.magnitude) } else { i128::from(value.magnitude) };
+    let flags = i32::try_from(flags).map_err(|_|LeafFailure::Unsupported)?;
+    let Some(Role::OutputAcquire { offset: Some(offset), .. }) = plans[2].symbol().owner_role() else { return Err(LeafFailure::Association); };
+    let value = offset.status;
+    let status = if value.negative { -i128::from(value.magnitude) } else { i128::from(value.magnitude) };
+    let status = i32::try_from(status).map_err(|_|LeafFailure::Unsupported)?;
+    let names = [
+        quoted(plans[0].symbol().symbol().native_name(), work)?, quoted(plans[1].symbol().symbol().native_name(), work)?,
+        quoted(plans[2].symbol().symbol().native_name(), work)?, quoted(plans[3].symbol().symbol().native_name(), work)?,
+    ];
+    let parent_outcomes = render_status_outcomes(plans[1], work)?;
+    let child_outcomes = render_status_outcomes(plans[3], work)?;
+    pay(work, 256)?;
+    let flags = format!("{flags}_i32"); let status = format!("{status}_i32");
+    let source = replace_template(include_str!("checked_owner_dependent_output_status.rs.in"), &[
+        ("__PARENT_ACQUIRE_NAME__", &names[0]), ("__PARENT_RELEASE_NAME__", &names[1]),
+        ("__CHILD_ACQUIRE_NAME__", &names[2]), ("__CHILD_RELEASE_NAME__", &names[3]),
+        ("__FLAGS__", &flags), ("__OFFSET_STATUS__", &status),
+        ("__PARENT_OUTCOMES__", &parent_outcomes), ("__CHILD_OUTCOMES__", &child_outcomes),
+    ], work)?;
+    pay(work, 4)?;
+    let mut retained = Vec::new(); retained.try_reserve_exact(4).map_err(|_|LeafFailure::Resource)?;
+    retained.extend_from_slice(&members);
+    Ok(LeafEmission { source, members: retained, profile: LeafProfile::DependentOutputStatus })
+}
+fn render_status_outcomes(plan: &super::bridge::TargetResolvedForeignBridge, work: &mut TypeWorkBudget) -> Result<String, LeafFailure> {
+    use crate::foreign::source_contract::PreparedNativePosition;
+    use std::fmt::Write;
+    let Some(PreparedOwnerCall::StatusTeardown { outcomes, .. }) = plan.symbol().owner_role() else { return Err(LeafFailure::Association); };
+    if outcomes.is_empty() || outcomes.len() > 64 { return Err(LeafFailure::Unsupported); }
+    let mut source = String::new(); let mut otherwise = false;
+    pay(work, outcomes.len())?;
+    for outcome in outcomes {
+        if outcome.predicates.len() > 1 || otherwise { return Err(LeafFailure::Unsupported); }
+        pay(work, 512)?; source.try_reserve(256).map_err(|_|LeafFailure::Resource)?;
+        if let Some(predicate) = outcome.predicates.first() {
+            if predicate.position != PreparedNativePosition::Result { return Err(LeafFailure::Unsupported); }
+            let value = predicate.value;
+            let value = if value.negative { -i128::from(value.magnitude) } else { i128::from(value.magnitude) };
+            if !scalar_contains(TargetScalar::I32, value) { return Err(LeafFailure::Association); }
+            write!(&mut source, "if status == ({value} as i32) {{ Some(({}, {})) }} else ", outcome.consumes, outcome.readable).map_err(|_|LeafFailure::Resource)?;
+        } else {
+            otherwise = true;
+            write!(&mut source, "{{ Some(({}, {})) }}", outcome.consumes, outcome.readable).map_err(|_|LeafFailure::Resource)?;
+        }
+    }
+    if !otherwise { return Err(LeafFailure::Unsupported); }
+    Ok(source)
+}
 fn scalar_contains(scalar: TargetScalar, value: i128) -> bool {
     match scalar {
         TargetScalar::I8 => i8::try_from(value).is_ok(), TargetScalar::U8 => u8::try_from(value).is_ok(),
@@ -391,6 +487,47 @@ mod tests {
             &mut super::super::gas::preparation(&sources,program.node_count()).unwrap()).unwrap()
     }
 
+    #[test]
+    fn dependent_leaf_keeps_original_parent_output_offset_and_dispositions() {
+        let (program, sources) = crate::elaborate::checked_owner_passive_program_for_source(
+            include_str!("../../libraries/sqlite_checked.ash"),
+            include_str!("../../tests/fixtures/checked-sqlite/dependent-physical-entry.ash"),
+        );
+        let mut image = super::super::image::encode_checked_preparation(&program, &sources,
+            super::super::host::NATIVE_TARGET, &mut super::super::gas::preparation(&sources, program.node_count()).unwrap()).unwrap();
+        let leaf = render(&image, &mut TypeWorkBudget::default()).unwrap();
+        assert_eq!(leaf.profile, LeafProfile::DependentOutputStatus);
+        assert_eq!(leaf.members.len(), 4);
+        assert!(leaf.source.contains("prepare_dependent_output_acquire"));
+        assert!(leaf.source.contains("sqlite3_prepare_v2"));
+        assert!(leaf.source.contains("sqlite3_finalize"));
+        assert!(!leaf.source.contains("impl Drop"));
+        let mut measured = TypeWorkBudget::default();
+        let canonical = render(&image, &mut measured).unwrap();
+        let cost = measured.used();
+        let mut short = TypeWorkBudget::with_limit(cost - 1);
+        assert!(matches!(render(&image, &mut short), Err(LeafFailure::Resource)));
+        let mut exact = TypeWorkBudget::with_limit(cost);
+        assert_eq!(render(&image, &mut exact).unwrap().source, canonical.source);
+        assert_eq!(exact.used(), cost);
+        assert!(matches!(render(&image, &mut exact), Err(LeafFailure::Resource)));
+        let mut fresh = TypeWorkBudget::with_limit(cost);
+        assert_eq!(render(&image, &mut fresh).unwrap().members, canonical.members);
+        let shim = render_admitted_root_shim(&image, &canonical, &mut TypeWorkBudget::default()).unwrap();
+        assert!(shim.contains("const CHECKED_PROFILE: u8 = 2"));
+        assert!(shim.contains("const CHECKED_ROLES: [[u32; 8]; 4]"));
+        // A genuine donor graph of the same source has different original owners.
+        for index in &canonical.members {
+            let (program, sources) = crate::elaborate::checked_owner_passive_program_for_source(
+                include_str!("../../libraries/sqlite_checked.ash"),
+                include_str!("../../tests/fixtures/checked-sqlite/dependent-physical-entry.ash"));
+            let mut donor = super::super::image::encode_checked_preparation(&program, &sources,
+                super::super::host::NATIVE_TARGET, &mut super::super::gas::preparation(&sources, program.node_count()).unwrap()).unwrap();
+            std::mem::swap(&mut donor.bridges[*index].plan, &mut image.bridges[*index].plan);
+            assert!(render(&donor, &mut TypeWorkBudget::default()).is_err());
+            std::mem::swap(&mut donor.bridges[*index].plan, &mut image.bridges[*index].plan);
+        }
+    }
     #[test]
     fn two_role_leaf_binds_total_originals_and_exact_render_work() {
         let mut image=output_status_fixture();

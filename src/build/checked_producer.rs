@@ -27,19 +27,9 @@ pub(super) fn observation_minimum(
     program: &ValidatedEffectProgram,
     work: &mut TypeWorkBudget,
 ) -> Result<(usize, usize), ReceiptFailure> {
-    let mut selected = None;
-    pay(work, program.node_count())?;
-    for (slot, node) in program.nodes().iter().enumerate() {
-        let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &node.kind
-        else {
-            continue;
-        };
-        if selected.is_some()
-            || scope.header().original.host.is_none()
-            || !scope.header().dependencies.is_empty()
-        {
-            return Err(ReceiptFailure::Association);
-        }
+    let scopes = admitted_scopes(program, work)?;
+    let mut total = 0usize;
+    for (_, scope) in &scopes {
         let mut supported = true;
         let mut copies = 0usize;
         let mut exhausted = false;
@@ -104,7 +94,7 @@ pub(super) fn observation_minimum(
             return Err(ReceiptFailure::Resource);
         }
         let independent_output = matches!(scope.header().acquire.owner_role(),
-            Some(crate::foreign::source_contract::PreparedOwnerCall::OutputAcquire { offset: None, .. }))
+            Some(crate::foreign::source_contract::PreparedOwnerCall::OutputAcquire { .. }))
             && matches!(scope.header().teardown.owner_role(),
                 Some(crate::foreign::source_contract::PreparedOwnerCall::StatusTeardown { .. }));
         if !supported || (copies == 0 && !independent_output) || (independent_output && (copies != 0 || windows != 0)) {
@@ -117,26 +107,68 @@ pub(super) fn observation_minimum(
             .checked_add(windows)
             .and_then(|n| n.checked_add(copies))
             .ok_or(ReceiptFailure::Resource)?;
-        selected = Some((slot, minimum));
+        total = total.checked_add(minimum).ok_or(ReceiptFailure::Resource)?;
     }
-    let result = selected.ok_or(ReceiptFailure::Association)?;
-    let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) =
-        &program.nodes()[result.0].kind
-    else {
-        return Err(ReceiptFailure::Association);
-    };
-    complete_association(program, scope, work)?;
-    Ok(result)
+    pay(work, scopes.len())?;
+    let mut references = Vec::new(); references.try_reserve_exact(scopes.len()).map_err(|_|ReceiptFailure::Resource)?;
+    references.extend(scopes.iter().map(|(_, scope)|*scope));
+    complete_association(program, &references, work)?;
+    Ok((scopes[0].0, total))
+}
+
+/// Reconstruct the supported scope census from exact Core originals. Profile tags
+/// do not authorize a scope; the bound image must prove this relation itself.
+pub(super) fn admitted_scopes<'a>(program: &'a ValidatedEffectProgram, work: &mut TypeWorkBudget)
+    -> Result<Vec<(usize, &'a crate::core::source_resource::SourceResourceScopeNode)>, ReceiptFailure> {
+    use crate::{foreign::checked_source, types::{KindedArgument, Type}};
+    pay(work, program.node_count().checked_add(2).ok_or(ReceiptFailure::Resource)?)?;
+    let mut scopes = Vec::new(); scopes.try_reserve_exact(2).map_err(|_|ReceiptFailure::Resource)?;
+    for (slot, node) in program.nodes().iter().enumerate() {
+        if let EffectExprKind::Operation(EffectOperation::SourceResourceScope(scope)) = &node.kind {
+            if scopes.len() == 2 || scope.header().original.host.is_none() { return Err(ReceiptFailure::Association); }
+            scopes.push((slot, scope));
+        }
+    }
+    if scopes.is_empty() { return Err(ReceiptFailure::Association); }
+    if scopes.len() == 1 {
+        if !scopes[0].1.header().dependencies.is_empty() { return Err(ReceiptFailure::Association); }
+        return Ok(scopes);
+    }
+    if !scopes[0].1.header().dependencies.is_empty() { scopes.swap(0,1); }
+    let (parent, child) = (scopes[0].1, scopes[1].1);
+    let (p, c) = (parent.header(), child.header());
+    pay(work, 32)?;
+    if !p.dependencies.is_empty() || c.dependencies.len() != 1
+        || !checked_source::independent_output_acquire(p.acquire.symbol())
+        || !checked_source::independent_status_teardown(p.teardown.symbol())
+        || !checked_source::dependent_output_acquire(c.owner.prepared(), c.acquire.symbol())
+        || !checked_source::dependent_status_teardown(c.owner.prepared(), c.teardown.symbol())
+        || !std::sync::Arc::ptr_eq(p.owner.prepared(), c.owner.prepared())
+        || std::sync::Arc::ptr_eq(&p.owner, &c.owner) { return Err(ReceiptFailure::Association); }
+    let retained = c.original.parameters.iter().position(|parameter|parameter.id == c.dependencies[0]).ok_or(ReceiptFailure::Association)?;
+    // Only original Type formal positions select H and the retained owned C.
+    for (left, right) in [
+        (parent.arguments().get(p.original.host.ok_or(ReceiptFailure::Association)?.position), child.arguments().get(c.original.host.ok_or(ReceiptFailure::Association)?.position)),
+        (parent.arguments().get(p.original.owned_position), child.arguments().get(retained)),
+    ] {
+        let (Some(KindedArgument::TypeArg(left @ Type::Variable(_))), Some(KindedArgument::TypeArg(right @ Type::Variable(_)))) = (left,right)
+            else { return Err(ReceiptFailure::Association); };
+        if !crate::types::same_type_with_budget(left,right,work).map_err(|()|ReceiptFailure::Resource)? {
+            return Err(ReceiptFailure::Association);
+        }
+    }
+    Ok(scopes)
 }
 
 fn complete_association(
     program: &ValidatedEffectProgram,
-    scope: &crate::core::source_resource::SourceResourceScopeNode,
+    scopes: &[&crate::core::source_resource::SourceResourceScopeNode],
     work: &mut TypeWorkBudget,
 ) -> Result<(), ReceiptFailure> {
     use crate::core::source_resource::SourceResourcePhase as Phase;
     use crate::types::{KindedArgument, Type};
     use std::collections::HashSet;
+    let scope = scopes.first().ok_or(ReceiptFailure::Association)?;
     let host = scope
         .header()
         .original
@@ -151,6 +183,7 @@ fn complete_association(
     let mut windows = HashSet::new();
     let mut primitives = HashSet::new();
     let mut failed = None;
+    for scope in scopes {
     let mut insert = |set: &mut HashSet<usize>, id, work: &mut TypeWorkBudget| {
         if work.charge(3).is_err() {
             failed = Some(ReceiptFailure::Resource);
@@ -166,6 +199,7 @@ fn complete_association(
         }
         set.insert(index);
     };
+
     scope
         .visit_windows(
             |id, work| {
@@ -225,6 +259,7 @@ fn complete_association(
                 requests.insert(node_index(program, *id).ok_or(ReceiptFailure::Association)?);
             }
         }
+    }
     }
     let mut hosts = 0usize;
     pay(work, program.node_count())?;
@@ -343,8 +378,8 @@ pub(super) fn policy_bytes(
         out.extend_from_slice(&pin.bytes.to_le_bytes());
         out.extend_from_slice(&pin.sha256);
     }
-    // Exactly one admitted scope: ordinal zero names that complete image scope,
-    // never an unrelated source-arena numeric handle.
+    // Ordinal zero retains its original meaning: the primary admitted scope.
+    // The dependent profile derives its second scope from the bound Core image.
     for n in [
         0,
         minimum,

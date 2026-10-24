@@ -55,6 +55,9 @@ pub(super) fn main() -> std::process::ExitCode {
     std::hint::black_box(transport::OwnerCell::prepare_output_acquire
         as for<'s, 'i> fn(&'s mut transport::OwnerCell, &'i [u8])
             -> Result<checked_owner_leaf::PreparedOutputAcquire<'s, 'i>, checked_owner_leaf::Refusal>);
+    std::hint::black_box(transport::OwnerCell::prepare_dependent_output_acquire
+        as for<'s, 'i> fn(&'s mut transport::OwnerCell, &'s transport::OwnerCell, &'i [u8], i32)
+            -> Result<checked_owner_leaf::PreparedOutputAcquire<'s, 'i>, checked_owner_leaf::Refusal>);
     std::hint::black_box(transport::OwnerCell::prepare_teardown
         as for<'s> fn(&'s mut transport::OwnerCell)
             -> Result<checked_owner_leaf::PreparedTeardown<'s>, checked_owner_leaf::Refusal>);

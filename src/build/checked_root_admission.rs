@@ -24,6 +24,7 @@ pub(crate) struct RootProgram {
     bindings: SourceNativeBindings,
     limits: CheckedOwnerLimits,
     scope: usize,
+    additional_scope: Option<usize>,
     minimum_observations: usize,
     roles: Vec<[u32; 8]>,
     verified: ash_trusted_preparation::VerifiedRunning,
@@ -35,7 +36,7 @@ impl RootProgram {
         bytes: &[u8], facts_bytes: &[u8], policy: &[u8], roles: &[[u32; 8]], profile: u8,
     ) -> Result<Self, RootRefusal> {
         let mut work = gas::startup(bytes.len(), facts_bytes.len()).map_err(|()| RootRefusal::Resource)?;
-        let count = match profile { 0 => 4, 1 => 2, _ => return Err(RootRefusal::Association) };
+        let count = match profile { 0 | 2 => 4, 1 => 2, _ => return Err(RootRefusal::Association) };
         if roles.len() != count { return Err(RootRefusal::Association); }
         work.charge(count * 32 + 8).map_err(|()|RootRefusal::Resource)?;
         let mut retained_roles = Vec::new();
@@ -61,6 +62,11 @@ impl RootProgram {
             .map_err(|error| if error == super::checked_receipt::ReceiptFailure::Resource {
                 RootRefusal::Resource
             } else { RootRefusal::Association })?;
+        let census = super::checked_producer::admitted_scopes(&restored.program, &mut work)
+            .map_err(|error| if error == super::checked_receipt::ReceiptFailure::Resource { RootRefusal::Resource } else { RootRefusal::Association })?;
+        if (profile == 2) != (census.len() == 2) { return Err(RootRefusal::Association); }
+        let additional_scope = census.get(1).map(|(index, _)| *index);
+        drop(census);
         // decode_policy already admitted the fixed complete framing. Retain the
         // actual census for report prepay and join its declared minimum here;
         // trusted request decoding independently regenerated the entire policy.
@@ -74,6 +80,7 @@ impl RootProgram {
             _ => return Err(RootRefusal::Association),
         };
         for (index, role) in roles.iter().enumerate() {
+            if roles[..index].iter().any(|previous|previous == role) { return Err(RootRefusal::Association); }
             let callback = match (profile, index) {
                 (0, 0) => SourceOwnerCallback::CheckedAcquire,
                 (0, 1) => SourceOwnerCallback::CheckedQuery,
@@ -81,6 +88,8 @@ impl RootProgram {
                 (0, 3) => SourceOwnerCallback::CheckedFree,
                 (1, 0) => SourceOwnerCallback::CheckedOutputAcquire,
                 (1, 1) => SourceOwnerCallback::CheckedStatusFree,
+                (2, 0 | 2) => SourceOwnerCallback::CheckedOutputAcquire,
+                (2, 1 | 3) => SourceOwnerCallback::CheckedStatusFree,
                 _ => return Err(RootRefusal::Association),
             };
             let [library_slot, module, ordinal, symbol_slot, symbol_index, operation_module, effect, local] = *role;
@@ -92,7 +101,13 @@ impl RootProgram {
             let checked = check_executable_foreign_library_in_program(identity, Arc::clone(original), &expected,
                 host::NATIVE_TARGET, &restored.program, &mut work).map_err(RootRefusal::Foreign)?;
             let source = restored.symbols.get(symbol_slot as usize).ok_or(RootRefusal::Association)?;
-            if !source.owner().is_some_and(|owner| Arc::ptr_eq(owner, scope_owner)) {
+            let expected_owner = if profile == 2 && index >= 2 {
+                match &restored.program.nodes().get(additional_scope.ok_or(RootRefusal::Association)?).ok_or(RootRefusal::Association)?.kind {
+                    crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(scope)) => &scope.header().owner,
+                    _ => return Err(RootRefusal::Association),
+                }
+            } else { scope_owner };
+            if !source.owner().is_some_and(|owner| Arc::ptr_eq(owner, expected_owner)) {
                 return Err(RootRefusal::Association);
             }
             let operation = restored.relocate_operation(operation_module, effect, local, &mut work)
@@ -103,7 +118,7 @@ impl RootProgram {
         }
         drop(facts);
         let (program, modules) = restored.into_program_and_modules();
-        Ok(Self { program, modules, bindings, limits, scope, minimum_observations, roles: retained_roles, verified, work })
+        Ok(Self { program, modules, bindings, limits, scope, additional_scope, minimum_observations, roles: retained_roles, verified, work })
     }
     /// Consumes the real verified context for exactly one evaluator invocation.
     /// Neither a borrowed grant factory nor a replayable run method is exposed.
@@ -126,7 +141,7 @@ impl RootProgram {
         if host.host().is_none_or(|actual| actual.identity() != *expected) || !host.interpretations().is_empty() {
             return Err(RootRefusal::Association);
         }
-        let admission = RootAdmission { program: &self.program, scope, host, limits: self.limits,
+        let admission = RootAdmission { program: &self.program, scope, additional_scope: self.additional_scope, host, limits: self.limits,
             minimum_observations: self.minimum_observations, roles: &self.roles, _verified: &self.verified };
         let outcome = crate::eval::evaluate_checked_root_program(&admission, &mut self.bindings, &mut self.work)
             .map_err(RootRefusal::Runtime)?;
@@ -143,6 +158,7 @@ impl RootProgram {
 pub(crate) struct RootAdmission<'program> {
     program: &'program ValidatedEffectProgram,
     scope: &'program crate::core::SourceResourceScopeNode,
+    additional_scope: Option<usize>,
     host: &'program crate::core::NativeInterpretNode,
     limits: CheckedOwnerLimits,
     minimum_observations: usize,
@@ -169,7 +185,14 @@ impl<'program> RootAdmission<'program> {
     pub(crate) fn authorizes_scope(&self, scope: &crate::core::SourceResourceScopeNode,
         work: &mut crate::types::TypeWorkBudget) -> Result<bool, crate::eval::RuntimeFailure> {
         charge_entry(work, 2)?;
-        Ok(std::ptr::eq(scope, self.scope))
+        if std::ptr::eq(scope, self.scope) { return Ok(true); }
+        if let Some(index) = self.additional_scope {
+            charge_entry(work, 2)?;
+            return Ok(matches!(&self.program.nodes()[index].kind,
+                crate::core::EffectExprKind::Operation(crate::core::EffectOperation::SourceResourceScope(authorized))
+                if std::ptr::eq(scope, authorized)));
+        }
+        Ok(false)
     }
 }
 

@@ -36,13 +36,15 @@ mod injected {
         pub(crate) fn status(&self) -> Option<RawScalar> { self.status }
         pub(crate) fn readable(&self) -> bool { self.readable }
     }
-    pub(crate) struct OutputAcquireReturned { nonnull: bool, status: RawScalar }
+    pub(crate) struct OutputAcquireReturned { nonnull: bool, status: RawScalar, offset: Option<*mut core::ffi::c_void> }
     impl OutputAcquireReturned {
         pub(crate) fn nonnull(&self) -> bool { self.nonnull }
         pub(crate) fn status(&self) -> RawScalar { self.status }
+        pub(crate) fn offset(&self) -> Option<*mut core::ffi::c_void> { self.offset }
     }
     pub(crate) struct PreparedOutputAcquire<'s, 'i> {
         destination: &'s mut OwnerCell, prepared: Option<Owner>, _input: &'i [u8], status: i32,
+        parent: Option<&'s OwnerCell>,
     }
     pub(crate) struct PreparedTeardown<'s> { destination: &'s mut OwnerCell }
 
@@ -143,7 +145,16 @@ mod injected {
             let prepared = (!NULL.replace(false)).then(||Owner {
                 serial, bytes: Box::new([0; 8]), opaque: true, unresolved: false,
             });
-            Ok(PreparedOutputAcquire { destination: self, prepared, _input: input, status: OUTPUT_STATUS.get() })
+            Ok(PreparedOutputAcquire { destination: self, prepared, _input: input, status: OUTPUT_STATUS.get(), parent: None })
+        }
+        pub(crate) fn prepare_dependent_output_acquire<'s, 'i>(&'s mut self, parent: &'s OwnerCell,
+            input: &'i [u8], length: i32) -> Result<PreparedOutputAcquire<'s, 'i>, Refusal> {
+            let owner = parent.owner.as_ref().ok_or(Refusal::Owner)?;
+            if !owner.opaque || owner.unresolved { return Err(Refusal::Owner); }
+            if usize::try_from(length).ok().is_none_or(|length|length > input.len()) { return Err(Refusal::Range); }
+            let mut prepared = self.prepare_output_acquire(input)?;
+            prepared.parent = Some(parent);
+            Ok(prepared)
         }
         pub(crate) fn mark_unresolved_for_test(&mut self) {
             self.owner.as_mut().expect("injected occupied owner").unresolved = true;
@@ -219,7 +230,8 @@ mod injected {
         pub(crate) fn invoke(self) -> OutputAcquireReturned {
             call(0);
             self.destination.owner = self.prepared;
-            OutputAcquireReturned { nonnull: self.destination.owner.is_some(), status: RawScalar::I32(self.status) }
+            OutputAcquireReturned { nonnull: self.destination.owner.is_some(), status: RawScalar::I32(self.status),
+                offset: (self.parent.is_some() && self.status == 0).then(||self._input.as_ptr().wrapping_add(self._input.len() - 1).cast_mut().cast()) }
         }
     }
     impl PreparedTeardown<'_> {
@@ -258,6 +270,29 @@ mod injected {
     #[cfg(test)]
     mod output_status_tests {
         use super::*;
+        #[test]
+        fn dependent_transport_holds_parent_and_destination_without_address_escape() {
+            reset();
+            let mut parent = OwnerCell::vacant();
+            parent.prepare_output_acquire(b"name\0").unwrap().invoke();
+            let mut child = OwnerCell::vacant();
+            let absent = OwnerCell::vacant();
+            assert!(child.prepare_dependent_output_acquire(&absent, b"SELECT 1;\0", 10).is_err());
+            assert!(child.prepare_dependent_output_acquire(&parent, b"SELECT 1;\0", -1).is_err());
+            drop(child.prepare_dependent_output_acquire(&parent, b"SELECT 1;\0", 4).unwrap());
+            assert_eq!(calls()[0], 1);
+            assert!(child.prepare_dependent_output_acquire(&parent, b"SELECT 1;\0", 11).is_err());
+            let input = b"SELECT 1;\0";
+            let returned = child.prepare_dependent_output_acquire(&parent, input, 10).unwrap().invoke();
+            assert!(returned.nonnull());
+            assert!(parent.is_occupied());
+            assert_eq!(returned.offset(), Some(input.as_ptr().wrapping_add(9).cast_mut().cast()));
+            assert!(child.query(0).is_err());
+            disposal(Some(true), Some(-3), true);
+            assert_eq!(child.prepare_teardown().unwrap().invoke().disposition(), Some(true));
+            assert!(parent.is_occupied());
+            assert!(!child.is_occupied());
+        }
         #[test]
         fn transport_model_arms_error_output_and_retains_exact_owner_on_status() {
             reset(); output_status(-11);

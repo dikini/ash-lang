@@ -73,6 +73,24 @@ impl NativeOwnerDependency {
         pay(work, 1)?;
         Ok(NativeOwnerBoundary { storage: Rc::clone(&self.storage), slot: self.slot })
     }
+    /// Mint only after exact typed dependency lookup. This is a locator, not entry authority.
+    pub(crate) fn operand(&self, work: &mut TypeWorkBudget) -> Result<NativeOwnerOperand, NativeOwnerAdmissionError> {
+        let slots = self.storage.slots.borrow();
+        let slot = &slots[self.slot];
+        if NativeOwnerStorage::denied(&slots, self.slot) || !slot.physically_live() {
+            return Err(NativeOwnerAdmissionError::Authority);
+        }
+        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        if slot.leaf.is_some() {
+            pay(work, 8)?;
+            let activation = slot.authority.as_ref().ok_or(NativeOwnerAdmissionError::Authority)?.activation;
+            return Ok(NativeOwnerOperand::CheckedParent(CheckedParentLocator {
+                storage: Rc::as_ptr(&self.storage) as usize, slot: self.slot, activation,
+            }));
+        }
+        let _ = work;
+        self.address().map(NativeOwnerOperand::Address).ok_or(NativeOwnerAdmissionError::Authority)
+    }
     pub(crate) fn address(&self) -> Option<*mut core::ffi::c_void> {
         let slots = self.storage.slots.borrow();
         if slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied) {
@@ -321,6 +339,12 @@ impl NativeOwnerDestruction {
     }
 }
 
+/// Opaque nonowning locator minted only by typed dependency lookup. It grants no
+/// native access and must match the prepared slot dependency again at entry.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct CheckedParentLocator { storage: usize, slot: usize, activation: usize }
+
 /// Already admitted native operands. Addresses are borrowed from guarded slots;
 /// this transport alone grants neither source access nor owner disposition.
 #[doc(hidden)]
@@ -328,6 +352,8 @@ impl NativeOwnerDestruction {
 pub enum NativeOwnerOperand {
     Scalar(NativeScalarValue),
     Address(*mut core::ffi::c_void),
+    /// Private checked transport locator; never a native pointer or source value.
+    CheckedParent(CheckedParentLocator),
     /// A private, null-initialized output slot supplied by the typed wrapper.
     OwnerOutput,
     /// A private initialized pointer-output slot, separate from the owner slot.
@@ -909,7 +935,7 @@ impl NativeOwnerGuard {
         if blocked || slot.quarantined || slot.host_attempted || !slot.physically_live() {
             return Ok(());
         }
-        if slot.live_dependents != 0 || !slot.dependencies.is_empty() {
+        if slot.live_dependents != 0 {
             return Ok(());
         }
         // Use the common entry barrier under this same held borrow. Its fixed
@@ -948,6 +974,7 @@ impl NativeOwnerGuard {
                 control.guard_disposed(consumed);
             }
             if consumed { *leaf = Some(CheckedLeafBacking::Consumed); }
+            if consumed { NativeOwnerStorage::record_consumed(&mut slots, self.slot); }
             self.initialized_bytes = None;
             Ok(())
         }
@@ -1007,18 +1034,21 @@ impl NativeOwnerGuard {
         let mut slots = self.storage.slots.try_borrow_mut()
             .map_err(|_| NativeOwnerAdmissionError::Authority)?;
         NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
-        let blocked = blocked || slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied);
+        let blocked = blocked || NativeOwnerStorage::has_dependents(&slots, self.slot)
+            || slots[self.slot].checked_group_root.is_some_and(|root| slots[root].checked_group_denied);
         let slot = slots.get_mut(self.slot).ok_or(NativeOwnerAdmissionError::Authority)?;
-        let NativeOwnerSlot { leaf, checked, dependencies, quarantined, closing_status, last_observed_status, .. } = slot;
+        let NativeOwnerSlot { leaf, checked, quarantined, closing_status, last_observed_status, .. } = slot;
         let control = checked.as_mut().ok_or(NativeOwnerAdmissionError::Authority)?;
         let leaf_for_preparation = &mut *leaf;
         let (entry, prepared) = control.begin_finish_entry_prepared(blocked, move || {
-            if !dependencies.is_empty() { return Err(crate::foreign::checked_control::Failure::State); }
             let Some(CheckedLeafBacking::Cell(cell)) = leaf_for_preparation else { return Err(crate::foreign::checked_control::Failure::State); };
             cell.prepare_teardown().map_err(|_|crate::foreign::checked_control::Failure::State)
         }).map_err(control_error)?;
         match (entry, prepared) {
             (crate::foreign::checked_control::FinishEntry::Synthetic(witness), None) => {
+                if witness.completion() == crate::foreign::checked_control::Completion::DependencyBlocked {
+                    *quarantined = true; // K5 retains this backing, without denying the child group.
+                }
                 drop(slots);
                 Ok((NativeOwnerDisposition::Synthetic { guard: self, witness }, None))
             }
@@ -1039,6 +1069,7 @@ impl NativeOwnerGuard {
                     control.finished(consumed);
                 }
                 if consumed { *leaf = Some(CheckedLeafBacking::Consumed); }
+                if consumed { NativeOwnerStorage::record_consumed(&mut slots, self.slot); }
                 drop(slots);
                 if consumed { Ok((NativeOwnerDisposition::Consumed(Arc::clone(&self.owner)), status)) }
                 else { Ok((NativeOwnerDisposition::Retained(self), status)) }
@@ -1459,6 +1490,7 @@ impl NativeOwnerGuard {
     ) -> Result<(), NativeOwnerAdmissionError> {
         let mut slots = self.storage.slots.borrow_mut();
         NativeOwnerStorage::sync_group_denial(&mut slots, self.slot);
+        let blocked = blocked || NativeOwnerStorage::has_dependents(&slots, self.slot);
         if let Some(control) = &mut slots[self.slot].checked {
             control
                 .prepare_finish(receipt, activation, blocked, work)
@@ -1623,13 +1655,26 @@ impl NativeOwnerGuardReady {
                 return Err(NativeOwnerAdmissionError::Authority);
             }
         }
-        let checked = crate::foreign::checked_control::RuntimeBoundary::reserve(
-            receipt,
-            activation,
-            limits.ok_or(NativeOwnerAdmissionError::Authority)?,
-            work,
-        )
-        .map_err(control_error)?;
+        let checked = {
+            let slots = self.guard.storage.slots.borrow();
+            let slot = &slots[self.guard.slot];
+            let parent = match slot.dependencies.as_ref() {
+                [] => None,
+                [parent] => {
+                    pay(work, 64)?; // inherited lineage and future fixed parent/destination entry checks
+                    let parent_slot = &slots[*parent];
+                    let root = slot.checked_group_root.ok_or(NativeOwnerAdmissionError::Authority)?;
+                    let parent = parent_slot.checked.as_ref().ok_or(NativeOwnerAdmissionError::Authority)?;
+                    let root = slots[root].checked.as_ref().ok_or(NativeOwnerAdmissionError::Authority)?;
+                    if parent.lineage() != root.lineage() { return Err(NativeOwnerAdmissionError::Authority); }
+                    Some(parent)
+                }
+                _ => return Err(NativeOwnerAdmissionError::Authority),
+            };
+            crate::foreign::checked_control::RuntimeBoundary::reserve(
+                receipt, activation, limits.ok_or(NativeOwnerAdmissionError::Authority)?, parent, work,
+            ).map_err(control_error)?
+        };
         self.guard.storage.slots.borrow_mut()[self.guard.slot].checked = Some(checked);
         Ok(())
     }
@@ -1791,32 +1836,65 @@ impl NativeOwnerGuardReady {
     }
 
     #[cfg(any(test, ash_checked_owner_root = "v1"))]
-    pub(in crate::foreign) fn invoke_checked_output_leaf(
-        self, input: &[u8],
+    pub(in crate::foreign) fn invoke_checked_output_leaf(self, input: &[u8])
+        -> Result<NativeOwnerCallReturned, NativeScalarCallError> {
+        self.invoke_checked_output_leaf_with_parent(input, None)
+    }
+
+    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    pub(in crate::foreign) fn invoke_checked_output_leaf_with_parent(
+        self, input: &[u8], parent: Option<(CheckedParentLocator, i32)>,
     ) -> Result<NativeOwnerCallReturned, NativeScalarCallError> {
         let mut slots = self.guard.storage.slots.try_borrow_mut()
             .map_err(|_|NativeScalarCallError::ArgumentContract)?;
         let index = self.guard.slot;
         NativeOwnerStorage::entry_allowed(&mut slots, index, false)
             .map_err(|_|NativeScalarCallError::ArgumentContract)?;
-        let slot = slots.get_mut(index).ok_or(NativeScalarCallError::ArgumentContract)?;
-        if !slot.dependencies.is_empty() || self.prepared_initialized_bytes.is_some() {
-            return Err(NativeScalarCallError::ArgumentContract);
-        }
+        if self.prepared_initialized_bytes.is_some() { return Err(NativeScalarCallError::ArgumentContract); }
+        let parent_index = match parent {
+            Some((locator, _)) => {
+                if locator.storage != Rc::as_ptr(&self.guard.storage) as usize
+                    || slots[index].dependencies.as_ref() != [locator.slot]
+                    || locator.slot >= index
+                    || NativeOwnerStorage::denied(&slots, locator.slot)
+                    || !slots[locator.slot].physically_live()
+                    || slots[locator.slot].authority.as_ref().is_none_or(|authority| authority.activation != locator.activation)
+                    || slots[locator.slot].checked_group_root != slots[index].checked_group_root
+                    || slots[locator.slot].checked.as_ref().is_none_or(|parent| !parent.parent_loan_live()
+                        || slots[index].checked.as_ref().is_none_or(|child|child.lineage() != parent.lineage())) {
+                    return Err(NativeScalarCallError::ArgumentContract);
+                }
+                Some(locator.slot)
+            }
+            None if slots[index].dependencies.is_empty() => None,
+            None => return Err(NativeScalarCallError::ArgumentContract),
+        };
+        let (preceding, destination) = slots.split_at_mut(index);
+        let slot = destination.first_mut().ok_or(NativeScalarCallError::ArgumentContract)?;
         let NativeOwnerSlot { leaf, checked, closing_status, last_observed_status, .. } = slot;
         let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeScalarCallError::ArgumentContract); };
         let control = checked.as_mut().ok_or(NativeScalarCallError::ArgumentContract)?;
-        let prepared = cell.prepare_output_acquire(input).map_err(|_|NativeScalarCallError::ArgumentContract)?;
+        let prepared = if let Some(parent_index) = parent_index {
+            let Some(CheckedLeafBacking::Cell(parent_cell)) = preceding[parent_index].leaf.as_ref() else {
+                return Err(NativeScalarCallError::ArgumentContract);
+            };
+            cell.prepare_dependent_output_acquire(parent_cell, input, parent.expect("selected parent").1)
+        } else { cell.prepare_output_acquire(input) }.map_err(|_|NativeScalarCallError::ArgumentContract)?;
         control.begin_acquire().map_err(|_|NativeScalarCallError::ArgumentContract)?;
         let returned = prepared.invoke(); // first arms the actual destination
+
+        if returned.nonnull() && let Some(parent_index) = parent_index {
+            preceding[parent_index].live_dependents += 1; // overflow admitted before entry
+        }
         let scalar = leaf_scalar(returned.status());
         control.observe_acquisition_status(Some(scalar));
         *closing_status = control.acquisition_status();
         *last_observed_status = *closing_status;
         control.acquired_status(returned.nonnull(), scalar);
+        let offset = returned.offset();
         drop(slots);
         Ok(NativeOwnerCallReturned { guard: self.guard, prepared_initialized_bytes: None,
-            scalar: Some(scalar), offset: None, recorded: true })
+            scalar: Some(scalar), offset, recorded: true })
     }
 
     /// Called immediately by the generated typed wrapper after native return.

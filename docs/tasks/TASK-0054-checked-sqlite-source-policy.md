@@ -469,3 +469,40 @@ deployment ran. All six conformity fields remain Missing and default association
 is None. Full F-core, milestone workspace and separate Main integration gates
 remain open. This result supplies bounded F3/F5 evidence; it does not check a
 whole criterion.
+
+
+## Dependent physical implementation candidate
+
+Root authorized the connected exact Prepare/Finalize extension after retained
+F3 static acceptance `52d4e122` and the independent native-preparation audit.
+The source candidate uses the existing checked-ffi worktree and branch
+`codex/checked-sqlite-dependent-physical`; it preserves original F3 acceptance.
+All authored Rust controls, generated compile/link checks and Clippy remain
+UNRUN until independent source constraint review assigns the serialized build
+lane. Source syntax checks do not establish type checking or behavior.
+
+The candidate joins inherited physical group lineage and owner-local K/history,
+opaque parent selectors and held parent/destination loans, retained child edges,
+conforming unpublished disposal, stable copied SQL and signed-length/offset
+transport, evaluator entry and completion, executable seals, exact generated
+leaf roles and two-scope producer/root reconstruction. The new internal profile
+uses four exact parent/child originals; existing profile tags and policy framing
+keep their meanings and per-boundary capacities. Public activation, protected
+installation and native execution are not authorized by this candidate.
+
+The closed physical length admission accepts the original narrowed signed-32
+source value only from zero through the stable NUL input allocation length and
+passes it unchanged. This is a runtime profile bound, not a new static source
+length equation. Multioperand Borrow, copied text bindings, row/kind caches,
+full E/B handler execution, Initialize and whole-library/isolation acceptance
+remain subsequent work. No SQLite-name dispatch or budget change is included.
+
+Required focused evidence includes actual source/Core dependent requests joined
+to injected physical calls, parent Close blocked by a live child, Finalize error
+consumption and once-only edge removal, L9 unpublished disposal versus L8 suspect
+retention, wrong storage/group/activation and stale parent refusal, window/Access
+misuse, null and out-of-range offsets, actual negative tail policy, exact/short/
+spent/fresh work, unchanged independent/arena profiles, exact original bridge and
+immutable image/role/policy substitution controls. These controls supply no
+native observation claim. The actual native lane retaining tip must be reconciled
+before freezing focused verification inputs; F-core and F-final remain pending.

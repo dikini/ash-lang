@@ -648,6 +648,18 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "assigned dependent four-role/two-scope compile-link slot; output is never executed"]
+    fn genuine_dependent_output_status_root_and_leaf_compile_link_without_startup() {
+        check_generated_compile_link(
+            include_str!("../../tests/fixtures/checked-owner-runtime/dependent-output-status.c"),
+            include_bytes!("../../tests/fixtures/checked-owner-runtime/dependent-output-status.h"),
+            include_str!("../../libraries/sqlite_checked.ash"),
+            include_str!("../../tests/fixtures/checked-sqlite/dependent-physical-entry.ash"),
+            "int sqlite3_finalize(", "sqlite3_finalize", "dependent-output-status",
+        );
+    }
+
     fn check_generated_compile_link(native_source: &str, native_header: &[u8], producer: &str, entry: &str,
         release_definition: &str, release_name: &str, profile: &str) {
         let target =
@@ -846,6 +858,12 @@ mod tests {
             assert!(leaf.contains("pub fn prepare_teardown"));
             assert!(leaf.contains("#[link_name = \"sqlite3_open_v2\"]"));
             assert!(leaf.contains("#[link_name = \"sqlite3_close\"]"));
+        }
+        if profile == "dependent-output-status" {
+            assert!(leaf.contains("pub fn prepare_dependent_output_acquire"));
+            assert!(leaf.contains("#[link_name = \"sqlite3_prepare_v2\"]"));
+            assert!(leaf.contains("#[link_name = \"sqlite3_finalize\"]"));
+            assert!(std::str::from_utf8(&data.shim).unwrap().contains("const CHECKED_PROFILE: u8 = 2"));
         }
         // Build a fresh coherent native observation for the donor rather than
         // changing a source behind an old pin. Header/prototype compilation

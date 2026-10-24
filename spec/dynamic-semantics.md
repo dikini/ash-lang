@@ -622,13 +622,44 @@ owner-disposition rules are unchanged.
 
 ## Source resource execution with native owners
 
-The explicit checked-host profile, `checked_scope` and checked byte/copy
-primitives have static source/Core correspondence and private static-image
-reconstruction only. Public checked building, executable native admission and
-evaluation remain unavailable; evaluation refuses `checked_scope` before its
-initializer runs. The rules in this section describe ordinary executable owner
-resources; they do not implement checked native outcomes, checked memory access,
-K discharge or host disposal.
+Public checked building, executable native admission and ordinary evaluation
+remain unavailable; ordinary evaluation refuses `checked_scope` before its
+initializer runs. Static source/Core and private-image reconstruction do not
+grant native entry. The ordinary executable owner rules below remain distinct
+from private checked-root admission.
+
+The private generated checked-root path admits the exact independent opaque
+output/status profile and its dependent two-owner extension only after immutable
+running-image verification and independent source/Core/image reconstruction.
+The dependent extension selects the existing independent parent acquisition and
+teardown plus the exact dependent acquisition and teardown described in the
+static profile. It reconstructs both scopes, their original owner-specific
+members, complete argument vectors, common host and retained parent identity.
+Profile tags, role counts, same-shaped owners and matching H alone grant no
+scope or native authority. Existing policy framing and capacities retain their
+per-boundary meaning; the two-scope census does not turn them into aggregate
+owner limits.
+
+Dependent entry borrows the exact preceding live parent and vacant child
+destination under one held physical-storage borrow. Its opaque nonowning
+selector must match the already prepared dependency, storage, activation and
+inherited group lineage. A window, ordinary access handle or unrelated group
+cannot replace it. The copied NUL input remains live through native return and
+input-relative offset interpretation. This physical profile admits a narrowed
+signed-32 source length from zero through the complete copied input length,
+including its terminator, and forwards that value unchanged. Outside this bound
+entry refuses; the static signature does not infer length equality.
+
+Every nonnull child return arms the destination and its one parent backing edge
+before fallible output construction. Null establishes no child edge. Conforming
+unpublished disposal retains the parent through teardown, removes the edge only
+on established consumption and creates no source completion obligation. A
+quarantined or contradictory acquisition retains backing and supplies no native
+teardown permission. Parent closing with a live or unresolved dependent completes
+locally without native entry. An admitted child teardown consumption removes its
+edge once even when its readable status reports a native error; retained or
+unresolved outcomes preserve backing. Owner-specific local completion and
+physical group denial remain separate records.
 
 The admitted product source resource scope combines an Ash initializer, acquire
 and finish functions, private data `D`, and an associated ordinary effect handler.

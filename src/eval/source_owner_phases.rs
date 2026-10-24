@@ -1554,9 +1554,6 @@ impl<'runtime> super::Machine<'runtime> {
                 #[cfg(test)]
                 post_record_test::destruction_preflight(&mut self.instantiation_work);
                 let Some(destruction) = (if invocation.uses_checked_leaf() {
-                    if !boundary.dependencies.is_empty() {
-                        return Err(super::RuntimeFailure::ForeignBinding);
-                    }
                     Some(Vec::new())
                 } else { prepare_destruction_operands(
                     invocation.destructor(),
@@ -1803,7 +1800,7 @@ impl<'runtime> super::Machine<'runtime> {
         let dependency = self.enclosing_owner_dependency(boundary_index, request, value, path, finishing)?;
         dependency.pay_group_checks(1, &mut self.instantiation_work)
             .map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))?;
-        Ok(NativeOwnerOperand::Address(dependency.address().ok_or(super::RuntimeFailure::ForeignBinding)?))
+        dependency.operand(&mut self.instantiation_work).map_err(|error| crate::foreign::source_bindings::owner_admission_failure(error, &self.instantiation_work))
     }
 
     fn enclosing_owner_dependency(
@@ -3252,5 +3249,19 @@ pub(crate) mod post_record_test {
             }
             STATE.set(Some(state));
         }
+    }
+}
+
+#[cfg(test)]
+mod dependent_offset_controls {
+    use super::input_relative_offset;
+    #[test]
+    fn exact_copied_input_bounds_reject_negative_foreign_and_past_end_offsets() {
+        assert_eq!(input_relative_offset(100, 10, 100), Some(0));
+        assert_eq!(input_relative_offset(100, 10, 110), Some(10));
+        assert_eq!(input_relative_offset(100, 10, 99), None);
+        assert_eq!(input_relative_offset(100, 10, 111), None);
+        assert_eq!(input_relative_offset(100, 10, 500), None);
+        assert_eq!(input_relative_offset(usize::MAX - 1, 1, usize::MAX), Some(1));
     }
 }

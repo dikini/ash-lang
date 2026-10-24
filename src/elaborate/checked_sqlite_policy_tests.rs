@@ -148,3 +148,15 @@ fn checked_policy_trace_is_ordinary_source_without_native_authority() {
         assert!(matches!(result.value, crate::eval::Value::Boolean(false)));
     }
 }
+
+#[test]
+fn checked_statement_tail_policy_rejects_actual_negative_and_outside_offsets() {
+    let policy = SQLITE.split_once("pub type OpenPolicy").unwrap().1;
+    let source = format!("import @builtin.foreign as Foreign\nimport @builtin.bytes as B\nimport @builtin.string as Text\npub type OpenPolicy{policy}\n");
+    for (offset, expected) in [(-1, false), (0, false), (9, true), (10, true), (11, false)] {
+        let entry = format!("import producer as SQLite\nmain : Unit -> Bool\nmain () = SQLite.valid_tail (\"SELECT 1; \", {offset})\n");
+        let (core, _) = checked_owner_passive_program_for_source(&source, &entry);
+        let result = crate::eval::evaluate_effect(&core).unwrap();
+        assert!(matches!(result.value, crate::eval::Value::Boolean(actual) if actual == expected));
+    }
+}

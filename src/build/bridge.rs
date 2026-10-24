@@ -328,6 +328,8 @@ impl TargetResolvedForeignBridge {
         // forms. Inspect its original and target coordinates before rendering;
         // unsupported offsets/sentinels never inherit a generic pointer grant.
         let output_acquire = self.call == TargetBridgeCall::OwnerOutputAcquire;
+        if output_acquire { work.charge(12).map_err(|()|ReceiptFailure::Resource)?; }
+        let dependent_output = output_acquire && crate::foreign::checked_source::dependent_output_acquire(self.symbol.prepared(), self.symbol.symbol());
         if output_acquire {
             // Twelve original-shape units plus eight fixed target/result and
             // checked-profile inspections precede all new correspondence work.
@@ -340,9 +342,11 @@ impl TargetResolvedForeignBridge {
                 _ => return Err(ReceiptFailure::Association),
             };
             if self.symbol.prepared().checked_contract().is_none()
-                || !crate::foreign::checked_source::independent_output_acquire(self.symbol.symbol())
-                || self.operands.as_ref() != [TargetOperand::Address, TargetOperand::OwnerOutput,
-                    TargetOperand::Scalar(TargetScalar::I32), TargetOperand::Address]
+                || (!crate::foreign::checked_source::independent_output_acquire(self.symbol.symbol()) && !dependent_output)
+                || (!dependent_output && self.operands.as_ref() != [TargetOperand::Address, TargetOperand::OwnerOutput,
+                    TargetOperand::Scalar(TargetScalar::I32), TargetOperand::Address])
+                || (dependent_output && self.operands.as_ref() != [TargetOperand::Address, TargetOperand::Address,
+                    TargetOperand::Scalar(TargetScalar::I32), TargetOperand::OwnerOutput, TargetOperand::OffsetOutput])
                 || self.result != original_result
             {
                 return Err(ReceiptFailure::Association);
@@ -360,7 +364,10 @@ impl TargetResolvedForeignBridge {
             }
             args.push_str(match operand {
                 TargetOperand::Scalar(s) => scalar(*s),
-                TargetOperand::Address if output_acquire && matches!(i, 0 | 3) => "const unsigned char *",
+                TargetOperand::Address if dependent_output && i == 1 => "const unsigned char *",
+                TargetOperand::OwnerOutput if dependent_output && i == 3 => "void **",
+                TargetOperand::OffsetOutput if dependent_output && i == 4 => "const unsigned char **",
+                TargetOperand::Address if output_acquire && !dependent_output && matches!(i, 0 | 3) => "const unsigned char *",
                 TargetOperand::OwnerOutput if output_acquire && i == 1 => "void **",
                 TargetOperand::Address => "void *",
                 _ => return Err(ReceiptFailure::Association),
