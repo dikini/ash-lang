@@ -6,7 +6,7 @@ compile_error!("unsupported checked owner leaf target");
 use std::{ffi::c_void, ptr::NonNull, sync::atomic::{AtomicU64, Ordering}};
 unsafe extern "C" {
     #[link_name = __ACQUIRE_NAME__]
-    fn native_acquire(input: *const u8, output: *mut *mut c_void, flags: i32, context: *mut c_void) -> __ACQUIRE_TYPE__;
+    fn native_acquire(input: *const u8, output: *mut *mut c_void, flags: i32, context: *const u8) -> __ACQUIRE_TYPE__;
     #[link_name = __RELEASE_NAME__]
     fn native_release(owner: *mut c_void) -> __RELEASE_TYPE__;
 }
@@ -94,7 +94,7 @@ impl PreparedOutputAcquire<'_, '_> {
         let mut output = std::ptr::null_mut();
         // SAFETY: exact typed original ABI, prepaid NUL input and initialized
         // output slot; validity/retention are the independently approved premise.
-        let status = unsafe { native_acquire(self.input.as_ptr(), &mut output, __FLAGS__, std::ptr::null_mut()) };
+        let status = unsafe { native_acquire(self.input.as_ptr(), &mut output, __FLAGS__, std::ptr::null()) };
         *self.destination = NonNull::new(output).map(|address| Owner { address, serial: self.serial, unresolved: false }); // FIRST backing action.
         OutputAcquireReturned { nonnull: self.destination.is_some(), status: RawScalar::__ACQUIRE_VARIANT__(status) }
     }

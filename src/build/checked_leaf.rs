@@ -400,6 +400,8 @@ mod tests {
         assert!(canonical.source.contains("#[link_name = \"sqlite3_open_v2\"]"));
         assert!(canonical.source.contains("#[link_name = \"sqlite3_close\"]"));
         assert!(canonical.source.contains("6_i32"));
+        assert!(canonical.source.contains("context: *const u8"));
+        assert!(canonical.source.contains("6_i32, std::ptr::null()"));
         assert!(canonical.source.contains("Some((true, true))"));
         assert!(canonical.source.contains("Some((false, true))"));
         assert!(!canonical.source.contains("impl Drop"));
