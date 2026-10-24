@@ -6,14 +6,17 @@
   [owned plan](plans/checked-ffi-regions-control.md)
 
 > This task records the agreed work boundary and delivery plan. It does not
-> define Ash semantics or authorize implementation. Technical interface and
-> memory mapping remain proposed in CP-0024 pending S1 design review.
+> define Ash semantics. The current assignment authorizes retirement of the
+> obsolete launch stack only. New interface and memory mapping remain proposed
+> in CP-0024 pending S1 design review.
 
 ## Dependencies
 
-Preserve current Main specification truth and the milestone product tree.
+Preserve current Main language behavior and unrelated milestone work. Remove
+the obsolete artifact/receipt/protected-launch stack under the user's explicit
+cleanup authorization; do not reset the whole product tree to Main.
 Root owns issue revisions and subsequent implementation assignments. S1 design
-review must precede source implementation; earlier local pointer/reset drafts
+review must precede new API implementation; earlier local pointer/reset drafts
 remain unmerged and do not supply accepted technical decisions.
 
 ## Agreed work boundary
@@ -57,8 +60,9 @@ report concrete unsupported cases/differences. The small fixture complements it.
 coverage and numeric representation delivery are not required now; discovered
 C-aligned representation gaps are future work to prioritize as needed.
 
-S1 design review is next. S2-S4 remain held, not execution assignments. See the
-owned plan for the bounded completion conditions.
+The obsolete artifact/launch retirement is authorized now. S1 API design review
+is next; new API implementation and native examples remain held. See the owned
+plan for the reuse/removal sequence and final verification owner.
 
 ## Progress
 
@@ -66,7 +70,9 @@ The planning/issue revision was delivered by
 [PR135](https://github.com/dikini/ash-lang/pull/135), with the SQLite canary
 clarification delivered by [PR136](https://github.com/dikini/ash-lang/pull/136).
 [Parent #52](https://github.com/dikini/ash-lang/issues/52) tracks the revised work.
-S1 design review is next; S2-S4 implementation remains held. No API, native
+The user subsequently authorized removal of unnecessary code. The first slice
+retires the artifact/receipt/protected-launch build stack while preserving
+ordinary builds and runtime machinery. S1 API design remains next. No API, native
 execution or product implementation is accepted by those documentation changes.
 
 The old F1-F8 workplan and checked-host/full-SQLite/deployment assignments are
@@ -76,9 +82,11 @@ scope; unfinished old criteria are not claimed satisfied.
 
 ## Verification
 
-For this revision, check the docs-only diff, links, consistent S1-S4 issue map,
-proposed technical status and independent review. No compiler or native run is
-required. Product verification belongs to later assigned implementation stages.
+For this retirement, run a workspace check and focused ordinary build, image,
+nonforeign and cleanup regressions, then independently review the removed
+dependency closure. Do not run generated native programs or protected operations.
+The developer owns the full normal gate at the integrated slim path plus example
+checkpoint before M1 acceptance and Main integration.
 
 ## Discoveries
 
@@ -90,4 +98,6 @@ resource-State or copying subsystem is assumed necessary.
 
 This smaller boundary replaces the
 [prior workplan](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/plans/checked-ffi-regions-control.md).
-It does not reset Main, remove product code or complete the earlier gates.
+The earlier planning revision did not remove product code. The separately
+authorized retirement now removes the obsolete launch stack without resetting
+Main or completing the earlier gates.

@@ -755,7 +755,6 @@ fn eight_byte_fixture_for_program(program: crate::core::ValidatedEffectProgram) 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ClosingStage { Reserved, Armed, Body, Consumed, Retained, Synthetic, SyntheticNotRequested }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 pub(crate) fn with_unpublished_leaf_for_test(
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
         crate::foreign::source_runtime::NativeOwnerBoundary,
@@ -763,7 +762,6 @@ pub(crate) fn with_unpublished_leaf_for_test(
 ) {
     with_unpublished_leaf_program_for_test(eight_byte_program(), test)
 }
-#[cfg(not(ash_checked_owner_root = "v1"))]
 pub(crate) fn with_unpublished_int_refusal_for_test(
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
         crate::foreign::source_runtime::NativeOwnerBoundary,
@@ -778,7 +776,6 @@ pub(crate) fn with_unpublished_int_refusal_for_test(
         "import @builtin.foreign as Foreign\nimport producer as Producer\nmain : Unit -> Foreign.CheckedScope<Producer.CopyProbe, Int, Unit>\nmain () = Producer.run ()\n");
     with_unpublished_leaf_program_for_test(program, test)
 }
-#[cfg(not(ash_checked_owner_root = "v1"))]
 fn with_unpublished_leaf_program_for_test(
     program: crate::core::ValidatedEffectProgram,
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
@@ -1230,7 +1227,6 @@ pub(crate) fn with_eight_byte_boundary_for_test(
     });
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 fn leaf_authority_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> NativeOwnerGuardReady {
     let mut ready = NativeOwnerGuardReady::in_storage_plan(
         Arc::clone(&acquire._scope.header().owner),
@@ -1244,7 +1240,6 @@ fn leaf_authority_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> 
     ready.prepare_initialized_bytes(Some(8));
     ready
 }
-#[cfg(not(ash_checked_owner_root = "v1"))]
 fn leaf_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> NativeOwnerGuardReady {
     let mut ready = leaf_authority_ready(acquire, work);
     ready.prepare_checked_boundary(acquire, 111, Some(crate::foreign::source_runtime::CheckedOwnerLimits {
@@ -1253,7 +1248,6 @@ fn leaf_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> NativeOwne
     ready
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 #[test]
 fn checked_leaf_full_slot_query_copy_and_native_finish_record_before_output_failure() {
     use crate::foreign::checked_leaf_transport as leaf;
@@ -1310,7 +1304,6 @@ fn checked_leaf_full_slot_query_copy_and_native_finish_record_before_output_fail
     assert_eq!(leaf::calls(), [1, 1, 1, 1, 1]);
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 #[test]
 fn checked_leaf_preentry_null_output_loss_and_synthetic_finish_do_not_invent_release() {
     use crate::foreign::checked_leaf_transport as leaf;
@@ -1549,7 +1542,6 @@ fn checked_violation_request_and_null_observation_identity_are_exact() {
     }
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 fn with_output_status_context(
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, FixtureRequest, FixtureRequest),
 ) {
@@ -1560,7 +1552,6 @@ fn with_output_status_context(
     with_program_context(&program, test);
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 fn output_leaf_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> NativeOwnerGuardReady {
     let mut ready = leaf_authority_ready(acquire, work);
     ready.prepare_initialized_bytes(None);
@@ -1570,7 +1561,6 @@ fn output_leaf_ready(acquire: &FixtureRequest, work: &mut TypeWorkBudget) -> Nat
 
 /// Rust physical backing on genuinely admitted output/status Core. This helper
 /// creates neither an executable binding nor protected/native permission.
-#[cfg(not(ash_checked_owner_root = "v1"))]
 pub(crate) fn with_output_status_unpublished_for_test(
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
         crate::foreign::source_runtime::NativeOwnerBoundary,
@@ -1585,7 +1575,6 @@ pub(crate) fn with_output_status_unpublished_for_test(
     });
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 #[test]
 fn genuine_output_status_guard_commits_typed_observations_before_reporting() {
     use crate::foreign::checked_leaf_transport as leaf;
@@ -1612,7 +1601,6 @@ fn genuine_output_status_guard_commits_typed_observations_before_reporting() {
     }
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 #[test]
 fn genuine_output_status_finish_uses_original_disposition_and_preserves_retained_backing() {
     use crate::foreign::checked_leaf_transport as leaf;
@@ -1645,7 +1633,6 @@ fn genuine_output_status_finish_uses_original_disposition_and_preserves_retained
     }
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 pub(crate) fn with_output_status_closing_for_test(
     test: impl FnOnce(&crate::core::ValidatedEffectProgram, crate::core::NodeId,
         crate::foreign::source_runtime::NativeOwnerBoundary,
@@ -1664,7 +1651,6 @@ pub(crate) fn with_output_status_closing_for_test(
     });
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 #[test]
 fn genuine_output_status_preentry_refusals_preserve_native_call_count() {
     use crate::foreign::checked_leaf_transport as leaf;
@@ -1692,7 +1678,6 @@ fn genuine_output_status_preentry_refusals_preserve_native_call_count() {
     });
 }
 
-#[cfg(not(ash_checked_owner_root = "v1"))]
 #[test]
 fn genuine_generic_status_finish_never_retries_on_drop_or_explicit_storage_close() {
     use crate::foreign::checked_control::{Native,K};

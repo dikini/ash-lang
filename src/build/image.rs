@@ -13136,37 +13136,11 @@ impl Decoder<'_> {
     }
 }
 
-type CheckedReencodingData = (NativeBuildImage, Vec<(ModuleId, Arc<SourceFile>)>);
-
 impl RestoredEffectImage {
-    /// Reuse the complete checked producer encoder after independent restore.
-    /// This returns data, never executable provider admission.
-    pub(crate) fn reencode_checked_data(
-        &self,
-        work: &mut TypeWorkBudget,
-    ) -> Result<CheckedReencodingData, NativeImageFailure> {
-        charge(work, self.sources.len())?;
-        let mut provenance = Vec::new();
-        provenance.try_reserve_exact(self.sources.len()).map_err(|_| ImageFailure::Resource)?;
-        for (module, source) in self.modules.iter().zip(&self.sources) {
-            charge(work, source.snapshot_work().map_err(|_| ImageFailure::Resource)?.checked_add(1).ok_or(ImageFailure::Resource)?)?;
-            provenance.push((*module, Arc::new(source.clone())));
-        }
-        let build = encode_checked_preparation(&self.program, &provenance, super::host::NATIVE_TARGET, work)?;
-        Ok((build, provenance))
-    }
-
     /// Drops startup-only coordinates/arena view after executable admission.
     /// The checked program/descriptor owners retain their original required data.
     pub(crate) fn into_program(self) -> crate::core::ValidatedEffectProgram {
         self.program
-    }
-
-    /// Retain existing original module coordinates for bounded root outcome
-    /// DATA. This moves the already funded table; it grants no dispatch rights.
-    #[cfg(ash_checked_owner_root = "v1")]
-    pub(crate) fn into_program_and_modules(self) -> (crate::core::ValidatedEffectProgram, Vec<ModuleId>) {
-        (self.program, self.modules)
     }
 
     pub(crate) fn relocate_library(
@@ -13337,25 +13311,7 @@ pub(crate) fn encode_effect_for_build(
     target: &str,
     work: &mut TypeWorkBudget,
 ) -> Result<NativeBuildImage, NativeImageFailure> {
-    encode_native_preparation(program, provenance, target, work, NativePreparation::Legacy)
-}
-
-#[derive(Clone, Copy)]
-enum NativePreparation { Legacy, Checked }
-
-/// Private producer-only route. It grants neither native binding nor startup.
-/// All ordinary serializer, original-source and bridge admission remains shared.
-pub(crate) fn encode_checked_preparation(
-    program: &crate::core::ValidatedEffectProgram,
-    provenance: &[(ModuleId, Arc<SourceFile>)],
-    target: &str,
-    work: &mut TypeWorkBudget,
-) -> Result<NativeBuildImage, NativeImageFailure> {
-    super::checked_producer::observation_minimum(program, work).map_err(|error| match error {
-        super::checked_receipt::ReceiptFailure::Resource => ImageFailure::Resource,
-        _ => ImageFailure::Unsupported(Unsupported::EffectOperation),
-    })?;
-    encode_native_preparation(program, provenance, target, work, NativePreparation::Checked)
+    encode_native_preparation(program, provenance, target, work)
 }
 
 fn encode_native_preparation(
@@ -13363,14 +13319,13 @@ fn encode_native_preparation(
     provenance: &[(ModuleId, Arc<SourceFile>)],
     target: &str,
     work: &mut TypeWorkBudget,
-    preparation: NativePreparation,
 ) -> Result<NativeBuildImage, NativeImageFailure> {
     let mut identities = Vec::new();
     let mut original_variables = Vec::new();
     charge(work, program.node_count())?;
     // A static host binder grants no executable image permission, even for
     // an empty interpretation vector. Refuse before encoding registry or body.
-    if matches!(preparation, NativePreparation::Legacy) && program.nodes().iter().any(|node| {
+    if program.nodes().iter().any(|node| {
         matches!(&node.kind,
             crate::core::EffectExprKind::Operation(crate::core::EffectOperation::NativeInterpret(boundary))
                 if boundary.host().is_some())

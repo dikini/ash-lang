@@ -493,7 +493,6 @@ mod tests {
         });
     }
 
-    #[cfg(not(ash_checked_owner_root = "v1"))]
     #[test]
     fn genuine_output_status_refusal_preserves_acquisition_and_disposal_inspections() {
         use crate::foreign::{checked_leaf_reset as reset, checked_leaf_calls as calls,
@@ -535,7 +534,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(ash_checked_owner_root = "v1"))]
     #[test]
     fn genuine_status_finish_codec_requires_actual_closing_and_completes_once() {
         use crate::foreign::{checked_leaf_reset as reset, checked_leaf_output_status as output_status,
@@ -609,7 +607,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(ash_checked_owner_root = "v1"))]
     #[test]
     fn unpublished_leaf_refusal_discard_and_output_failure_dispose_before_reporting() {
         use crate::foreign::{checked_leaf_calls as leaf_calls, checked_leaf_reset as leaf_reset,
@@ -672,7 +669,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(ash_checked_owner_root = "v1"))]
     #[test]
     fn huge_typed_refusal_copy_is_funded_after_disposal_and_survives_one_short() {
         use crate::foreign::{checked_leaf_calls as leaf_calls, checked_leaf_reset as leaf_reset,

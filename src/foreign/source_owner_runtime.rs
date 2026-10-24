@@ -129,7 +129,7 @@ pub type NativeOwnerStatusTeardownCallback = fn(&[NativeOwnerOperand]) -> Native
 
 #[derive(Debug)]
 pub(crate) enum NativeOwnerDestruction {
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     CheckedLeaf,
     Void {
         callback: NativeOwnerTeardownCallback,
@@ -196,17 +196,12 @@ pub(in crate::foreign) fn scalar_observation(
     NativeOwnerStatus { reply, readable: false, valid }.raw_observation()
 }
 
-#[cfg(any(test, ash_checked_owner_root = "v1"))]
+#[cfg(test)]
 fn leaf_scalar(value: super::super::checked_leaf_transport::RawScalar) -> NativeScalarReply {
     use super::super::checked_leaf_transport::RawScalar as Raw;
-    NativeScalarReply::Scalar(match value {
-        Raw::I8(n) => NativeScalarValue::I8(n), Raw::U8(n) => NativeScalarValue::U8(n),
-        Raw::I32(n) => NativeScalarValue::I32(n), Raw::U32(n) => NativeScalarValue::U32(n),
-        Raw::I64(n) => NativeScalarValue::I64(n), Raw::U64(n) => NativeScalarValue::U64(n),
-        Raw::USize(n) => NativeScalarValue::USize(n),
-    })
+    NativeScalarReply::Scalar(match value { Raw::I32(n) => NativeScalarValue::I32(n) })
 }
-#[cfg(any(test, ash_checked_owner_root = "v1"))]
+#[cfg(test)]
 fn leaf_disposal_status(returned: &super::super::checked_leaf_transport::DisposalReturned)
     -> Option<NativeOwnerStatus> {
     if returned.disposition().is_none() {
@@ -238,7 +233,7 @@ impl NativeOwnerDestruction {
         operands: &[NativeOwnerOperand],
     ) -> (bool, Option<NativeOwnerStatus>) {
         match self {
-            #[cfg(any(test, ash_checked_owner_root = "v1"))]
+            #[cfg(test)]
             Self::CheckedLeaf => unreachable!("opaque checked release never uses a raw callback"),
             Self::Void { callback, consumes } => {
                 callback(operands);
@@ -442,7 +437,7 @@ pub(crate) struct NativeOwnerStorage {
 #[derive(Debug)]
 struct NativeOwnerSlot {
     raw: RawOwnerGuard,
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     leaf: Option<CheckedLeafBacking>,
     quarantined: bool,
     // Stable indexes into this never-removed arena; no owner/member backedges.
@@ -461,7 +456,7 @@ struct NativeOwnerSlot {
     last_observed_status: Option<i128>,
 }
 
-#[cfg(any(test, ash_checked_owner_root = "v1"))]
+#[cfg(test)]
 #[derive(Debug)]
 enum CheckedLeafBacking {
     Cell(super::super::checked_leaf_transport::OwnerCell),
@@ -469,7 +464,7 @@ enum CheckedLeafBacking {
 }
 impl NativeOwnerSlot {
     fn physically_live(&self) -> bool {
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         if let Some(leaf) = &self.leaf {
             return match leaf {
                 CheckedLeafBacking::Cell(cell) => cell.is_occupied(),
@@ -479,7 +474,7 @@ impl NativeOwnerSlot {
         self.raw.address.is_some()
     }
     fn raw_address(&self) -> Option<NonNull<core::ffi::c_void>> {
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         if self.leaf.is_some() { return None; }
         self.raw.address
     }
@@ -495,14 +490,14 @@ impl NativeOwnerStorage {
         let mut slots = self.slots.borrow_mut();
         slots.try_reserve(1).map_err(|_| ())?;
         let index = slots.len();
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         let leaf = if matches!(teardown, NativeOwnerDestruction::CheckedLeaf) {
             if count != 0 || current != 0 { return Err(()); }
             Some(CheckedLeafBacking::Cell(super::super::checked_leaf_transport::OwnerCell::vacant()))
         } else { None };
         slots.push(NativeOwnerSlot {
             raw: RawOwnerGuard::with_plan(teardown, count, current)?,
-            #[cfg(any(test, ash_checked_owner_root = "v1"))]
+            #[cfg(test)]
             leaf,
             quarantined: false,
             checked_group_root: None,
@@ -598,7 +593,7 @@ impl NativeOwnerStorage {
             return;
         }
         let slot = &mut slots[index];
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         if slot.leaf.is_some() {
             // Physical checked backing never enters an implicit destructor.
             // Keep it unresolved for the pre-funded host transfer/report path.
@@ -765,7 +760,7 @@ impl Drop for NativeOwnerStorage {
 /// the Ash heap; copying this storage handle grants no invocation authority.
 #[derive(Debug)]
 pub(crate) struct NativeOwnerGuard {
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     backing: GuardBacking,
     storage: Rc<NativeOwnerStorage>,
     slot: usize,
@@ -774,7 +769,7 @@ pub(crate) struct NativeOwnerGuard {
     bytes: Option<NativeByteCallbacks>,
 }
 
-#[cfg(any(test, ash_checked_owner_root = "v1"))]
+#[cfg(test)]
 #[derive(Debug)]
 enum GuardBacking { Legacy, CheckedLeaf }
 
@@ -921,9 +916,9 @@ impl NativeOwnerGuard {
             Err(NativeOwnerAdmissionError::Authority) => return Ok(()),
             Err(error) => return Err(error),
         }
-        let slot = &mut slots[self.slot];
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         {
+            let slot = &mut slots[self.slot];
             let NativeOwnerSlot { leaf, checked, host_attempted, closing_status, last_observed_status, .. } = slot;
             if leaf.is_none() { return Ok(()); }
             let Some(CheckedLeafBacking::Cell(cell)) = leaf else { return Err(NativeOwnerAdmissionError::Authority); };
@@ -951,7 +946,7 @@ impl NativeOwnerGuard {
             self.initialized_bytes = None;
             Ok(())
         }
-        #[cfg(not(any(test, ash_checked_owner_root = "v1")))]
+        #[cfg(not(test))]
         {
             let _ = (activation, scope);
             Err(NativeOwnerAdmissionError::Authority)
@@ -967,7 +962,7 @@ impl NativeOwnerGuard {
         operands: &[NativeOwnerOperand],
         blocked: bool,
     ) -> Result<(NativeOwnerDisposition, Option<NativeOwnerStatus>), NativeOwnerAdmissionError> {
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         if matches!(plan, NativeOwnerDestruction::CheckedLeaf) {
             if !operands.is_empty() { return Err(NativeOwnerAdmissionError::Authority); }
             return self.finish_checked_leaf(blocked);
@@ -999,7 +994,7 @@ impl NativeOwnerGuard {
         }
     }
 
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     fn finish_checked_leaf(
         self,
         blocked: bool,
@@ -1115,7 +1110,7 @@ impl NativeOwnerGuard {
 
 impl Drop for NativeOwnerGuard {
     fn drop(&mut self) {
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         if matches!(self.backing, GuardBacking::CheckedLeaf) {
             // Refusal while another live storage borrow exists must not reborrow
             // in Drop. The slot still owns its opaque cell; the ordinary host
@@ -1265,7 +1260,7 @@ pub(crate) struct NativeOwnerBorrowRecord {
     original: Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
 }
 impl NativeOwnerBorrowRecord {
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     pub(in crate::foreign) fn invoke_leaf(self, key: usize, query: bool) -> Result<(NativeOwnerBoundary, super::super::source_bindings::SourceWindowRaw), NativeScalarCallError> {
         // Query's additional nonowning view retain is paid during preparation.
         let view_boundary = query.then(|| NativeOwnerBoundary { storage: Rc::clone(&self.boundary.storage), slot: self.boundary.slot });
@@ -1322,7 +1317,7 @@ pub(crate) struct NativeOwnerCopyRecord {
     entry_work: TypeWorkBudget,
 }
 impl NativeOwnerCopyRecord {
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     pub(crate) fn copy_checked_leaf(mut self, view: &super::view::NativeViewReturned, destination: &mut [u8]) -> Result<(), NativeOwnerAdmissionError> {
         let (owner, descriptor) = view.checked_descriptor().ok_or(NativeOwnerAdmissionError::Authority)?;
         if owner.slot != self.boundary.slot || !Rc::ptr_eq(&owner.storage, &self.boundary.storage) { return Err(NativeOwnerAdmissionError::Authority); }
@@ -1581,12 +1576,12 @@ impl NativeOwnerGuardReady {
         current: usize,
         storage: Rc<NativeOwnerStorage>,
     ) -> Result<Self, ()> {
-        #[cfg(any(test, ash_checked_owner_root = "v1"))]
+        #[cfg(test)]
         let backing = if matches!(plan, NativeOwnerDestruction::CheckedLeaf) { GuardBacking::CheckedLeaf } else { GuardBacking::Legacy };
         let slot = storage.reserve(plan, count, current)?;
         Ok(Self {
             guard: NativeOwnerGuard {
-                #[cfg(any(test, ash_checked_owner_root = "v1"))]
+                #[cfg(test)]
                 backing,
                 storage,
                 slot,
@@ -1751,7 +1746,7 @@ impl NativeOwnerGuardReady {
     /// The exact checked route owns the slot borrow before transport preparation
     /// and C. Profile/identity refusal happens before the ledger enters; after
     /// invocation both physical arming and mandatory observation use this borrow.
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     pub(in crate::foreign) fn invoke_checked_leaf(
         mut self,
         capacity: usize,
@@ -1790,7 +1785,7 @@ impl NativeOwnerGuardReady {
         })
     }
 
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     pub(in crate::foreign) fn invoke_checked_output_leaf(
         self, input: &[u8],
     ) -> Result<NativeOwnerCallReturned, NativeScalarCallError> {
@@ -1939,7 +1934,7 @@ impl NativeOwnerCallRecorded {
     }
 }
 
-#[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+#[cfg(test)]
 impl NativeOwnerGuardReady {
     pub(crate) fn assert_leaf_borrow_refusal_for_test(self) {
         let storage = Rc::clone(&self.guard.storage);
@@ -1949,7 +1944,7 @@ impl NativeOwnerGuardReady {
         assert!(storage.close());
     }
 }
-#[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+#[cfg(test)]
 impl NativeOwnerGuard {
     pub(crate) fn mark_leaf_unpreparable_for_test(&mut self) {
         let mut slots = self.storage.slots.borrow_mut();

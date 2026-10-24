@@ -1,8 +1,11 @@
 //! Independent checked-resource observations. These values confer no authority.
 use super::{Evaluation, RuntimeFailure};
 use crate::types::TypeWorkBudget;
-use std::{cell::Cell, rc::Rc, sync::atomic::{AtomicU64, Ordering}};
+use std::{cell::Cell, rc::Rc};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(test)]
 static NEXT_REPORTS: AtomicU64 = AtomicU64::new(1);
 
 /// Last admitted native ownership fact, distinct from later uncertainty.
@@ -190,20 +193,22 @@ pub struct CheckedEvaluation {
     result: Result<Evaluation, RuntimeFailure>,
     reports: Vec<ResourceReport>,
     unpublished: Vec<UnpublishedGuardInspection>,
+    #[cfg(test)]
     failure_effect_trace: Option<Vec<super::EffectTraceEvent>>,
 }
 impl CheckedEvaluation {
+    #[cfg(test)]
     pub(crate) fn from_parts(
         result: Result<Evaluation, RuntimeFailure>,
         reports: Vec<ResourceReport>,
     ) -> Self {
         Self { result, reports, unpublished: Vec::new(), failure_effect_trace: None }
     }
-    pub(crate) fn with_inspections_and_trace(result: Result<Evaluation, RuntimeFailure>, reports: Vec<ResourceReport>, unpublished: Vec<UnpublishedGuardInspection>, failure_effect_trace: Option<Vec<super::EffectTraceEvent>>) -> Self {
-        Self { result, reports, unpublished, failure_effect_trace }
+    pub(crate) fn with_inspections_and_trace(result: Result<Evaluation, RuntimeFailure>, reports: Vec<ResourceReport>, unpublished: Vec<UnpublishedGuardInspection>, #[cfg(test)] failure_effect_trace: Option<Vec<super::EffectTraceEvent>>) -> Self {
+        Self { result, reports, unpublished, #[cfg(test)] failure_effect_trace }
     }
     /// Actual machine trace or its terminal prefix; None means unavailable.
-    #[cfg(any(test, ash_checked_owner_root = "v1"))]
+    #[cfg(test)]
     pub(crate) fn effect_trace(&self) -> Option<&[super::EffectTraceEvent]> {
         match &self.result {
             Ok(evaluation) => evaluation.retained_effect_trace(),
@@ -264,10 +269,12 @@ impl ResourceReportSlot {
         }
     }
 }
+#[cfg(test)]
 pub(crate) struct ReadyResourceReport<'a> {
     records: &'a mut Vec<ResourceReport>,
 }
 impl ResourceReports {
+    #[cfg(test)]
     pub(crate) fn reserve(
         capacity: usize,
         work: &mut TypeWorkBudget,
@@ -328,6 +335,7 @@ impl ResourceReports {
         self.unpublished.push(observation);
         slot.publication.set(Publication::GuardObserved);
     }
+    #[cfg(test)]
     pub(crate) fn ready(&mut self) -> Result<ReadyResourceReport<'_>, RuntimeFailure> {
         if self.reserved == self.limit {
             return Err(super::failure::resource_failure(
@@ -345,6 +353,7 @@ impl ResourceReports {
             records: &mut self.records,
         })
     }
+    #[cfg(test)]
     pub(crate) fn into_records(self) -> Vec<ResourceReport> {
         self.records
     }
@@ -354,12 +363,14 @@ impl ResourceReports {
     pub(crate) fn record(&self, index: usize) -> Option<&ResourceReport> {
         self.records.get(index)
     }
+    #[cfg(test)]
     pub(crate) fn record_count(&self) -> usize { self.records.len() }
     pub(crate) fn record_for(&self, slot: &ResourceReportSlot) -> Option<&ResourceReport> {
         if slot.collector != self.identity { return None; }
         self.record(slot.published()?)
     }
 }
+#[cfg(test)]
 impl ReadyResourceReport<'_> {
     pub(crate) fn commit(self, report: ResourceReport) -> usize {
         // The exclusive pre-entry borrow preserves the admitted spare slot.

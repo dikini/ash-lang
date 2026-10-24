@@ -28,9 +28,39 @@ Full SQLite coverage is not required now. Discover C-aligned primitive needs as
 they arise and report them for later prioritization; no fixed type catalogue,
 scheduled extension phase or numeric-delivery prerequisite follows.
 
-Root assigns each stage. This checkpoint revises planning and issues only;
-implementation, native runs and product cleanup remain held. Detailed pointer
-API/memory mapping is S1 work, not a decision inherited from earlier drafts.
+Root assigns each stage. The user has authorized removal of unnecessary code;
+new pointer/API implementation and native execution still need S1 design.
+Existing machinery governs values and artifacts originating in FFI. Foreign
+origin adds no admission, lifecycle or validation protocol.
+
+Use this concrete sequence:
+
+1. Retire the milestone-only artifact/receipt/protected-launch package, producer,
+   root, leaf, link observers, APIs and dedicated tests. Trim their hooks from
+   normal build/emission; preserve typed bridges, generic image/Core fixes,
+   fingerprint/gas, managed Bytes, effects, handlers and cleanup. No Main reset.
+2. Settle the smallest address/byte mapping in S1, then replace inherited foreign
+   policy in the existing entry and delete its obsolete dependency closure.
+   Current shared checked source-projection/reconstruction and injected leaf
+   policy tests remain only until this replacement; they are not a permanent
+   compatibility stack. No new general resource-State mechanism is assumed.
+3. Use ordinary Ash binding code and existing cleanup for the small normal/error
+   example. Assess pointer-only SQLite canary calls, such as libversion/sourceid,
+   against open/prepare calls whose C int/out-pointer shapes may be unsupported.
+   Report actual gaps; do not add a shim to claim numeric representation support.
+4. The developer owns focused ordinary build/image/nonforeign regressions and a
+   workspace check for this removal. At the integrated slim path plus example,
+   the developer runs the full normal gate before M1 acceptance/Main integration.
+   This cleanup alone is not milestone completion.
+
+Observed first-retirement editing/check time was about one active agent hour
+before review, including fresh unit-test compilation. Estimated remaining active
+agent elapsed time with one writer and parallel review: S1 0.5–1 hour;
+S2 2–4 hours including mandatory obsolete source-policy retirement;
+S3 0.75–1.5 hours; S4 0.75–1.5 hours, about 4–8 hours total.
+Allow up to roughly 12 hours only if S1 exposes a concrete missing ordinary
+memory/backing capability or policy deletion reveals generic Core/image coupling
+that needs repair. These are estimates, not promises or a new mechanism budget.
 
 The [old F1-F8 plan](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/plans/checked-ffi-regions-control.md)
 is superseded as an active assignment. Its source/static results remain

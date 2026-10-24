@@ -1,10 +1,8 @@
 //! Private physical transport only. Neither type availability nor a prepared
 //! acquisition supplies source, protected-context or native-entry permission.
 
-#[cfg(ash_checked_owner_root = "v1")]
-pub(crate) use crate::checked_owner_root::transport::{OwnerCell, ViewDescriptor, RawScalar, DisposalReturned};
 
-#[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+#[cfg(test)]
 mod injected {
     use std::{cell::Cell, fmt};
 
@@ -29,7 +27,7 @@ mod injected {
     }
     pub(crate) struct ReleaseReturned;
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub(crate) enum RawScalar { I8(i8), U8(u8), I32(i32), U32(u32), I64(i64), U64(u64), USize(usize) }
+    pub(crate) enum RawScalar { I32(i32) }
     pub(crate) struct DisposalReturned { disposition: Option<bool>, status: Option<RawScalar>, readable: bool }
     impl DisposalReturned {
         pub(crate) fn disposition(&self) -> Option<bool> { self.disposition }
@@ -301,10 +299,10 @@ mod injected {
     }
 }
 
-#[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+#[cfg(test)]
 pub(crate) use injected::*;
 
-#[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

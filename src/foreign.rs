@@ -12,11 +12,11 @@
 //! ```
 mod arena;
 mod checked_control;
-#[cfg(any(test, ash_checked_owner_root = "v1"))]
+#[cfg(test)]
 mod checked_leaf_transport;
 // Rust-only injected observation controls; expose no physical transport type
 // or constructor to the evaluator tests and no product binding/admission.
-#[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+#[cfg(test)]
 pub(crate) use checked_leaf_transport::{
     calls as checked_leaf_calls, null_next as checked_leaf_null_next,
     reset as checked_leaf_reset,
