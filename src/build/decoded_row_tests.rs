@@ -72,7 +72,6 @@ fn decoder<'a>(
         expected_fact_prefixes: None,
         sources: CoordinateStorage::Owned(Vec::new()),
         modules: CoordinateStorage::Owned(vec![module]),
-        source_pending_rows: Default::default(),
         source_declaration_catalogs: HashMap::new(),
         decoded_types: HashMap::new(),
         decoded_rows: HashMap::new(),
@@ -164,7 +163,7 @@ fn decoded_rows_keep_full_kinds_identities_and_paid_exact_replays() {
 }
 
 #[test]
-fn decoded_rows_never_cross_prefix_pending_or_coordinate_domains() {
+fn decoded_rows_never_cross_prefix_or_coordinate_domains() {
     let (mut image, root) = fixture(2);
     let prefixes = NativeFactPrefixes::seal(&image).unwrap();
     let suffix = record(
@@ -182,17 +181,6 @@ fn decoded_rows_never_cross_prefix_pending_or_coordinate_domains() {
     d.expected_fact_prefixes = Some(prefixes);
     assert!(matches!(d.row(suffix), Err(ImageFailure::InvalidRecord)));
     d.expected_fact_prefixes = None;
-    let count = d.decoded_rows.len();
-    d.source_pending_rows
-        .insert(crate::types::InferenceVariableId::new(20));
-    let before = d.work.used();
-    assert_eq!(d.row(root).unwrap(), original);
-    let cold_cost = d.work.used() - before;
-    assert_eq!(d.decoded_rows.len(), count);
-    d.source_pending_rows.clear();
-    let before = d.work.used();
-    assert_eq!(d.row(root).unwrap(), original);
-    assert!(d.work.used() - before < cold_cost);
     assert!(matches!(d.row(0), Err(ImageFailure::InvalidRecord)));
     assert!(!d.decoded_rows.contains_key(&(0, 0, 1)));
     d.modules.push(ModuleId::new(402), d.work).unwrap();
@@ -211,21 +199,22 @@ fn decoded_rows_never_cross_prefix_pending_or_coordinate_domains() {
         donor, original,
         "fresh Decoder preserves distinct module identities"
     );
-    let pending = record(
+    let malformed = record(
         &mut image,
-        TypeTag::SourcePendingRow {
-            known: 0,
-            identity: 20,
+        TypeTag::Row {
+            known: 1,
+            tail: None,
         },
-        &[],
+        &[0],
     );
     let mut d = decoder(&image, &mut work, ModuleId::new(401));
-    d.source_pending_rows
-        .insert(crate::types::InferenceVariableId::new(20));
-    d.row(pending).unwrap();
-    assert!(d.decoded_rows.is_empty());
-    d.source_pending_rows.clear();
-    assert!(matches!(d.row(pending), Err(ImageFailure::InvalidRecord)));
+    for _ in 0..2 {
+        assert!(matches!(d.row(malformed), Err(ImageFailure::InvalidRecord)));
+        assert!(
+            !d.decoded_rows.contains_key(&(malformed, 0, 1)),
+            "malformed raw rows cannot publish a cached value"
+        );
+    }
 }
 
 #[test]

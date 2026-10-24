@@ -9,10 +9,9 @@ pub mod function;
 pub mod literal;
 pub mod packed;
 pub mod primitive;
-pub(crate) mod provider;
+
 pub mod recursion;
-pub(crate) mod source_resource;
-pub(crate) mod source_window;
+
 pub mod transform;
 pub mod type_ops;
 pub mod validate;
@@ -32,7 +31,7 @@ pub use effect::{
 };
 pub use primitive::Primitive;
 pub use recursion::{RecursiveBindingMember, RecursiveBindingNode};
-pub use source_resource::SourceResourceScopeNode;
+
 pub use type_ops::{
     LocalNominalScopeNode, NewtypeConversionDirection, NewtypeConversionNode, TypeAbstractionNode,
     TypeApplicationNode,
@@ -42,23 +41,3 @@ pub use variable::TypedBinder;
 
 #[cfg(test)]
 pub(crate) use validate::check_ordinary_effect_modules_with_budget_for_test;
-
-#[cfg(test)]
-pub(crate) fn corrupt_provider_core_closure_for_test(
-    program: &mut UnvalidatedEffectProgram,
-    mutation: usize,
-    span: crate::source::Span,
-) -> bool {
-    std::sync::Arc::make_mut(&mut program.registry)
-        .corrupt_provider_core_closure_for_test(mutation, span)
-}
-
-#[cfg(test)]
-pub(crate) fn erase_provider_certificates_for_test(program: &mut UnvalidatedEffectProgram) {
-    std::sync::Arc::make_mut(&mut program.registry).erase_provider_certificates_for_test();
-}
-
-#[cfg(test)]
-pub(crate) fn erase_registered_foreign_facts_for_test(program: &mut UnvalidatedEffectProgram) {
-    std::sync::Arc::make_mut(&mut program.registry).erase_registered_foreign_facts_for_test();
-}

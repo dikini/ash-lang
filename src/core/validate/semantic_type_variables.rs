@@ -183,10 +183,6 @@ impl<'work> UnusedVariables<'work> {
             }
             self.application(&owner.application)?;
             match &owner.resource {
-                Some(MethodEvidenceResourceOwner::Provider(owner)) => {
-                    self.id(owner.identity)?;
-                    self.arguments(&owner.arguments)?;
-                }
                 Some(MethodEvidenceResourceOwner::Builtin(owner)) => self.id(owner.identity)?,
                 None => {}
             }
@@ -308,25 +304,11 @@ impl<'work> UnusedVariables<'work> {
                     match operation {
                         EffectOperation::NativeInterpret(boundary) => {
                             self.charge(boundary.interpretations().len())?;
-                            if let Some(host) = boundary.host() {
-                                self.id(host.identity())?;
-                            }
                         }
                         EffectOperation::Handler(handler) => {
                             self.charge(handler.clauses().len())?
                         }
-                        EffectOperation::ProviderScope(scope) => {
-                            self.charge(scope.attached.len() + scope.handler.clauses().len())?;
-                            for attached in &scope.attached {
-                                self.charge(attached.handler.clauses().len())?;
-                            }
-                        }
-                        EffectOperation::SourceResourceScope(scope) => self.charge(
-                            scope.handler.clauses().len() + scope.native_interpretations().len(),
-                        )?,
-                        EffectOperation::SourceCopyWindow(window) => {
-                            self.charge(window.interpretations().len())?
-                        }
+
                         _ => {}
                     }
                 }
@@ -386,70 +368,12 @@ impl<'work> UnusedVariables<'work> {
                     }
                 });
                 result?;
-                if let Some(scope) = F::source_scope(&node.kind) {
-                    scope.visit_semantic_type_variables(self)?;
-                    self.charge(3)?;
-                    pending.try_reserve(3).map_err(|_| ())?;
-                    pending.extend([
-                        scope.original().original_acquire(),
-                        scope.original().original_finish(),
-                        scope.original().original_handler(),
-                    ]);
-                }
-                if let Some(scope) = F::provider_scope(&node.kind) {
-                    scope.visit_semantic_type_variables(self)?;
-                }
             }
             for anchor in &program.method_evidence_anchors {
                 self.application(&anchor.application)?;
             }
             program.registry.visit_semantic_type_variables(self)?;
             self.catalog(&program.method_evidence)?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn pending_rows(
-        &mut self,
-        pending: &crate::core::provider::HandlerPendingRows,
-    ) -> Result<(), ()> {
-        use crate::core::provider::PendingRowEquation;
-        self.charge(
-            pending.equations.len() + pending.equalities.len() + pending.recomputations.len(),
-        )?;
-        for record in &pending.equations {
-            match &record.equation {
-                PendingRowEquation::Discard(_) => {}
-                PendingRowEquation::Union(left, right) => {
-                    self.row(left)?;
-                    self.row(right)?;
-                }
-                PendingRowEquation::Remove(row, effect, _) => {
-                    self.row(row)?;
-                    self.instance(effect)?;
-                }
-            }
-        }
-        for equality in &pending.equalities {
-            self.row(&equality.left)?;
-            self.row(&equality.right)?;
-        }
-        for recomputation in &pending.recomputations {
-            self.row(&recomputation.output)?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn capture_inputs(
-        &mut self,
-        inputs: &crate::core::capture::ActualCaptureInputs,
-    ) -> Result<(), ()> {
-        self.charge(inputs.rows.len() + inputs.witnesses.len())?;
-        for row in inputs.rows.values() {
-            self.row(row)?;
-        }
-        for witness in &inputs.witnesses {
-            self.row(&witness.row)?;
         }
         Ok(())
     }

@@ -80,7 +80,7 @@ Use input-derived cumulative work allowances at the modular compiler phase
 owners and for native preparation and startup. The accepted policy is:
 
 ```text
-preparation gas = 125 * (admitted source UTF8 bytes + validated main Core nodes)
+preparation gas = 850 * (admitted source UTF8 bytes + validated main Core nodes)
 source gas      = 800 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 800 * (the same canonical source UTF8 closure)
 rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
@@ -184,6 +184,22 @@ meter carries its census, native-input checks, image encoding and emission.
 The finite measurements used `204P` and stopped before generated-host building
 or evaluation; normal native verification and retained delivery remain required.
 Source/Final/rewrite/Core/startup policies and every other check remain unchanged.
+
+For the CP-0024 slim transition, the project lead selected preparation `850P`
+under the same delegated calibration judgment after independent review. The
+retained ordinary handled-row workload at depth 42 used 2,181,566 units for
+P = 3,494; depth 43 used 2,330,800 units for P = 3,510 (3,401 source bytes and
+109 main nodes). These measurements carry the paid source census through complete
+image encoding and Rust emission; they exclude native-input path checks,
+generated-host building and execution. Encoding and emission took about 28 ms
+at depth 43. A 25% fitting reserve requires integer coefficient 831; 850 grants
+2,983,500 units, about 28% above that observation. The former `125P` allowance
+would require an 81% reduction in complete preparation work for this input.
+Changing the coefficient avoids new encoding or caching machinery for this
+measured cost. These two fitting cases are not a universal bound. The cumulative
+meter still pays native-input checks, and all bootstrap, overflow, exhaustion,
+depth and separate phase limits remain unchanged. Normal depth-42/43 preparation
+and native startup verification remain required.
 
 ### Optional C/header verification
 

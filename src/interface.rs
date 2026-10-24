@@ -144,8 +144,7 @@ impl InterfaceConstraintBudget {
                             pending.push(Task::Type(right));
                             pending.push(Task::Type(left));
                         }
-                        Type::ResourceApply(_, arguments)
-                        | Type::ForeignOwnerApply(_, arguments) => {
+                        Type::ResourceApply(_, arguments) => {
                             self.charge(arguments.len())?;
                             pending.try_reserve(arguments.len()).map_err(|_| ())?;
                             pending.extend(arguments.iter().map(Task::Argument));
@@ -336,18 +335,7 @@ impl InterfaceConstraintBudget {
                 (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
                 (Type::Variable(left), Type::Variable(right)) if left == right => {}
                 (Type::Inference(left), Type::Inference(right)) if left == right => {}
-                (
-                    Type::ForeignOwnerApply(left_id, left),
-                    Type::ForeignOwnerApply(right_id, right),
-                ) if left_id == right_id && left.len() == right.len() => {
-                    self.charge(left.len())?;
-                    pending.try_reserve(left.len()).map_err(|_| ())?;
-                    pending.extend(
-                        left.iter()
-                            .zip(right)
-                            .map(|(left, right)| Task::Arguments(left, right)),
-                    );
-                }
+
                 (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                     if left_id == right_id && left.len() == right.len() =>
                 {
@@ -531,7 +519,7 @@ fn type_contains_any_variable(
                 pending.try_reserve(elements.len()).map_err(|_| ())?;
                 pending.extend(elements.iter().rev());
             }
-            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) => {
                 if extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })? {
@@ -597,7 +585,7 @@ fn schedule_type_children<'a>(
             pending.try_reserve(elements.len()).map_err(|_| ())?;
             pending.extend(elements.iter().rev());
         }
-        Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+        Type::ResourceApply(_, arguments) => {
             extend_owner_type_children_with_charge(arguments, pending, &mut |cells| {
                 budget.charge(cells)
             })?;
@@ -697,10 +685,7 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
     while let Some(ty) = pending.pop() {
         match ty {
             Type::Nominal(id) => nominal_identities.observe(*id, budget)?,
-            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
-                if let Type::ForeignOwnerApply(id, _) = ty {
-                    nominal_identities.observe(*id, budget)?;
-                }
+            Type::ResourceApply(_, arguments) => {
                 extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })?;
@@ -966,18 +951,7 @@ fn same_type_with_constraint_budget_inner(
             }
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::Inference(left), Type::Inference(right)) if left == right => {}
-            (Type::ForeignOwnerApply(left_id, left), Type::ForeignOwnerApply(right_id, right))
-                if left_id == right_id && left.len() == right.len() =>
-            {
-                budget.charge(left.len())?;
-                pending.try_reserve(left.len()).map_err(|_| ())?;
-                pending.extend(
-                    left.iter()
-                        .zip(right)
-                        .rev()
-                        .map(|(left, right)| Task::Arguments(left, right)),
-                );
-            }
+
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id && left.len() == right.len() =>
             {
@@ -1162,29 +1136,6 @@ pub(crate) fn match_implementation_application_head_in_environment(
     )
 }
 
-/// Matches a scoped family while keeping every variable except its payload rigid.
-/// The original family header and complete owner actuals are already authenticated.
-pub(crate) fn match_provider_family_application_head_in_environment(
-    registry: &ResolvedRegistry,
-    operation: InterfaceOperationWork<'_>,
-    goal_environments: &KindEnvironments<'_>,
-    payload: TypeVariableId,
-    candidate: &[&KindedArgument],
-    goal: &[&KindedArgument],
-) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
-    match_implementation_application_head_with_goal_validation(
-        registry,
-        operation,
-        goal_environments,
-        &[payload],
-        candidate,
-        goal,
-        HeadMatchPolicy::ScopedFamily {
-            validate_goal: true,
-        },
-    )
-}
-
 #[derive(Clone, Copy)]
 enum HeadMatchPolicy {
     Implementation { validate_goal: bool },
@@ -1243,27 +1194,6 @@ pub(crate) fn match_implementation_application_head_against_canonical_goal(
         candidate,
         goal.roots,
         HeadMatchPolicy::Implementation {
-            validate_goal: false,
-        },
-    )
-}
-
-/// Reuses an authenticated complete goal for exact scoped-family matching.
-pub(crate) fn match_provider_family_application_head_against_canonical_goal(
-    registry: &ResolvedRegistry,
-    operation: InterfaceOperationWork<'_>,
-    payload: TypeVariableId,
-    candidate: &[&KindedArgument],
-    goal: &CanonicalImplementationGoal<'_, '_>,
-) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
-    match_implementation_application_head_with_goal_validation(
-        registry,
-        operation,
-        &goal.environments,
-        &[payload],
-        candidate,
-        goal.roots,
-        HeadMatchPolicy::ScopedFamily {
             validate_goal: false,
         },
     )
@@ -1552,21 +1482,7 @@ where
             | (Type::Bool, Type::Bool)
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(candidate), Type::Nominal(goal)) if candidate == goal => {}
-            (
-                Type::ForeignOwnerApply(candidate_id, candidate),
-                Type::ForeignOwnerApply(goal_id, goal),
-            ) if candidate_id == goal_id => {
-                if !extend_owner_type_pairs_with_charge(
-                    candidate,
-                    goal,
-                    &mut pending,
-                    &mut |cells| constraint_budget.charge(cells),
-                )
-                .map_err(|()| HeadMatchFailure::ConstraintResource)?
-                {
-                    return Ok(None);
-                }
-            }
+
             (Type::ResourceApply(candidate_id, candidate), Type::ResourceApply(goal_id, goal))
                 if candidate_id == goal_id =>
             {
@@ -1673,7 +1589,7 @@ fn validate_match_type(
             continue;
         }
         match ty {
-            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) => {
                 if extend_owner_type_children_with_charge(arguments, &mut pending, &mut |cells| {
                     budget.charge(cells)
                 })
@@ -1812,17 +1728,7 @@ fn match_types_equal(
             | (Type::Bool, Type::Bool)
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (Type::ForeignOwnerApply(left_id, left), Type::ForeignOwnerApply(right_id, right))
-                if left_id == right_id =>
-            {
-                if !extend_owner_type_pairs_with_charge(left, right, &mut pending, &mut |cells| {
-                    budget.charge(cells)
-                })
-                .map_err(|()| HeadMatchFailure::ConstraintResource)?
-                {
-                    return Ok(false);
-                }
-            }
+
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id =>
             {
@@ -2275,21 +2181,7 @@ where
             | (Type::Bool, Type::Bool)
             | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (
-                Type::ForeignOwnerApply(left_id, left_arguments),
-                Type::ForeignOwnerApply(right_id, right_arguments),
-            ) if left_id == right_id => {
-                if !schedule_overlap_owner_pairs(
-                    left_arguments,
-                    left.side,
-                    right_arguments,
-                    right.side,
-                    &mut pending,
-                    budget,
-                )? {
-                    return Ok(false);
-                }
-            }
+
             (
                 Type::ResourceApply(left_id, left_arguments),
                 Type::ResourceApply(right_id, right_arguments),
@@ -2550,7 +2442,7 @@ fn overlap_occurs<'a>(
             continue;
         }
         match head.ty {
-            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) => {
                 if schedule_overlap_owner_children(arguments, head.side, &mut pending, budget)? {
                     return Err(OverlapFailure::InvalidState);
                 }
@@ -3657,17 +3549,6 @@ impl Drop for EvidenceSubstitution {
 
 #[derive(Debug)]
 enum EvidenceNodeData {
-    ProviderFamily {
-        source: LexicalEvidenceId,
-        definition: crate::resolved::ResourceDefinitionId,
-        parameter: TypeVariableId,
-        application: InterfaceApplication,
-        prerequisites: Box<[EvidenceNodeId]>,
-        methods: Box<[MethodId]>,
-    },
-    NativeLayout {
-        producer: crate::foreign::ForeignLayoutProducer,
-    },
     Lexical {
         source: LexicalEvidenceId,
         methods: Box<[MethodId]>,
@@ -3695,25 +3576,9 @@ struct EvidencePlan {
 pub enum EvidenceNode<'a> {
     /// Provisional exact source family selection. Independent admission checks
     /// the original family certificate and complete goal before executable use.
-    ProviderFamily {
-        /// Resolver-reserved lexical family candidate, not a member capability.
-        source: LexicalEvidenceId,
-        /// Original resource declaration owning this family.
-        definition: crate::resolved::ResourceDefinitionId,
-        /// Canonical rigid payload parameter in that original declaration.
-        parameter: TypeVariableId,
-        /// Complete selected goal, including ordered type and row arguments.
-        application: &'a InterfaceApplication,
-        /// Selected prerequisite nodes in original declaration order.
-        prerequisites: &'a [EvidenceNodeId],
-        /// Interface methods in original declaration order.
-        methods: &'a [MethodId],
-    },
+
     /// One exact dictionary from the original sealed foreign Layout policy.
-    NativeLayout {
-        /// Qualified producer header; independent validation checks its dictionary.
-        producer: crate::foreign::ForeignLayoutProducer,
-    },
+
     /// One exact lexical source and its interface method order.
     Lexical {
         /// Canonical source selected at the occurrence's lexical scope.
@@ -3748,10 +3613,7 @@ impl<'a> EvidenceNode<'a> {
     pub(crate) const fn executable_prerequisites(self) -> Option<&'a [EvidenceNodeId]> {
         match self {
             Self::Implementation { prerequisites, .. } => Some(prerequisites),
-            Self::ProviderFamily { .. }
-            | Self::NativeLayout { .. }
-            | Self::Lexical { .. }
-            | Self::Abstract { .. } => None,
+            Self::Lexical { .. } | Self::Abstract { .. } => None,
         }
     }
 }
@@ -3787,14 +3649,6 @@ impl EvidenceSelection {
             uses.charge(plan.nodes.len())?;
             for node in &plan.nodes {
                 match node {
-                    EvidenceNodeData::ProviderFamily {
-                        parameter,
-                        application,
-                        ..
-                    } => {
-                        uses.id(*parameter)?;
-                        uses.application(application)?;
-                    }
                     EvidenceNodeData::Implementation { substitution, .. } => {
                         uses.charge(substitution.len())?;
                         for substitution in substitution {
@@ -3802,9 +3656,7 @@ impl EvidenceSelection {
                             uses.ty(&substitution.argument)?;
                         }
                     }
-                    EvidenceNodeData::NativeLayout { .. }
-                    | EvidenceNodeData::Lexical { .. }
-                    | EvidenceNodeData::Abstract { .. } => {}
+                    EvidenceNodeData::Lexical { .. } | EvidenceNodeData::Abstract { .. } => {}
                 }
             }
         }
@@ -3872,47 +3724,6 @@ impl EvidenceSelection {
         let mut builder = EvidenceSelectionBuilder::new();
         for node in &original.nodes {
             match node {
-                EvidenceNodeData::ProviderFamily {
-                    source,
-                    definition,
-                    parameter,
-                    application,
-                    prerequisites,
-                    methods,
-                } => {
-                    types
-                        .charge(application.arguments().len())
-                        .map_err(|()| type_resource())?;
-                    let mut actuals = InterfaceArgumentBuffer(Vec::new());
-                    actuals
-                        .0
-                        .try_reserve_exact(application.arguments().len())
-                        .map_err(|_| type_resource())?;
-                    for argument in application.arguments() {
-                        actuals.0.push(rewrite_argument(argument, types)?);
-                    }
-                    let application = InterfaceApplication::new_kinded(
-                        application.interface(),
-                        actuals.into_boxed_slice(),
-                    );
-                    let source = rewrite_lexical(*source, types)?;
-                    builder
-                        .push_provider_family(
-                            source,
-                            *definition,
-                            *parameter,
-                            application,
-                            prerequisites,
-                            methods,
-                            constraints,
-                        )
-                        .map_err(|()| constraint_resource())?;
-                }
-                EvidenceNodeData::NativeLayout { producer } => {
-                    builder
-                        .push_native_layout(*producer, constraints)
-                        .map_err(|()| constraint_resource())?;
-                }
                 EvidenceNodeData::Lexical { source, methods } => {
                     let source = rewrite_lexical(*source, types)?;
                     builder
@@ -4005,24 +3816,6 @@ impl EvidenceSelection {
 
 fn evidence_node(plan: &EvidencePlan, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
     match plan.nodes.get(id.0)? {
-        EvidenceNodeData::ProviderFamily {
-            source,
-            definition,
-            parameter,
-            application,
-            prerequisites,
-            methods,
-        } => Some(EvidenceNode::ProviderFamily {
-            source: *source,
-            definition: *definition,
-            parameter: *parameter,
-            application,
-            prerequisites,
-            methods,
-        }),
-        EvidenceNodeData::NativeLayout { producer } => Some(EvidenceNode::NativeLayout {
-            producer: *producer,
-        }),
         EvidenceNodeData::Lexical { source, methods } => Some(EvidenceNode::Lexical {
             source: *source,
             methods,
@@ -4068,56 +3861,6 @@ impl EvidenceSelectionBuilder {
     }
 
     #[allow(clippy::too_many_arguments)] // Complete source identity, goal, and prerequisite order are independent claims.
-    pub(crate) fn push_provider_family(
-        &mut self,
-        source: LexicalEvidenceId,
-        definition: crate::resolved::ResourceDefinitionId,
-        parameter: TypeVariableId,
-        application: InterfaceApplication,
-        prerequisites: &[EvidenceNodeId],
-        methods: &[MethodId],
-        budget: &mut InterfaceConstraintBudget,
-    ) -> Result<EvidenceNodeId, ()> {
-        let retained = 1usize
-            .checked_add(prerequisites.len())
-            .and_then(|n| n.checked_add(methods.len()))
-            .ok_or(())?;
-        budget.charge(retained)?;
-        for argument in application.arguments() {
-            budget.charge_argument(argument)?;
-        }
-        if prerequisites
-            .iter()
-            .any(|child| child.0 >= self.nodes.len())
-        {
-            return Err(());
-        }
-        let prerequisites = try_copy_slice(prerequisites)?;
-        let methods = try_copy_slice(methods)?;
-        self.nodes.try_reserve(1).map_err(|_| ())?;
-        let id = EvidenceNodeId(self.nodes.len());
-        self.nodes.push(EvidenceNodeData::ProviderFamily {
-            source,
-            definition,
-            parameter,
-            application,
-            prerequisites,
-            methods,
-        });
-        Ok(id)
-    }
-
-    pub(crate) fn push_native_layout(
-        &mut self,
-        producer: crate::foreign::ForeignLayoutProducer,
-        budget: &mut InterfaceConstraintBudget,
-    ) -> Result<EvidenceNodeId, ()> {
-        budget.charge(6)?;
-        self.nodes.try_reserve(1).map_err(|_| ())?;
-        let id = EvidenceNodeId(self.nodes.len());
-        self.nodes.push(EvidenceNodeData::NativeLayout { producer });
-        Ok(id)
-    }
 
     pub(crate) fn push_lexical(
         &mut self,
@@ -6141,165 +5884,6 @@ mod tests {
             ),
             Ok(None),
             "the ordinary full-validation entry point remains available",
-        );
-    }
-
-    #[test]
-    fn scoped_family_matching_substitutes_only_payload_and_keeps_owner_actuals_rigid() {
-        let module = ModuleId::new(71);
-        let owner = TypeVariableId::resolved(module, 0);
-        let other_owner = TypeVariableId::resolved(module, 1);
-        let payload = TypeVariableId::resolved(module, 2);
-        let source = SourceFile::new("scoped-family-match.ash", "family")
-            .expect("the family matcher source should fit");
-        let span = source
-            .span(ByteRange::new(0, 6).expect("the family matcher range is ordered"))
-            .expect("the family matcher span should fit");
-        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
-            .with_additional_type_variables(
-                [
-                    (owner, "Owner"),
-                    (other_owner, "OtherOwner"),
-                    (payload, "Payload"),
-                ]
-                .map(|(id, spelling)| ResolvedTypeVariable {
-                    id,
-                    spelling: spelling.into(),
-                    kind: Kind::Type,
-                    origin: Origin::Source(span),
-                }),
-            );
-        let owner_pattern = KindedArgument::TypeArg(Type::Variable(owner));
-        let payload_pattern = KindedArgument::TypeArg(Type::Variable(payload));
-        let candidate = [&owner_pattern, &payload_pattern];
-        let accepted_owner = KindedArgument::TypeArg(Type::Variable(owner));
-        let accepted_payload = KindedArgument::TypeArg(Type::Int);
-        let accepted = [&accepted_owner, &accepted_payload];
-        let rejected_owner = KindedArgument::TypeArg(Type::Variable(other_owner));
-        let function_owner =
-            KindedArgument::TypeArg(Type::Function(Box::new(Type::Int), Box::new(Type::Bool)));
-
-        // Both consumers authenticate genuine canonical goal roots. The
-        // selector checks those roots again; materialization reuses the seal.
-        let run = |goal: &[&KindedArgument],
-                   reuse_goal: bool,
-                   constraints: &mut InterfaceConstraintBudget,
-                   types: &mut TypeWorkBudget| {
-            let canonical = authenticate_implementation_application_goal(
-                &registry,
-                InterfaceOperationWork::new(span, constraints, types),
-                goal,
-            )?;
-            if reuse_goal {
-                match_provider_family_application_head_against_canonical_goal(
-                    &registry,
-                    InterfaceOperationWork::new(span, constraints, types),
-                    payload,
-                    &candidate,
-                    &canonical,
-                )
-            } else {
-                match_provider_family_application_head_in_environment(
-                    &registry,
-                    InterfaceOperationWork::new(span, constraints, types),
-                    &canonical.environments,
-                    payload,
-                    &candidate,
-                    goal,
-                )
-            }
-        };
-        for reuse_goal in [false, true] {
-            let mut measured_constraints = InterfaceConstraintBudget::default();
-            let mut measured_types = TypeWorkBudget::default();
-            let substitutions = run(
-                &accepted,
-                reuse_goal,
-                &mut measured_constraints,
-                &mut measured_types,
-            )
-            .expect("the family match should authenticate")
-            .expect("the identical owner permits the scalar payload");
-            assert_eq!(substitutions.len(), 1);
-            assert_eq!(substitutions[0].parameter(), payload);
-            assert_eq!(substitutions[0].argument(), &Type::Int);
-            for rejected in [
-                [&rejected_owner, &accepted_payload],
-                [&function_owner, &accepted_payload],
-            ] {
-                assert_eq!(
-                    run(
-                        &rejected,
-                        reuse_goal,
-                        &mut InterfaceConstraintBudget::default(),
-                        &mut TypeWorkBudget::default()
-                    ),
-                    Ok(None),
-                    "a rigid owner mismatch must refuse without substitution or panic",
-                );
-            }
-
-            let constraint_cost = measured_constraints.used();
-            let type_cost = measured_types.used();
-            assert!(constraint_cost > 0 && type_cost > 0);
-            for prefix in [0, 17] {
-                let replay = |constraint_limit, type_limit| {
-                    let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
-                    let mut types = TypeWorkBudget::with_limit(type_limit);
-                    constraints
-                        .charge(prefix)
-                        .expect("the constraint prefix fits");
-                    types.charge(prefix).expect("the type prefix fits");
-                    let result = run(&accepted, reuse_goal, &mut constraints, &mut types);
-                    (result, constraints.used(), types.used())
-                };
-                let (result, constraints_used, types_used) =
-                    replay(prefix + constraint_cost, prefix + type_cost);
-                assert_eq!(
-                    result
-                        .expect("the exact ledgers should fit")
-                        .expect("the exact replay should match"),
-                    substitutions
-                );
-                assert_eq!(constraints_used, prefix + constraint_cost);
-                assert_eq!(types_used, prefix + type_cost);
-                assert_eq!(
-                    replay(prefix + constraint_cost - 1, prefix + type_cost).0,
-                    Err(HeadMatchFailure::ConstraintResource),
-                    "constraint exhaustion must not become a mismatch or partial match",
-                );
-                assert_eq!(
-                    replay(prefix + constraint_cost, prefix + type_cost - 1).0,
-                    Err(HeadMatchFailure::TypeResource),
-                    "type exhaustion must not become a mismatch or partial match",
-                );
-            }
-        }
-
-        let canonical = authenticate_implementation_application_goal(
-            &registry,
-            InterfaceOperationWork::new(
-                span,
-                &mut InterfaceConstraintBudget::default(),
-                &mut TypeWorkBudget::default(),
-            ),
-            &accepted,
-        )
-        .expect("the ordinary comparison goal should authenticate");
-        assert_eq!(
-            match_implementation_application_head_against_canonical_goal(
-                &registry,
-                InterfaceOperationWork::new(
-                    span,
-                    &mut InterfaceConstraintBudget::default(),
-                    &mut TypeWorkBudget::default()
-                ),
-                &[payload],
-                &candidate,
-                &canonical,
-            ),
-            Err(HeadMatchFailure::InvalidState),
-            "ordinary implementation heads still reject undeclared pattern variables",
         );
     }
 

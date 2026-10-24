@@ -1,19 +1,8 @@
 //! Bidirectional typed elaboration from resolved surface syntax to pure Core.
 
 mod cleanup_rows;
-pub(crate) mod provider;
-mod provider_code;
-pub(crate) use provider_code::ProviderCodeAvailability;
-mod foreign_host;
+
 mod module_bodies;
-pub(crate) mod provider_globals;
-mod provider_instance;
-mod source_resource;
-mod source_window;
-pub(crate) use provider_instance::PreparedProviderInstance;
-pub(crate) use provider_instance::final_preparation::{
-    FinalProviderPreparation, prepare_final_provider_program,
-};
 
 use std::{
     cell::RefCell,
@@ -191,7 +180,7 @@ fn pure_core_type_from_precharged(ty: &Type) -> Result<Type, ()> {
             Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
             Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
             Task::Visit(Type::Nominal(identity)) => rebuilt.push(Type::Nominal(*identity)),
-            Task::Visit(Type::ResourceApply(_, _) | Type::ForeignOwnerApply(_, _)) => {
+            Task::Visit(Type::ResourceApply(_, _)) => {
                 return Err(());
             }
             Task::Visit(Type::Variable(identity)) => rebuilt.push(Type::Variable(*identity)),
@@ -310,9 +299,7 @@ fn requires_pure_core_projection(
     schedule(&mut work, ty, &mut budget)?;
     while let Some(current) = work.pop() {
         match current {
-            Type::EffectfulFunction(_, _)
-            | Type::ResourceApply(_, _)
-            | Type::ForeignOwnerApply(_, _) => return Ok(true),
+            Type::EffectfulFunction(_, _) | Type::ResourceApply(_, _) => return Ok(true),
             Type::Tuple(elements) => {
                 for element in elements {
                     schedule(&mut work, element, &mut budget)?;
@@ -1361,16 +1348,6 @@ struct LoweredEvidenceMethod {
 
 #[derive(Clone, Copy, Debug)]
 enum PolymorphicEvidenceProducer {
-    ProviderFamily {
-        source: crate::interface::LexicalEvidenceId,
-        member: usize,
-        selection_node: crate::interface::EvidenceNodeId,
-        binder: BinderId,
-    },
-    NativeLayout {
-        producer: crate::foreign::ForeignLayoutProducer,
-        selection_node: crate::interface::EvidenceNodeId,
-    },
     Lexical {
         source: crate::interface::LexicalEvidenceId,
         selection_node: crate::interface::EvidenceNodeId,
@@ -1390,31 +1367,6 @@ enum PolymorphicEvidenceProducer {
 impl Drop for LoweredEvidenceMethod {
     fn drop(&mut self) {
         discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
-    }
-}
-
-struct ProviderMethodOccurrence {
-    node: NodeId,
-    occurrence: crate::resolved::ResolvedOccurrence,
-    value_type: IterativeTypeOwner,
-}
-impl std::fmt::Debug for ProviderMethodOccurrence {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProviderMethodOccurrence")
-            .field("node", &self.node)
-            .field("occurrence", &self.occurrence)
-            .field("value_type", &*self.value_type)
-            .finish()
-    }
-}
-impl Drop for ProviderMethodOccurrence {
-    fn drop(&mut self) {
-        let span = self.occurrence.origin.primary_span();
-        discard_origin_iteratively(std::mem::replace(
-            &mut self.occurrence.origin,
-            Origin::Source(span),
-        ));
     }
 }
 
@@ -1553,8 +1505,7 @@ impl TypeProvenance {
                 | Type::Variable(_)
                 | Type::Inference(_)
                 | Type::Forall(_, _)
-                | Type::ResourceApply(_, _)
-                | Type::ForeignOwnerApply(_, _) => {
+                | Type::ResourceApply(_, _) => {
                     nodes.push(TypeProvenanceNode::Fact(span));
                     roots.push(nodes.len() - 1);
                 }
@@ -1713,8 +1664,7 @@ impl TypeProvenance {
                         | Type::Variable(_)
                         | Type::Inference(_)
                         | Type::Forall(_, _)
-                        | Type::ResourceApply(_, _)
-                        | Type::ForeignOwnerApply(_, _),
+                        | Type::ResourceApply(_, _),
                         Some(TypeProvenanceNode::Fact(_)),
                     ) => {}
                     (
@@ -1821,21 +1771,7 @@ impl TypeProvenance {
                                 },
                             ));
                         }
-                        (
-                            Type::ForeignOwnerApply(resource, arguments),
-                            Some(ResolvedTypeProvenanceNode::ForeignOwner {
-                                nominal: source,
-                                arguments: roots,
-                                ..
-                            }),
-                        ) if resource == source && arguments.len() == roots.len() => {
-                            reserve(&mut work, roots.len(), &mut budget)?;
-                            work.extend(arguments.iter().zip(roots.iter().copied()).map(
-                                |(argument, root)| {
-                                    (Value::Argument(argument), Cursor::Resolved(resolved, root))
-                                },
-                            ));
-                        }
+
                         (
                             Type::Application(function, argument),
                             Some(ResolvedTypeProvenanceNode::Application {
@@ -2549,18 +2485,6 @@ impl OwnerReplacementBuffer {
         self.insert_cloned(source, &argument, budget)
     }
 
-    fn substitute_row(
-        &self,
-        row: &EffectRow,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<EffectRow, TypeError> {
-        crate::types::substitute_effect_row_with(row, self.types.as_map(), &self.rows, |cells| {
-            budget.charge(cells)
-        })
-        .map_err(|()| type_resource())?
-        .map_err(|_| invalid_state())
-    }
-
     fn insert_cloned(
         &mut self,
         parameter: TypeVariableId,
@@ -2987,22 +2911,8 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     active_acquisitions: Vec<crate::resolved::ResourceAcquisition>,
     // A generic computation requires complete dependency inference before summary publication.
     generic_dependency_origin: Option<Span>,
-    provider_codes: ProviderCodeAvailability,
-    source_provider_contracts:
-        HashMap<crate::module::ModuleId, Arc<provider::CheckedProviderContracts>>,
-    pending_local_provider: Option<Arc<provider::PreparedLocalProviderCode>>,
+
     // Prior fully typed module roots, borrowed only while checking one body.
-    provider_completed_roots: Option<Vec<(BinderId, NodeId)>>,
-    provider_imported_captures: Option<Vec<(BinderId, crate::core::capture::CaptureValueSummary)>>,
-    provider_capture_implementations: Option<Vec<CheckedImplementationFact>>,
-    provider_completed_publication: Option<PendingEvidencePublication>,
-    provider_instances: crate::resolved::PendingProviderInstancePublication,
-    provider_family_demands: Vec<provider_instance::ProviderFamilyDemandScope>,
-    deferred_provider_instances: Vec<provider_instance::DeferredSourceProviderInstance>,
-    deferred_source_resources: Vec<source_resource::DeferredSourceResourceInstance>,
-    provider_defining_facts: Option<Arc<crate::resolved::ProviderDefiningFacts>>,
-    provider_context: Option<provider::CheckingContext>,
-    provider_occurrence_template: Option<crate::resolved::ProviderTemplateId>,
     monomorphic_recursive: HashSet<BinderId>,
     current_implementation_method: Option<CurrentImplementationMethod>,
     method_binders: HashMap<MethodId, BinderId>,
@@ -3019,15 +2929,11 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     method_capture_uses: Vec<(NodeId, usize, MethodId)>,
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
     global_capture_uses: Vec<(NodeId, RequirementId, usize)>,
-    provider_global_occurrences: Vec<provider::CheckedGlobalOccurrence>,
-    provider_method_occurrences: Vec<ProviderMethodOccurrence>,
+
     implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
     expected_scheme_rows: Vec<HashMap<TypeVariableId, EffectRow>>,
     next_handler: u32,
-    next_provider_resume: u32,
-    next_provider_lexical: u32,
-    final_provider_preparation: Option<Arc<provider_instance::FinalProviderPreparation>>,
 }
 
 /// Pure Core elaboration with its uninhabited operation family.
@@ -3168,21 +3074,10 @@ impl CoreLoweringFamily for EffectOperationFamily {
     ) -> Result<NodeId, BuildError> {
         match operation {
             EffectOperation::NativeInterpret(boundary) => {
-                let (body, interpretations, host) = boundary.into_parts();
-                builder.native_interpret_with_host(body, interpretations, host, ty, effects, origin)
+                let (body, interpretations) = boundary.into_parts();
+                builder.native_interpret(body, interpretations, ty, effects, origin)
             }
-            EffectOperation::ProviderStateAccess(access) => {
-                builder.provider_state_access(access, ty, effects, origin)
-            }
-            EffectOperation::ProviderScope(scope) => {
-                builder.provider_scope(scope, ty, effects, origin)
-            }
-            EffectOperation::SourceCopyWindow(scope) => {
-                builder.source_copy_window(scope, ty, effects, origin)
-            }
-            EffectOperation::SourceResourceScope(scope) => {
-                builder.source_resource_scope(scope, ty, effects, origin)
-            }
+
             EffectOperation::Cleanup(scope) => builder.cleanup_scope(scope, ty, effects, origin),
             EffectOperation::Registration(scope) => {
                 builder.registration_scope(scope, ty, effects, origin)
@@ -3289,6 +3184,126 @@ enum ElaborationPurpose {
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    fn elaborate_module_program_plain(
+        &mut self,
+        program: &ValidatedInterfaceProgram,
+    ) -> Result<TypedNode, TypeError> {
+        let mut context = TypeContext::new();
+        let mut groups = ElaboratedGroupBuffer(Vec::new());
+        groups
+            .0
+            .try_reserve(program.groups().len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for group in program.groups() {
+            let (members, next_context) = self.elaborate_checked_module_group(group, context)?;
+            context = next_context;
+            groups
+                .0
+                .push((ElaboratedBindingBuffer(members), group.span()));
+        }
+        let mut result = self.elaborate_result(program.result(), &mut context)?;
+        let assembly = (|| {
+            while let Some((mut members, span)) = groups.0.pop() {
+                if members.0.is_empty() {
+                    continue;
+                }
+                let mut core_members = CoreRecursiveMemberBuffer(Vec::new());
+                core_members
+                    .0
+                    .try_reserve(members.0.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let mut constants = ElaboratedBindingBuffer(Vec::new());
+                members.0.reverse();
+                while let Some(member) = members.0.pop() {
+                    if member.foreign_constant {
+                        self.type_work.charge(1).map_err(|_| type_resource())?;
+                        constants.0.try_reserve(1).map_err(|_| type_resource())?;
+                        constants.0.push(member);
+                    } else {
+                        core_members.0.push((member.binder, member.initializer));
+                    }
+                }
+                if !core_members.0.is_empty() {
+                    let result_type = self.clone_type(&result.ty)?;
+                    result.node = self.builder.recursive_binding(
+                        core_members.into_vec(),
+                        result.node,
+                        result_type,
+                        Origin::Generated {
+                            cause: Box::new(Origin::Source(span)),
+                            reason: GeneratedReason::RecursiveBindingLowering,
+                        },
+                    )?;
+                }
+                // Literal definitions are independent, nonrecursive values.
+                // Their binders enclose both this module's function group and
+                // the already-assembled client modules.
+                while let Some(member) = constants.0.pop() {
+                    let result_type = self.clone_type(&result.ty)?;
+                    result.node = self.builder.binding(
+                        member.binder,
+                        member.initializer,
+                        result.node,
+                        result_type,
+                        Origin::Generated {
+                            cause: Box::new(Origin::Source(span)),
+                            reason: GeneratedReason::TypeChecking,
+                        },
+                    )?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = assembly {
+            discard_typed_node(result);
+            return Err(error);
+        }
+
+        self.solve_cleanup_rows(&[], &[], &[], &[])?;
+        Ok(result)
+    }
+
+    pub(super) fn retain_completed_implementation_lowering(
+        &mut self,
+        lowering: &mut EvidenceLowering,
+        implementation: &CheckedImplementationFact,
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(implementation.methods.len())
+            .map_err(|()| type_resource())?;
+        lowering
+            .implementation_methods
+            .try_reserve(implementation.methods.len())
+            .map_err(|_| type_resource())?;
+        for method in &implementation.methods {
+            let scheme = self.lower_constrained_scheme(
+                &method.scheme,
+                lowering,
+                MethodEvidenceOwner::Implementation(method.id),
+                true,
+                method.span,
+            )?;
+            let lowered = LoweredImplementationMethod {
+                binder: method.binder,
+                head_type_parameter_count: method.head_type_parameter_count(),
+                application: implementation
+                    .application()
+                    .clone_with_budget(&mut self.type_work)
+                    .map_err(|()| type_resource())?,
+                scheme,
+                span: method.span,
+            };
+            if lowering
+                .implementation_methods
+                .insert(method.id, lowered)
+                .is_some()
+            {
+                return Err(invalid_state());
+            }
+        }
+        Ok(())
+    }
+
     fn core_effect_row(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
         if !F::EFFECTS {
             return Ok(EffectRow::empty());
@@ -3335,20 +3350,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
             generic_dependency_origin: None,
-            provider_codes: ProviderCodeAvailability::default(),
-            source_provider_contracts: HashMap::new(),
-            pending_local_provider: None,
-            provider_completed_roots: None,
-            provider_imported_captures: None,
-            provider_capture_implementations: None,
-            provider_completed_publication: None,
-            provider_instances: crate::resolved::PendingProviderInstancePublication::default(),
-            provider_family_demands: Vec::new(),
-            deferred_provider_instances: Vec::new(),
-            deferred_source_resources: Vec::new(),
-            provider_defining_facts: None,
-            provider_context: None,
-            provider_occurrence_template: None,
+
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -3363,15 +3365,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_uses: Vec::new(),
             method_capture_binders: Vec::new(),
             global_capture_uses: Vec::new(),
-            provider_global_occurrences: Vec::new(),
-            provider_method_occurrences: Vec::new(),
+
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             expected_scheme_rows: Vec::new(),
             next_handler: 0,
-            next_provider_resume: u32::MAX,
-            next_provider_lexical: u32::MAX,
-            final_provider_preparation: None,
         }
     }
 
@@ -3489,20 +3487,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
             generic_dependency_origin: None,
-            provider_codes: ProviderCodeAvailability::default(),
-            source_provider_contracts: HashMap::new(),
-            pending_local_provider: None,
-            provider_completed_roots: None,
-            provider_imported_captures: None,
-            provider_capture_implementations: None,
-            provider_completed_publication: None,
-            provider_instances: crate::resolved::PendingProviderInstancePublication::default(),
-            provider_family_demands: Vec::new(),
-            deferred_provider_instances: Vec::new(),
-            deferred_source_resources: Vec::new(),
-            provider_defining_facts: None,
-            provider_context: None,
-            provider_occurrence_template: None,
+
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -3517,15 +3502,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_uses: Vec::new(),
             method_capture_binders: Vec::new(),
             global_capture_uses: Vec::new(),
-            provider_global_occurrences: Vec::new(),
-            provider_method_occurrences: Vec::new(),
+
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             expected_scheme_rows: Vec::new(),
             next_handler: 0,
-            next_provider_resume: u32::MAX,
-            next_provider_lexical: u32::MAX,
-            final_provider_preparation: None,
         })
     }
 
@@ -3564,11 +3545,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             rewrite_work,
         )
         .map_err(|failure| (failure, prefix))?;
-        if let Some(preparation) = program.provider_preparation() {
-            preparation
-                .apply_to(&mut elaborator)
-                .map_err(|failure| (failure, elaborator.type_work.used()))?;
-        }
+
         elaborator.evidence_lowering = Some(
             elaborator
                 .build_evidence_lowering(program)
@@ -3634,20 +3611,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
             generic_dependency_origin: None,
-            provider_codes: ProviderCodeAvailability::default(),
-            source_provider_contracts: HashMap::new(),
-            pending_local_provider: None,
-            provider_completed_roots: None,
-            provider_imported_captures: None,
-            provider_capture_implementations: None,
-            provider_completed_publication: None,
-            provider_instances: crate::resolved::PendingProviderInstancePublication::default(),
-            provider_family_demands: Vec::new(),
-            deferred_provider_instances: Vec::new(),
-            deferred_source_resources: Vec::new(),
-            provider_defining_facts: None,
-            provider_context: None,
-            provider_occurrence_template: None,
+
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -3662,15 +3626,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_uses: Vec::new(),
             method_capture_binders: Vec::new(),
             global_capture_uses: Vec::new(),
-            provider_global_occurrences: Vec::new(),
-            provider_method_occurrences: Vec::new(),
+
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             expected_scheme_rows: Vec::new(),
             next_handler: 0,
-            next_provider_resume: u32::MAX,
-            next_provider_lexical: u32::MAX,
-            final_provider_preparation: None,
         };
         Ok(elaborator)
     }
@@ -4075,20 +4035,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
             generic_dependency_origin: None,
-            provider_codes: ProviderCodeAvailability::default(),
-            source_provider_contracts: HashMap::new(),
-            pending_local_provider: None,
-            provider_completed_roots: None,
-            provider_imported_captures: None,
-            provider_capture_implementations: None,
-            provider_completed_publication: None,
-            provider_instances: crate::resolved::PendingProviderInstancePublication::default(),
-            provider_family_demands: Vec::new(),
-            deferred_provider_instances: Vec::new(),
-            deferred_source_resources: Vec::new(),
-            provider_defining_facts: None,
-            provider_context: None,
-            provider_occurrence_template: None,
+
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -4103,15 +4050,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             method_capture_uses: Vec::new(),
             method_capture_binders: Vec::new(),
             global_capture_uses: Vec::new(),
-            provider_global_occurrences: Vec::new(),
-            provider_method_occurrences: Vec::new(),
+
             implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             expected_scheme_rows: Vec::new(),
             next_handler: 0,
-            next_provider_resume: u32::MAX,
-            next_provider_lexical: u32::MAX,
-            final_provider_preparation: None,
         })
     }
 
@@ -4308,125 +4251,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
     }
 
-    /// A mixed defining module needs genuine ordinary contracts before its
-    /// Source originals consume a closed registry. Use the normal transaction
-    /// and actual checked dependency closure; no source-name readiness shortcut.
-    fn prepare_available_provider_group_before_source(
-        &mut self,
-        module: &ResolvedModule,
-        schemes: &mut [CheckedGlobalScheme],
-        checked_interfaces: &[CheckedInterface],
-        interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
-        checked_implementations: &[CheckedImplementation],
-        constraints: &mut InterfaceConstraintBudget,
-    ) -> Result<
-        (
-            Vec<ModuleBodyChecking>,
-            Option<Arc<crate::resolved::ProviderDefiningFacts>>,
-        ),
-        TypeError,
-    > {
-        if !F::EFFECTS || module.source_resources().is_empty() || module.resources().is_empty() {
-            return Ok((Vec::new(), None));
-        }
-        std::mem::swap(&mut self.constraint_work, constraints);
-        let result = (|| {
-            let mut checking = self.begin_module_body_checking(module, schemes)?;
-            self.enable_module_body_reordering(module, schemes, &mut checking)?;
-            let prerequisites = checking
-                .schedule
-                .as_ref()
-                .ok_or_else(invalid_state)?
-                .available_original_prerequisites(module, &mut self.type_work)?;
-            self.type_work
-                .charge(
-                    module
-                        .declaration_order()
-                        .len()
-                        .checked_mul(
-                            prerequisites
-                                .len()
-                                .checked_add(1)
-                                .ok_or_else(type_resource)?,
-                        )
-                        .ok_or_else(type_resource)?,
-                )
-                .map_err(|()| type_resource())?;
-            for declaration in module.declaration_order() {
-                if prerequisites.contains(declaration) {
-                    self.step_module_body_checking(
-                        module,
-                        checked_interfaces,
-                        checked_implementations,
-                        *declaration,
-                        &mut checking,
-                    )?;
-                }
-            }
-            self.stage_completed_module_body_evidence(&mut checking)?;
-            let closed = self.closed_completed_module_declarations(module, &checking)?;
-            let mut available = true;
-            for definition in module.resources() {
-                let dependencies = checking
-                    .schedule
-                    .as_ref()
-                    .ok_or_else(invalid_state)?
-                    .original_source_dependencies(definition, &mut self.type_work)?;
-                self.type_work
-                    .charge(
-                        dependencies
-                            .len()
-                            .checked_mul(closed.len().checked_add(1).ok_or_else(type_resource)?)
-                            .ok_or_else(type_resource)?,
-                    )
-                    .map_err(|_| type_resource())?;
-                available &= dependencies
-                    .iter()
-                    .all(|dependency| closed.contains(dependency));
-            }
-            let mut source_defining = None;
-            if available {
-                self.type_work.charge(1).map_err(|()| type_resource())?;
-                let defining = Arc::new(self.completed_module_provider_facts_for(
-                    module,
-                    schemes,
-                    interface_facts,
-                    &mut checking,
-                    &closed,
-                )?);
-                let code = provider::check_module_provider_group(
-                    module,
-                    Some(&defining),
-                    checking.publication.as_mut().ok_or_else(invalid_state)?,
-                    &mut self.type_work,
-                    &mut self.coverage_work,
-                    &mut self.constraint_work,
-                    self.builder.rewrite_work_limit(),
-                )?
-                .ok_or_else(invalid_state)?;
-                self.pending_local_provider = Some(provider::PreparedLocalProviderCode::prepare(
-                    &code,
-                    crate::resolved::ProviderExternalFacts {
-                        imported: module.imported_facts(),
-                        defining: Some(&defining),
-                    },
-                    checking.publication.as_ref().ok_or_else(invalid_state)?,
-                    &mut self.type_work,
-                )?);
-                source_defining = Some(defining);
-            }
-            // One owned state, held off the module driver's stack. The later
-            // phase consumes it; no second body/scheme/publication preparation.
-            self.type_work.charge(1).map_err(|_| type_resource())?;
-            let mut started = Vec::new();
-            started.try_reserve_exact(1).map_err(|_| type_resource())?;
-            started.push(checking);
-            Ok((started, source_defining))
-        })();
-        std::mem::swap(&mut self.constraint_work, constraints);
-        result
-    }
-
     #[expect(
         clippy::too_many_arguments,
         reason = "the same started body/evidence transaction accompanies the existing module checking inputs"
@@ -4473,54 +4297,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Some(checking) => checking,
             None => self.begin_module_body_checking(module, checked_schemes)?,
         };
-        let mut local_instances = Vec::new();
-        let mut needs_local_preparation = false;
-        if F::EFFECTS && !module.resources().is_empty() && self.pending_local_provider.is_none() {
-            self.type_work
-                .charge(module.declaration_order().len())
-                .map_err(|()| type_resource())?;
-            local_instances
-                .try_reserve_exact(module.declaration_order().len())
-                .map_err(|_| type_resource())?;
-            for declaration in module.declaration_order() {
-                let local = module_bodies::declaration_has_local_provider_instance(
-                    module,
-                    *declaration,
-                    &mut self.type_work,
-                )?;
-                needs_local_preparation |= local;
-                local_instances.push(local);
+        for declaration in module.declaration_order() {
+            if matches!(
+                declaration,
+                ResolvedDeclarationIndex::Global(_) | ResolvedDeclarationIndex::Implementation(_)
+            ) && let Some(schedule) = &checking.schedule
+                && schedule.is_completed(*declaration)?
+            {
+                continue;
             }
-        }
-        if needs_local_preparation {
-            self.check_local_provider_module_bodies(
+            self.step_module_body_checking(
                 module,
-                checked_schemes,
                 checked_interfaces,
-                interface_facts,
                 checked_implementations,
-                &local_instances,
+                *declaration,
                 &mut checking,
             )?;
-        } else {
-            for declaration in module.declaration_order() {
-                if matches!(
-                    declaration,
-                    ResolvedDeclarationIndex::Global(_)
-                        | ResolvedDeclarationIndex::Implementation(_)
-                ) && let Some(schedule) = &checking.schedule
-                    && schedule.is_completed(*declaration)?
-                {
-                    continue;
-                }
-                self.step_module_body_checking(
-                    module,
-                    checked_interfaces,
-                    checked_implementations,
-                    *declaration,
-                    &mut checking,
-                )?;
-            }
         }
         self.finish_module_body_checking(
             module,
@@ -4534,301 +4326,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     /// Private originals release later bodies; only the complete group exports.
     /// Publication remains the enclosing module's single transaction.
     #[allow(clippy::too_many_arguments)] // Original declarations, checked bodies and independent ledgers remain explicit.
-    fn check_local_provider_module_bodies(
-        &mut self,
-        module: &ResolvedModule,
-        schemes: &mut [CheckedGlobalScheme],
-        checked_interfaces: &[CheckedInterface],
-        interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
-        checked_implementations: &[CheckedImplementation],
-        local_instances: &[bool],
-        checking: &mut ModuleBodyChecking,
-    ) -> Result<(), TypeError> {
-        if self.pending_local_provider.is_some()
-            || local_instances.len() != module.declaration_order().len()
-        {
-            return Err(invalid_state());
-        }
-        if checking.schedule.is_none() {
-            self.enable_module_body_reordering(module, schemes, checking)?;
-        }
-        for (declaration, local) in module.declaration_order().iter().zip(local_instances) {
-            if !local {
-                if matches!(
-                    declaration,
-                    ResolvedDeclarationIndex::Global(_)
-                        | ResolvedDeclarationIndex::Implementation(_)
-                ) && checking
-                    .schedule
-                    .as_ref()
-                    .ok_or_else(invalid_state)?
-                    .is_completed(*declaration)?
-                {
-                    continue;
-                }
-                self.step_module_body_checking(
-                    module,
-                    checked_interfaces,
-                    checked_implementations,
-                    *declaration,
-                    checking,
-                )?;
-            }
-        }
-        self.stage_completed_module_body_evidence(checking)?;
-        let mut closed = self.closed_completed_module_declarations(module, checking)?;
-        self.type_work.charge(1).map_err(|()| type_resource())?;
-        let mut defining = Arc::new(self.completed_module_provider_facts_for(
-            module,
-            schemes,
-            interface_facts,
-            checking,
-            &closed,
-        )?);
-        let mut original_dependencies = Vec::new();
-        self.type_work
-            .charge(module.resources().len())
-            .map_err(|()| type_resource())?;
-        original_dependencies
-            .try_reserve_exact(module.resources().len())
-            .map_err(|_| type_resource())?;
-        for definition in module.resources() {
-            original_dependencies.push(
-                checking
-                    .schedule
-                    .as_ref()
-                    .ok_or_else(invalid_state)?
-                    .original_source_dependencies(definition, &mut self.type_work)?,
-            );
-        }
-        self.type_work
-            .charge(
-                original_dependencies
-                    .iter()
-                    .try_fold(0usize, |count, dependencies| {
-                        count.checked_add(dependencies.len())
-                    })
-                    .and_then(|count| count.checked_mul(closed.len().checked_add(1)?))
-                    .ok_or_else(type_resource)?,
-            )
-            .map_err(|()| type_resource())?;
-        if original_dependencies.iter().all(|dependencies| {
-            dependencies
-                .iter()
-                .all(|dependency| closed.contains(dependency))
-        }) {
-            let code = provider::check_module_provider_group(
-                module,
-                Some(&defining),
-                checking.publication.as_mut().ok_or_else(invalid_state)?,
-                &mut self.type_work,
-                &mut self.coverage_work,
-                &mut self.constraint_work,
-                self.builder.rewrite_work_limit(),
-            )?
-            .ok_or_else(invalid_state)?;
-            let local = provider::PreparedLocalProviderCode::prepare(
-                &code,
-                crate::resolved::ProviderExternalFacts {
-                    imported: module.imported_facts(),
-                    defining: Some(&defining),
-                },
-                checking.publication.as_ref().ok_or_else(invalid_state)?,
-                &mut self.type_work,
-            )?;
-            self.pending_local_provider = Some(local);
-            for (declaration, local) in module.declaration_order().iter().zip(local_instances) {
-                if *local {
-                    self.step_module_body_checking(
-                        module,
-                        checked_interfaces,
-                        checked_implementations,
-                        *declaration,
-                        checking,
-                    )?;
-                }
-            }
-            return Ok(());
-        }
-        let preparation = provider::prepare_module_provider_originals(
-            module,
-            Some(&defining),
-            &mut self.type_work,
-            &mut self.coverage_work,
-            &mut self.constraint_work,
-            self.builder.rewrite_work_limit(),
-        )?;
-        let mut instance_requirements = Vec::new();
-        self.type_work
-            .charge(local_instances.len())
-            .map_err(|()| type_resource())?;
-        instance_requirements
-            .try_reserve_exact(local_instances.len())
-            .map_err(|_| type_resource())?;
-        for (declaration, local) in module.declaration_order().iter().zip(local_instances) {
-            instance_requirements.push(if *local {
-                module_bodies::declaration_local_provider_requirements(
-                    module,
-                    *declaration,
-                    &mut self.type_work,
-                )?
-            } else {
-                Vec::new()
-            });
-        }
-        self.pending_local_provider = Some(provider::PreparedLocalProviderCode::pending(
-            module.module(),
-            module.resources().len(),
-            &mut self.type_work,
-        )?);
-        loop {
-            let mut progressed = false;
-            for (index, definition) in module.resources().iter().enumerate() {
-                let local = self
-                    .pending_local_provider
-                    .as_ref()
-                    .ok_or_else(invalid_state)?;
-                self.type_work
-                    .charge(module.resources().len())
-                    .map_err(|()| type_resource())?;
-                if local.contains(definition.id) {
-                    continue;
-                }
-                let dependencies = &original_dependencies[index];
-                self.type_work
-                    .charge(
-                        dependencies
-                            .len()
-                            .checked_mul(closed.len().checked_add(1).ok_or_else(type_resource)?)
-                            .ok_or_else(type_resource)?,
-                    )
-                    .map_err(|()| type_resource())?;
-                if dependencies
-                    .iter()
-                    .any(|dependency| !closed.contains(dependency))
-                {
-                    continue;
-                }
-                let original = provider::check_module_provider_original(
-                    module,
-                    &preparation,
-                    index,
-                    Some(&defining),
-                    checking.publication.as_mut().ok_or_else(invalid_state)?,
-                    &mut self.type_work,
-                    &mut self.coverage_work,
-                    &mut self.constraint_work,
-                    self.builder.rewrite_work_limit(),
-                )?;
-                original.authenticate_pending(
-                    crate::resolved::ProviderExternalFacts {
-                        imported: module.imported_facts(),
-                        defining: Some(&defining),
-                    },
-                    checking.publication.as_ref().ok_or_else(invalid_state)?,
-                    &mut self.type_work,
-                )?;
-                Arc::get_mut(
-                    self.pending_local_provider
-                        .as_mut()
-                        .ok_or_else(invalid_state)?,
-                )
-                .ok_or_else(invalid_state)?
-                .add(original, &mut self.type_work)?;
-                progressed = true;
-            }
-            for ((declaration, local), required) in module
-                .declaration_order()
-                .iter()
-                .zip(local_instances)
-                .zip(&instance_requirements)
-            {
-                if !*local
-                    || checking
-                        .schedule
-                        .as_ref()
-                        .ok_or_else(invalid_state)?
-                        .is_completed(*declaration)?
-                {
-                    continue;
-                }
-                self.type_work
-                    .charge(
-                        required
-                            .len()
-                            .checked_mul(module.resources().len())
-                            .ok_or_else(type_resource)?,
-                    )
-                    .map_err(|()| type_resource())?;
-                if required.iter().any(|definition| {
-                    !self
-                        .pending_local_provider
-                        .as_ref()
-                        .is_some_and(|local| local.contains(*definition))
-                }) {
-                    continue;
-                }
-                self.step_module_body_checking(
-                    module,
-                    checked_interfaces,
-                    checked_implementations,
-                    *declaration,
-                    checking,
-                )?;
-                progressed = true;
-            }
-            let local = self
-                .pending_local_provider
-                .as_ref()
-                .ok_or_else(invalid_state)?;
-            self.type_work
-                .charge(
-                    module
-                        .resources()
-                        .len()
-                        .checked_mul(module.resources().len())
-                        .ok_or_else(type_resource)?,
-                )
-                .map_err(|()| type_resource())?;
-            if checking.next_global == module.definitions().len()
-                && checking.next_implementation == module.implementations().len()
-                && module
-                    .resources()
-                    .iter()
-                    .all(|definition| local.contains(definition.id))
-            {
-                break;
-            }
-            if !progressed {
-                return Err(invalid_state());
-            }
-            self.stage_completed_module_body_evidence(checking)?;
-            closed = self.closed_completed_module_declarations(module, checking)?;
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            defining = Arc::new(self.completed_module_provider_facts_for(
-                module,
-                schemes,
-                interface_facts,
-                checking,
-                &closed,
-            )?);
-        }
-        let local = self
-            .pending_local_provider
-            .as_ref()
-            .ok_or_else(invalid_state)?;
-        let components = local.ordered_originals(module, &mut self.type_work)?;
-        let code =
-            provider::finish_module_provider_originals(module, &components, &mut self.type_work)?;
-        Arc::get_mut(
-            self.pending_local_provider
-                .as_mut()
-                .ok_or_else(invalid_state)?,
-        )
-        .ok_or_else(invalid_state)?
-        .complete(module, code, &mut self.type_work)?;
-        Ok(())
-    }
 
     fn begin_module_body_checking(
         &mut self,
@@ -4874,87 +4371,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
-    /// Coordinates come only from fully typed bodies held by this transaction.
-    /// No capture summary or callable classification is supplied by this view.
-    fn snapshot_provider_capture_implementations(
-        &mut self,
-        imported: &crate::resolved::ImportedFacts,
-        completed: &[CheckedImplementationFact],
-    ) -> Result<Vec<CheckedImplementationFact>, TypeError> {
-        let mut facts: Vec<CheckedImplementationFact> = Vec::new();
-        for fact in imported
-            .implementations()
-            .map(|imported| &imported.fact)
-            .chain(completed)
-        {
-            self.type_work
-                .charge(facts.len().checked_add(1).ok_or_else(type_resource)?)
-                .map_err(|()| type_resource())?;
-            if facts.iter().any(|retained| retained.id == fact.id) {
-                return Err(invalid_state());
-            }
-            if let Some(defining) = &self.provider_defining_facts {
-                self.type_work
-                    .charge(defining.implementations.len())
-                    .map_err(|()| type_resource())?;
-                if defining
-                    .implementations
-                    .iter()
-                    .any(|retained| retained.id == fact.id)
-                {
-                    continue;
-                }
-            }
-            let retained = crate::resolved::clone_checked_implementation_fact(
-                fact,
-                &mut self.type_work,
-                &mut self.constraint_work,
-            )
-            .map_err(resolved_build_error)?;
-            facts.try_reserve(1).map_err(|_| type_resource())?;
-            facts.push(retained);
-        }
-        Ok(facts)
-    }
-
-    fn snapshot_provider_imported_captures(
-        &mut self,
-        imported: &crate::resolved::ImportedFacts,
-    ) -> Result<Vec<(BinderId, crate::core::capture::CaptureValueSummary)>, TypeError> {
-        let mut captures = Vec::new();
-        for global in imported.globals() {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            if global.capture.has_graph() {
-                self.type_work.charge(1).map_err(|()| type_resource())?;
-                captures.try_reserve(1).map_err(|_| type_resource())?;
-                captures.push((
-                    global.binder,
-                    global
-                        .capture
-                        .clone_with_budget(&mut self.type_work)
-                        .map_err(|()| type_resource())?,
-                ));
-            }
-        }
-        for implementation in imported.implementations() {
-            for method in &implementation.fact.methods {
-                self.type_work.charge(1).map_err(|()| type_resource())?;
-                if method.capture.has_graph() {
-                    self.type_work.charge(1).map_err(|()| type_resource())?;
-                    captures.try_reserve(1).map_err(|_| type_resource())?;
-                    captures.push((
-                        method.binder,
-                        method
-                            .capture
-                            .clone_with_budget(&mut self.type_work)
-                            .map_err(|()| type_resource())?,
-                    ));
-                }
-            }
-        }
-        Ok(captures)
-    }
-
     fn step_module_body_checking(
         &mut self,
         module: &ResolvedModule,
@@ -4963,76 +4379,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         declaration: ResolvedDeclarationIndex,
         checking: &mut ModuleBodyChecking,
     ) -> Result<(), TypeError> {
-        if !matches!(
-            declaration,
-            ResolvedDeclarationIndex::Global(_) | ResolvedDeclarationIndex::Implementation(_)
-        ) || !F::EFFECTS
-            || (module.resources().is_empty()
-                && module.source_resources().is_empty()
-                && module.imported_facts().resource_facts().next().is_none()
-                && module
-                    .imported_facts()
-                    .source_resource_facts()
-                    .next()
-                    .is_none())
-        {
-            return self.step_module_body_checking_with_roots(
-                module,
-                checked_interfaces,
-                checked_implementations,
-                declaration,
-                checking,
-            );
-        }
-        if !module_bodies::declaration_has_provider_instance(
-            module,
-            declaration,
-            &mut self.type_work,
-        )? {
-            return self.step_module_body_checking_with_roots(
-                module,
-                checked_interfaces,
-                checked_implementations,
-                declaration,
-                checking,
-            );
-        }
-        // Both inventories come from authenticated imported facts or fully
-        // completed typed bodies. The current declaration is absent.
-        let roots = self.completed_module_body_roots(checking)?;
-        let imports = self.snapshot_provider_imported_captures(module.imported_facts())?;
-        let implementations = self.snapshot_provider_capture_implementations(
-            module.imported_facts(),
-            &checking.facts.0,
-        )?;
-        let previous = self.provider_completed_roots.replace(roots);
-        let previous_imports = self.provider_imported_captures.replace(imports);
-        let previous_implementations = self
-            .provider_capture_implementations
-            .replace(implementations);
-        // Borrow the exact enclosing transaction through its existing owner.
-        // The body step neither publishes nor mutates completed selections.
-        let previous_publication = std::mem::replace(
-            &mut self.provider_completed_publication,
-            checking.publication.take(),
-        );
-        let result = self.step_module_body_checking_with_roots(
+        self.step_module_body_checking_with_roots(
             module,
             checked_interfaces,
             checked_implementations,
             declaration,
             checking,
-        );
-        self.provider_completed_roots = previous;
-        self.provider_imported_captures = previous_imports;
-        self.provider_capture_implementations = previous_implementations;
-        checking.publication = std::mem::replace(
-            &mut self.provider_completed_publication,
-            previous_publication,
-        );
-        result
+        )
     }
-
     fn step_module_body_checking_with_roots(
         &mut self,
         module: &ResolvedModule,
@@ -5042,26 +4396,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         checking: &mut ModuleBodyChecking,
     ) -> Result<(), TypeError> {
         match declaration {
-            ResolvedDeclarationIndex::SourceResource(index) if F::EFFECTS => {
-                let code = self
-                    .provider_codes
-                    .source_code(module.module(), &mut self.type_work)?
-                    .ok_or_else(invalid_state)?;
-                let original = code.resource(index).ok_or_else(invalid_state)?.header();
-                let definition = module
-                    .source_resources()
-                    .get(index)
-                    .ok_or_else(invalid_state)?;
-                if !Arc::ptr_eq(&original.original, &definition.header) {
-                    return Err(invalid_state());
-                }
-            }
-            ResolvedDeclarationIndex::SourceResource(_) => {
-                return Err(unsupported_provider_resource());
-            }
             ResolvedDeclarationIndex::Resource(_) if F::EFFECTS => {}
             ResolvedDeclarationIndex::Resource(_) => {
-                return Err(unsupported_provider_resource());
+                return Err(invalid_state());
             }
             ResolvedDeclarationIndex::Global(source_index) => {
                 if let Some(schedule) = &checking.schedule {
@@ -5123,7 +4460,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .checked_add(1)
                     .ok_or_else(invalid_state)?;
             }
-            ResolvedDeclarationIndex::Type(_)
+            ResolvedDeclarationIndex::Resource(_)
+            | ResolvedDeclarationIndex::Type(_)
             | ResolvedDeclarationIndex::Interface(_)
             | ResolvedDeclarationIndex::Effect(_) => {}
         }
@@ -5843,33 +5181,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .rewrite_types_and_rows(checkpoint, rewrite, rewrite_row)?;
             }
         }
-        if strict && let Some(builder) = F::effect_builder(&mut self.builder) {
-            let type_work = RefCell::new(&mut self.type_work);
-            builder.finalize_source_resource_instances(
-                &mut |ty| {
-                    zonk_core_type(
-                        ty,
-                        &self.inference_solutions,
-                        &self.row_inference_solutions,
-                        &self.inference_variables,
-                        &self.authenticated_inference_solutions,
-                        &mut type_work.borrow_mut(),
-                        true,
-                    )
-                },
-                &mut |row| {
-                    zonk_core_effect_row(
-                        row,
-                        &self.inference_solutions,
-                        &self.row_inference_solutions,
-                        &self.inference_variables,
-                        &self.authenticated_inference_solutions,
-                        &mut type_work.borrow_mut(),
-                        true,
-                    )
-                },
-            )?;
-        }
+
         Ok(())
     }
 
@@ -6453,8 +5765,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         owner: NodeId,
     ) -> Result<(), TypeError> {
         self.close_evidence_obligations(marker)?;
-        self.complete_deferred_provider_instances(marker, owner)?;
-        self.complete_deferred_source_resources(Some(marker), owner)
+        Ok(())
     }
 
     fn apply_improvement_tasks(
@@ -6763,186 +6074,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok((routes, adapters))
     }
 
-    /// Actual provider requests use only the immutable plan already selected
-    /// for their exact typed occurrence. Final synthesis has executable
-    /// dictionary projections and does not use this source route view.
-    fn capture_provider_actual_routes(
-        &mut self,
-        body: NodeId,
-        globals: &[(BinderId, NodeId)],
-    ) -> Result<
-        (
-            Vec<crate::core::capture::MethodUse>,
-            Vec<crate::core::capture::MethodAdapter>,
-        ),
-        TypeError,
-    > {
-        if self.purpose != ElaborationPurpose::ModuleCheck {
-            return Err(invalid_state());
-        }
-        // Only typed expressions in the actual query's roots need a route.
-        // Unrelated enclosing pending obligations remain outside this phase.
-        let mut pending = Vec::new();
-        self.type_work
-            .charge(globals.len().checked_add(1).ok_or_else(type_resource)?)
-            .map_err(|()| type_resource())?;
-        pending
-            .try_reserve_exact(globals.len() + 1)
-            .map_err(|_| type_resource())?;
-        pending.push(body);
-        pending.extend(globals.iter().map(|(_, node)| *node));
-        let mut reachable = HashSet::new();
-        while let Some(node) = pending.pop() {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            reachable.try_reserve(1).map_err(|_| type_resource())?;
-            if !reachable.insert(node) {
-                continue;
-            }
-            let kind = self.builder.compiler_node_kind(node)?;
-            self.type_work
-                .charge(F::child_count(kind))
-                .map_err(|()| type_resource())?;
-            pending
-                .try_reserve(F::child_count(kind))
-                .map_err(|_| type_resource())?;
-            for ordinal in 0..F::child_count(kind) {
-                pending.push(F::child_at(kind, ordinal).ok_or_else(invalid_state)?);
-            }
-        }
-        let selector = self.selection.as_ref().ok_or_else(invalid_state)?;
-        let mut routes = Vec::new();
-        let mut adapters = Vec::new();
-        let mut occurrences = Vec::new();
-        self.type_work
-            .charge(
-                self.method_capture_uses
-                    .len()
-                    .checked_add(self.global_capture_uses.len())
-                    .ok_or_else(type_resource)?,
-            )
-            .map_err(|()| type_resource())?;
-        occurrences
-            .try_reserve_exact(self.method_capture_uses.len() + self.global_capture_uses.len())
-            .map_err(|_| type_resource())?;
-        occurrences.extend(
-            self.method_capture_uses
-                .iter()
-                .map(|(node, slot, method)| (*node, *slot, Some(*method), None)),
-        );
-        occurrences.extend(
-            self.global_capture_uses
-                .iter()
-                .map(|(node, requirement, slot)| (*node, *slot, None, Some(*requirement))),
-        );
-        for (node, slot, requested, requirement) in occurrences {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            if !reachable.contains(&node) {
-                continue;
-            }
-            let prior = self
-                .provider_completed_publication
-                .as_ref()
-                .map(|publication| {
-                    publication.capture_selection_if_present(slot, requested, &mut self.type_work)
-                })
-                .transpose()
-                .map_err(|failure| selection_failure(failure, None))?
-                .flatten();
-            let (selection, arguments) = if let Some(prior) = prior {
-                if selector
-                    .capture_slot_present(slot, &mut self.type_work)
-                    .map_err(|failure| selection_failure(failure, None))?
-                {
-                    return Err(invalid_state());
-                }
-                prior
-            } else {
-                selector
-                    .capture_selected(slot, requested, &mut self.type_work)
-                    .map_err(|failure| selection_failure(failure, None))?
-            };
-            let targets = crate::core::capture::selection_targets(
-                selection,
-                requested,
-                |id, work| {
-                    let mut matched = None;
-                    for fact in self
-                        .provider_capture_implementations
-                        .as_deref()
-                        .unwrap_or(&[])
-                        .iter()
-                        .chain(
-                            self.provider_defining_facts
-                                .iter()
-                                .flat_map(|facts| facts.implementations.iter()),
-                        )
-                    {
-                        work.charge(1)
-                            .map_err(|()| crate::core::capture::Failure::Resource)?;
-                        if fact.id == id {
-                            if matched.is_some() {
-                                return Err(crate::core::capture::Failure::Invalid);
-                            }
-                            matched = Some(fact);
-                        }
-                    }
-                    matched.ok_or(crate::core::capture::Failure::Invalid)
-                },
-                |owner, method, work| {
-                    let mut matched = None;
-                    for (candidate_owner, candidate_method, binder) in &self.method_capture_binders
-                    {
-                        work.charge(1)
-                            .map_err(|()| crate::core::capture::Failure::Resource)?;
-                        if *candidate_owner == owner && *candidate_method == method {
-                            if matched.is_some() {
-                                return Err(crate::core::capture::Failure::Invalid);
-                            }
-                            matched = Some(*binder);
-                        }
-                    }
-                    matched.ok_or(crate::core::capture::Failure::Invalid)
-                },
-                &self.registry,
-                |selection, node, method, work| {
-                    provider_instance::capture_family_forwarding(
-                        &self.provider_family_demands,
-                        &self.registry,
-                        selection,
-                        node,
-                        method,
-                        work,
-                    )
-                },
-                &mut adapters,
-                &mut self.type_work,
-            )
-            .map_err(|failure| match failure {
-                crate::core::capture::Failure::Resource => type_resource(),
-                _ => invalid_state(),
-            })?;
-            if requested.is_some() && (targets.len() != 1 || targets[0].0 != requested.unwrap()) {
-                return Err(invalid_state());
-            }
-            self.type_work
-                .charge(targets.len())
-                .map_err(|()| type_resource())?;
-            routes
-                .try_reserve(targets.len())
-                .map_err(|_| type_resource())?;
-            routes.extend(targets.into_iter().map(|(method, target)| {
-                crate::core::capture::MethodUse {
-                    node,
-                    target,
-                    method,
-                    requirement,
-                    arguments: if requirement.is_some() { 0 } else { arguments },
-                }
-            }));
-        }
-        Ok((routes, adapters))
-    }
-
     fn capture_selection_targets(
         &mut self,
         selection: &EvidenceSelection,
@@ -6975,17 +6106,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .find(|(owner, candidate, _)| *owner == source && *candidate == method)
                     .map(|(_, _, binder)| *binder)
                     .ok_or(crate::core::capture::Failure::Invalid)
-            },
-            &self.registry,
-            |selection, node, method, work| {
-                provider_instance::capture_family_forwarding(
-                    &self.provider_family_demands,
-                    &self.registry,
-                    selection,
-                    node,
-                    method,
-                    work,
-                )
             },
             adapters,
             &mut self.type_work,
@@ -7138,52 +6258,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         result
     }
 
-    fn retain_provider_method_occurrence(
-        &mut self,
-        occurrence: &crate::resolved::ResolvedOccurrence,
-        node: NodeId,
-        value_type: &Type,
-    ) -> Result<(), TypeError> {
-        if self.provider_occurrence_template.is_none() {
-            return Ok(());
-        }
-        self.type_work
-            .charge(
-                occurrence
-                    .evidence
-                    .len()
-                    .checked_add(occurrence.spelling.len())
-                    .and_then(|count| count.checked_add(1))
-                    .ok_or_else(type_resource)?,
-            )
-            .map_err(|()| type_resource())?;
-        let mut slots = Vec::new();
-        slots
-            .try_reserve_exact(occurrence.evidence.len())
-            .map_err(|_| type_resource())?;
-        for slot in &occurrence.evidence {
-            slots.push(slot.retain_unpublished().ok_or_else(invalid_state)?);
-        }
-        provider_globals::charge_origin_clone(&occurrence.origin, &mut self.type_work)?;
-        let value_type = IterativeTypeOwner::new(self.clone_type(value_type)?);
-        self.provider_method_occurrences
-            .try_reserve(1)
-            .map_err(|_| type_resource())?;
-        self.provider_method_occurrences
-            .push(ProviderMethodOccurrence {
-                node,
-                occurrence: crate::resolved::ResolvedOccurrence {
-                    term: occurrence.term,
-                    spelling: occurrence.spelling.clone(),
-                    origin: occurrence.origin.clone(),
-                    import_span: occurrence.import_span,
-                    evidence: slots.into_boxed_slice(),
-                },
-                value_type,
-            });
-        Ok(())
-    }
-
     fn synthesize_method_occurrence(
         &mut self,
         method: MethodId,
@@ -7194,9 +6268,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if method.interface().module().is_builtin_generic_cell() {
             self.generic_dependency_origin.get_or_insert(span);
         }
-        if self.registry.foreign_state_access(method).is_some() {
-            return Err(foreign_privilege_unavailable());
-        }
+
         if self.purpose != ElaborationPurpose::ModuleCheck || occurrence.evidence.len() != 1 {
             return Err(invalid_state());
         }
@@ -7360,7 +6432,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .map_err(|_| type_resource())?;
             self.method_capture_uses
                 .push((node, occurrence.evidence[0].storage_id(), method));
-            self.retain_provider_method_occurrence(occurrence, node, &ty)?;
+
             let TypeFact {
                 ty: fact_ty,
                 provenance,
@@ -7475,9 +6547,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .get(&(requirement, method))
                     .map(|active| (Some(requirement), Some(active.binder))),
                 Some(EvidenceNode::Implementation { .. }) => Some((None, None)),
-                Some(EvidenceNode::NativeLayout { .. } | EvidenceNode::ProviderFamily { .. }) => {
-                    return Err(invalid_state());
-                }
+
                 None => None,
             };
             let application_type = self.clone_type(&expected)?;
@@ -7516,56 +6586,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             provenance,
             ty: ty.into_inner(),
         })
-    }
-
-    fn enter_provider_family_evidence_scope(
-        &mut self,
-        definition: crate::resolved::ResourceDefinitionId,
-        requirements: &[crate::interface::CheckedRequirement],
-        cause: &Origin,
-    ) -> Result<Vec<ScopedEvidenceBinder>, TypeError> {
-        self.type_work
-            .charge(requirements.len())
-            .map_err(|()| type_resource())?;
-        for (ordinal, requirement) in requirements.iter().enumerate() {
-            if requirement.id.owner()
-                != crate::interface::RequirementOwner::ResourceFamily(definition)
-                || usize::try_from(requirement.id.declaration()).map_err(|_| invalid_state())?
-                    != ordinal
-            {
-                return Err(invalid_state());
-            }
-        }
-        let lowering = self.evidence_lowering.take().ok_or_else(invalid_state)?;
-        let lowered = self.lower_evidence_requirements(
-            requirements,
-            &lowering,
-            MethodEvidenceOwner::ResourceFamily(definition),
-        );
-        self.evidence_lowering = Some(lowering);
-        let lowered = lowered?;
-        let count = lowered.iter().try_fold(0usize, |count, requirement| {
-            count
-                .checked_add(requirement.methods.len())
-                .ok_or_else(type_resource)
-        })?;
-        let mut specifications = EvidenceSpecificationBuffer(Vec::new());
-        self.reserve_evidence_specifications(&mut specifications, count)?;
-        for requirement in &lowered {
-            for method in &requirement.methods {
-                specifications.push((
-                    requirement.owner,
-                    requirement.id,
-                    method.method,
-                    method
-                        .application
-                        .clone_with_budget(&mut self.type_work)
-                        .map_err(|()| type_resource())?,
-                    self.clone_type(&method.ty)?,
-                ));
-            }
-        }
-        self.enter_lowered_evidence_specifications(specifications, cause)
     }
 
     fn enter_lowered_global_evidence_scope(
@@ -8371,8 +7391,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let polymorphic = matches!(domain.as_ref(), Type::Forall(_, _));
         if polymorphic {
             let producer_matches = match argument.producer {
-                PolymorphicEvidenceProducer::NativeLayout { .. }
-                | PolymorphicEvidenceProducer::ProviderFamily { .. } => false,
                 PolymorphicEvidenceProducer::Abstract { .. } => {
                     let Some(application) = argument.adapter_application.as_ref() else {
                         return Err(invalid_state());
@@ -8449,28 +7467,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if polymorphic || adapter_edge.is_some() {
             let application = self.zonk_interface_application(target_application)?;
             let (producer, producer_selection_node, producer_binder) = match argument.producer {
-                PolymorphicEvidenceProducer::ProviderFamily {
-                    source,
-                    member,
-                    selection_node,
-                    binder,
-                } => (
-                    CoreMethodEvidenceProducer::ProviderFamily {
-                        source,
-                        member,
-                        binder,
-                    },
-                    selection_node,
-                    Some(binder),
-                ),
-                PolymorphicEvidenceProducer::NativeLayout {
-                    producer,
-                    selection_node,
-                } => (
-                    CoreMethodEvidenceProducer::NativeLayout { producer },
-                    selection_node,
-                    None,
-                ),
                 PolymorphicEvidenceProducer::Lexical {
                     source,
                     selection_node,
@@ -8799,134 +7795,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             }
                             results
                         }
-                        EvidenceNode::ProviderFamily {
-                            source,
-                            application,
-                            methods,
-                            ..
-                        } => {
-                            let requested =
-                                (node == selection.root()).then_some(root_method).flatten();
-                            self.type_work
-                                .charge(methods.len())
-                                .map_err(|()| type_resource())?;
-                            let mut results = Vec::new();
-                            results
-                                .try_reserve_exact(methods.len())
-                                .map_err(|_| type_resource())?;
-                            for method in methods {
-                                if requested.is_some_and(|requested| requested != *method) {
-                                    continue;
-                                }
-                                let (member, binder, ty) =
-                                    self.materialize_provider_family(selection, node, *method)?;
-                                let ty = IterativeTypeOwner::new(ty);
-                                let core_ty = self.clone_type(&ty)?;
-                                let core_node =
-                                    self.builder.variable(binder, core_ty, origin.clone())?;
-                                self.builder.authenticate_method_evidence(
-                                    core_node,
-                                    None,
-                                    None,
-                                    *method,
-                                    application
-                                        .clone_with_budget(&mut self.type_work)
-                                        .map_err(|()| type_resource())?,
-                                    MethodEvidenceAnchorRole::ProviderFamilyUse {
-                                        source,
-                                        member,
-                                        selection_node: node,
-                                        binder,
-                                    },
-                                    Some(occurrence),
-                                )?;
-                                results.push(LoweredEvidenceMethod {
-                                    method: *method,
-                                    node: core_node,
-                                    ty: ty.into_inner(),
-                                    producer: PolymorphicEvidenceProducer::ProviderFamily {
-                                        source,
-                                        member,
-                                        selection_node: node,
-                                        binder,
-                                    },
-                                    adapter_application: Some(
-                                        application
-                                            .clone_with_budget(&mut self.type_work)
-                                            .map_err(|()| type_resource())?,
-                                    ),
-                                });
-                            }
-                            results
-                        }
-                        EvidenceNode::NativeLayout { producer } => {
-                            if root_method.is_some_and(|method| {
-                                node == selection.root() && method != producer.method()
-                            }) {
-                                return Err(invalid_state());
-                            }
-                            let dictionary = self
-                                .registry
-                                .foreign_layout_dictionary(producer, &mut self.type_work)
-                                .map_err(|failure| {
-                                    if failure.is_resource_exhaustion() {
-                                        type_resource()
-                                    } else {
-                                        invalid_state()
-                                    }
-                                })?;
-                            if dictionary.producer() != producer {
-                                return Err(invalid_state());
-                            }
-                            let ty = IterativeTypeOwner::new(producer.producer_type());
-                            let core_ty = self.clone_type(&ty)?;
-                            let core_node = self.builder.intrinsic(
-                                crate::core::packed::Intrinsic::ForeignLayoutWitness { producer },
-                                producer.interface().module(),
-                                core_ty,
-                                origin.clone(),
-                            )?;
-                            self.type_work.charge(1).map_err(|()| type_resource())?;
-                            let mut arguments = Vec::new();
-                            arguments
-                                .try_reserve_exact(1)
-                                .map_err(|_| type_resource())?;
-                            arguments.push(crate::types::KindedArgument::TypeArg(
-                                producer.payload_type(),
-                            ));
-                            let application = InterfaceApplication::new_kinded(
-                                producer.interface(),
-                                arguments.into_boxed_slice(),
-                            );
-                            self.builder.authenticate_method_evidence(
-                                core_node,
-                                None,
-                                None,
-                                producer.method(),
-                                application
-                                    .clone_with_budget(&mut self.type_work)
-                                    .map_err(|()| type_resource())?,
-                                MethodEvidenceAnchorRole::NativeLayoutUse {
-                                    producer,
-                                    selection_node: node,
-                                },
-                                Some(occurrence),
-                            )?;
-                            self.type_work.charge(1).map_err(|()| type_resource())?;
-                            let mut results = Vec::new();
-                            results.try_reserve_exact(1).map_err(|_| type_resource())?;
-                            results.push(LoweredEvidenceMethod {
-                                method: producer.method(),
-                                node: core_node,
-                                ty: ty.into_inner(),
-                                producer: PolymorphicEvidenceProducer::NativeLayout {
-                                    producer,
-                                    selection_node: node,
-                                },
-                                adapter_application: Some(application),
-                            });
-                            results
-                        }
+
                         EvidenceNode::Implementation {
                             implementation,
                             substitution,
@@ -10321,10 +9190,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 Type::ResourceApply(left_id, left),
                                 Type::ResourceApply(right_id, right),
                             ) if left_id == right_id && left.len() == right.len() => left.len(),
-                            (
-                                Type::ForeignOwnerApply(left_id, left),
-                                Type::ForeignOwnerApply(right_id, right),
-                            ) if left_id == right_id && left.len() == right.len() => left.len(),
+
                             (Type::Tuple(left), Type::Tuple(right))
                                 if left.len() == right.len() =>
                             {
@@ -10384,20 +9250,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     )));
                                 }
                             }
-                            (
-                                Type::ForeignOwnerApply(left_id, left),
-                                Type::ForeignOwnerApply(right_id, right),
-                            ) if left_id == right_id && left.len() == right.len() => {
-                                // Capacity was admitted while both complete roots were still guarded.
-                                for (left, right) in
-                                    left.into_vec().into_iter().zip(right.into_vec()).rev()
-                                {
-                                    work.push(Rc::new(Task::Argument(
-                                        ArgumentOwner::new(left),
-                                        ArgumentOwner::new(right),
-                                    )));
-                                }
-                            }
+
                             (Type::Tuple(left), Type::Tuple(right))
                                 if left.len() == right.len() =>
                             {
@@ -11056,116 +9909,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
-        if !F::EFFECTS {
-            return self.elaborate_module_program_with_provider_roots(program);
-        }
-        self.type_work
-            .charge(program.groups().len())
-            .map_err(|_| type_resource())?;
-        let source_resources = program
-            .groups()
-            .iter()
-            .any(|group| group.source_resource_code().is_some());
-        if self.final_provider_preparation.is_none() && !source_resources {
-            return self.elaborate_module_program_with_provider_roots(program);
-        }
-        let previous = self.provider_completed_roots.replace(Vec::new());
-        let previous_imports = self.provider_imported_captures.take();
-        let result = self.elaborate_module_program_with_provider_roots(program);
-        self.provider_completed_roots = previous;
-        self.provider_imported_captures = previous_imports;
-        result
-    }
-
-    fn elaborate_module_program_with_provider_roots(
-        &mut self,
-        program: &ValidatedInterfaceProgram,
-    ) -> Result<TypedNode, TypeError> {
-        // Retain every original checked provider before lowering any module,
-        // including code reached through imported helper modules.
-        for group in program.groups() {
-            if let Some(code) = group.provider_code() {
-                self.provider_codes
-                    .retain(group.module(), code, &mut self.type_work)?;
-            }
-            if let Some(code) = group.source_resource_code() {
-                self.provider_codes
-                    .retain_source(group.module(), code, &mut self.type_work)?;
-            }
-        }
-        let mut context = TypeContext::new();
-        let mut groups = ElaboratedGroupBuffer(Vec::new());
-        groups
-            .0
-            .try_reserve(program.groups().len())
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for group in program.groups() {
-            let (members, next_context) = self.elaborate_checked_module_group(group, context)?;
-            context = next_context;
-            groups
-                .0
-                .push((ElaboratedBindingBuffer(members), group.span()));
-        }
-        let mut result = self.elaborate_result(program.result(), &mut context)?;
-        let assembly = (|| {
-            while let Some((mut members, span)) = groups.0.pop() {
-                if members.0.is_empty() {
-                    continue;
-                }
-                let mut core_members = CoreRecursiveMemberBuffer(Vec::new());
-                core_members
-                    .0
-                    .try_reserve(members.0.len())
-                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let mut constants = ElaboratedBindingBuffer(Vec::new());
-                members.0.reverse();
-                while let Some(member) = members.0.pop() {
-                    if member.foreign_constant {
-                        self.type_work.charge(1).map_err(|_| type_resource())?;
-                        constants.0.try_reserve(1).map_err(|_| type_resource())?;
-                        constants.0.push(member);
-                    } else {
-                        core_members.0.push((member.binder, member.initializer));
-                    }
-                }
-                if !core_members.0.is_empty() {
-                    let result_type = self.clone_type(&result.ty)?;
-                    result.node = self.builder.recursive_binding(
-                        core_members.into_vec(),
-                        result.node,
-                        result_type,
-                        Origin::Generated {
-                            cause: Box::new(Origin::Source(span)),
-                            reason: GeneratedReason::RecursiveBindingLowering,
-                        },
-                    )?;
-                }
-                // Literal definitions are independent, nonrecursive values.
-                // Their binders enclose both this module's function group and
-                // the already-assembled client modules.
-                while let Some(member) = constants.0.pop() {
-                    let result_type = self.clone_type(&result.ty)?;
-                    result.node = self.builder.binding(
-                        member.binder,
-                        member.initializer,
-                        result.node,
-                        result_type,
-                        Origin::Generated {
-                            cause: Box::new(Origin::Source(span)),
-                            reason: GeneratedReason::TypeChecking,
-                        },
-                    )?;
-                }
-            }
-            Ok(())
-        })();
-        if let Err(error) = assembly {
-            discard_typed_node(result);
-            return Err(error);
-        }
-        self.complete_deferred_source_resources(None, result.node)?;
-        self.solve_cleanup_rows(&[], &[], &[], &[])?;
-        Ok(result)
+        self.elaborate_module_program_plain(program)
     }
 
     fn elaborate_checked_module_group(
@@ -11181,67 +9925,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.prepare_implementation_method_views(group, &mut prepared)?;
         let mut next_global = 0usize;
         let mut next_implementation = 0usize;
-        let mut next_resource = 0usize;
-        let mut next_source_resource = 0usize;
         for declaration in group.declaration_order() {
             match *declaration {
-                ResolvedDeclarationIndex::Resource(index)
-                    if F::EFFECTS && index == next_resource =>
-                {
-                    let code = group.provider_code().ok_or_else(invalid_state)?;
-                    self.type_work
-                        .charge(index.checked_add(1).ok_or_else(type_resource)?)
-                        .map_err(|()| type_resource())?;
-                    let fact = code
-                        .contracts()
-                        .resource_contracts()
-                        .nth(index)
-                        .ok_or_else(invalid_state)?
-                        .2;
-                    if fact.id.module() != group.module() {
-                        return Err(invalid_state());
-                    }
-                    next_resource = next_resource.checked_add(1).ok_or_else(type_resource)?;
-                }
-                ResolvedDeclarationIndex::Resource(_) => {
-                    return Err(unsupported_provider_resource());
-                }
-                ResolvedDeclarationIndex::SourceResource(index)
-                    if index == next_source_resource =>
-                {
-                    let code = group.source_resource_code().ok_or_else(invalid_state)?;
-                    let header = code.resource(index).ok_or_else(invalid_state)?.header();
-                    let fact = self
-                        .registry
-                        .source_resource_fact(header.original.id)
-                        .ok_or_else(invalid_state)?;
-                    if header.original.id.module() != group.module()
-                        || !Arc::ptr_eq(fact, &header.original)
-                    {
-                        return Err(invalid_state());
-                    }
-                    next_source_resource = next_source_resource
-                        .checked_add(1)
-                        .ok_or_else(type_resource)?;
-                }
-                ResolvedDeclarationIndex::SourceResource(_) => {
-                    return Err(unsupported_provider_resource());
-                }
                 ResolvedDeclarationIndex::Global(index) if index == next_global => {
                     let definition = group.definitions().get(index).ok_or_else(invalid_state)?;
-                    let completed_before = prepared.globals.len();
+
                     self.elaborate_prepared_definition(definition, &mut prepared)?;
-                    self.retain_final_provider_roots(&prepared.globals[completed_before..])?;
+
                     next_global = next_global.checked_add(1).ok_or_else(invalid_state)?;
                 }
                 ResolvedDeclarationIndex::Implementation(index) if index == next_implementation => {
-                    let completed_before = prepared.globals.len();
                     self.elaborate_prepared_implementation(group, index, &mut prepared)?;
-                    self.retain_final_provider_roots(&prepared.globals[completed_before..])?;
+
                     next_implementation = next_implementation
                         .checked_add(1)
                         .ok_or_else(invalid_state)?;
                 }
+                ResolvedDeclarationIndex::Resource(_) => return Err(invalid_state()),
                 ResolvedDeclarationIndex::Type(_)
                 | ResolvedDeclarationIndex::Interface(_)
                 | ResolvedDeclarationIndex::Effect(_) => {}
@@ -11251,36 +9951,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         if next_global != group.definitions().len()
             || next_implementation != group.implementations().len()
-            || next_source_resource != group.source_resource_code().map_or(0, |code| code.len())
-            || next_resource
-                != group
-                    .provider_code()
-                    .map_or(0, |code| code.contracts().resource_count())
         {
             return Err(invalid_state());
         }
         self.finish_prepared_definitions(prepared)
-    }
-
-    fn retain_final_provider_roots(
-        &mut self,
-        completed: &[ElaboratedBinding],
-    ) -> Result<(), TypeError> {
-        let Some(roots) = &mut self.provider_completed_roots else {
-            return Ok(());
-        };
-        self.type_work
-            .charge(completed.len())
-            .map_err(|()| type_resource())?;
-        roots
-            .try_reserve(completed.len())
-            .map_err(|_| type_resource())?;
-        roots.extend(
-            completed
-                .iter()
-                .map(|body| (body.binder.id(), body.initializer)),
-        );
-        Ok(())
     }
 
     fn prepare_implementation_method_views(
@@ -11955,56 +10629,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Ok(None);
         };
         if module.is_builtin_foreign() {
-            self.type_work
-                .charge(1)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let Some(fact) = self.registry.scalar_preflight(name.id) else {
-                return Ok(None);
-            };
-            if fact.function() != name.id || fact.module() != module {
-                return Err(invalid_state());
-            }
-            return Ok(Some(match fact.role() {
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedQuarantine => {
-                    Intrinsic::ForeignQuarantine { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedRejectAcquisition => {
-                    Intrinsic::ForeignRejectAcquisition { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::I64 => {
-                    Intrinsic::ForeignCheckedI64 { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::SizeT => {
-                    Intrinsic::ForeignCheckedSizeT { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::Nul => {
-                    Intrinsic::ForeignCheckedNul { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::DataOf => {
-                    Intrinsic::ForeignDataOf { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ReplaceData => {
-                    Intrinsic::ForeignReplaceData { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyBytes
-                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedCopyBytes => {
-                    Intrinsic::ForeignCopyBytes { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyNul
-                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedCopyNul => {
-                    Intrinsic::ForeignCopyNul { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ExtentValue => {
-                    Intrinsic::ForeignExtentValue { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead
-                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedByteRead => {
-                    Intrinsic::ForeignByteRead { function: name.id }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite
-                | crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CheckedByteWrite => {
-                    Intrinsic::ForeignByteWrite { function: name.id }
-                }
+            return Ok(Some(match name.spelling.as_str() {
+                "null" => Intrinsic::AddressNull,
+                "is_null" => Intrinsic::AddressIsNull,
+                "equal" => Intrinsic::AddressEqual,
+                _ => return Err(invalid_state()),
             }));
         }
         if !module.is_builtin_bytes() && !module.is_builtin_string() {
@@ -12188,15 +10817,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         } else {
             Ok(())
         };
-        let source_close = if evidence_marker.is_none() {
-            if let Ok((_, function)) = &definition_result {
-                self.complete_deferred_source_resources(None, function.node)
-            } else {
-                Ok(())
-            }
-        } else {
-            Ok(())
-        };
         let leave_result = if evidence_marker.is_some() {
             self.leave_evidence_scope()
         } else {
@@ -12215,7 +10835,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let (name, mut function) = definition_result?;
         close_result?;
-        source_close?;
+
         leave_result?;
         lowered_clear_result?;
         if let Some(binders) = lowered_evidence {
@@ -12655,14 +11275,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         tasks: &mut ElaborationTaskBuffer<'a>,
     ) -> Result<(), TypeError> {
-        if self.registry.foreign_operation(request.operation).is_some()
-            || self
-                .registry
-                .native_symbol(request.operation)
-                .is_some_and(|symbol| symbol.owner().is_some())
-        {
-            self.check_provider_native_request(request)?;
-        }
         let (domain, result) = self.operation_signature(
             &request.effect.instance,
             request.operation,
@@ -12714,23 +11326,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .map_err(|error| TypeError::Internal(error.into()))?,
         );
         let mut effects = self.union_effects(&operand.effects, &requested, span)?;
-        if let Some(symbol) = self.registry.native_symbol(request.operation) {
-            let host = crate::foreign::checked_source::checked_host_instance(
-                symbol,
-                &request.effect.instance,
-                &mut self.type_work,
-            )
-            .map_err(|failure| {
-                if failure.is_resource_exhaustion() {
-                    type_resource()
-                } else {
-                    invalid_state()
-                }
-            })?;
-            if let Some(host) = host {
-                effects = self.union_effects(&effects, &EffectRow::singleton(host), span)?;
-            }
-        }
+
         let ty = result.into_inner();
         let core_ty = self.pure_core_type(&ty)?;
         let request_node = RequestNode::new(
@@ -13205,18 +11801,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         body: TypedNode,
         rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
     ) -> Result<TypedNode, TypeError> {
-        if handler
-            .effect
-            .instance
-            .effect()
-            .module()
-            .is_builtin_foreign()
-            || self
-                .registry
-                .foreign_effect(handler.effect.instance.effect())
-        {
-            return Err(foreign_privilege_unavailable());
-        }
         let body = TypedNodeOwner::new(body);
         if let Some(root) = &handler.hook_root {
             self.type_work
@@ -13935,13 +12519,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .ok_or_else(invalid_state)?
         } else {
             let Some(lowering) = self.evidence_lowering.as_ref() else {
-                if self.provider_context.is_some() {
-                    return Err(inference_failure(
-                        TypeReason::Argument,
-                        source.application.span,
-                        "resource phases cannot introduce lexical evidence or nested resources",
-                    ));
-                }
                 return Err(invalid_state());
             };
             let fact = lowering
@@ -14614,13 +13191,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<(), TypeError> {
         self.type_work.charge(2).map_err(|()| type_resource())?;
         tasks.0.try_reserve(2).map_err(|_| type_resource())?;
-        if let Some(payload) = resource.payload()
-            && self.contains_provider_state(payload)?
-        {
-            return Err(provider::ordinary_state_unavailable(
-                resource.initializer.span,
-            ));
-        }
+
         let ty =
             IterativeTypeOwner::new(if resource.acquisition.builtin.is_builtin_generic_cell() {
                 self.clone_type(resource.payload().ok_or_else(invalid_state)?)?
@@ -14704,12 +13275,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 pattern_count,
                 infer_effects,
                 cleanup_completion,
-                provider_context,
             } => {
                 if has_ambient_rows && self.expected_scheme_rows.pop().is_none() {
                     return Err(invalid_state());
                 }
-                self.provider_context = provider_context.map(|context| *context);
                 let effect_span = origin.primary_span();
                 let origin = OriginOwner::new(origin);
                 let mut pattern = CorePatternOwner::new(pattern);
@@ -15218,9 +13787,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let rigid = self.monomorphic_recursive.contains(&binder);
         let (ty, arguments, row_arguments) = self.instantiate(fact, rigid, span)?;
         let ty = IterativeTypeOwner::new(ty);
-        if self.provider_context.is_none() && self.contains_provider_state(&ty)? {
-            return Err(provider::ordinary_state_unavailable(span));
-        }
+
         let arguments = OwnedTypeBuffer(arguments);
         let provenance = fact.provenance.clone();
         let has_lowered_global_scheme = self
@@ -15243,12 +13810,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             result
         } else {
             self.record_global_obligations(binder, occurrence, &arguments, &row_arguments, span)?;
-            let provider_occurrence = self.retain_provider_global_occurrence(
-                occurrence,
-                &arguments,
-                &row_arguments,
-                &ty,
-            )?;
             let scheme = self.pure_core_scheme(fact)?;
             let mut node = self
                 .builder
@@ -15274,14 +13835,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }?;
             }
             self.record_capture_global(binder, node, occurrence)?;
-            if let Some(index) = provider_occurrence {
-                let retained = self
-                    .provider_global_occurrences
-                    .get_mut(index)
-                    .ok_or_else(invalid_state)?;
-                retained.node = Some(node);
-                retained.source_node = Some(node);
-            }
+
             Ok(TypedNode {
                 node,
                 ty: ty.into_inner(),
@@ -15561,51 +14115,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         // Ordinary generalization and its type abstraction complete
         // this initializer before conditional source metadata is saved.
-        if let Some(marker) = evidence_marker {
-            self.complete_deferred_provider_instances(marker, initializer.node)?;
-            self.complete_deferred_source_resources(Some(marker), initializer.node)?;
-        }
+        if let Some(marker) = evidence_marker {}
         Ok(())
     }
 
     // Keep source phase payloads and return-value storage outside the ordinary
     // dispatcher frame, including when unrelated cleanup checks call unification.
-    #[inline(never)]
-    #[expect(
-        clippy::boxed_local,
-        reason = "unboxing in the caller enlarges the shared expression dispatcher's stack frame"
-    )]
-    fn step_source_resource_body<'a>(
-        &mut self,
-        prepared: Box<source_resource::PreparedSourceResource<'a>>,
-        context: &mut TypeContext,
-        tasks: &mut ElaborationTaskBuffer<'a>,
-        values: &mut TypedNodeBuffer,
-    ) -> Result<(), TypeError> {
-        let initializer = values.pop().ok_or_else(invalid_state)?;
-        let resource = prepared.resource;
-        let progress = self.enter_source_resource_body(*prepared, initializer, context)?;
-        self.type_work.charge(2).map_err(|_| type_resource())?;
-        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
-        tasks.push(ElaborationTask::FinishSourceResource(Box::new(progress)));
-        tasks.push(ElaborationTask::Synthesize {
-            expression: &resource.body,
-            cause: None,
-        });
-        Ok(())
-    }
-
-    #[inline(never)]
-    fn step_source_resource_completion<'a>(
-        &mut self,
-        progress: Box<source_resource::SourceResourceProgress<'a>>,
-        context: &mut TypeContext,
-        values: &mut TypedNodeBuffer,
-    ) -> Result<(), TypeError> {
-        let body = values.pop().ok_or_else(invalid_state)?;
-        values.push(self.finish_source_resource_instance(*progress, body, context)?);
-        Ok(())
-    }
 
     // Visiting a source node and completing its scheduled work have separate
     // frames. Completion may zonk/unify complete types and must not carry all
@@ -15620,23 +14135,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         declarations: &mut ElaboratedDeclarationBuffer,
     ) -> Result<(), TypeError> {
         match &current.kind {
-            ResolvedExprKind::ForeignHost(host) => {
-                self.schedule_foreign_host(host, current.span, tasks)?;
-            }
-            ResolvedExprKind::CopyWindow(window) => {
-                self.schedule_copy_window(window, current.span, tasks)?;
-            }
-            ResolvedExprKind::ProviderResource(resource) => {
-                if self
-                    .registry
-                    .source_resource_fact(resource.definition)
-                    .is_some()
-                {
-                    self.schedule_source_resource_instance(resource, current.span, tasks)?;
-                } else {
-                    self.schedule_provider_instance(resource, current.span, tasks)?;
-                }
-            }
             ResolvedExprKind::String(value) => {
                 let node = self.builder.string(
                     value.as_bytes(),
@@ -15867,21 +14365,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 });
             }
             ResolvedExprKind::Apply(application) => {
-                if let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind
-                    && let crate::resolved::ResolvedTermName::Method(method) = occurrence.term
-                    && self.is_provider_state_access(method)?
-                {
-                    self.require_provider_state_access_phase(current.span)?;
-                    tasks.push(ElaborationTask::FinishProviderStateAccess {
-                        method,
-                        span: current.span,
-                    });
-                    tasks.push(ElaborationTask::Synthesize {
-                        expression: &application.argument,
-                        cause: None,
-                    });
-                    return Ok(());
-                }
                 let recursive_call = matches!(
                     &application.function.kind,
                     ResolvedExprKind::Occurrence(occurrence)
@@ -16045,18 +14528,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         declarations: &mut ElaboratedDeclarationBuffer,
     ) -> Result<(), TypeError> {
         match task {
-            ElaborationTask::ProviderInstanceBody { resource, span } => {
-                self.step_provider_instance_body(resource, span, context, tasks, values)?;
-            }
-            ElaborationTask::SourceResourceBody(prepared) => {
-                self.step_source_resource_body(prepared, context, tasks, values)?;
-            }
-            ElaborationTask::FinishSourceResource(progress) => {
-                self.step_source_resource_completion(progress, context, values)?;
-            }
-            ElaborationTask::FinishProviderInstance(progress) => {
-                self.step_provider_instance_completion(progress, context, values)?;
-            }
             ElaborationTask::FinishCleanup { cleanup, span } => {
                 self.step_cleanup_completion(cleanup, span, values)?;
             }
@@ -16070,15 +14541,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ElaborationTask::FinishResource(progress) => {
                 self.step_resource_completion(progress, context, values)?;
             }
-            ElaborationTask::CopyWindowBody(progress) => {
-                self.step_copy_window_body(progress, tasks, values)?;
-            }
-            ElaborationTask::FinishCopyWindow(progress) => {
-                self.finish_copy_window(progress, values)?;
-            }
-            ElaborationTask::FinishForeignHost { source, span } => {
-                self.finish_foreign_host(source, span, values)?;
-            }
+
             ElaborationTask::Equation(_) => return Err(invalid_state()),
             ElaborationTask::RetainLocalNewtype(owner) => {
                 declarations.push(ElaboratedDeclaration::Newtype(owner));
@@ -16121,14 +14584,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ElaborationTask::AfterApplicationFunction { .. } => {
                 unreachable!("application argument work uses its direct dispatch path")
             }
-            ElaborationTask::FinishProviderStateAccess { method, span } => {
-                let operand = values.pop().ok_or_else(invalid_state)?;
-                values.push(self.synthesize_provider_state_access(
-                    method,
-                    span,
-                    operand.into_inner(),
-                )?);
-            }
+
             ElaborationTask::FinishApplication {
                 whole_span,
                 function_span,
@@ -16861,12 +15317,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         argument: TypedNode,
     ) -> Result<TypedNode, TypeError> {
         let function = TypedNodeOwner::new(function);
-        self.check_provider_source_application(
-            function.node,
-            &function.ty,
-            &argument.ty,
-            argument_span,
-        )?;
+
         let codomain = ProvenancedTypeOwner::new(codomain);
         let ProvenancedType {
             ty: codomain_ty,
@@ -19097,13 +17548,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut domain = ProvenancedTypeOwner::new(domain);
         let mut codomain = ProvenancedTypeOwner::new(codomain);
         let mut function_type = ProvenancedTypeOwner::new(function_type);
-        if self.contains_provider_state(&domain.ty)?
-            || self.contains_provider_state(&codomain.ty)?
-        {
-            return Err(provider::ordinary_state_unavailable(
-                presentation.as_ref().primary_span(),
-            ));
-        }
+
         let mut pattern_binders = Vec::new();
         let (mut checked_pattern, inference_changed, contains_newtype, pattern_count) =
             if matches!(&parameter.kind, ResolvedPatternKind::Binder(_)) {
@@ -19196,9 +17641,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             cause: Box::new(presentation.into_inner()),
             reason: GeneratedReason::FunctionLowering,
         };
-        if self.provider_context.is_some() {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-        }
+
         let function_type = function_type.into_inner();
         let (cleanup_completion, body_check) = match body_check {
             CheckKind::CleanupAction(completion) => (Some(completion), CheckKind::General),
@@ -19226,7 +17669,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             pattern_count,
             infer_effects,
             cleanup_completion,
-            provider_context: self.provider_context.take().map(Box::new),
         });
         match body {
             FunctionBody::Block(block) => schedule_block(
@@ -19293,11 +17735,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let presentation = OriginOwner::new(presentation);
         let mut function_type = ProvenancedTypeOwner::new(function_type);
         let ambient_rows = self.qualify_checking_type(&mut function_type, original_signature)?;
-        if self.provider_context.is_none() && self.contains_provider_state(&function_type.ty)? {
-            return Err(provider::ordinary_state_unavailable(
-                presentation.as_ref().primary_span(),
-            ));
-        }
+
         let Some(first) = equations.first() else {
             return Err(invalid_state());
         };
@@ -20112,9 +18550,8 @@ fn preflight_application_arities(
     for declaration in module.declaration_order() {
         budget.charge(1).map_err(|()| constraint_resource())?;
         match *declaration {
-            ResolvedDeclarationIndex::Resource(_) | ResolvedDeclarationIndex::SourceResource(_) => {
-            }
-            ResolvedDeclarationIndex::Type(_)
+            ResolvedDeclarationIndex::Resource(_)
+            | ResolvedDeclarationIndex::Type(_)
             | ResolvedDeclarationIndex::Interface(_)
             | ResolvedDeclarationIndex::Effect(_) => {}
             ResolvedDeclarationIndex::Global(index) => {
@@ -22150,7 +20587,6 @@ pub(crate) fn check_newtype_representation_cycles(
                 | ResolvedTypeProvenanceNode::Function { span, .. }
                 | ResolvedTypeProvenanceNode::Application { span, .. }
                 | ResolvedTypeProvenanceNode::Resource { span, .. }
-                | ResolvedTypeProvenanceNode::ForeignOwner { span, .. }
                 | ResolvedTypeProvenanceNode::Row { span, .. } => *span,
             };
             let ty = match value {
@@ -22276,31 +20712,7 @@ pub(crate) fn check_newtype_representation_cycles(
                             .map(|(argument, root)| (Value::Argument(argument), root)),
                     );
                 }
-                Type::ForeignOwnerApply(resource, arguments) => {
-                    let ResolvedTypeProvenanceNode::ForeignOwner {
-                        nominal: source,
-                        arguments: roots,
-                        ..
-                    } = provenance
-                    else {
-                        return Err(invalid_state());
-                    };
-                    if resource != source || arguments.len() != roots.len() {
-                        return Err(invalid_state());
-                    }
-                    type_work
-                        .charge(arguments.len())
-                        .map_err(|()| type_resource())?;
-                    pending
-                        .try_reserve(arguments.len())
-                        .map_err(|_| type_resource())?;
-                    pending.extend(
-                        arguments
-                            .iter()
-                            .zip(roots.iter().copied())
-                            .map(|(argument, root)| (Value::Argument(argument), root)),
-                    );
-                }
+
                 Type::Tuple(elements) => {
                     type_work.charge(elements.len()).map_err(|()| {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -22467,46 +20879,22 @@ pub(crate) fn check_module_with_budget(
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<CheckedModule, TypeError> {
-    check_module_with_budget_and_provider_codes(
+    check_module_with_budget_and_rewrite_work(
         resolved,
-        &ProviderCodeAvailability::default(),
-        type_work,
-        coverage_work,
-        constraint_work,
-    )
-}
-
-/// Checks one module with separately retained original dependency code.
-/// Availability never substitutes for imported declaration authority.
-pub(crate) fn check_module_with_budget_and_provider_codes(
-    resolved: ResolvedModule,
-    provider_codes: &ProviderCodeAvailability,
-    type_work: &mut TypeWorkBudget,
-    coverage_work: &mut UsefulnessBudget,
-    constraint_work: &mut InterfaceConstraintBudget,
-) -> Result<CheckedModule, TypeError> {
-    check_module_with_budget_and_provider_codes_and_rewrite_work(
-        resolved,
-        provider_codes,
         type_work,
         coverage_work,
         constraint_work,
         None,
     )
 }
-
-/// The modular driver supplies one separately funded rewrite meter per arena.
-pub(crate) fn check_module_with_budget_and_provider_codes_and_rewrite_work(
+pub(crate) fn check_module_with_budget_and_rewrite_work(
     resolved: ResolvedModule,
-    provider_codes: &ProviderCodeAvailability,
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
     rewrite_work: Option<TypeWorkBudget>,
 ) -> Result<CheckedModule, TypeError> {
-    let mut effects = !resolved.resources().is_empty()
-        || !resolved.source_resources().is_empty()
-        || !resolved.effects().is_empty()
+    let mut effects = !resolved.effects().is_empty()
         || !resolved.registry().effects().is_empty()
         || resolved.imported_facts().effects().next().is_some();
     if !effects {
@@ -22528,48 +20916,20 @@ pub(crate) fn check_module_with_budget_and_provider_codes_and_rewrite_work(
     if effects {
         check_module_with_budget_family::<EffectOperationFamily>(
             resolved,
-            provider_codes,
             type_work,
             coverage_work,
             constraint_work,
             rewrite_work,
-            #[cfg(test)]
-            None,
         )
     } else {
         check_module_with_budget_family::<PureOperationFamily>(
             resolved,
-            provider_codes,
             type_work,
             coverage_work,
             constraint_work,
             rewrite_work,
-            #[cfg(test)]
-            None,
         )
     }
-}
-
-/// Borrows genuine completed source preparation for connected authority tests.
-/// The observer cannot mutate the builder or manufacture a Prepared receipt.
-#[cfg(test)]
-pub(crate) fn check_effect_module_with_source_capture_for_test(
-    resolved: ResolvedModule,
-    provider_codes: &ProviderCodeAvailability,
-    type_work: &mut TypeWorkBudget,
-    coverage_work: &mut UsefulnessBudget,
-    constraint_work: &mut InterfaceConstraintBudget,
-    observer: fn(&crate::core::EffectCoreBuilder),
-) -> Result<CheckedModule, TypeError> {
-    check_module_with_budget_family::<EffectOperationFamily>(
-        resolved,
-        provider_codes,
-        type_work,
-        coverage_work,
-        constraint_work,
-        None,
-        Some(observer),
-    )
 }
 
 /// Exposes only the internal scheduling selector. It neither checks a body nor
@@ -22591,12 +20951,10 @@ pub(crate) fn source_original_prerequisites_for_test(
 )]
 fn check_module_with_budget_family<F: CoreLoweringFamily>(
     mut resolved: ResolvedModule,
-    provider_codes: &ProviderCodeAvailability,
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
     rewrite_work: Option<TypeWorkBudget>,
-    #[cfg(test)] source_capture_observer: Option<fn(&crate::core::EffectCoreBuilder)>,
 ) -> Result<CheckedModule, TypeError> {
     resolved
         .authenticate_owner_definitions(type_work)
@@ -22632,67 +20990,6 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         rewrite_work,
     )?;
     let result: Result<_, TypeError> = (|| {
-        elaborator.provider_codes = provider_codes.clone_with_budget(&mut elaborator.type_work)?;
-        // Original import certificates remain separate from executable code
-        // availability and from the complete final Core registry.
-        for (_, resource) in resolved.imported_facts().resource_facts() {
-            elaborator
-                .type_work
-                .charge(1)
-                .map_err(|()| type_resource())?;
-            let module = resource.id.module();
-            let certificate = resolved
-                .imported_facts()
-                .provider_contract(module)
-                .ok_or_else(invalid_state)?;
-            if let Some(family) = &resource.family_template {
-                elaborator
-                    .type_work
-                    .charge(
-                        certificate
-                            .resource_count()
-                            .checked_mul(6)
-                            .ok_or_else(type_resource)?,
-                    )
-                    .map_err(|()| type_resource())?;
-                let identity = certificate
-                    .family_identity(resource.id)
-                    .ok_or_else(invalid_state)?;
-                if identity.definition != resource.id
-                    || identity.parameter != family.parameter.id
-                    || certificate
-                        .family_provider_application(resource.id)
-                        .is_none()
-                    || certificate.family_requirements(resource.id).is_none()
-                    || certificate.family_methods(resource.id).is_none()
-                    || certificate
-                        .family_handler_certificate(resource.id)
-                        .is_none()
-                    || !certificate
-                        .resource_contracts()
-                        .any(|(_, _, original)| Arc::ptr_eq(original, resource))
-                {
-                    return Err(invalid_state());
-                }
-            }
-            if let Some(previous) = elaborator.source_provider_contracts.get(&module) {
-                if !Arc::ptr_eq(previous, certificate) {
-                    return Err(invalid_state());
-                }
-            } else {
-                elaborator
-                    .type_work
-                    .charge(1)
-                    .map_err(|()| type_resource())?;
-                elaborator
-                    .source_provider_contracts
-                    .try_reserve(1)
-                    .map_err(|_| type_resource())?;
-                elaborator
-                    .source_provider_contracts
-                    .insert(module, Arc::clone(certificate));
-            }
-        }
         let interface_facts = checked_interface_facts(
             &resolved,
             &checked_interfaces,
@@ -22709,71 +21006,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             &mut elaborator.type_work,
             constraint_work,
         )?);
-        let (mut started_bodies, source_defining) = elaborator
-            .prepare_available_provider_group_before_source(
-                &resolved,
-                &mut schemes,
-                &checked_interfaces,
-                &interface_facts,
-                &checked_implementations,
-                constraint_work,
-            )?;
-        let source_provider = if let Some(local) = &elaborator.pending_local_provider {
-            Some(
-                local.source_original_context(
-                    resolved.imported_facts(),
-                    source_defining.as_ref().ok_or_else(invalid_state)?,
-                    started_bodies
-                        .first()
-                        .and_then(|checking| checking.publication.as_ref())
-                        .ok_or_else(invalid_state)?,
-                )?,
-            )
-        } else {
-            None
-        };
-        let source_registry = if resolved.source_resources().is_empty() {
-            Arc::clone(&elaborator.registry)
-        } else {
-            let registry = resolved
-                .registry()
-                .source_original_checker_view(resolved.imported_facts(), &mut elaborator.type_work)
-                .map_err(resolved_build_error)?;
-            let registry = if let Some(local) = &source_provider {
-                registry
-                    .with_source_prepared_provider_group(
-                        &resolved,
-                        local,
-                        &mut elaborator.type_work,
-                    )
-                    .map_err(resolved_build_error)?
-            } else {
-                registry
-            };
-            elaborator
-                .type_work
-                .charge(1)
-                .map_err(|_| type_resource())?;
-            Arc::new(registry)
-        };
-        let source_resources = source_resource::compile(
-            &resolved,
-            &source_registry,
-            &interface_facts,
-            &schemes,
-            &mut elaborator.type_work,
-            &mut elaborator.coverage_work,
-            constraint_work,
-            source_provider.as_ref(),
-            elaborator.builder.rewrite_work_limit(),
-        )?;
-        if let Some(code) = &source_resources {
-            elaborator.provider_codes.retain_source(
-                resolved.module(),
-                code,
-                &mut elaborator.type_work,
-            )?;
-        }
+        let mut started_bodies = Vec::new();
         let (implementation_facts, mut publication) = elaborator.check_module_bodies(
             &resolved,
             &mut schemes,
@@ -22796,49 +21029,12 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             EvidenceAuditFailure::InvalidState => invalid_state(),
             EvidenceAuditFailure::ConstraintResource => constraint_resource(),
         })?;
-        let defining = if F::EFFECTS
-            && !resolved.resources().is_empty()
-            && elaborator.pending_local_provider.is_none()
-        {
-            Some(Arc::new(elaborator.prepare_provider_defining_facts(
-                &schemes,
-                &interface_facts,
-                &implementation_facts,
-                resolved.imported_facts(),
-                constraint_work,
-            )?))
-        } else {
-            None
-        };
-        let providers = if let Some(local) = &elaborator.pending_local_provider {
-            elaborator
-                .type_work
-                .charge(1)
-                .map_err(|()| type_resource())?;
-            Some(Arc::clone(local.code()?))
-        } else if F::EFFECTS {
-            provider::check_module_provider_group(
-                &resolved,
-                defining.as_ref(),
-                &mut publication,
-                &mut elaborator.type_work,
-                &mut elaborator.coverage_work,
-                constraint_work,
-                elaborator.builder.rewrite_work_limit(),
-            )?
-        } else if resolved.resources().is_empty() {
-            None
-        } else {
-            return Err(unsupported_provider_resource());
-        };
-
-        let exports = ExportSummary::freeze_with_providers(
+        let exports = ExportSummary::freeze(
             &resolved,
             &schemes,
             &interface_facts,
             &checked_implementations,
             &implementation_facts,
-            providers.as_ref(),
             &mut elaborator.type_work,
             constraint_work,
         )
@@ -22851,20 +21047,8 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             implementation_facts,
             exports,
             publication,
-            providers,
-            source_resources,
         ))
     })();
-    let result = result.and_then(|checked| {
-        elaborator.finalize_source_provider_plans()?;
-        #[cfg(test)]
-        if let Some(observer) = source_capture_observer {
-            let builder = F::effect_builder(&mut elaborator.builder).ok_or_else(invalid_state)?;
-            observer(builder);
-        }
-        Ok(checked)
-    });
-    let provider_publication = std::mem::take(&mut elaborator.provider_instances);
     *type_work = std::mem::take(&mut elaborator.type_work);
     *coverage_work = std::mem::take(&mut elaborator.coverage_work);
     let (
@@ -22874,8 +21058,6 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         implementation_facts,
         exports,
         publication,
-        providers,
-        source_resources,
     ) = result?;
     let imported_implementation_count = resolved.imported_facts().implementations().count();
     let local_implementation_count = resolved.implementations().len();
@@ -22913,15 +21095,11 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         resolved.definitions().len(),
         resolved.implementations().len(),
     )?;
-    let instances = provider_publication
-        .prepare_publication(type_work)
-        .map_err(resolved_build_error)?;
     let evidence = publication
         .prepare_publication()
         .map_err(|failure| selection_failure(failure, None))?;
     // Both inventories have passed every fallible check. No source writer or
     // allocation intervenes between these two one-shot publication commits.
-    instances.commit();
     evidence.commit();
     definitions.extend(
         resolved
@@ -22949,8 +21127,6 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             interface_facts,
             implementation_facts,
             exports,
-            providers,
-            source_resources,
         },
     ))
 }
@@ -23370,13 +21546,22 @@ struct CleanupActionProgress {
 }
 
 enum ElaborationTask<'a> {
-    ProviderInstanceBody {
-        resource: &'a crate::resolved::ResolvedProviderResourceExpr,
-        span: Span,
+    FinishFunction {
+        has_ambient_rows: bool,
+        direct_binder: Option<BinderId>,
+        pattern_binders: Vec<BinderId>,
+        binder: TypedBinder,
+        pattern: Option<CorePattern>,
+        domain: Option<Type>,
+        ty: Type,
+        origin: Origin,
+        provenance: TypeProvenance,
+        contains_newtype: bool,
+        pattern_count: usize,
+        infer_effects: bool,
+        cleanup_completion: Option<usize>,
     },
-    FinishProviderInstance(Box<provider_instance::ProviderInstanceProgress<'a>>),
-    SourceResourceBody(Box<source_resource::PreparedSourceResource<'a>>),
-    FinishSourceResource(Box<source_resource::SourceResourceProgress<'a>>),
+
     FinishCleanupAction(Box<CleanupActionProgress>),
     FinishCleanup {
         cleanup: &'a crate::resolved::ResolvedCleanupExpr,
@@ -23396,12 +21581,7 @@ enum ElaborationTask<'a> {
         span: Span,
     },
     FinishResource(Box<ResourceProgress<'a>>),
-    CopyWindowBody(Box<source_window::WindowProgress<'a>>),
-    FinishCopyWindow(Box<source_window::WindowProgress<'a>>),
-    FinishForeignHost {
-        source: &'a crate::resolved::ResolvedForeignHostExpr,
-        span: Span,
-    },
+
     Equation(EquationTask<'a>),
     RetainLocalNewtype(NominalTypeId),
     Synthesize {
@@ -23434,32 +21614,14 @@ enum ElaborationTask<'a> {
         body_check: CheckKind,
         infer_effects: bool,
     },
-    FinishFunction {
-        has_ambient_rows: bool,
-        direct_binder: Option<BinderId>,
-        pattern_binders: Vec<BinderId>,
-        binder: TypedBinder,
-        pattern: Option<CorePattern>,
-        domain: Option<Type>,
-        ty: Type,
-        origin: Origin,
-        provenance: TypeProvenance,
-        contains_newtype: bool,
-        pattern_count: usize,
-        infer_effects: bool,
-        cleanup_completion: Option<usize>,
-        provider_context: Option<Box<provider::CheckingContext>>,
-    },
+
     AfterApplicationFunction {
         whole_span: Span,
         function_span: Span,
         argument: &'a ResolvedExpr,
         recursive_call: bool,
     },
-    FinishProviderStateAccess {
-        method: MethodId,
-        span: Span,
-    },
+
     FinishApplication {
         whole_span: Span,
         function_span: Span,
@@ -24763,23 +22925,15 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
         ElaborationTask::Equation(_) => {}
         ElaborationTask::FinishCleanupAction(_) => {}
         ElaborationTask::ResourceBody { .. }
-        | ElaborationTask::SourceResourceBody(_)
-        | ElaborationTask::FinishSourceResource(_)
-        | ElaborationTask::ProviderInstanceBody { .. }
-        | ElaborationTask::FinishProviderInstance(_)
         | ElaborationTask::FinishCleanup { .. }
         | ElaborationTask::BeginCleanupBinding { .. }
         | ElaborationTask::FinishHookBody { .. }
         | ElaborationTask::FinishResource(_)
-        | ElaborationTask::CopyWindowBody(_)
-        | ElaborationTask::FinishCopyWindow(_)
-        | ElaborationTask::FinishForeignHost { .. }
         | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
         | ElaborationTask::BeginRegistrationBinding { .. }
         | ElaborationTask::AfterApplicationFunction { .. }
-        | ElaborationTask::FinishProviderStateAccess { .. }
         | ElaborationTask::AfterLeft { .. }
         | ElaborationTask::CheckRecursiveMember(_)
         | ElaborationTask::BeginRecursiveGroup(_)
@@ -25267,13 +23421,6 @@ fn schedule_left<'a>(
 }
 
 /// Temporary frontend-only boundary: provider templates await lifecycle checking.
-fn foreign_privilege_unavailable() -> TypeError {
-    TypeError::Internal(ElaborationFailure::ForeignPrivilegeUnavailable)
-}
-
-fn unsupported_provider_resource() -> TypeError {
-    TypeError::Internal(ElaborationFailure::InvalidState)
-}
 
 /// Retain temporary payload ownership across a later metadata reservation.
 fn prepare_resource_payload_copy(
@@ -25514,23 +23661,7 @@ fn candidate_kind_environment<'a>(
                             .map_err(kind_failure_for_unification)?;
                     }
                 }
-                crate::types::TypeStructureNode::Type(Type::ForeignOwnerApply(identity, _))
-                    if !environments.contains_nominal(*identity) =>
-                {
-                    let parameters = crate::foreign::source_owner::row_foreign_parameters(
-                        *identity, registry, span, budget,
-                    )
-                    .map_err(|error| {
-                        if error.is_resource_exhaustion() {
-                            UnificationFailure::Resource
-                        } else {
-                            UnificationFailure::Invariant
-                        }
-                    })?;
-                    environments
-                        .insert_nominal(*identity, parameters, span, budget)
-                        .map_err(kind_failure_for_unification)?;
-                }
+
                 crate::types::TypeStructureNode::Type(Type::Nominal(identity))
                     if !environments.contains_nominal(*identity) =>
                 {
@@ -25919,8 +24050,7 @@ fn validate_recursive_member(
         | Type::Variable(_)
         | Type::Inference(_)
         | Type::Forall(_, _)
-        | Type::ResourceApply(_, _)
-        | Type::ForeignOwnerApply(_, _) => Err(unsafe_recursive_root(group, member)),
+        | Type::ResourceApply(_, _) => Err(unsafe_recursive_root(group, member)),
     }
 }
 
@@ -26026,17 +24156,7 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.push(&match_expression.scrutinee);
                 work.extend(match_expression.arms.iter().map(|arm| &arm.body));
             }
-            ResolvedExprKind::ForeignHost(host) => {
-                work.push(&host.body);
-            }
-            ResolvedExprKind::CopyWindow(window) => {
-                work.push(&window.body);
-                work.push(&window.state);
-            }
-            ResolvedExprKind::ProviderResource(resource) => {
-                work.push(&resource.body);
-                work.push(&resource.initializer);
-            }
+
             ResolvedExprKind::Resource(resource) => {
                 work.push(&resource.body);
                 work.push(&resource.initializer);
@@ -26311,43 +24431,7 @@ fn validate_and_charge_public_monotype(
                     push(&mut work, Task::Argument(argument, child_depth), budget)?;
                 }
             }
-            Type::ForeignOwnerApply(nominal, arguments) if applied_arguments == 0 => {
-                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
-                    return Err(PublicTypeAdmissionError::Invalid);
-                }
-                let span = match registry
-                    .nominal_kind(*nominal)
-                    .ok_or(PublicTypeAdmissionError::Invalid)?
-                {
-                    CanonicalNominalKind::Parameters { origin, .. }
-                    | CanonicalNominalKind::Frozen { origin, .. }
-                    | CanonicalNominalKind::RowBearingResource { origin, .. } => origin,
-                };
-                let parameters = crate::foreign::source_owner::row_foreign_parameters(
-                    *nominal, registry, span, budget,
-                )
-                .map_err(|error| {
-                    if error.is_resource_exhaustion() {
-                        PublicTypeAdmissionError::Resource
-                    } else {
-                        PublicTypeAdmissionError::Invalid
-                    }
-                })?;
-                if parameters.len() != arguments.len() {
-                    return Err(PublicTypeAdmissionError::Invalid);
-                }
-                budget
-                    .charge(arguments.len())
-                    .map_err(|_| PublicTypeAdmissionError::Resource)?;
-                for (parameter, argument) in parameters.iter().zip(arguments.iter()).rev() {
-                    if (parameter.kind == Kind::EffectRow)
-                        != matches!(argument, crate::types::KindedArgument::RowArg(_))
-                    {
-                        return Err(PublicTypeAdmissionError::Invalid);
-                    }
-                    push(&mut work, Task::Argument(argument, child_depth), budget)?;
-                }
-            }
+
             Type::Application(function, argument) => {
                 if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
                     return Err(PublicTypeAdmissionError::Invalid);
@@ -26388,9 +24472,9 @@ fn validate_and_charge_public_monotype(
                 )?;
                 push(&mut work, Task::Visit(domain, child_depth, 0), budget)?;
             }
+
             Type::Tuple(_)
             | Type::ResourceApply(_, _)
-            | Type::ForeignOwnerApply(_, _)
             | Type::Function(_, _)
             | Type::EffectfulFunction(_, _)
             | Type::Inference(_)
@@ -26585,18 +24669,8 @@ fn compare_concrete_types(
         match (left, right) {
             (Type::Inference(_) | Type::Forall(_, _), _)
             | (_, Type::Inference(_) | Type::Forall(_, _))
-            | (
-                Type::EffectfulFunction(_, _)
-                | Type::ResourceApply(_, _)
-                | Type::ForeignOwnerApply(_, _),
-                _,
-            )
-            | (
-                _,
-                Type::EffectfulFunction(_, _)
-                | Type::ResourceApply(_, _)
-                | Type::ForeignOwnerApply(_, _),
-            ) => Some(None),
+            | (Type::EffectfulFunction(_, _) | Type::ResourceApply(_, _), _)
+            | (_, Type::EffectfulFunction(_, _) | Type::ResourceApply(_, _)) => Some(None),
             (Type::Bytes, Type::Bytes)
             | (Type::String, Type::String)
             | (Type::Int, Type::Int)
@@ -26992,7 +25066,7 @@ fn zonk_compound_root_with_status_and_inference_and_rows<E>(
         Instances(std::slice::Iter<'a, EffectInstance>),
         Tuple(usize),
         Resource(crate::types::ResourceDefinitionId, usize),
-        ForeignOwner(NominalTypeId, usize),
+
         InstanceResult(crate::types::EffectId, usize),
         Application,
         Function,
@@ -27150,18 +25224,7 @@ fn zonk_compound_root_with_status_and_inference_and_rows<E>(
                     &mut work_charge,
                 )?;
             }
-            Task::Type(Type::ForeignOwnerApply(id, arguments)) => {
-                schedule(
-                    &mut work,
-                    Task::ForeignOwner(*id, arguments.len()),
-                    &mut work_charge,
-                )?;
-                schedule(
-                    &mut work,
-                    Task::Arguments(arguments.iter()),
-                    &mut work_charge,
-                )?;
-            }
+
             Task::Type(Type::Application(function, argument)) => {
                 schedule(&mut work, Task::Application, &mut work_charge)?;
                 schedule(&mut work, Task::Type(argument), &mut work_charge)?;
@@ -27330,19 +25393,7 @@ fn zonk_compound_root_with_status_and_inference_and_rows<E>(
                     &mut work_charge,
                 )?;
             }
-            Task::ForeignOwner(id, count) => {
-                let staged = suffix(&mut values, count, &mut work_charge)?;
-                let mut arguments = Vec::new();
-                arguments
-                    .try_reserve_exact(count)
-                    .map_err(|_| allocation(&mut work_charge))?;
-                arguments.extend(staged.into_iter().map(Value::into_argument));
-                retain(
-                    &mut values,
-                    Value::ty(Type::ForeignOwnerApply(id, arguments.into_boxed_slice())),
-                    &mut work_charge,
-                )?;
-            }
+
             Task::InstanceResult(id, count) => {
                 let staged = suffix(&mut values, count, &mut work_charge)?;
                 let mut arguments = Vec::new();
@@ -27504,7 +25555,7 @@ fn zonk_owned_root_with_rows<B: crate::types::TypeWorkMeter>(
         Function,
         EffectfulFunction,
         Resource(crate::types::ResourceDefinitionId, usize),
-        ForeignOwner(NominalTypeId, usize),
+
         TypeArgument,
         RowArgument,
         Row(RowShape),
@@ -27655,12 +25706,7 @@ fn zonk_owned_root_with_rows<B: crate::types::TypeWorkMeter>(
                     schedule(&mut work, Task::Resource(owner, count), budget)?;
                     schedule(&mut work, Task::Sequence(arguments.into_iter()), budget)?;
                 }
-                Type::ForeignOwnerApply(owner, arguments) => {
-                    let count = arguments.len();
-                    let arguments = argument_sequence(arguments, budget)?;
-                    schedule(&mut work, Task::ForeignOwner(owner, count), budget)?;
-                    schedule(&mut work, Task::Sequence(arguments.into_iter()), budget)?;
-                }
+
                 Type::Application(function, argument) => {
                     let function = Value::ty(*function);
                     let argument = Value::ty(*argument);
@@ -27827,20 +25873,7 @@ fn zonk_owned_root_with_rows<B: crate::types::TypeWorkMeter>(
                     budget,
                 )?;
             }
-            Task::ForeignOwner(owner, count) => {
-                let staged = suffix(&mut values, count, budget)?;
-                budget.charge(count)?;
-                let mut arguments = Vec::new();
-                arguments
-                    .try_reserve_exact(count)
-                    .map_err(|_| crate::types::allocation_error(budget))?;
-                arguments.extend(staged.into_iter().map(Value::into_argument));
-                retain(
-                    &mut values,
-                    Value::ty(Type::ForeignOwnerApply(owner, arguments.into_boxed_slice())),
-                    budget,
-                )?;
-            }
+
             Task::Application | Task::Function => {
                 let right = values.pop().expect("zonked right child");
                 let left = values.pop().expect("zonked left child");
@@ -28065,7 +26098,7 @@ fn inference_occurs_in_owner_graph(
                 schedule!(Task::Visit(codomain));
                 schedule!(Task::Visit(domain));
             }
-            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) => {
                 for argument in arguments {
                     schedule!(Task::Argument(argument));
                 }
@@ -28158,9 +26191,7 @@ fn collect_unsolved_inference(
                 schedule(&mut work, Task::Type(argument), budget)?;
                 schedule(&mut work, Task::Type(function), budget)?;
             }
-            Task::Type(
-                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
-            ) => {
+            Task::Type(Type::ResourceApply(_, arguments)) => {
                 for argument in arguments {
                     schedule(&mut work, Task::Argument(argument), budget)?;
                 }
@@ -28246,9 +26277,7 @@ fn type_contains_unsolved_row_inference(
                 schedule(&mut work, Task::Type(argument), budget)?;
                 schedule(&mut work, Task::Type(function), budget)?;
             }
-            Task::Type(
-                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
-            ) => {
+            Task::Type(Type::ResourceApply(_, arguments)) => {
                 for argument in arguments {
                     schedule(&mut work, Task::Argument(argument), budget)?;
                 }
@@ -28602,17 +26631,7 @@ fn resume_usage_with_budget(
                     push(&mut tasks, Task::BeginMatch(&matched.arms), budget)?;
                     push(&mut tasks, Task::Visit(&matched.scrutinee), budget)?;
                 }
-                ResolvedExprKind::ForeignHost(host) => {
-                    push(&mut tasks, Task::Visit(&host.body), budget)?;
-                }
-                ResolvedExprKind::CopyWindow(window) => {
-                    push(&mut tasks, Task::Visit(&window.body), budget)?;
-                    push(&mut tasks, Task::Visit(&window.state), budget)?;
-                }
-                ResolvedExprKind::ProviderResource(resource) => {
-                    push(&mut tasks, Task::Visit(&resource.body), budget)?;
-                    push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
-                }
+
                 ResolvedExprKind::Resource(resource) => {
                     push(&mut tasks, Task::Visit(&resource.body), budget)?;
                     push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
@@ -28818,17 +26837,7 @@ fn contains_resume_owner_with_budget(
                     return Ok(true);
                 }
             }
-            ResolvedExprKind::ForeignHost(host) => {
-                schedule(&mut pending, &host.body, budget)?;
-            }
-            ResolvedExprKind::CopyWindow(window) => {
-                schedule(&mut pending, &window.body, budget)?;
-                schedule(&mut pending, &window.state, budget)?;
-            }
-            ResolvedExprKind::ProviderResource(resource) => {
-                schedule(&mut pending, &resource.body, budget)?;
-                schedule(&mut pending, &resource.initializer, budget)?;
-            }
+
             ResolvedExprKind::Resource(resource) => {
                 schedule(&mut pending, &resource.body, budget)?;
                 schedule(&mut pending, &resource.initializer, budget)?;
@@ -29106,9 +27115,6 @@ pub(crate) fn checked_program_contains_effect_syntax(
     while let Some(expression) = work.pop() {
         match &expression.kind {
             ResolvedExprKind::Cleanup(_)
-            | ResolvedExprKind::ProviderResource(_)
-            | ResolvedExprKind::CopyWindow(_)
-            | ResolvedExprKind::ForeignHost(_)
             | ResolvedExprKind::Resource(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
@@ -29214,24 +27220,7 @@ fn resolved_module_binders(
             }
         }
     }
-    for resource in module.source_resources() {
-        charge(resource.handlers.len().saturating_add(2))?;
-        expressions
-            .try_reserve(resource.handlers.len().saturating_add(2))
-            .map_err(|_| BuildError::TypeWorkExceeded)?;
-        for pattern in [
-            &resource.acquire_pattern,
-            &resource.finish_pattern,
-            &resource.handlers_pattern,
-        ] {
-            collect_family_pattern_binders(pattern, &mut binders, &mut charge)?;
-        }
-        expressions.extend([&resource.acquire, &resource.finish]);
-        for clause in &resource.handlers {
-            collect_family_pattern_binders(&clause.pattern, &mut binders, &mut charge)?;
-            expressions.push(&clause.body);
-        }
-    }
+
     collect_definition_binders(module.definitions(), &mut binders, &mut expressions);
     collect_implementation_binders(module.implementations(), &mut binders, &mut expressions);
     collect_expression_binders(&mut binders, expressions, charge)?;
@@ -29382,39 +27371,7 @@ fn collect_expression_binders(
                     expressions.push(&arm.body);
                 }
             }
-            ResolvedExprKind::ForeignHost(host) => {
-                charge(1)?;
-                expressions
-                    .try_reserve(1)
-                    .map_err(|_| BuildError::TypeWorkExceeded)?;
-                expressions.push(&host.body);
-            }
-            ResolvedExprKind::CopyWindow(window) => {
-                charge(2)?;
-                expressions
-                    .try_reserve(2)
-                    .map_err(|_| BuildError::TypeWorkExceeded)?;
-                expressions.push(&window.body);
-                expressions.push(&window.state);
-            }
-            ResolvedExprKind::ProviderResource(resource) => {
-                let count = resource
-                    .forwarding
-                    .len()
-                    .checked_mul(2)
-                    .ok_or(BuildError::TypeWorkExceeded)?;
-                charge(count)?;
-                binders
-                    .try_reserve(count.checked_add(1).ok_or(BuildError::TypeWorkExceeded)?)
-                    .map_err(|_| BuildError::TypeWorkExceeded)?;
-                for method in &resource.forwarding {
-                    binders.push(method.binder.id);
-                    binders.push(method.parameter.id);
-                }
-                binders.push(resource.handle.id);
-                expressions.push(&resource.body);
-                expressions.push(&resource.initializer);
-            }
+
             ResolvedExprKind::Resource(resource) => {
                 binders.push(resource.handle.id);
                 expressions.push(&resource.body);
@@ -34231,7 +32188,7 @@ mod tests {
                     Type::Tuple(vec![Type::Variable(parameter_id), nested_tail].into_boxed_slice());
                 let module = ResolvedModule::new(ResolvedModuleParts {
                     resources: Vec::new(),
-                    source_resources: Vec::new(),
+
                     module: module_id,
                     registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
                     imported: ImportedFacts::default(),
@@ -39491,7 +37448,6 @@ mod tests {
                             pattern_count: 0,
                             infer_effects: false,
                             cleanup_completion: None,
-                            provider_context: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -39718,7 +37674,6 @@ mod tests {
                             pattern_count: 0,
                             infer_effects: false,
                             cleanup_completion: None,
-                            provider_context: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -39781,7 +37736,6 @@ mod tests {
                             pattern_count: 1,
                             infer_effects: false,
                             cleanup_completion: None,
-                            provider_context: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -39847,7 +37801,6 @@ mod tests {
                             pattern_count: 1,
                             infer_effects: false,
                             cleanup_completion: None,
-                            provider_context: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -42812,190 +40765,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod borrowed_owner_argument_tests {
-    use super::*;
-    use crate::module::ModuleId;
-    use crate::types::{EffectId, EffectInstance, EffectRowVariable, KindedArgument};
-
-    fn variable(index: u32) -> TypeVariableId {
-        TypeVariableId::new(index)
-    }
-
-    fn payloads() -> (crate::types::IterativeArgumentOwner, EffectRow) {
-        let row = EffectRow::with_tail(
-            vec![EffectInstance::new_kinded(
-                EffectId::new(ModuleId::new(31), 0),
-                vec![KindedArgument::TypeArg(Type::Variable(variable(3)))].into_boxed_slice(),
-            )]
-            .into_boxed_slice(),
-            EffectRowVariable::rigid(variable(4)),
-            vec![EffectInstance::new_kinded(
-                EffectId::new(ModuleId::new(31), 1),
-                vec![KindedArgument::TypeArg(Type::Variable(variable(5)))].into_boxed_slice(),
-            )]
-            .into_boxed_slice(),
-        );
-        let mut work = TypeWorkBudget::unbounded();
-        let ty = Type::Forall(
-            vec![(
-                variable(0),
-                Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::EffectRow)),
-            )]
-            .into_boxed_slice(),
-            Box::new(Type::EffectfulFunction(
-                Box::new(Type::Application(
-                    Box::new(Type::Variable(variable(1))),
-                    Box::new(Type::Variable(variable(2))),
-                )),
-                Box::new(ComputationType::new(
-                    Type::Unit,
-                    clone_effect_row_with_budget(&row, &mut work).unwrap(),
-                )),
-            )),
-        );
-        (
-            crate::types::IterativeArgumentOwner::new(KindedArgument::TypeArg(ty)),
-            row,
-        )
-    }
-
-    fn reference_insert(
-        target: &mut OwnerReplacementBuffer,
-        parameter: TypeVariableId,
-        argument: &crate::types::KindedArgument,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), TypeError> {
-        budget.charge(1).map_err(|()| type_resource())?;
-        if target.types.as_map().contains_key(&parameter) || target.rows.contains_key(&parameter) {
-            return Err(invalid_state());
-        }
-        match argument {
-            crate::types::KindedArgument::TypeArg(ty) => {
-                target.types.try_reserve(1).map_err(|_| type_resource())?;
-                target
-                    .types
-                    .try_insert_unique(
-                        parameter,
-                        clone_type_with_budget(ty, budget).map_err(|()| type_resource())?,
-                    )
-                    .map_err(|()| invalid_state())?;
-            }
-            crate::types::KindedArgument::RowArg(row) => {
-                target.rows.try_reserve(1).map_err(|_| type_resource())?;
-                target.rows.insert(
-                    parameter,
-                    clone_effect_row_with_budget(row, budget).map_err(|()| type_resource())?,
-                );
-            }
-        }
-        Ok(())
-    }
-
-    fn assert_same(left: &OwnerReplacementBuffer, right: &OwnerReplacementBuffer) {
-        assert_eq!(left.types.as_map(), right.types.as_map());
-        assert_eq!(left.rows, right.rows);
-    }
-
-    #[test]
-    fn borrowed_owner_input_preserves_both_cross_kind_duplicate_guards() {
-        let (argument, row) = payloads();
-        let KindedArgument::TypeArg(ty) = argument.as_ref() else {
-            unreachable!()
-        };
-        for row_first in [false, true] {
-            let mut target = OwnerReplacementBuffer::new();
-            let mut work = TypeWorkBudget::unbounded();
-            let key = variable(100);
-            if row_first {
-                target
-                    .insert_borrowed(key, BorrowedOwnerArgument::RowArg(&row), &mut work)
-                    .unwrap();
-            } else {
-                target
-                    .insert_borrowed(key, BorrowedOwnerArgument::TypeArg(ty), &mut work)
-                    .unwrap();
-            }
-            let before = work.used();
-            let result = if row_first {
-                target.insert_borrowed(key, BorrowedOwnerArgument::TypeArg(ty), &mut work)
-            } else {
-                target.insert_borrowed(key, BorrowedOwnerArgument::RowArg(&row), &mut work)
-            };
-            assert_eq!(result, Err(invalid_state()));
-            assert_eq!(work.used(), before + 1);
-            assert_eq!(target.types.as_map().len(), usize::from(!row_first));
-            assert_eq!(target.rows.len(), usize::from(row_first));
-            if row_first {
-                assert_eq!(target.rows.get(&key), Some(&row));
-            } else {
-                assert_eq!(target.types.as_map().get(&key), Some(ty));
-            }
-        }
-    }
-
-    #[test]
-    fn borrowed_owner_input_matches_original_insertion_at_every_work_cut() {
-        let (argument, row) = payloads();
-        let row_argument = crate::types::IterativeArgumentOwner::new(KindedArgument::RowArg(
-            clone_effect_row_with_budget(&row, &mut TypeWorkBudget::unbounded()).unwrap(),
-        ));
-        let mut measured = TypeWorkBudget::unbounded();
-        let mut complete = OwnerReplacementBuffer::new();
-        reference_insert(&mut complete, variable(100), &argument, &mut measured).unwrap();
-        reference_insert(&mut complete, variable(101), &row_argument, &mut measured).unwrap();
-        for cut in 0..=measured.used() {
-            let mut old = OwnerReplacementBuffer::new();
-            let mut new = OwnerReplacementBuffer::new();
-            let mut old_work = TypeWorkBudget::with_limit(cut);
-            let mut new_work = TypeWorkBudget::with_limit(cut);
-            let old_result = reference_insert(&mut old, variable(100), &argument, &mut old_work)
-                .and_then(|()| {
-                    reference_insert(&mut old, variable(101), &row_argument, &mut old_work)
-                });
-            let new_result = new
-                .insert_cloned(variable(100), &argument, &mut new_work)
-                .and_then(|()| new.insert_cloned(variable(101), &row_argument, &mut new_work));
-            assert_eq!(old_result, new_result);
-            assert_eq!(old_work.used(), new_work.used());
-            assert_same(&old, &new);
-        }
-    }
-
-    #[test]
-    fn borrowed_hidden_inputs_keep_three_owned_maps_without_temporary_clones() {
-        let (argument, row) = payloads();
-        let KindedArgument::TypeArg(ty) = argument.as_ref() else {
-            unreachable!()
-        };
-        let mut old_work = TypeWorkBudget::unbounded();
-        let mut new_work = TypeWorkBudget::unbounded();
-        for ordinal in 0..3 {
-            let mut old = OwnerReplacementBuffer::new();
-            let mut new = OwnerReplacementBuffer::new();
-            let type_key = variable(100 + ordinal * 2);
-            let row_key = variable(101 + ordinal * 2);
-            let copied = crate::types::IterativeArgumentOwner::new(KindedArgument::TypeArg(
-                clone_type_with_budget(ty, &mut old_work).unwrap(),
-            ));
-            reference_insert(&mut old, type_key, &copied, &mut old_work).unwrap();
-            let copied = crate::types::IterativeArgumentOwner::new(KindedArgument::RowArg(
-                clone_effect_row_with_budget(&row, &mut old_work).unwrap(),
-            ));
-            reference_insert(&mut old, row_key, &copied, &mut old_work).unwrap();
-            new.insert_borrowed(type_key, BorrowedOwnerArgument::TypeArg(ty), &mut new_work)
-                .unwrap();
-            new.insert_borrowed(row_key, BorrowedOwnerArgument::RowArg(&row), &mut new_work)
-                .unwrap();
-            assert_same(&old, &new);
-        }
-        let mut removed = TypeWorkBudget::unbounded();
-        crate::types::discard_type_iteratively(clone_type_with_budget(ty, &mut removed).unwrap());
-        drop(clone_effect_row_with_budget(&row, &mut removed).unwrap());
-        assert_eq!(old_work.used() - new_work.used(), 3 * removed.used());
-    }
-}
-
 /// The driver retains source entry failures separately from compiler refusal.
 pub(crate) enum NativeEntryFinishFailure {
     ResidualEffects,
@@ -43046,11 +40815,3 @@ impl CoreElaborator<EffectOperationFamily> {
             .map_err(|failure| (Elaboration(failure.into()), used))
     }
 }
-
-#[cfg(test)]
-#[path = "elaborate/checked_owner_lifecycle_tests.rs"]
-mod checked_owner_lifecycle_tests;
-#[cfg(test)]
-pub(crate) use checked_owner_lifecycle_tests::{
-    checked_owner_passive_program, checked_owner_passive_program_for_source, checked_owner_violation_program,
-};

@@ -280,22 +280,28 @@ mod tests {
         let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
             ResolvedRegistry::default(),
         ));
-        let node = builder.unit(Type::Unit, origin()).unwrap();
+        let _node = builder.unit(Type::Unit, origin()).unwrap();
         let mut work = TypeWorkBudget::default();
         identity(&mut builder, &mut work).unwrap();
         assert!(builder.settled_zonk_nodes[0]);
         let id = InferenceVariableId::new(10);
         builder
-            .set_provider_copy_node_row(
-                node,
-                EffectRow::open(EffectRowVariable::inference(id), Box::new([])),
+            .rewrite_types_and_rows(
+                None,
+                |_| Ok(Type::Unit),
+                |_| {
+                    Ok(EffectRow::open(
+                        EffectRowVariable::inference(id),
+                        Box::new([]),
+                    ))
+                },
             )
             .unwrap();
         assert!(!builder.settled_zonk_nodes[0]);
         identity(&mut builder, &mut work).unwrap();
         assert!(!builder.settled_zonk_nodes[0]);
         builder
-            .set_provider_copy_node_row(node, EffectRow::empty())
+            .rewrite_types_and_rows(None, |_| Ok(Type::Unit), |_| Ok(EffectRow::empty()))
             .unwrap();
         identity(&mut builder, &mut work).unwrap();
         assert!(builder.settled_zonk_nodes[0]);

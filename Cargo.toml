@@ -23,11 +23,8 @@ num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] 
 [build-dependencies]
 sha2 = "=0.10.9"
 
-[dev-dependencies]
-ash-foreign-adapter = { path = "foreign-adapter" }
-
 [workspace]
-members = ["foreign-adapter", "xtask"]
+members = ["xtask"]
 resolver = "3"
 
 # Receipt hashing is verification tooling. Product gates keep the default profile.

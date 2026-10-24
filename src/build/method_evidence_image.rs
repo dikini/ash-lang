@@ -4,9 +4,9 @@
 //! helper selections. Concrete implementations, adapters and captured or ordinary
 //! non-resource lexical dictionaries remain explicitly unsupported.
 use super::{
-    ArgumentOwner, BinderIdentity, Decoder, Encoder, ImageFailure, InterfaceIdentity,
-    ResourceIdentity, Slice, StructuralInput, TypeBuffer, Unsupported, Wire, WireOutput,
-    WireReader, WireWriter, append, charge, get, index, push,
+    ArgumentOwner, BinderIdentity, Decoder, EffectIdentity, Encoder, ImageFailure,
+    QuantifierRecord, Slice, StructuralInput, TypeBuffer, TypeVariableIdentity, Unsupported, Wire,
+    WireOutput, WireReader, WireWriter, append, charge, get, index, push,
 };
 use crate::core::dialect::{
     MethodEvidenceAnchorRole, MethodEvidenceCatalog, MethodEvidenceExpectedRole,
@@ -96,12 +96,12 @@ impl Encoder<'_> {
         application: &InterfaceApplication,
     ) -> Result<(InterfaceIdentity, Slice), ImageFailure> {
         let interface = self.interface_identity(application.interface())?;
-        let start = self.image.source_arguments.len();
+        let start = self.image.method_arguments.len();
         for argument in application.arguments() {
             let argument = self.encode_structural(StructuralInput::Argument(argument))?;
-            push(&mut self.image.source_arguments, argument, self.work)?;
+            push(&mut self.image.method_arguments, argument, self.work)?;
         }
-        Ok((interface, Slice::of(&self.image.source_arguments, start)?))
+        Ok((interface, Slice::of(&self.image.method_arguments, start)?))
     }
     fn method_owner(
         &mut self,
@@ -168,12 +168,12 @@ impl Encoder<'_> {
         selection: &crate::interface::EvidenceSelection,
     ) -> Result<(), ImageFailure> {
         let interface = self.interface_identity(selection.interface())?;
-        let start = self.image.source_arguments.len();
+        let start = self.image.method_arguments.len();
         for argument in selection.arguments() {
             let argument = self.encode_structural(StructuralInput::Argument(argument))?;
-            push(&mut self.image.source_arguments, argument, self.work)?;
+            push(&mut self.image.method_arguments, argument, self.work)?;
         }
-        let arguments = Slice::of(&self.image.source_arguments, start)?;
+        let arguments = Slice::of(&self.image.method_arguments, start)?;
         put(data, interface, self.work)?;
         put(data, arguments, self.work)?;
         put(data, index(selection.node_count())?, self.work)?;
@@ -222,23 +222,7 @@ impl Encoder<'_> {
         })
         .transpose()
     }
-    pub(super) fn encode_source_forwardings(
-        &mut self,
-        lexical: LexicalEvidenceId,
-        forwardings: &[crate::core::provider::ProviderForwardingMethod],
-    ) -> Result<Slice, ImageFailure> {
-        let mut data = Vec::new();
-        let lexical = self.lexical_identity(lexical)?;
-        put(&mut data, lexical, self.work)?;
-        put(&mut data, index(forwardings.len())?, self.work)?;
-        for forwarding in forwardings {
-            let method = self.method_identity(forwarding.method)?;
-            let binder = self.binder_id(forwarding.binder)?;
-            put(&mut data, method, self.work)?;
-            put(&mut data, binder, self.work)?;
-        }
-        append(&mut self.image.source_method_evidence, &data, self.work)
-    }
+
     pub(super) fn encode_source_method_evidence(
         &mut self,
         catalog: &MethodEvidenceCatalog,
@@ -263,23 +247,6 @@ impl Encoder<'_> {
             put(&mut data, method, self.work)?;
             put(&mut data, binder, self.work)?;
             match &owner.resource {
-                Some(crate::core::dialect::MethodEvidenceResourceOwner::Provider(resource)) => {
-                    put(&mut data, 0u8, self.work)?;
-                    let definition = self.resource_identity(resource.definition)?;
-                    let family = self.nominal(resource.family)?;
-                    let identity = self.type_variable(resource.identity)?;
-                    let start = self.image.source_arguments.len();
-                    for argument in &resource.arguments {
-                        let argument =
-                            self.encode_structural(StructuralInput::Argument(argument))?;
-                        push(&mut self.image.source_arguments, argument, self.work)?;
-                    }
-                    let arguments = Slice::of(&self.image.source_arguments, start)?;
-                    put(&mut data, definition, self.work)?;
-                    put(&mut data, family, self.work)?;
-                    put(&mut data, identity, self.work)?;
-                    put(&mut data, arguments, self.work)?;
-                }
                 Some(crate::core::dialect::MethodEvidenceResourceOwner::Builtin(acquisition)) => {
                     put(&mut data, 1u8, self.work)?;
                     let acquisition = self.encode_cell_acquisition(*acquisition)?;
@@ -477,7 +444,7 @@ impl Decoder<'_> {
         arguments: Slice,
     ) -> Result<Box<[crate::types::KindedArgument]>, ImageFailure> {
         let mut guarded = Vec::new();
-        for argument in arguments.get(&self.image.source_arguments)? {
+        for argument in arguments.get(&self.image.method_arguments)? {
             let argument = self.structural(*argument)?.argument()?;
             push(&mut guarded, argument, self.work)?;
         }
@@ -641,36 +608,7 @@ impl Decoder<'_> {
         })
         .transpose()
     }
-    pub(super) fn source_forwardings(
-        &mut self,
-        record: Slice,
-    ) -> Result<
-        (
-            LexicalEvidenceId,
-            Box<[crate::core::provider::ProviderForwardingMethod]>,
-        ),
-        ImageFailure,
-    > {
-        let bytes = record.get(&self.image.source_method_evidence)?;
-        let mut offset = 0;
-        let id = take(bytes, &mut offset, self.work)?;
-        let lexical = self.lexical_identity(id)?;
-        let count: u32 = take(bytes, &mut offset, self.work)?;
-        let mut forwardings = Vec::new();
-        for _ in 0..count {
-            let method = take(bytes, &mut offset, self.work)?;
-            let binder = take(bytes, &mut offset, self.work)?;
-            let forwarding = crate::core::provider::ProviderForwardingMethod {
-                method: self.method_identity(method)?,
-                binder: self.binder_id(binder)?,
-            };
-            push(&mut forwardings, forwarding, self.work)?;
-        }
-        if offset != bytes.len() {
-            return Err(ImageFailure::InvalidRecord);
-        }
-        Ok((lexical, forwardings.into_boxed_slice()))
-    }
+
     pub(super) fn source_method_evidence(
         &mut self,
         record: Slice,
@@ -708,20 +646,6 @@ impl Decoder<'_> {
             let method = take(bytes, &mut offset, self.work)?;
             let binder = take(bytes, &mut offset, self.work)?;
             let resource = match take::<u8>(bytes, &mut offset, self.work)? {
-                0 => {
-                    let definition = take(bytes, &mut offset, self.work)?;
-                    let family = take(bytes, &mut offset, self.work)?;
-                    let identity = take(bytes, &mut offset, self.work)?;
-                    let arguments = take(bytes, &mut offset, self.work)?;
-                    crate::core::dialect::MethodEvidenceResourceOwner::Provider(
-                        crate::core::dialect::ProviderEvidenceOwner {
-                            definition: self.resource_identity(definition)?,
-                            family: self.nominal(family)?,
-                            identity: self.type_variable(identity)?,
-                            arguments: self.method_arguments(arguments)?,
-                        },
-                    )
-                }
                 1 => {
                     let acquisition = take(bytes, &mut offset, self.work)?;
                     crate::core::dialect::MethodEvidenceResourceOwner::Builtin(
@@ -1000,6 +924,320 @@ impl Decoder<'_> {
         }
         if offset != bytes.len() {
             return Err(ImageFailure::InvalidRecord);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub(super) struct ResourceIdentity {
+    pub(super) module: u32,
+    pub(super) local: u32,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct InterfaceIdentity {
+    module: u32,
+    local: u32,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct InterfaceOwnerRecord {
+    id: InterfaceIdentity,
+    pub(super) parameters: Slice,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct MethodCatalogRecord {
+    methods: Slice,
+    evidence: Slice,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct MethodRecord {
+    interface: InterfaceIdentity,
+    local: u32,
+    interface_parameters: Slice,
+    inherited_parameters: Slice,
+    parameters: Slice,
+    value_type: u32,
+    pub(super) spelling: Slice,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) enum OwnerIdentity {
+    Effect(EffectIdentity),
+    Interface(InterfaceIdentity),
+    Resource(ResourceIdentity),
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) struct InheritedParameterRecord {
+    owner: OwnerIdentity,
+    slot: u32,
+    binder: TypeVariableIdentity,
+}
+wire_struct!(MethodCatalogRecord, methods, evidence);
+wire_struct!(
+    MethodRecord,
+    interface,
+    local,
+    interface_parameters,
+    inherited_parameters,
+    parameters,
+    value_type,
+    spelling
+);
+wire_struct!(InheritedParameterRecord, owner, slot, binder);
+impl Wire for OwnerIdentity {
+    const MINIMUM: usize = 1 + EffectIdentity::MINIMUM;
+    fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
+        match self {
+            Self::Effect(id) => {
+                0u8.write(writer)?;
+                id.write(writer)
+            }
+            Self::Interface(id) => {
+                1u8.write(writer)?;
+                id.write(writer)
+            }
+            Self::Resource(id) => {
+                2u8.write(writer)?;
+                id.write(writer)
+            }
+        }
+    }
+    fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
+        Ok(match u8::read(reader)? {
+            0 => Self::Effect(Wire::read(reader)?),
+            1 => Self::Interface(Wire::read(reader)?),
+            2 => Self::Resource(Wire::read(reader)?),
+            _ => return Err(ImageFailure::InvalidEncoding),
+        })
+    }
+}
+
+wire_struct!(ResourceIdentity, module, local);
+wire_struct!(InterfaceIdentity, module, local);
+wire_struct!(InterfaceOwnerRecord, id, parameters);
+
+impl Encoder<'_> {
+    pub(super) fn resource_identity(
+        &mut self,
+        id: crate::types::ResourceDefinitionId,
+    ) -> Result<ResourceIdentity, ImageFailure> {
+        Ok(ResourceIdentity {
+            module: self.module(id.module())?,
+            local: id.ordinal(),
+        })
+    }
+    pub(super) fn interface_identity(
+        &mut self,
+        id: crate::interface::InterfaceId,
+    ) -> Result<InterfaceIdentity, ImageFailure> {
+        Ok(InterfaceIdentity {
+            module: self.module(id.module())?,
+            local: id.declaration(),
+        })
+    }
+    pub(super) fn encode_method_catalog(
+        &mut self,
+        catalog: &Arc<crate::core::dialect::MethodEvidenceCatalog>,
+    ) -> Result<u32, ImageFailure> {
+        let start = self.image.source_methods.len();
+        for method in catalog.methods() {
+            let interface = self.interface_identity(method.id.interface())?;
+            let variable_start = self.image.method_variables.len();
+            for id in &method.interface_parameters {
+                let id = self.type_variable(*id)?;
+                push(&mut self.image.method_variables, id, self.work)?;
+            }
+            let interface_parameters = Slice::of(&self.image.method_variables, variable_start)?;
+            let inherited_start = self.image.inherited_parameters.len();
+            for parameter in &method.inherited_parameters {
+                let owner = match parameter.owner {
+                    crate::resolved::OwnerId::Effect(id) => {
+                        OwnerIdentity::Effect(self.effect_identity(id)?)
+                    }
+                    crate::resolved::OwnerId::Interface(id) => {
+                        OwnerIdentity::Interface(self.interface_identity(id)?)
+                    }
+                    crate::resolved::OwnerId::Resource(id) => {
+                        OwnerIdentity::Resource(self.resource_identity(id)?)
+                    }
+                };
+                let binder = self.type_variable(parameter.binder)?;
+                push(
+                    &mut self.image.inherited_parameters,
+                    InheritedParameterRecord {
+                        owner,
+                        slot: parameter.slot,
+                        binder,
+                    },
+                    self.work,
+                )?;
+            }
+            let inherited_parameters =
+                Slice::of(&self.image.inherited_parameters, inherited_start)?;
+            let quantifier_start = self.image.quantifiers.len();
+            for (id, kind) in &method.parameters {
+                let id = self.type_variable(*id)?;
+                let kind = self.encode_kind(kind)?;
+                push(
+                    &mut self.image.quantifiers,
+                    QuantifierRecord { id, kind },
+                    self.work,
+                )?;
+            }
+            let parameters = Slice::of(&self.image.quantifiers, quantifier_start)?;
+            let value_type = self.encode_type(&method.value_type)?;
+            let spelling = append(&mut self.image.bytes, method.spelling.as_bytes(), self.work)?;
+            push(
+                &mut self.image.source_methods,
+                MethodRecord {
+                    interface,
+                    local: method.id.declaration(),
+                    interface_parameters,
+                    inherited_parameters,
+                    parameters,
+                    value_type,
+                    spelling,
+                },
+                self.work,
+            )?;
+        }
+        let evidence = self.encode_source_method_evidence(catalog)?;
+        push(
+            &mut self.image.method_catalogs,
+            MethodCatalogRecord {
+                methods: Slice::of(&self.image.source_methods, start)?,
+                evidence,
+            },
+            self.work,
+        )
+    }
+}
+impl Decoder<'_> {
+    pub(super) fn resource_identity(
+        &mut self,
+        id: ResourceIdentity,
+    ) -> Result<crate::types::ResourceDefinitionId, ImageFailure> {
+        charge(self.work, 1)?;
+        Ok(crate::types::ResourceDefinitionId::new(
+            *get(&self.modules, id.module)?,
+            id.local,
+        ))
+    }
+    pub(super) fn interface_identity(
+        &mut self,
+        id: InterfaceIdentity,
+    ) -> Result<crate::interface::InterfaceId, ImageFailure> {
+        charge(self.work, 1)?;
+        Ok(crate::interface::InterfaceId::new(
+            *get(&self.modules, id.module)?,
+            id.local,
+        ))
+    }
+    pub(super) fn method_catalog(
+        &mut self,
+        slot: u32,
+    ) -> Result<Arc<crate::core::dialect::MethodEvidenceCatalog>, ImageFailure> {
+        let catalog = *get(
+            self.fact_table(&self.image.method_catalogs, |p| p.method_catalogs)?,
+            slot,
+        )?;
+        let original_methods = catalog
+            .methods
+            .get(self.fact_table(&self.image.source_methods, |p| p.source_methods)?)?;
+        let mut methods = Vec::new();
+        // Each catalog belongs to its exact original registry view. Caller
+        // declarations remain in main's catalog, never ambient additions to
+        // a defining library's catalog.
+        for record in original_methods {
+            let id = crate::interface::MethodId::new(
+                self.interface_identity(record.interface)?,
+                record.local,
+            );
+            let mut interface_parameters = Vec::new();
+            for id in record
+                .interface_parameters
+                .get(self.fact_table(&self.image.method_variables, |p| p.method_variables)?)?
+            {
+                let id = self.type_variable(*id)?;
+                push(&mut interface_parameters, id, self.work)?;
+            }
+            let mut inherited_parameters = Vec::new();
+            for parameter in record.inherited_parameters.get(
+                self.fact_table(&self.image.inherited_parameters, |p| p.inherited_parameters)?,
+            )? {
+                let owner = match parameter.owner {
+                    OwnerIdentity::Effect(id) => {
+                        crate::resolved::OwnerId::Effect(self.effect_identity(id)?)
+                    }
+                    OwnerIdentity::Interface(id) => {
+                        crate::resolved::OwnerId::Interface(self.interface_identity(id)?)
+                    }
+                    OwnerIdentity::Resource(id) => {
+                        crate::resolved::OwnerId::Resource(self.resource_identity(id)?)
+                    }
+                };
+                let binder = self.type_variable(parameter.binder)?;
+                push(
+                    &mut inherited_parameters,
+                    crate::resolved::InheritedOwnerParameter {
+                        owner,
+                        slot: parameter.slot,
+                        binder,
+                    },
+                    self.work,
+                )?;
+            }
+            let mut parameters = Vec::new();
+            for parameter in record
+                .parameters
+                .get(self.fact_table(&self.image.quantifiers, |p| p.quantifiers)?)?
+            {
+                let id = self.type_variable(parameter.id)?;
+                let kind = self.kind(parameter.kind)?;
+                push(&mut parameters, (id, kind), self.work)?;
+            }
+            let value_type = self.ty(record.value_type)?;
+            let method = crate::core::dialect::MethodEvidenceMethod {
+                id,
+                interface_parameters: interface_parameters.into_boxed_slice(),
+                inherited_parameters: inherited_parameters.into_boxed_slice(),
+                parameters: parameters.into_boxed_slice(),
+                value_type: value_type.into_inner(),
+                spelling: {
+                    let text = self.text(record.spelling)?;
+                    charge(self.work, text.len())?;
+                    let mut spelling = String::new();
+                    spelling
+                        .try_reserve_exact(text.len())
+                        .map_err(|_| ImageFailure::Resource)?;
+                    spelling.push_str(&text);
+                    spelling.into_boxed_str()
+                },
+            };
+            push(&mut methods, method, self.work)?;
+        }
+        self.source_method_evidence(catalog.evidence, methods)
+    }
+}
+
+impl Encoder<'_> {
+    pub(super) fn encode_interface_owners(
+        &mut self,
+        registry: &crate::resolved::ResolvedRegistry,
+    ) -> Result<(), ImageFailure> {
+        for (id, parameters) in registry.image_interface_owner_definitions() {
+            let id = self.interface_identity(id)?;
+            let start = self.image.parameters.len();
+            for parameter in parameters {
+                self.encode_parameter(parameter)?;
+            }
+            push(
+                &mut self.image.interface_owners,
+                InterfaceOwnerRecord {
+                    id,
+                    parameters: Slice::of(&self.image.parameters, start)?,
+                },
+                self.work,
+            )?;
         }
         Ok(())
     }

@@ -82,6 +82,37 @@ superseded. Items #57-64 and the premature #130 are deprecated as active work.
 Previously completed results retain their historical completion and recorded
 scope; unfinished old criteria are not claimed satisfied.
 
+S2 is in progress. The connected image restoration tests pass four cases, and
+the generated pointer/Bytes/void fixture passes static and shared linking,
+repeated execution after source removal, exact native call order and loader
+refusal before calls. The full normal workspace gate and final review remain
+pending; these focused results do not complete S2 or M1 acceptance.
+
+The preparation calibration retained the actual executed ordinary handled-row
+fixture at depths 42 and 43. A bounded diagnostic carried the normal source
+census through complete image encoding and Rust emission: 2,181,566 units for
+P = 3,494 at depth 42 and 2,330,800 for P = 3,510 at depth 43, about 28 ms for
+the latter. Native-input path checks and host building/execution were outside
+that diagnostic. Independent review accepted the preparation-only `850P`
+coefficient in [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
+with about 28% reserve over the depth-43 observation. Normal public preparation
+regressions, exhausted-budget checks and native execution remain separate gates.
+
+The current WIP checkpoint also passes the five public native-preparation cases
+(including the normal depth-42/43 workload), seven slim FFI cases and eight
+syntax plus eight admission cases. A broader library run exposed ordinary
+regressions and a small-stack overflow before completion. Restoring the ordinary
+polymorphic recursive-initializer validation branch makes the two generic Cell
+acquisition cases pass; summary authentication and remaining failures are still
+under repair. This checkpoint is a draft, not an accepted delivery or Main gate.
+
+The removal preserves ordinary Cell execution and body-free generic resource
+metadata used by kind and import checking. Nonbuiltin provider execution used
+the retired foreign policy engine and now receives the existing unsupported
+resource diagnostic. [DN-0036](../design/DN-0036-foreign-library-and-memory-provider-experiments.md)
+retained experimental evidence without adopting that execution model as product
+semantics; this transition does not add a general resource-State capability.
+
 ## Verification
 
 For S1, independently review the proposed mapping, removal boundary and SQLite

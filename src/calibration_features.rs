@@ -417,9 +417,7 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                         pending.push(Visit::Expr(&resource.initializer, scope));
                         pending.push(Visit::Block(&resource.body, scope));
                     }
-                    SurfaceExprKind::ForeignHost(host) => {
-                        pending.push(Visit::Block(&host.body, scope));
-                    }
+
                     SurfaceExprKind::CopyWindow(window) => {
                         pending.push(Visit::Type(&window.family, 1));
                         pending.push(Visit::Expr(&window.state, scope));

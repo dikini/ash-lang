@@ -224,8 +224,7 @@ mod tests {
                     .map_err(EmissionFailure::Bridge)?,
             );
         }
-        let rust_source =
-            render_native_host_text(build, fingerprint, work, Some(&wrappers))?;
+        let rust_source = render_native_host_text(build, fingerprint, work, Some(&wrappers))?;
         Ok(NativeHostEmission {
             rust_source,
             payloads: NativePayloads {
@@ -305,7 +304,10 @@ main () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {
             let name = NativeBridgeName::from_member(bridge);
             let name_bytes = name.admitted_length(&mut wrappers).unwrap();
             wrapper_bytes += super::super::bridge::emit_rust_bridge_named(
-                &bridge.plan, &name, name_bytes, &mut wrappers,
+                &bridge.plan,
+                &name,
+                name_bytes,
+                &mut wrappers,
             )
             .unwrap()
             .len();
@@ -475,7 +477,6 @@ const NATIVE_HOST_MAIN: &str = concat!(
     "}\n",
 );
 
-
 #[derive(Clone, Copy)]
 struct NativeBridgeName {
     module: u32,
@@ -550,41 +551,13 @@ fn render_native_suffix(
             } else {
                 super::bridge::render_bridge_named(output, &member.plan, &name)?;
             }
-            let constructor = match member.plan.call() {
-                super::bridge::TargetBridgeCall::Scalar => "__private_native_bridge",
-                super::bridge::TargetBridgeCall::OwnerBorrow => {
-                    "__private_native_owner_borrow_bridge"
-                }
-                super::bridge::TargetBridgeCall::WindowView => {
-                    "__private_native_window_view_bridge"
-                }
-                super::bridge::TargetBridgeCall::OwnerAcquire
-                | super::bridge::TargetBridgeCall::OwnerOutputAcquire => {
-                    if member.plan.byte_owner() {
-                        "__private_native_byte_owner_acquire_bridge"
-                    } else {
-                        "__private_native_owner_acquire_bridge"
-                    }
-                }
-                super::bridge::TargetBridgeCall::OwnerTeardown => {
-                    if matches!(member.plan.result(), super::bridge::TargetResult::Scalar(_)) {
-                        "__private_native_owner_status_teardown_bridge"
-                    } else {
-                        "__private_native_owner_teardown_bridge"
-                    }
-                }
-            };
+            let constructor = "__private_native_bridge";
             write!(
                 output,
                 "pub fn {name}__provide() -> ash::build::PrivateNativeBridge {{\n    ash::build::{constructor}("
             )?;
             render_coordinates(output, library, member)?;
             write!(output, ", super::EXPECTED_FACTS, {name}")?;
-            if member.plan.call() == super::bridge::TargetBridgeCall::OwnerAcquire
-                && member.plan.byte_owner()
-            {
-                write!(output, ", {name}__read, {name}__write")?;
-            }
             writeln!(output, ")\n}}")?;
         }
         writeln!(
@@ -614,8 +587,6 @@ fn render_native_suffix(
     output.write_str(NATIVE_HOST_MAIN)
 }
 
-
-
 pub(super) fn native_host(
     build: &super::image::NativeBuildImage,
     runtime_fingerprint: &[u8; 32],
@@ -636,8 +607,7 @@ pub(super) fn native_host(
         super::bridge::admit_render_inspection_named(&bridge.plan, name_bytes, work)
             .map_err(EmissionFailure::Bridge)?;
     }
-    let output =
-        render_native_host_text(build, runtime_fingerprint, work, None)?;
+    let output = render_native_host_text(build, runtime_fingerprint, work, None)?;
     Ok(NativeHostEmission {
         rust_source: output,
         payloads: NativePayloads {
@@ -691,8 +661,7 @@ fn render_native_host_text(
     output.push_str(NATIVE_HOST_START);
     emit_array(&mut output, runtime_fingerprint);
     render_native_payloads(&mut output).map_err(|_| EmissionFailure::Resource)?;
-    render_native_suffix(&mut output, build, wrappers)
-        .map_err(|_| EmissionFailure::Resource)?;
+    render_native_suffix(&mut output, build, wrappers).map_err(|_| EmissionFailure::Resource)?;
     debug_assert_eq!(output.len(), length);
     Ok(output)
 }

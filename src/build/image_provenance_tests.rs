@@ -17,14 +17,8 @@ fn encoder<'a>(source: &SourceFile, work: &'a mut TypeWorkBudget) -> Encoder<'a>
         remapped: Vec::new(),
         prepared_libraries: HashMap::new(),
         native_symbols: HashMap::new(),
-        call_codecs: HashMap::new(),
-        source_owners: HashMap::new(),
-        source_accesses: HashMap::new(),
-        source_headers: HashMap::new(),
-        source_templates: HashMap::new(),
-        source_views: HashMap::new(),
+
         source_declaration_catalogs: HashMap::new(),
-        source_pending_rows: std::collections::HashSet::new(),
         origin_records: HashMap::new(),
         origin_spans: HashMap::new(),
         original_native_symbols: Vec::new(),
@@ -57,7 +51,6 @@ fn restore(
         expected_fact_prefixes: None,
         sources: CoordinateStorage::Borrowed(std::slice::from_ref(source)),
         modules: CoordinateStorage::Borrowed(&modules),
-        source_pending_rows: std::collections::HashSet::new(),
         source_declaration_catalogs: HashMap::new(),
         decoded_types: HashMap::new(),
         decoded_rows: HashMap::new(),
@@ -456,6 +449,9 @@ fn portable_row_keys_preserve_ordered_actuals_kinds_tails_and_depth() {
         key(&mut encoder, &pending, 0),
         Err(ImageFailure::Unsupported(Unsupported::Type))
     ));
-    encoder.source_pending_rows.insert(inference);
-    key(&mut encoder, &pending, 0).unwrap();
+    // Source-only inference placeholders have no private-image admission route.
+    assert!(matches!(
+        key(&mut encoder, &pending, 0),
+        Err(ImageFailure::Unsupported(Unsupported::Type))
+    ));
 }

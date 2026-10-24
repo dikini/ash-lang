@@ -103,7 +103,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checked_host_conversions_reject_negative_and_oversized_integers() {
+    fn integer_conversions_reject_negative_and_oversized_values() {
         for number in [-1, -256] {
             let integer = Integer(num_bigint::BigInt::from(number));
             assert_eq!(integer.to_usize(), None);

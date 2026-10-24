@@ -73,38 +73,13 @@ impl ResolvedRegistry {
                 uses.id(*parameter)?;
             }
         }
-        uses.charge(self.source_resource_facts.len())?;
-        for fact in self.source_resource_facts.values() {
-            uses.source_header(fact)?;
-        }
-        uses.charge(self.native_symbols.len() + self.source_foreign_nominals.len())?;
+        uses.charge(self.native_symbols.len())?;
         for symbol in self.native_symbols.values() {
             uses.ty(symbol.source_signature())?;
             uses.charge(symbol.parameter_ids().len())?;
             for parameter in symbol.parameter_ids() {
                 uses.id(*parameter)?;
             }
-        }
-        uses.charge(self.scalar_preflights.len())?;
-        for preflight in self.scalar_preflights.values() {
-            uses.ty(preflight.signature())?;
-            uses.ty(preflight.core_signature())?;
-        }
-        for nominal in &self.source_foreign_nominals {
-            uses.charge(nominal.parameters.len())?;
-            for parameter in nominal.parameters.iter() {
-                uses.id(parameter.id)?;
-            }
-        }
-        uses.charge(self.provider_contracts.len())?;
-        for contract in self.provider_contracts.values() {
-            uses.charge(contract.resource_count())?;
-            for (_, _, fact) in contract.resource_contracts() {
-                uses.ordinary_header(fact)?;
-            }
-            // The private canonical owner rows are definitions. They are
-            // authenticated by the certificate, independent of public aliases.
-            contract.visit_semantic_type_variables(uses)?;
         }
         Ok(())
     }
@@ -154,33 +129,6 @@ impl UnusedVariables<'_> {
         Ok(())
     }
 
-    pub(crate) fn source_header(&mut self, fact: &SourceResourceTypeFact) -> Result<(), ()> {
-        self.charge(fact.parameters.len() + fact.interpreted.len() + fact.windows.len())?;
-        for parameter in &fact.parameters {
-            self.id(parameter.id)?;
-        }
-        self.id(fact.answer.id)?;
-        for ty in [
-            &fact.input,
-            &fact.state,
-            &fact.data,
-            &fact.acquisition,
-            &fact.completion,
-            &fact.result,
-        ] {
-            self.ty(&ty.ty)?;
-        }
-        self.resolved_application(&fact.provider)?;
-        self.instance(&fact.provided.instance)?;
-        for effect in &fact.interpreted {
-            self.instance(&effect.instance)?;
-        }
-        for window in &fact.windows {
-            self.id(window.identity)?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn ordinary_header(&mut self, fact: &ResourceTypeFact) -> Result<(), ()> {
         self.charge(fact.parameters.len())?;
         for parameter in &fact.parameters {
@@ -225,49 +173,6 @@ impl CheckedImplementationFact {
         for method in &self.methods {
             uses.scheme(&method.scheme)?;
             method.capture.visit_semantic_type_variables(uses)?;
-        }
-        Ok(())
-    }
-}
-
-impl ProviderExternalFacts<'_> {
-    pub(crate) fn visit_semantic_type_variables(
-        &self,
-        uses: &mut UnusedVariables<'_>,
-    ) -> Result<(), ()> {
-        uses.charge(
-            self.imported.globals.len()
-                + self.imported.interfaces.len()
-                + self.imported.implementations.len(),
-        )?;
-        for global in self.imported.globals.values() {
-            uses.scheme(&global.scheme)?;
-            global.capture.visit_semantic_type_variables(uses)?;
-            if let Some(preflight) = &global.scalar_preflight {
-                uses.ty(preflight.signature())?;
-                uses.ty(preflight.core_signature())?;
-            }
-        }
-        for interface in &self.imported.interfaces {
-            uses.interface_fact(&interface.fact)?;
-        }
-        for implementation in &self.imported.implementations {
-            implementation.fact.visit_semantic_type_variables(uses)?;
-        }
-        if let Some(defining) = self.defining {
-            uses.charge(
-                defining.globals.len() + defining.interfaces.len() + defining.implementations.len(),
-            )?;
-            for global in &defining.globals {
-                uses.scheme(&global.scheme)?;
-                global.capture.visit_semantic_type_variables(uses)?;
-            }
-            for interface in &defining.interfaces {
-                uses.interface_fact(interface)?;
-            }
-            for implementation in &defining.implementations {
-                implementation.visit_semantic_type_variables(uses)?;
-            }
         }
         Ok(())
     }

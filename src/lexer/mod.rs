@@ -361,7 +361,6 @@ pub(crate) fn lex_with_budget(
                 offset += 2;
                 TokenKind::Arrow
             }
-            b'-' => single(&mut offset, TokenKind::Minus),
             _ => {
                 let Some(character) = text[offset..].chars().next() else {
                     return Err(SourceError::InvalidLineState);
@@ -532,7 +531,6 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "with" => Some(TokenKind::With),
         "resume" => Some(TokenKind::Resume),
         "resource" => Some(TokenKind::Resource),
-        "copy_window" => Some(TokenKind::CopyWindow),
         "hook" => Some(TokenKind::Hook),
         "register" => Some(TokenKind::Register),
         "cleanup" => Some(TokenKind::Cleanup),

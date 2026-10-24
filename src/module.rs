@@ -20,14 +20,6 @@ use crate::{
     syntax_resource::SyntaxBudget,
 };
 
-mod foreign_coordinates;
-pub(crate) use foreign_coordinates::{ForeignNominalCoordinates, foreign_nominal_coordinates};
-mod foreign_host;
-pub(crate) use foreign_host::{
-    FOREIGN_NATIVE_HOST_LOCAL, ForeignCheckedNominalRole, foreign_native_host_ranges,
-    foreign_type_formal_local,
-};
-
 /// Maximum source files admitted by one module graph.
 pub const MODULE_SOURCE_LIMIT: usize = 16_384;
 /// Maximum import edges retained by one module graph.
@@ -73,116 +65,16 @@ const STRING_SOURCE: &str = concat!(
 // ConversionError's private representation does not define a public inventory
 // of conversion causes; only its opaque nominal identity is source-accessible.
 const FOREIGN_SOURCE: &str = concat!(
-    "pub opaque type ConversionError = HiddenConversionError\n",
-    "pub type Call<T> = Returned(T)\n",
-    "    | ConversionFailed(ConversionError)\n",
-    "pub type Output<T> = Unreadable\n",
-    "    | Readable(T)\n",
-    "pub type Nullable<T> = Null\n",
-    "    | NonNull(T)\n",
-    "pub type Disposition<T> = Consumed(T)\n",
-    "    | Retained(T)\n",
-    "    | BlockedDependent\n",
-    "pub opaque type Extent<V> = HiddenExtent\n",
-    "pub checked_i64 : Int -> Call<Int>\nchecked_i64 value = checked_i64 value\n",
-    "pub checked_size_t : Int -> Call<Int>\nchecked_size_t value = checked_size_t value\n",
-    "pub byte_read<S> : (S, Int) -> Call<Int>\nbyte_read value = byte_read value\n",
-    "pub byte_write<S> : (S, Int, Int) -> Call<Unit>\nbyte_write value = byte_write value\n",
-    "pub checked_nul : String -> Call<Unit>\nchecked_nul value = checked_nul value\n",
-    "pub data_of<S, D> : S -> D\ndata_of state = data_of state\n",
-    "pub replace_data<S, D> : (S, D) -> Unit\nreplace_data value = replace_data value\n",
-    "pub copy_bytes<V> : (V, Extent<V>) -> Call<Bytes>\ncopy_bytes value = copy_bytes value\n",
-    "pub copy_nul<V> : (V, Int) -> Call<Bytes>\ncopy_nul value = copy_nul value\n",
-    "pub extent_value<V> : Extent<V> -> Int\nextent_value value = extent_value value\n",
-    "pub type NativeStatus = NoNativeStatus\n| NativeStatus(Int)\n",
-    "pub type NativeFact = NoNativeOwner\n| NativeOwned\n| NativeConsumedFact\n| NativeUnknown\n",
-    "pub type DiagnosticAbsence = NotRequested\n| AllowanceRefused\n| NativeAbsent\n| ScanBoundExceeded\n| InvalidDiagnosticEncoding\n| DiagnosticLost\n",
-    "pub type Diagnostic = DiagnosticUnavailable(DiagnosticAbsence)\n| DiagnosticText(String)\n",
-    "pub type BoundaryRecord = BoundaryRecord(NativeStatus, NativeFact, Bool, Diagnostic)\n",
-    "pub type BoundaryFailure = SessionLost(BoundaryRecord)\n| DependencyBlocked(BoundaryRecord)\n| Quarantined(BoundaryRecord)\n",
-    "pub type CheckedCall<T> = CheckedReturned(T)\n| CheckedConversionFailed(ConversionError)\n| BoundaryFailed(BoundaryFailure)\n",
-    "pub type FinishResult<E> = FinishOk\n| FinishError(E)\n",
-    "pub type CheckedFinish<S, E> = FinishedConsumed(FinishResult<E>)\n| FinishedRetained(S, E)\n| FinishedBoundary(BoundaryFailure)\n",
-    "pub type CheckedCompletion<E> = NativeConsumed(FinishResult<E>, BoundaryRecord)\n| NativeRetained(E, BoundaryRecord)\n| LocalBoundary(BoundaryFailure)\n",
-    "pub type CheckedScope<A, I, E> = CheckedNotAcquired(I)\n| CheckedCompleted(A, CheckedCompletion<E>)\n",
-    "pub type ViolationCause = UnexpectedStatus(Int)\n| UnexpectedTag(Int)\n| UnexpectedNull\n| InvalidNativeExtent(Int)\n| ContradictoryNativeResult(Int, Int)\n",
-    "native_host_metadata : Unit -> String\n",
-    "native_host_metadata ignored = \"pub effect NativeHost<H> (compiler-owned; no operations)\"\n",
-    "pub checked_byte_read<H, S> : (S, Int) -> CheckedCall<Int> ! {NativeHost<H>}\nchecked_byte_read value = checked_byte_read value\n",
-    "pub checked_byte_write<H, S> : (S, Int, Int) -> CheckedCall<Unit> ! {NativeHost<H>}\nchecked_byte_write value = checked_byte_write value\n",
-    "pub checked_copy_bytes<H, V> : (V, Extent<V>) -> CheckedCall<Bytes> ! {NativeHost<H>}\nchecked_copy_bytes value = checked_copy_bytes value\n",
-    "pub checked_copy_nul<H, V> : (V, Int) -> CheckedCall<Bytes> ! {NativeHost<H>}\nchecked_copy_nul value = checked_copy_nul value\n",
-    "pub checked_quarantine<H, S> : (S, ViolationCause) -> CheckedCall<Unit> ! {NativeHost<H>}\nchecked_quarantine value = checked_quarantine value\n",
-    "pub checked_reject_acquisition<H> : ViolationCause -> CheckedCall<Unit> ! {NativeHost<H>}\nchecked_reject_acquisition value = checked_reject_acquisition value\n",
+    "pub opaque type Address = HiddenAddress\n",
+    "pub null : Unit -> Address\nnull value = null value\n",
+    "pub is_null : Address -> Bool\nis_null value = is_null value\n",
+    "pub equal : (Address, Address) -> Bool\nequal value = equal value\n",
 );
 
 /// Immutable coordinate data; matching these bytes alone grants no builtin role.
-pub(crate) const fn foreign_builtin_source_text() -> &'static str {
-    FOREIGN_SOURCE
-}
-
-/// Exact source coordinates for compiler-owned scalar preflight declarations.
-/// These roles follow the unchanged canonical foreign nominal inventory.
-pub(crate) fn foreign_scalar_preflight_ranges(
-    source: Span,
-    local: u32,
-) -> Option<(crate::source::ByteRange, crate::source::ByteRange)> {
-    if source.range().start() != 0
-        || usize::try_from(source.range().end()).ok()? != FOREIGN_SOURCE.len()
-    {
-        return None;
-    }
-    let (name, generic, length) = match local {
-        0 => ("checked_i64", 0, 16),
-        1 => ("checked_size_t", 0, 16),
-        2 => ("byte_read", 3, 21),
-        3 => ("byte_write", 3, 27),
-        4 => ("checked_nul", 0, 20),
-        5 => ("data_of", 6, 6),
-        6 => ("replace_data", 6, 14),
-        7 => ("copy_bytes", 3, 29),
-        8 => ("copy_nul", 3, 23),
-        9 => ("extent_value", 3, 16),
-        11 => ("checked_byte_read", 6, 46),
-        12 => ("checked_byte_write", 6, 52),
-        13 => ("checked_copy_bytes", 6, 54),
-        14 => ("checked_copy_nul", 6, 48),
-        16 => ("checked_reject_acquisition", 3, 53),
-        15 => ("checked_quarantine", 6, 58),
-        _ => return None,
-    };
-    // Only the immutable compiler-owned source is inspected here. Runtime
-    // selection uses retained identities and provenance, never these names.
-    let start = FOREIGN_SOURCE.find(name)?.checked_sub("pub ".len())?;
-    let name_start = u32::try_from(start + "pub ".len()).ok()?;
-    let name_end = name_start.checked_add(u32::try_from(name.len()).ok()?)?;
-    let annotation_start = name_end.checked_add(3 + generic)?;
-    let annotation_end = annotation_start.checked_add(length)?;
-    Some((
-        crate::source::ByteRange::new(name_start, name_end).ok()?,
-        crate::source::ByteRange::new(annotation_start, annotation_end).ok()?,
-    ))
-}
 
 /// Exact declaration and formal ranges for the compiler-owned opaque extent.
 /// These coordinates authenticate the role, never an exported display spelling.
-pub(crate) fn foreign_extent_ranges(
-    source: Span,
-) -> Option<(crate::source::ByteRange, crate::source::ByteRange)> {
-    if source.range().start() != 0
-        || usize::try_from(source.range().end()).ok()? != FOREIGN_SOURCE.len()
-    {
-        return None;
-    }
-    let declaration = "pub opaque type Extent<V> = HiddenExtent";
-    let start = u32::try_from(FOREIGN_SOURCE.find(declaration)?).ok()?;
-    let end = start.checked_add(u32::try_from(declaration.len()).ok()?)?;
-    let formal = start.checked_add(u32::try_from("pub opaque type Extent<".len()).ok()?)?;
-    Some((
-        crate::source::ByteRange::new(start, end).ok()?,
-        crate::source::ByteRange::new(formal, formal.checked_add(1)?).ok()?,
-    ))
-}
 
 /// A validated name for one configured module root.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -225,7 +117,6 @@ impl Borrow<str> for ModuleRootName {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModuleRoots {
     named: HashMap<ModuleRootName, PathBuf>,
-    foreign: crate::foreign::ForeignRegistrations,
 }
 
 impl ModuleRoots {
@@ -237,13 +128,6 @@ impl ModuleRoots {
 
     /// Attaches an immutable host-authored registration table.
     #[must_use]
-    pub fn with_foreign_registrations(
-        mut self,
-        foreign: crate::foreign::ForeignRegistrations,
-    ) -> Self {
-        self.foreign = foreign;
-        self
-    }
 
     /// Validates names, rejects duplicates, and canonicalizes configured paths.
     ///
@@ -305,10 +189,7 @@ impl ModuleRoots {
             }
             named.insert(name, canonical);
         }
-        Ok(Self {
-            named,
-            foreign: crate::foreign::ForeignRegistrations::default(),
-        })
+        Ok(Self { named })
     }
 }
 
@@ -467,19 +348,10 @@ pub struct LoadedModule {
     source: std::sync::Arc<SourceFile>,
     surface: SurfaceModule,
     dependencies: Box<[ModuleDependency]>,
-    foreign: Option<crate::foreign::ForeignModuleSource>,
 }
 
 impl LoadedModule {
     /// Returns authenticated foreign admission metadata, when host-registered.
-    #[must_use]
-    pub fn foreign_admission(&self) -> Option<&ForeignModuleAdmission> {
-        self.foreign.as_ref().map(|foreign| &foreign.admission)
-    }
-
-    pub(crate) fn foreign_source(&self) -> Option<&crate::foreign::ForeignModuleSource> {
-        self.foreign.as_ref()
-    }
 
     /// Returns this module's graph-local identity.
     #[must_use]
@@ -909,11 +781,9 @@ mod presentation_tests {
                 dependencies: Vec::new(),
                 relative_edges: Vec::new(),
                 state: VisitState::Active,
-                foreign: None,
             };
             let roots = ModuleRoots {
                 named: HashMap::from([(ModuleRootName::new("std").unwrap(), PathBuf::from("."))]),
-                foreign: crate::foreign::ForeignRegistrations::default(),
             };
             let failure = resolve_import(&module, &module.surface.imports[0], &roots).unwrap_err();
             assert_eq!(failure.module_reason(), Some(ModuleReason::InvalidPath));
@@ -1362,7 +1232,6 @@ struct StagedModule {
     dependencies: Vec<ModuleDependency>,
     relative_edges: Vec<RelativeEdge>,
     state: VisitState,
-    foreign: Option<crate::foreign::ForeignModuleSource>,
 }
 
 impl StagedModule {
@@ -1373,7 +1242,6 @@ impl StagedModule {
             source: std::sync::Arc::new(self.source),
             surface: self.surface,
             dependencies: self.dependencies.into_boxed_slice(),
-            foreign: self.foreign,
         }
     }
 }
@@ -1567,78 +1435,12 @@ pub fn load_module_graph(
                 .expect("the loop observed one traversal frame")
                 .next_import += 1;
 
-            if let SurfaceModulePath::Absolute { root, segments } = &import.path
+            if let SurfaceModulePath::Absolute { root, .. } = &import.path
                 && root.text == "foreign"
             {
-                let path = format!(
-                    "@foreign.{}",
-                    segments
-                        .iter()
-                        .map(|segment| segment.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join(".")
+                return Err(
+                    ModuleFailure::source(ModuleReason::UnknownForeign, import.span, None).into(),
                 );
-                let registration = roots.foreign.get(&path).ok_or_else(|| {
-                    ModuleFailure::source(
-                        ModuleReason::UnknownForeign,
-                        import.span,
-                        Some(PathBuf::from(&path)),
-                    )
-                })?;
-                let target = if let Some(target) = by_path.get(Path::new(&path)).copied() {
-                    target
-                } else {
-                    budget.charge_sources()?;
-                    staged
-                        .try_reserve(1)
-                        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
-                    dependency_order
-                        .try_reserve(1)
-                        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
-                    let (source, surface) = parse_surface_module(
-                        Path::new(&path),
-                        registration.source().to_owned(),
-                        Some(import.span),
-                        &mut budget.syntax_work,
-                    )?;
-                    let id = ModuleId::admitted(
-                        graph_identity,
-                        u32::try_from(staged.len())
-                            .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?,
-                    );
-                    let admission = ForeignModuleAdmission {
-                        module_id: id,
-                        registration_id: registration.id(),
-                        manifest_digest: registration.digest(),
-                        origin: crate::source::Origin::Source(surface.span),
-                    };
-                    staged.push(StagedModule {
-                        id,
-                        canonical_path: PathBuf::from(&path),
-                        source,
-                        surface,
-                        owners: OwnerSet::from_paths(&[], &mut budget)?,
-                        dependencies: Vec::new(),
-                        relative_edges: Vec::new(),
-                        state: VisitState::Finished,
-                        foreign: Some(crate::foreign::ForeignModuleSource {
-                            admission,
-                            manifest: std::sync::Arc::clone(registration),
-                        }),
-                    });
-                    by_path.insert(PathBuf::from(&path), id);
-                    dependency_order.push(id);
-                    id
-                };
-                staged[module_index]
-                    .dependencies
-                    .try_reserve(1)
-                    .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
-                staged[module_index].dependencies.push(ModuleDependency {
-                    target,
-                    import_span: import.span,
-                });
-                continue;
             }
 
             if let SurfaceModulePath::Absolute { root, segments } = &import.path
@@ -1815,16 +1617,6 @@ fn admit_builtin_foreign(
         graph,
         value,
     };
-    if let Err(resource) = foreign_host::charge_host(&mut budget.syntax_work) {
-        return Err(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
-            lexical: Vec::new(),
-            parser: Vec::new(),
-            resource: Some(resource),
-            source,
-            import_span: Some(import_span),
-        })));
-    }
-    foreign_host::append_host(id, &source, &mut surface)?;
     let owners = OwnerSet::from_paths(&[], budget)?;
     staged.push(StagedModule {
         id,
@@ -1835,7 +1627,6 @@ fn admit_builtin_foreign(
         dependencies: Vec::new(),
         relative_edges: Vec::new(),
         state: VisitState::Finished,
-        foreign: None,
     });
     dependency_order.push(id);
     Ok(id)
@@ -1887,7 +1678,6 @@ fn admit_builtin_packed(
         dependencies: Vec::new(),
         relative_edges: Vec::new(),
         state: VisitState::Finished,
-        foreign: None,
     });
     dependency_order.push(id);
     Ok(id)
@@ -1944,7 +1734,6 @@ fn admit_builtin_resource(
         dependencies: Vec::new(),
         relative_edges: Vec::new(),
         state: VisitState::Finished,
-        foreign: None,
     });
     dependency_order.push(id);
     Ok(id)
@@ -1975,7 +1764,6 @@ fn admit_module(
         dependencies: Vec::new(),
         relative_edges: Vec::new(),
         state: VisitState::Active,
-        foreign: None,
     });
     Ok(id)
 }
@@ -2540,12 +2328,11 @@ mod tests {
                 implementations: Vec::new(),
                 definitions: Vec::new(),
                 resources: Vec::new(),
-                source_resources: Vec::new(),
+
                 foreign_libraries: Vec::new(),
                 span,
             },
             dependencies: Box::new([]),
-            foreign: None,
         }
     }
 }
@@ -2553,19 +2340,6 @@ mod tests {
 /// Host-selected identity of one immutable foreign registration manifest.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ForeignRegistrationId(u64);
-
-impl ForeignRegistrationId {
-    /// Creates a host registration identity, independently of source spelling.
-    #[must_use]
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-    /// Returns the host registration key.
-    #[must_use]
-    pub const fn value(self) -> u64 {
-        self.0
-    }
-}
 
 /// Immutable admission metadata for a registered module with an ordinary ModuleId.
 ///
@@ -2575,7 +2349,7 @@ pub struct ForeignModuleAdmission {
     /// Ordinary admitted module identity, with no library-specific namespace.
     pub module_id: ModuleId,
     /// Immutable host registry entry.
-    pub registration_id: ForeignRegistrationId,
+
     /// Digest of the admitted manifest.
     pub manifest_digest: [u8; 32],
     /// Manifest admission provenance.
@@ -2654,4 +2428,8 @@ pub(crate) fn restore_image_module(
             })
         }
     }
+}
+
+pub(crate) fn foreign_builtin_source_text() -> &'static str {
+    FOREIGN_SOURCE
 }

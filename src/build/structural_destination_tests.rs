@@ -65,15 +65,22 @@ fn fixture(arm: u8, depth: usize, malformed: bool, empty: bool) -> (PureImage, u
             module: 0,
             local: 8,
         }),
-        2 => TypeTag::ForeignOwner(NominalId {
-            module: 0,
-            local: 9,
-        }),
+        2 => TypeTag::Application,
         3 => TypeTag::Tuple,
         _ => unreachable!(),
     };
+    let nominal = record(
+        &mut image,
+        TypeTag::Nominal(NominalId {
+            module: 0,
+            local: 9,
+        }),
+        &[],
+    );
     let mut children = if arm == 3 {
         vec![raw, unit]
+    } else if arm == 2 {
+        vec![nominal, raw]
     } else {
         vec![ty, row_arg]
     };
@@ -93,7 +100,6 @@ fn decoder<'a>(image: &'a PureImage, work: &'a mut TypeWorkBudget) -> Decoder<'a
         expected_fact_prefixes: None,
         sources: CoordinateStorage::Owned(Vec::new()),
         modules: CoordinateStorage::Owned(vec![ModuleId::new(601)]),
-        source_pending_rows: Default::default(),
         source_declaration_catalogs: HashMap::new(),
         decoded_types: HashMap::new(),
         decoded_rows: HashMap::new(),
@@ -118,10 +124,6 @@ fn arguments(value: &StructuralOwner) -> &[crate::types::KindedArgument] {
                 );
                 args
             }
-            Type::ForeignOwnerApply(id, args) => {
-                assert_eq!(*id, NominalTypeId::new(ModuleId::new(601), 9));
-                args
-            }
             _ => panic!("expected exact kinded application"),
         },
         _ => panic!("expected typed final owner"),
@@ -129,6 +131,23 @@ fn arguments(value: &StructuralOwner) -> &[crate::types::KindedArgument] {
 }
 
 fn assert_value(value: &StructuralOwner, arm: u8) {
+    if arm == 2 {
+        let StructuralOwner::Type(ty) = value else {
+            panic!("application owner");
+        };
+        let Type::Application(function, argument) = &**ty else {
+            panic!("application shape");
+        };
+        assert_eq!(
+            function.as_ref(),
+            &Type::Nominal(NominalTypeId::new(ModuleId::new(601), 9))
+        );
+        assert!(
+            matches!(argument.as_ref(), Type::EffectfulFunction(_, computation) if computation.effects().is_empty())
+        );
+        return;
+    }
+
     if arm == 3 {
         let StructuralOwner::Type(ty) = value else {
             panic!("tuple owner")
@@ -178,7 +197,7 @@ fn structural_destinations_preserve_full_kinds_order_and_raw_representations() {
             .structural(root)
             .unwrap();
         assert_value(&value, arm);
-        if arm < 3 {
+        if arm < 2 {
             let (image, root) = fixture(arm, 0, false, true);
             let value = decoder(&image, &mut TypeWorkBudget::default())
                 .structural(root)

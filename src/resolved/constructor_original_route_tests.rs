@@ -2,8 +2,18 @@
 
 use super::*;
 
-const PRODUCER: &str =
-    include_str!("../../tests/fixtures/checked-constructor-closure/producer.ash");
+const PRODUCER: &str = r"type Leaf = Leaf(Int)
+type Donor = Donor(Int)
+type Spare = Spare(Int)
+pub type Envelope = Envelope(Leaf)
+pub type Witness = Witness(Donor)
+pub make : Int -> Envelope
+make value = Envelope (Leaf value)
+pub inspect : Envelope -> Int
+inspect envelope = match envelope {
+    Envelope(Leaf(value)) => value
+}
+";
 
 #[derive(Clone, Copy)]
 enum RouteControl {
@@ -37,7 +47,7 @@ fn check_routes(control: RouteControl) {
     // Both constructor occurrences are intentional: this reaches real duplicate
     // constructor retention instead of comparing only outward global types.
     std::fs::write(directory.join("entry.ash"),
-        "import @builtin.foreign as Foreign\nimport native as Native\nimport facade as Facade\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = match Facade.make 7 {\n    Native.Envelope(leaf) => Facade.inspect (Facade.Envelope leaf)\n}\n").unwrap();
+        "import native as Native\nimport facade as Facade\nmain : Unit -> Int\nmain () = match Facade.make 7 {\n    Native.Envelope(leaf) => Facade.inspect (Facade.Envelope leaf)\n}\n").unwrap();
     let graph = crate::module::load_module_graph(
         &directory.join("entry.ash"),
         &crate::module::ModuleRoots::empty(),
@@ -92,8 +102,7 @@ fn check_routes(control: RouteControl) {
                     .unwrap()
                 })
                 .collect::<Vec<_>>();
-            let canonical =
-                crate::resolve::resolve_checked_foreign_module(loaded, &dependencies).unwrap();
+            let canonical = crate::resolve::resolve_module(loaded, &dependencies).unwrap();
             crate::elaborate::check_module(canonical).unwrap();
             match control {
                 RouteControl::Canonical => return,
@@ -145,7 +154,7 @@ fn check_routes(control: RouteControl) {
                 .unwrap()
             })
             .collect::<Vec<_>>();
-        let resolved = crate::resolve::resolve_checked_foreign_module(loaded, &dependencies);
+        let resolved = crate::resolve::resolve_module(loaded, &dependencies);
         if loaded.id() == graph.entry() {
             let error = match resolved {
                 Err(crate::resolve::ResolveModuleError::Resolution(error)) => error,

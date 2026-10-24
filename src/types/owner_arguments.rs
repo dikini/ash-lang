@@ -2,10 +2,9 @@
 
 use super::{
     ComputationType, EffectId, EffectInstance, EffectRow, EffectRowTail, EffectRowVariable,
-    IterativeTypeOwner, Kind, KindedArgument, NominalTypeId, ResourceDefinitionId,
-    RowReservationSite, Type, TypeVariableId, TypeWorkMeter, allocation_error,
-    charge_kinded_type_parameters, discard_type_iteratively,
-    effect_row_from_owned_parts_with_budget_and_failure, reserve_row,
+    IterativeTypeOwner, Kind, KindedArgument, ResourceDefinitionId, RowReservationSite, Type,
+    TypeVariableId, TypeWorkMeter, allocation_error, charge_kinded_type_parameters,
+    discard_type_iteratively, effect_row_from_owned_parts_with_budget_and_failure, reserve_row,
 };
 
 #[derive(Clone, Copy)]
@@ -142,7 +141,7 @@ pub(super) fn charge_structural<B: TypeWorkMeter>(
                     schedule(&mut pending, StructuralRoot::Type(left), budget)?;
                     schedule(&mut pending, StructuralRoot::Type(right), budget)?;
                 }
-                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+                Type::ResourceApply(_, arguments) => {
                     for argument in arguments {
                         schedule(&mut pending, StructuralRoot::Argument(argument), budget)?;
                     }
@@ -234,7 +233,6 @@ fn clone_compound_structural_with_failure<B: TypeWorkMeter>(
         Tuple(usize),
         Application,
         Resource(ResourceDefinitionId, usize),
-        ForeignOwner(NominalTypeId, usize),
         Function,
         EffectfulFunction,
         Forall(Box<[(TypeVariableId, Kind)]>),
@@ -299,23 +297,6 @@ fn clone_compound_structural_with_failure<B: TypeWorkMeter>(
                         )
                         .map_err(|_| storage_error(budget))?;
                     pending.push(Task::Resource(*id, arguments.len()));
-                    pending.extend(
-                        arguments
-                            .iter()
-                            .rev()
-                            .map(|arg| Task::Visit(StructuralRoot::Argument(arg))),
-                    );
-                }
-                Type::ForeignOwnerApply(id, arguments) => {
-                    pending
-                        .try_reserve(
-                            arguments
-                                .len()
-                                .checked_add(1)
-                                .ok_or_else(|| storage_error(budget))?,
-                        )
-                        .map_err(|_| storage_error(budget))?;
-                    pending.push(Task::ForeignOwner(*id, arguments.len()));
                     pending.extend(
                         arguments
                             .iter()
@@ -446,21 +427,6 @@ fn clone_compound_structural_with_failure<B: TypeWorkMeter>(
                 }
                 values.push(StructuralValue::new(StructuralOwned::Type(
                     Type::ResourceApply(id, children.into_boxed_slice()),
-                )));
-            }
-            Task::ForeignOwner(id, count) => {
-                let mut children = Vec::new();
-                reserve_row(&mut children, count, RowReservationSite::CloneArguments)
-                    .map_err(|_| storage_error(budget))?;
-                for value in values.drain(values.len() - count..) {
-                    children.push(
-                        value
-                            .into_argument()
-                            .expect("foreign owner children have argument shape"),
-                    );
-                }
-                values.push(StructuralValue::new(StructuralOwned::Type(
-                    Type::ForeignOwnerApply(id, children.into_boxed_slice()),
                 )));
             }
             Task::Instance(id, count) => {

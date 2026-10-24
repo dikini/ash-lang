@@ -306,6 +306,8 @@ fn retain_selected_dependencies(
         visited.try_reserve(1).map_err(|_| type_resource())?;
         visited.insert(node);
         match selection.node(node).ok_or_else(invalid_state)? {
+            crate::interface::EvidenceNode::Lexical { .. }
+            | crate::interface::EvidenceNode::Abstract { .. } => {}
             crate::interface::EvidenceNode::Implementation {
                 implementation,
                 prerequisites,
@@ -331,17 +333,6 @@ fn retain_selected_dependencies(
                     .map_err(|_| type_resource())?;
                 pending.extend(prerequisites.iter().rev().copied());
             }
-            crate::interface::EvidenceNode::ProviderFamily { prerequisites, .. } => {
-                work.charge(prerequisites.len())
-                    .map_err(|()| type_resource())?;
-                pending
-                    .try_reserve(prerequisites.len())
-                    .map_err(|_| type_resource())?;
-                pending.extend(prerequisites.iter().rev().copied());
-            }
-            crate::interface::EvidenceNode::Lexical { .. }
-            | crate::interface::EvidenceNode::Abstract { .. }
-            | crate::interface::EvidenceNode::NativeLayout { .. } => {}
         }
     }
     Ok(())
@@ -641,201 +632,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         Ok(())
     }
-
-    /// Reconstructs captures only for an authenticated closed subset. Checked
-    /// bodies outside that subset remain stored with their existing state;
-    /// none of their incomplete capture facts is offered to template checking.
-    pub(super) fn completed_module_provider_facts_for(
-        &mut self,
-        module: &ResolvedModule,
-        schemes: &mut [CheckedGlobalScheme],
-        interfaces: &[crate::resolved::SharedCheckedInterfaceFact],
-        checking: &mut ModuleBodyChecking,
-        declarations: &[ResolvedDeclarationIndex],
-    ) -> Result<crate::resolved::ProviderDefiningFacts, TypeError> {
-        self.stage_completed_module_body_evidence(checking)?;
-        if self.cleanup_rows.is_empty() {
-            self.zonk_builder_types().map_err(TypeError::Internal)?;
-        } else {
-            self.zonk_builder_types_since(None, false)
-                .map_err(TypeError::Internal)?;
-        }
-        let roots = self.completed_module_body_roots_for(checking, declarations)?;
-        let (dependencies, reachable) =
-            self.module_body_dependencies_from_roots(module, checking, &roots)?;
-        let schedule = checking.schedule.as_ref().ok_or_else(invalid_state)?;
-        self.type_work
-            .charge(declarations.len())
-            .map_err(|()| type_resource())?;
-        let mut selected = HashSet::new();
-        selected
-            .try_reserve(declarations.len())
-            .map_err(|_| type_resource())?;
-        for declaration in declarations {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            if !schedule.is_completed(*declaration)?
-                || !selected.insert(schedule.position(*declaration)?)
-            {
-                return Err(invalid_state());
-            }
-        }
-        for dependency in &dependencies.entries {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            if !dependency.completed
-                || !selected.contains(&schedule.position(dependency.declaration)?)
-            {
-                return Err(invalid_state());
-            }
-        }
-        // Routes are scalar preparation records. Restrict them to the actual
-        // queried graph, then restore the complete module records on success or
-        // refusal. Selection and capture reconstruction still use the ordinary
-        // engine, including all exact selected prerequisite facts.
-        let mut methods = Vec::new();
-        let mut globals = Vec::new();
-        for record in &self.method_capture_uses {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            if reachable.contains(&record.0) {
-                self.type_work.charge(1).map_err(|()| type_resource())?;
-                methods.try_reserve(1).map_err(|_| type_resource())?;
-                methods.push(*record);
-            }
-        }
-        for record in &self.global_capture_uses {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            if reachable.contains(&record.0) {
-                self.type_work.charge(1).map_err(|()| type_resource())?;
-                globals.try_reserve(1).map_err(|_| type_resource())?;
-                globals.push(*record);
-            }
-        }
-        let publication = checking.publication.as_ref().ok_or_else(invalid_state)?;
-        let all_methods = std::mem::replace(&mut self.method_capture_uses, methods);
-        let all_globals = std::mem::replace(&mut self.global_capture_uses, globals);
-        let captures =
-            self.capture_completed_module_roots(module, &roots, &checking.facts.0, publication);
-        self.method_capture_uses = all_methods;
-        self.global_capture_uses = all_globals;
-        let captures = captures?;
-        if captures.len() != roots.len() {
-            return Err(invalid_state());
-        }
-        let mut captures = captures.into_iter();
-        let mut positions = Vec::new();
-        for (binder, _) in &roots {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            if let Some(position) = schedule.globals.get(binder).copied() {
-                let scheme = schemes.get_mut(position).ok_or_else(invalid_state)?;
-                if scheme.binder != *binder {
-                    return Err(invalid_state());
-                }
-                scheme.capture = captures.next().ok_or_else(invalid_state)?;
-                self.type_work.charge(1).map_err(|()| type_resource())?;
-                positions.try_reserve(1).map_err(|_| type_resource())?;
-                positions.push(position);
-            }
-        }
-        let mut implementation_roots = roots.iter().skip(positions.len());
-        let mut retained = CheckedImplementationFactBuffer(Vec::new());
-        for fact in &mut checking.facts.0 {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            let source = *schedule
-                .implementations
-                .get(&fact.id)
-                .ok_or_else(invalid_state)?;
-            if !selected
-                .contains(&schedule.position(ResolvedDeclarationIndex::Implementation(source))?)
-            {
-                continue;
-            }
-            for method in &mut fact.methods {
-                self.type_work.charge(1).map_err(|()| type_resource())?;
-                if implementation_roots.next().map(|(binder, _)| *binder) != Some(method.binder) {
-                    return Err(invalid_state());
-                }
-                method.capture = captures.next().ok_or_else(invalid_state)?;
-            }
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            retained.0.try_reserve(1).map_err(|_| type_resource())?;
-            retained.0.push(
-                crate::resolved::clone_checked_implementation_fact(
-                    fact,
-                    &mut self.type_work,
-                    &mut self.constraint_work,
-                )
-                .map_err(resolved_build_error)?,
-            );
-        }
-        if captures.next().is_some() || implementation_roots.next().is_some() {
-            return Err(invalid_state());
-        }
-        let mut constraints = std::mem::take(&mut self.constraint_work);
-        let result = self.prepare_provider_defining_facts_completed(
-            positions.iter().map(|position| &schemes[*position]),
-            interfaces,
-            &retained.0,
-            module.imported_facts(),
-            &mut constraints,
-        );
-        self.constraint_work = constraints;
-        result
-    }
-}
-
-/// Detects a local instance from the original resolved body, including bodies
-/// nested inside a supplied lexical method. It does not inspect provider
-/// definitions or implementation candidates.
-pub(super) fn declaration_has_local_provider_instance(
-    module: &ResolvedModule,
-    declaration: ResolvedDeclarationIndex,
-    work: &mut TypeWorkBudget,
-) -> Result<bool, TypeError> {
-    let pending = declaration_source_items(module, declaration, work)?;
-    visit_source_items(pending, work, |expression, _| {
-        Ok(matches!(&expression.kind,
-        ResolvedExprKind::ProviderResource(resource) if resource.definition.module() == module.module()))
-    })
-}
-
-/// This gate only avoids retaining a provider environment for ordinary bodies.
-/// It supplies no selection, capture, or executable permission.
-pub(super) fn declaration_has_provider_instance(
-    module: &ResolvedModule,
-    declaration: ResolvedDeclarationIndex,
-    work: &mut TypeWorkBudget,
-) -> Result<bool, TypeError> {
-    let pending = declaration_source_items(module, declaration, work)?;
-    visit_source_items(pending, work, |expression, _| {
-        Ok(matches!(
-            &expression.kind,
-            ResolvedExprKind::ProviderResource(_)
-        ))
-    })
-}
-
-/// Source coordinates are readiness hints only. Checked typed components and
-/// their selected evidence remain the sole capture and original authority.
-pub(super) fn declaration_local_provider_requirements(
-    module: &ResolvedModule,
-    declaration: ResolvedDeclarationIndex,
-    work: &mut TypeWorkBudget,
-) -> Result<Vec<crate::resolved::ResourceDefinitionId>, TypeError> {
-    let pending = declaration_source_items(module, declaration, work)?;
-    let mut required = Vec::new();
-    visit_source_items(pending, work, |expression, work| {
-        if let ResolvedExprKind::ProviderResource(resource) = &expression.kind
-            && resource.definition.module() == module.module()
-        {
-            work.charge(required.len().checked_add(1).ok_or_else(type_resource)?)
-                .map_err(|()| type_resource())?;
-            if !required.contains(&resource.definition) {
-                required.try_reserve(1).map_err(|_| type_resource())?;
-                required.push(resource.definition);
-            }
-        }
-        Ok(false)
-    })?;
-    Ok(required)
 }
 
 impl ModuleBodySchedule {
@@ -902,7 +698,7 @@ impl ModuleBodySchedule {
             self.position(declaration)?;
             let items = declaration_source_items(module, declaration, work)?;
             let dependencies = self.source_dependencies(items, work)?;
-            let blocked = declaration_has_local_provider_instance(module, declaration, work)?;
+            let blocked = false;
             for dependency in &dependencies {
                 work.charge(pending.len().checked_add(1).ok_or_else(type_resource)?)
                     .map_err(|()| type_resource())?;
@@ -1006,6 +802,10 @@ fn declaration_source_items<'a>(
 ) -> Result<Vec<BodySourceItem<'a>>, TypeError> {
     let mut pending = Vec::new();
     match declaration {
+        ResolvedDeclarationIndex::Resource(_)
+        | ResolvedDeclarationIndex::Type(_)
+        | ResolvedDeclarationIndex::Interface(_)
+        | ResolvedDeclarationIndex::Effect(_) => {}
         ResolvedDeclarationIndex::Global(index) => {
             let definition = module.definitions().get(index).ok_or_else(invalid_state)?;
             match &definition.kind {
@@ -1046,11 +846,6 @@ fn declaration_source_items<'a>(
                 }
             }
         }
-        ResolvedDeclarationIndex::Resource(_)
-        | ResolvedDeclarationIndex::SourceResource(_)
-        | ResolvedDeclarationIndex::Type(_)
-        | ResolvedDeclarationIndex::Interface(_)
-        | ResolvedDeclarationIndex::Effect(_) => return Ok(pending),
     }
     Ok(pending)
 }
@@ -1103,6 +898,7 @@ fn visit_source_items<'a>(
                     )?;
                 }
             }
+
             BodySourceItem::Declaration(ResolvedLocalDeclaration::Binding(binding)) => {
                 push_source(
                     &mut pending,
@@ -1139,42 +935,6 @@ fn visit_source_items<'a>(
                     return Ok(true);
                 }
                 match &expression.kind {
-                    ResolvedExprKind::ForeignHost(host) => {
-                        push_source(
-                            &mut pending,
-                            BodySourceItem::Expression(&host.body),
-                            work,
-                            expression.span,
-                        )?;
-                    }
-                    ResolvedExprKind::CopyWindow(window) => {
-                        push_source(
-                            &mut pending,
-                            BodySourceItem::Expression(&window.body),
-                            work,
-                            expression.span,
-                        )?;
-                        push_source(
-                            &mut pending,
-                            BodySourceItem::Expression(&window.state),
-                            work,
-                            expression.span,
-                        )?;
-                    }
-                    ResolvedExprKind::ProviderResource(resource) => {
-                        push_source(
-                            &mut pending,
-                            BodySourceItem::Expression(&resource.body),
-                            work,
-                            expression.span,
-                        )?;
-                        push_source(
-                            &mut pending,
-                            BodySourceItem::Expression(&resource.initializer),
-                            work,
-                            expression.span,
-                        )?;
-                    }
                     ResolvedExprKind::Block(block) => push_source(
                         &mut pending,
                         BodySourceItem::Block(block),
@@ -1314,9 +1074,9 @@ fn visit_source_items<'a>(
 }
 
 enum BodySourceItem<'a> {
+    Declaration(&'a ResolvedLocalDeclaration),
     Expression(&'a ResolvedExpr),
     Block(&'a ResolvedBlock),
-    Declaration(&'a ResolvedLocalDeclaration),
 }
 
 fn push_source<'a>(
