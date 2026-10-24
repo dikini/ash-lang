@@ -325,6 +325,8 @@ fn assert_controls(
         assert_ne!(error.reason(), ValidationReason::Resource);
     }
     println!(
-        "checked dependency Core work={cost}, hostile cases={cases}; exact/prefix/short/spent/two fresh"
+        "checked dependency Core work={cost} allowance={} remaining={} rows={require_rows} donor={donor_required}, hostile cases={cases}; exact/prefix/short/spent/two fresh",
+        measured.limit(),
+        measured.limit() - cost
     );
 }

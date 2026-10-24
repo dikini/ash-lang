@@ -210,3 +210,26 @@ The combined TASK0053 delivery now reconciles runtime and primary static/Core/Le
 The [combined TASK0053 evidence](evidence/checked-owner-core-execution/independent-output-status/README.md) supersedes the current prerequisite's UNRUN note: 64 ordinary behavioral controls pass on `45f53d93`/`35186`, with qualified behavior-only transfer across two root-cfg retention casts, and fresh Clippy plus actual two-role/four-role compile-link selectors pass on `c96a1629`/`31191`. Both profiles refresh all code/runtime/input/artifact/receipt/request identities; no old approval transfers and this is not 66 fresh tests. Genuine independent checked status observation/guard/Finish is distinct from the retained legacy accounting models.
 
 The compile-only sqlite-named C fixture is not actual SQLite behavior or Native/Header conformity. This prerequisite does not render or activate the full library image, dependent Prepare/Finalize/offset output/retained-parent roles, multioperand/copied text, whole E/B or native SQLite L2. The separately authored source/dependent admission work needs reconciliation onto the actual retaining tip and its own common physical carrier/evidence joins. Default bootstrap association/six Missing fields, configured deployment, native/F-core and whole F5 acceptance remain open.
+
+
+## Dependent source and static delivery on retained PR125
+
+The five reviewed source commits are replayed onto retained PR125 `15128ba4` in
+`codex/checked-sqlite-dependent-delivery`. The replay at `3a864e35` preserves all
+15 reviewed source blobs and the retained independent status, header, root and
+guard fixes. This slice connects Connection/arena policy and exact dependent
+Prepare/Finalize originals through source, independent Core and private static
+reconstruction. It adds no dependent runtime, executable-image or physical
+admission; the same-header refusal controls remain required.
+
+The focused gate is 18 exact Rust selectors, including four explicitly ignored
+dependent controls, plus targeted Ash library/test Clippy. All are UNRUN on this
+reconciliation. Existing test helpers now print successful standalone work and
+Core allowance/remaining alongside their exact, short, spent and fresh controls.
+Statement standalone fit is an authored premise awaiting measurement; semantic
+refusal must remain distinct from Resource. No allowance or limit changes.
+
+Dependent native carriers, retained-parent loans/edges, SQL/offset lifetimes,
+post-observation runtime denial, copied/multioperand support and native SQLite
+E/B remain subsequent work. Static acceptance does not grant native authority,
+configured approval, whole F5/F-core acceptance or the milestone/Main gates.

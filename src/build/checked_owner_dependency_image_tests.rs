@@ -135,7 +135,14 @@ pub(crate) fn controls(
     let mut standalone_work = TypeWorkBudget::default();
     let standalone_result = canonical.restore_effect(&mut standalone_work);
     match (standalone, standalone_result) {
-        (crate::build::CheckedDependencyStandalone::Fits, Ok(restored)) => drop(restored),
+        (crate::build::CheckedDependencyStandalone::Fits, Ok(restored)) => {
+            drop(restored);
+            println!(
+                "checked dependency standalone fits used={} limit={}",
+                standalone_work.used(),
+                standalone_work.limit()
+            );
+        }
         (crate::build::CheckedDependencyStandalone::Resource, Err(error)) => {
             assert!(
                 matches!(&error, ImageFailure::Resource)

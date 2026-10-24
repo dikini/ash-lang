@@ -678,3 +678,16 @@ planning history without merging obsolete code to manufacture ancestry.
 TASK-0050 owns this plan until it is superseded or the program closes. Consolidate
 durable conclusions in the appropriate artifacts and then retire this temporary
 plan; do not promote it into a second specification or permanent progress tracker.
+
+
+### Current dependent source/static replay
+
+TASK0054 now replays its five reviewed source commits onto retained PR125
+`15128ba4`, preserving the independent status/runtime fixes. The bounded next
+gate is 18 exact source/Core/private-image and regression selectors plus Ash
+library/test Clippy, all UNRUN. Four ignored dependent controls must be selected
+explicitly. Record actual standalone fit and full Core/private reconstruction
+cost, allowance and exact/short/spent/fresh outcomes without changing limits.
+The genuine dependent header must still refuse runtime Ledger and executable
+admission. This delivery grants no dependent physical/native authority or whole
+SQLite/F-core acceptance; those connected carriers and evidence remain pending.
