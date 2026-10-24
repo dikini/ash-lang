@@ -1085,3 +1085,24 @@ fn rejects_external_opaque_constructor_and_pattern_in_impl_body() {
         );
     }
 }
+
+#[test]
+fn imported_unassociated_interface_keeps_local_impl_selection_with_private_dependency_impl() {
+    let prior = "pub interface Plain<A> {\n    value : A -> Int\n}\ntype SourceKey = SourceKey\nimpl Plain<SourceKey> {\n    value ignored = 1\n}\n";
+    for route in ["dependency", "facade"] {
+        let tree = ModuleTree::create();
+        tree.write("dependency.ash", prior);
+        tree.write("facade.ash", "pub import dependency (Plain, value)\n");
+        let entry = tree.write(
+            "entry.ash",
+            &format!(
+                "import {route} (Plain, value)\ntype Local = Local\nimpl Plain<Local> {{\n    value ignored = 42\n}}\nmain : Unit -> Int\nmain () = value Local\n"
+            ),
+        );
+        ash::driver::compile_path(ash::driver::RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .expect("private dependency implementation must not select or seal an ordinary interface");
+    }
+}

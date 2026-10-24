@@ -979,7 +979,7 @@ mod tests {
     fn original_coordinate_authentication_preserves_work_and_rejects_missing_or_donor_sources() {
         let source = SourceFile::new(
             "ordinary.ash",
-            "effect First { one : Unit -> Unit }\neffect Second { two : Unit -> Unit }\n",
+            "effect First {\none : Unit -> Unit\n}\neffect Second {\ntwo : Unit -> Unit\n}\n",
         )
         .unwrap();
         let registry = effect_registry(&source, [0, 1]);
@@ -1034,7 +1034,7 @@ mod tests {
     fn coordinate_loan_never_reuses_registry_or_original_binder_authority() {
         let source_arena = [SourceFile::new(
             "ordinary.ash",
-            "effect First { one : Unit -> Unit }\neffect Second { two : Unit -> Unit }\n",
+            "effect First {\none : Unit -> Unit\n}\neffect Second {\ntwo : Unit -> Unit\n}\n",
         )
         .unwrap()];
         let source = &source_arena[0];
@@ -1105,7 +1105,7 @@ mod tests {
     fn coordinate_loan_whole_original_admission_keeps_cumulative_work() {
         let source_arena = [SourceFile::new(
             "ordinary.ash",
-            "effect First { one : Unit -> Unit }\neffect Second { two : Unit -> Unit }\n",
+            "effect First {\none : Unit -> Unit\n}\neffect Second {\ntwo : Unit -> Unit\n}\n",
         )
         .unwrap()];
         let source = &source_arena[0];

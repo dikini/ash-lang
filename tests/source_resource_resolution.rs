@@ -650,24 +650,3 @@ main () = resource Owner.Probe<{}, Fresh, {}> owner = 42 {
         );
     }
 }
-
-#[test]
-fn public_source_provider_passive_census_preserves_unassociated_interface_selection() {
-    let prior = "pub interface Plain<A> {\n    value : A -> Int\n}\ntype SourceKey = SourceKey\nimpl Plain<SourceKey> {\n    value ignored = 1\n}\n";
-    for route in ["owner", "facade"] {
-        let entry = format!(
-            "import {route} (Plain, value)\ntype Local = Local\nimpl Plain<Local> {{\n    value ignored = 42\n}}\nmain : Unit -> Int\nmain () = value Local\n"
-        );
-        let fixture = CompilationFixture::new(prior, &entry);
-        fs::write(
-            fixture.0.join("facade.ash"),
-            "pub import owner (Plain, value)\n",
-        )
-        .unwrap();
-        compile_path(RunConfiguration {
-            entry: fixture.0.join("entry.ash"),
-            roots: ModuleRoots::empty(),
-        })
-        .expect("a passive private-implementation census supplies no selection or seal");
-    }
-}

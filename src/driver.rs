@@ -2745,10 +2745,14 @@ mod tests {
         // four import routes removes three duplicate retention cells.
         // Final method admission removes four duplicate binder-map slots and
         // one repeated Function-result kind queue; full child checks remain.
+        // Completed global/implementation publications and constructor originals
+        // authenticate ordinary meanings at each summary/import boundary. The
+        // earlier receipt predated those guards: base publication adds 218,
+        // each route 224, imported checking 60. Link/evidence stay 149/1769.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 1_138, 1_721, 2_335, 2_918, 3_532, 4_107, 4_726, 5_756, 6_208, 6_357, 8_126,
+            0, 1, 1_356, 2_163, 3_061, 3_868, 4_766, 5_565, 6_468, 7_946, 8_458, 8_607, 10_376,
         ];
-        const EXACT_CONSTRAINT_WORK: usize = 8_126;
+        const EXACT_CONSTRAINT_WORK: usize = 10_376;
         let source = relational_interface_graph_source();
         let directory = source
             .0

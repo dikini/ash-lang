@@ -11578,6 +11578,9 @@ impl ExportSummary {
         summary.authenticate_with_provider_commit(type_work, constraint_work)?;
         Ok(summary)
     }
+    // Independent admission must not retain collection stack storage. Both
+    // phases consume the caller's cumulative budgets.
+    #[inline(never)]
     fn collect_with_providers(
         resolved: &ResolvedModule,
         checked_globals: &[CheckedGlobalScheme],
@@ -12663,6 +12666,95 @@ impl ExportSummary {
                 constructor_owners.insert(owner);
                 constructor_owner_order.push(owner);
             }
+        }
+
+        type_work
+            .charge(constructor_owner_order.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut constructor_family_capacity = 0usize;
+        for owner in &constructor_owner_order {
+            let family_len = if owner.module() == resolved.module {
+                resolved
+                    .registry
+                    .nominal(*owner)
+                    .map(|nominal| nominal.constructors.len())
+            } else {
+                resolved
+                    .imported
+                    .nominal(*owner)
+                    .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
+                    .map(|nominal| nominal.constructors.len())
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            constructor_family_capacity = constructor_family_capacity
+                .checked_add(family_len)
+                .ok_or(ResolvedBuildFailure::TypeResource)?;
+        }
+        let constructor_family_work = constructor_family_capacity
+            .checked_mul(3)
+            .ok_or(ResolvedBuildFailure::TypeResource)?;
+        type_work
+            .charge(constructor_family_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut constructor_family_ids = HashSet::new();
+        constructor_family_ids
+            .try_reserve(constructor_family_capacity)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let mut constructor_family_order = Vec::new();
+        constructor_family_order
+            .try_reserve(constructor_family_capacity)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for owner in constructor_owner_order {
+            let family = if owner.module() == resolved.module {
+                resolved
+                    .registry
+                    .nominal(owner)
+                    .map(|nominal| nominal.constructors.as_ref())
+            } else {
+                resolved
+                    .imported
+                    .nominal(owner)
+                    .filter(|nominal| nominal.access == ImportedTypeAccess::Transparent)
+                    .map(|nominal| nominal.constructors.as_ref())
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            for constructor in family {
+                if constructor_family_ids.insert(*constructor) {
+                    constructor_family_order.push(*constructor);
+                }
+            }
+        }
+        for spelling in &resolved.export_candidate.constructor_order {
+            let exported = summary
+                .constructors
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if !constructor_family_ids.contains(&exported.id) {
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+        }
+        type_work
+            .charge(constructor_family_order.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let hidden_constructor_count = constructor_family_order
+            .iter()
+            .filter(|identity| !summary.constructor_names_by_id.contains_key(identity))
+            .count();
+        type_work
+            .charge(hidden_constructor_count)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .hidden_constructors
+            .try_reserve(hidden_constructor_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .hidden_constructor_order
+            .try_reserve_exact(hidden_constructor_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for constructor_id in constructor_family_order {
+            summary.retain_hidden_constructor_from_resolved(resolved, constructor_id, type_work)?;
         }
 
         // Freeze the complete retained effect inventory before selecting hidden
@@ -14344,6 +14436,53 @@ impl ExportSummary {
     }
 
     #[cfg(test)]
+    fn rebuild_diamond_constructor_original_for_test(&mut self, owner: NominalTypeId) {
+        let mut work = TypeWorkBudget::unbounded();
+        let fact = self.nominal_fact(owner).unwrap();
+        let parameters = clone_resolved_type_variables_with_budget(fact.parameters, &mut work)
+            .unwrap()
+            .into_boxed_slice();
+        let nominal = ResolvedNominalType {
+            id: owner,
+            declaration_kind: fact.declaration_kind,
+            spelling: fact.display_spelling.unwrap_or("hidden").to_owned(),
+            constructors: fact.constructors.to_vec().into_boxed_slice(),
+            representation: fact
+                .representation
+                .map(|ty| clone_type_with_budget(ty, &mut work).unwrap()),
+            representation_provenance: fact.representation_provenance.cloned(),
+            origin: clone_effect_origin_with_budget(fact.origin, &mut work).unwrap(),
+        };
+        let constructors = self
+            .constructors()
+            .map(|(_, constructor)| constructor)
+            .chain(self.hidden_constructors())
+            .filter(|constructor| constructor.id.owner() == owner)
+            .map(|constructor| ResolvedConstructor {
+                id: constructor.id,
+                owner,
+                spelling: constructor.spelling.clone(),
+                payload: constructor
+                    .payload
+                    .as_ref()
+                    .map(|ty| clone_type_with_budget(ty, &mut work).unwrap()),
+                origin: clone_effect_origin_with_budget(&constructor.origin, &mut work).unwrap(),
+            })
+            .collect();
+        let mut registry = ResolvedRegistry::new(vec![nominal], constructors);
+        registry.nominal_parameters.insert(owner, parameters);
+        let original = ConstructorOriginal::from_checked(&Arc::new(registry), &mut work).unwrap();
+        for constructor in self
+            .constructors
+            .values_mut()
+            .chain(self.hidden_constructors.values_mut())
+            .filter(|constructor| constructor.id.owner() == owner)
+        {
+            constructor.original = Some(original.retain(&mut work).unwrap());
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn corrupt_first_duplicate_fact_for_test(
         &mut self,
         fact: SummaryDuplicateFactForTest,
@@ -14357,6 +14496,7 @@ impl ExportSummary {
             };
         }
 
+        let mut changed_constructor_owner = None;
         match fact {
             SummaryDuplicateFactForTest::Global => {
                 let Some(global) = self
@@ -14447,6 +14587,7 @@ impl ExportSummary {
                     return false;
                 };
                 wrap_origin(&mut parameter.origin);
+                changed_constructor_owner = Some(self.nominals[&spelling].id);
             }
             SummaryDuplicateFactForTest::Constructor => {
                 let Some(constructor) = self
@@ -14466,6 +14607,7 @@ impl ExportSummary {
                     discard_type_iteratively(payload);
                 }
                 constructor.scheme.value_type = Type::Function(Box::new(Type::Unit), result);
+                changed_constructor_owner = Some(constructor.id.owner());
             }
             SummaryDuplicateFactForTest::ConstructorOrigin => {
                 let Some(constructor) = self
@@ -14476,6 +14618,7 @@ impl ExportSummary {
                     return false;
                 };
                 wrap_origin(&mut constructor.origin);
+                changed_constructor_owner = Some(constructor.id.owner());
             }
             SummaryDuplicateFactForTest::Interface => {
                 let Some(method) = self
@@ -14722,6 +14865,53 @@ impl ExportSummary {
                     drop(std::mem::replace(&mut method_parameter.1, Kind::Type));
                 }
             }
+        }
+        // Build a genuine alternate defining publication. Admission still checks
+        // this authority before the importer compares the two routes.
+        if matches!(
+            fact,
+            SummaryDuplicateFactForTest::Global
+                | SummaryDuplicateFactForTest::GlobalValueType
+                | SummaryDuplicateFactForTest::GlobalRequirementOrigin
+                | SummaryDuplicateFactForTest::GlobalRequirementSpan
+        ) {
+            let spelling = self
+                .term_order
+                .iter()
+                .find(|spelling| {
+                    !matches!(
+                        fact,
+                        SummaryDuplicateFactForTest::GlobalRequirementOrigin
+                            | SummaryDuplicateFactForTest::GlobalRequirementSpan
+                    ) || !self.terms[*spelling].scheme.requirements.is_empty()
+                })
+                .unwrap()
+                .clone();
+            let mut global = self.terms.remove(&spelling).unwrap();
+            global.publication = None;
+            self.terms
+                .insert(spelling, global.with_fixture_publication());
+        }
+        if matches!(
+            fact,
+            SummaryDuplicateFactForTest::Implementation
+                | SummaryDuplicateFactForTest::ImplementationOrigin
+                | SummaryDuplicateFactForTest::ImplementationSpan
+                | SummaryDuplicateFactForTest::ImplementationHeadParameterOrigin
+                | SummaryDuplicateFactForTest::ImplementationHeadArgument
+                | SummaryDuplicateFactForTest::ImplementationPrerequisiteOrigin
+                | SummaryDuplicateFactForTest::ImplementationPrerequisiteSpan
+                | SummaryDuplicateFactForTest::ImplementationPrerequisiteType
+                | SummaryDuplicateFactForTest::ImplementationMethodSpan
+                | SummaryDuplicateFactForTest::OpaqueNominalKindClosure
+        ) {
+            for implementation in &mut self.implementations {
+                implementation.publication =
+                    Some(implementation_publication_for_test(&implementation.fact));
+            }
+        }
+        if let Some(owner) = changed_constructor_owner {
+            self.rebuild_diamond_constructor_original_for_test(owner);
         }
         true
     }
@@ -16319,7 +16509,8 @@ impl ExportSummary {
                 reason: crate::source::GeneratedReason::ConstantFolding,
             };
         };
-        match mutation {
+        let mut changed_constructor_owner = None;
+        let changed = match mutation {
             SummaryHiddenDiamondMutationForTest::NominalOrigin => self
                 .hidden_nominal_order
                 .first()
@@ -16332,9 +16523,12 @@ impl ExportSummary {
                 .hidden_nominal_order
                 .first()
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
-                .and_then(|nominal| nominal.parameters.first_mut())
-                .is_some_and(|parameter| {
+                .is_some_and(|nominal| {
+                    let Some(parameter) = nominal.parameters.first_mut() else {
+                        return false;
+                    };
                     wrap_origin(&mut parameter.origin);
+                    changed_constructor_owner = Some(nominal.id);
                     true
                 }),
             SummaryHiddenDiamondMutationForTest::ConstructorOrigin => {
@@ -16357,6 +16551,7 @@ impl ExportSummary {
                     .and_then(|identity| self.hidden_constructors.get_mut(&identity))
                     .is_some_and(|constructor| {
                         wrap_origin(&mut constructor.origin);
+                        changed_constructor_owner = Some(constructor.id.owner());
                         true
                     })
             }
@@ -16414,7 +16609,11 @@ impl ExportSummary {
                 ));
                 true
             }
+        };
+        if let Some(owner) = changed_constructor_owner {
+            self.rebuild_diamond_constructor_original_for_test(owner);
         }
+        changed
     }
 
     #[cfg(test)]
@@ -18147,7 +18346,9 @@ fn validate_checked_registries<'a>(
         }
         let mut local_variable_count = 0usize;
         for (position, nominal) in registry.nominals().iter().enumerate() {
-            if nominal.id.module() != module
+            if registry.abstract_nominal_names.contains_key(&nominal.id)
+                || registry.abstract_nominal_kinds.contains_key(&nominal.id)
+                || nominal.id.module() != module
                 || nominal.id.is_lexical()
                 || !nominal_ids.insert(nominal.id)
                 || registry.nominal_positions.get(&nominal.id) != Some(&position)
@@ -18196,7 +18397,9 @@ fn validate_checked_registries<'a>(
             let [constructor_id] = nominal.constructors.as_ref() else {
                 return Err(ResolvedBuildFailure::InvalidState);
             };
-            if nominal.id.module() != module
+            if registry.abstract_nominal_names.contains_key(&nominal.id)
+                || registry.abstract_nominal_kinds.contains_key(&nominal.id)
+                || nominal.id.module() != module
                 || !nominal.id.is_lexical()
                 || !nominal_ids.insert(nominal.id)
                 || registry.lexical_nominal_positions.get(&nominal.id) != Some(&position)
@@ -19309,15 +19512,11 @@ impl ResolvedRegistry {
             .try_reserve(abstracts.len())
             .map_err(|_| resource())?;
         for (id, spelling, kind, origin) in abstracts {
-            // The initial native image may preserve only the common module's
-            // opaque ConversionError and exact unary Extent roles. Later
-            // canonical preflight/extent admission authenticates their origin.
-            // Resource/provider abstractions and
-            // arbitrary opaque source metadata remain explicit subset refusals.
-            if !id.module().is_builtin_foreign()
-                || !(id.declaration() == 0 && matches!(kind, Kind::Type)
-                    || id.declaration() == 5
-                        && matches!(&kind, Kind::Arrow(argument, result) if argument.as_ref() == &Kind::Type && result.as_ref() == &Kind::Type))
+            // The slim native image preserves the canonical opaque Address.
+            // Independent source and Core validation authenticate the resident
+            // builtin declaration after this supported-subset inventory.
+            if !is_builtin_address(id)
+                || !matches!(kind, Kind::Type)
                 || self.nominal(id).is_some()
                 || self.abstract_nominal_names.contains_key(&id)
                 || self.abstract_nominal_kinds.contains_key(&id)
@@ -20453,6 +20652,22 @@ impl ResolvedRegistry {
                     &interface.parameters,
                     type_work,
                 )?;
+            }
+        }
+        // Abstract metadata is paired independently of materialized families.
+        // Authenticate complete identities before combined inventory reservation.
+        for checked in modules {
+            let registry = checked.registry();
+            if registry.abstract_nominal_names.len() != registry.abstract_nominal_kinds.len() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for identity in registry.abstract_nominal_names.keys() {
+                type_work.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                if !registry.abstract_nominal_kinds.contains_key(identity)
+                    || registry.nominal(*identity).is_some()
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
             }
         }
         let counts = checked_registry_counts(modules)?;
@@ -27900,7 +28115,7 @@ mod tests {
         // carrier/position cells, and the canonical-variable staging slot.
         // Ten additional cells authenticate and retain the zero-argument
         // effect original reference, defining record, signature and indexes.
-        const TYPE_WORK: usize = 6 * DEPTH + 19 + 2 + 10;
+        const TYPE_WORK: usize = 6 * DEPTH + 19 + 1 + 10;
         const TYPE_PREFLIGHT: usize = 4;
         std::thread::Builder::new()
             .name("deep-combined-registry".to_owned())
@@ -28213,8 +28428,8 @@ mod tests {
         // Existing canonical/global retention costs fifteen cells per owner.
         // Source owner preflight costs seven, and independently retained
         // shared interface originals, signatures, indexes and authentication
-        // cost twelve more. Nine fixed storage cells and two module cells remain.
-        const TYPE_WORK: usize = 34 * OWNER_COUNT + 9 + 2;
+        // cost twelve more. Nine fixed storage cells and one module cell remain.
+        const TYPE_WORK: usize = 34 * OWNER_COUNT + 9 + 1;
         const TYPE_PREFLIGHT: usize = 7 * OWNER_COUNT + 1;
         std::thread::Builder::new()
             .name("wide-combined-registry".to_owned())
@@ -28300,11 +28515,11 @@ mod tests {
     #[test]
     fn combine_checked_prices_the_canonical_interface_kind_before_retention() {
         const CONSTRAINT_WORK: usize = 25;
-        // The one-owner fixture costs 45 TypeWork cells. A coherent
+        // The one-owner fixture costs 44 TypeWork cells. A coherent
         // `Type -> Type` binder adds two preflight Kind visits, two canonical
         // Kind copies and two independent signature Kind visits. The defining
         // original records are shared while their authentication remains full.
-        const TYPE_WORK: usize = 34 + 11 + 6;
+        const TYPE_WORK: usize = 34 + 10 + 6;
         const TYPE_PREFLIGHT: usize = 10;
         let mut modules = wide_combined_registry_fixture(4);
         let interface_parameter = modules[0].interface_facts[0].parameters[0].id;
@@ -28556,7 +28771,7 @@ mod tests {
         const PREEXISTING_RETENTION_TYPE_WORK: usize = 3 * GLOBAL_PARAMETERS;
         const ROW_RETENTION_TYPE_WORK: usize = 2 * GLOBAL_ROWS + GLOBAL_PARAMETERS;
         const TYPE_WORK: usize =
-            PREEXISTING_RETENTION_TYPE_WORK + ROW_RETENTION_TYPE_WORK + 2 * MODULES;
+            PREEXISTING_RETENTION_TYPE_WORK + ROW_RETENTION_TYPE_WORK + MODULES;
 
         let modules = global_parameter_row_fixture();
         let counts = checked_registry_counts(&modules).expect("the row counts should fit");
@@ -28584,7 +28799,7 @@ mod tests {
         assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 1);
         assert_eq!(untouched_type.used(), MODULES);
 
-        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - MODULES - 1);
+        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
         let mut exact_constraint =
             crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
         assert_eq!(
@@ -28810,7 +29025,7 @@ mod tests {
         const CONSTRAINT_WORK: usize = 4 * WIDTH + 5;
         // TypeWork: WIDTH family-id cells, four nominal carrier/staging/index
         // cells, and two carrier/index cells per constructor.
-        const TYPE_WORK: usize = 3 * WIDTH + 4 + 2;
+        const TYPE_WORK: usize = 3 * WIDTH + 4 + 1;
 
         std::thread::Builder::new()
             .name("wide-combined-registry-family".to_owned())
@@ -28833,7 +29048,7 @@ mod tests {
 
                 let mut constraint =
                     crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
-                let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 2);
+                let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
                 assert_eq!(
                     ResolvedRegistry::combine_checked(&modules, &mut type_short, &mut constraint,),
                     Err(ResolvedBuildFailure::TypeResource),
@@ -28879,6 +29094,8 @@ mod tests {
             ExtraParameterRow,
             AbstractName,
             AbstractKind,
+            AbstractMismatchedKeys,
+            AbstractMaterializedCollision,
             CanonicalValueIdentity,
             MissingNominalCanonical,
             MissingInterfaceCanonical,
@@ -28924,6 +29141,8 @@ mod tests {
             (Mutation::ExtraParameterRow, 13, 7),
             (Mutation::AbstractName, 0, 7),
             (Mutation::AbstractKind, 0, 7),
+            (Mutation::AbstractMismatchedKeys, 0, 8),
+            (Mutation::AbstractMaterializedCollision, 0, 8),
             (Mutation::CanonicalValueIdentity, 17, 7),
             (Mutation::MissingNominalCanonical, 0, 7),
             (Mutation::MissingInterfaceCanonical, 0, 4),
@@ -29039,6 +29258,16 @@ mod tests {
                             origin: span,
                         },
                     );
+                }
+                Mutation::AbstractMismatchedKeys | Mutation::AbstractMaterializedCollision => {
+                    let name = registry.nominals[0].id;
+                    let kind = if matches!(mutation, Mutation::AbstractMismatchedKeys) {
+                        NominalTypeId::new(module, u32::MAX)
+                    } else { name };
+                    registry.abstract_nominal_names.insert(name, "abstract".to_owned());
+                    registry.abstract_nominal_kinds.insert(kind, NonMaterializedNominalKindFact {
+                        kind: NonMaterializedNominalKind::Ordinary(Kind::Type), origin: span,
+                    });
                 }
                 Mutation::CanonicalValueIdentity => {
                     let id = registry.nominal_parameters[&registry.nominals[0].id][0].id;
@@ -30867,8 +31096,40 @@ mod tests {
                 )),
             ),
         };
+        let defining_registry = Arc::new(
+            ResolvedRegistry::new(
+                vec![ResolvedNominalType {
+                    id: nominal,
+                    spelling: "Wrap".to_owned(),
+                    declaration_kind: ResolvedNominalDeclarationKind::Data,
+                    representation: None,
+                    representation_provenance: None,
+                    constructors: Box::new([constructor_id]),
+                    origin: Origin::Source(span),
+                }],
+                vec![ResolvedConstructor {
+                    id: constructor_id,
+                    owner: nominal,
+                    spelling: "Wrap".to_owned(),
+                    payload: Some(Type::Variable(parameter)),
+                    origin: Origin::Source(span),
+                }],
+            )
+            .with_type_parameters(vec![(
+                nominal,
+                vec![ResolvedTypeVariable {
+                    id: parameter,
+                    spelling: "F".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                }],
+            )]),
+        );
+        let original =
+            ConstructorOriginal::from_checked(&defining_registry, &mut TypeWorkBudget::unbounded())
+                .expect("the constructor fixture retains its defining family");
         let imported_constructor = ImportedConstructorFact {
-            original: None,
+            original: Some(original),
             id: constructor_id,
             spelling: "Wrap".to_owned(),
             payload: Some(Type::Variable(parameter)),
@@ -30876,7 +31137,14 @@ mod tests {
             origin: Origin::Source(span),
         };
         let mut exported_constructor = ExportedConstructor {
-            original: None,
+            original: Some(
+                imported_constructor
+                    .original
+                    .as_ref()
+                    .unwrap()
+                    .retain(&mut TypeWorkBudget::unbounded())
+                    .expect("both projections retain the same defining constructor"),
+            ),
             id: constructor_id,
             spelling: "Wrap".to_owned(),
             payload: Some(Type::Variable(parameter)),
@@ -31288,8 +31556,40 @@ mod tests {
                         )),
                     ),
                 };
+                let defining_registry = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Deep".to_owned(),
+                            declaration_kind: ResolvedNominalDeclarationKind::Data,
+                            representation: None,
+                            representation_provenance: None,
+                            constructors: Box::new([constructor]),
+                            origin: Origin::Source(span),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: nominal,
+                            spelling: "Deep".to_owned(),
+                            payload: Some(applied_parameter()),
+                            origin: Origin::Source(span),
+                        }],
+                    )
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![ResolvedTypeVariable {
+                            id: parameter,
+                            spelling: "F".to_owned(),
+                            kind: deep_kind(),
+                            origin: Origin::Source(span),
+                        }],
+                    )]),
+                );
+                let original =
+                    ConstructorOriginal::from_checked(&defining_registry, &mut TypeWorkBudget::unbounded())
+                        .expect("the constructor fixture retains its defining family");
                 let imported_constructor = ImportedConstructorFact {
-                    original: None,
+                    original: Some(original),
                     id: constructor,
                     spelling: "Deep".to_owned(),
                     payload: Some(applied_parameter()),
@@ -31297,7 +31597,14 @@ mod tests {
                     origin: Origin::Source(span),
                 };
                 let mut exported_constructor = ExportedConstructor {
-                    original: None,
+                    original: Some(
+                        imported_constructor
+                            .original
+                            .as_ref()
+                            .unwrap()
+                            .retain(&mut TypeWorkBudget::unbounded())
+                            .expect("both projections retain the same defining constructor"),
+                    ),
                     id: constructor,
                     spelling: "Deep".to_owned(),
                     payload: Some(applied_parameter()),

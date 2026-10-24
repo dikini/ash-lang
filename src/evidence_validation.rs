@@ -9462,7 +9462,7 @@ mod tests {
         const CANONICAL_BINDER_LOOKUP_WORK: usize = 1;
         const DECLARATION_ENVIRONMENT_RECORD_WORK: usize = 1;
         const EXACT_TYPE_WORK: usize =
-            CANONICAL_BINDER_LOOKUP_WORK + DECLARATION_ENVIRONMENT_RECORD_WORK + 1; // defining-group code/contract scan
+            CANONICAL_BINDER_LOOKUP_WORK + DECLARATION_ENVIRONMENT_RECORD_WORK;
 
         thread::Builder::new()
             .stack_size(256 * 1024)
@@ -9575,7 +9575,8 @@ mod tests {
                     &mut one_short,
                     &mut TypeWorkBudget::default(),
                 )
-                .expect_err("one-short public work must not publish a validated program");
+                .err()
+                .expect("one-short public work must not publish a validated program");
                 assert_eq!(
                     failure.reason(),
                     EvidenceValidationReason::ConstraintResourceExhausted,
@@ -9588,7 +9589,8 @@ mod tests {
                     &mut InterfaceConstraintBudget::with_limit(EXACT_WORK),
                     &mut type_one_short,
                 )
-                .expect_err("one-short linked Kind-mirror work must prevent publication");
+                .err()
+                .expect("one-short linked Kind-mirror work must prevent publication");
                 assert_eq!(
                     failure.reason(),
                     EvidenceValidationReason::TypeResourceExhausted,
@@ -13390,8 +13392,8 @@ mod tests {
         let exact = measured.used();
         assert_eq!(
             exact - narrow_work.used(),
-            10 * (WIDE - NARROW) as usize,
-            "each nullary member owns predecessor traversal plus complete row shape, staged member, and retained member work"
+            9 * (WIDE - NARROW) as usize,
+            "ordered nullary rows reuse canonical storage, preserving traversal and comparison work"
         );
 
         let mut one_short = InterfaceConstraintBudget::with_limit(exact - 1);
@@ -14030,10 +14032,10 @@ mod tests {
         // its duplicate one-node Kind comparison.
         const PUBLIC_WORK_OUTSIDE_RELATIONSHIP: usize = 371 + 29 - 4 - 1;
         const EXACT_CONSTRAINT_WORK: usize = PUBLIC_WORK_OUTSIDE_RELATIONSHIP + RELATIONSHIP_WORK;
-        // Defining-group scan, one List<A> formal-kind scan, and one
+        // One List<A> formal-kind scan and one
         // precharged original `relate` spelling.
         const METHOD_SPELLING_WORK: usize = "relate".len();
-        const EXACT_TYPE_WORK: usize = 22 + 1 + 1 + 2 * 2 + METHOD_SPELLING_WORK;
+        const EXACT_TYPE_WORK: usize = 22 + 1 + 2 * 2 + METHOD_SPELLING_WORK;
 
         let relationship_program = linked_determined_generic_decrease_program();
         let group = &relationship_program.groups()[0];
@@ -14325,9 +14327,9 @@ mod tests {
         // slots; the checked function root removes one duplicate Kind visit.
         const ORDINARY_CONSTRAINT_WORK: usize = 149 - 3 - 1;
         const DETERMINED_CONSTRAINT_WORK: usize = 165 - 3 - 1;
-        // Defining-group scan plus one precharged original `relation` spelling.
+        // One precharged original `relation` spelling; no provider-code scan.
         const METHOD_SPELLING_WORK: usize = "relation".len();
-        const EXACT_TYPE_WORK: usize = 16 + 1 + 2 * 3 + METHOD_SPELLING_WORK;
+        const EXACT_TYPE_WORK: usize = 16 + 2 * 3 + METHOD_SPELLING_WORK;
         const PARAMETER_COUNT: usize = 3;
         const DETERMINANT_COUNT: usize = 2;
         const THREE_WAY_AUTH_DELTA: usize = 2 * PARAMETER_COUNT + 2 * DETERMINANT_COUNT;
@@ -16961,7 +16963,6 @@ mod tests {
         // owns each binder's retained record, Type Kind, and canonical-variable
         // staging cell.
         const CONSTRAINT_WORK: usize = 7 + 6 + 1;
-        const CODE_CONTRACT_GROUP_WORK: usize = 1;
         // Original coverage visits its defining owner and its table once. The
         // exact signature check charges parameter/entry slots, the record,
         // original provenance and Kind, at both independent boundaries.
@@ -16976,7 +16977,7 @@ mod tests {
         // retains the canonical records, one shared owner record and signature,
         // and authenticates their agreement with the same original declaration.
         const TYPE_WORK: usize = 2 * 3
-            + 2 * CODE_CONTRACT_GROUP_WORK
+            + 1 // ordinary per-module admission (retired provider-copy scan removed)
             + OWNER_COVERAGE_WORK
             + 2 * OWNER_AUTHENTICATION_WORK
             + OWNER_DEFINITION_WORK
@@ -17009,7 +17010,7 @@ mod tests {
         );
         assert_eq!(
             untouched_type.used(),
-            CODE_CONTRACT_GROUP_WORK + OWNER_COVERAGE_WORK + OWNER_AUTHENTICATION_WORK
+            1 + OWNER_COVERAGE_WORK + OWNER_AUTHENTICATION_WORK
         );
 
         let mut constraint = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);

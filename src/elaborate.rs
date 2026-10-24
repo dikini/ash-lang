@@ -28411,7 +28411,7 @@ mod tests {
     #[test]
     fn family_core_scheme_projection_preserves_pure_erasure_and_effect_rows() {
         const PURE_WORK: usize = 11;
-        const EFFECT_WORK: usize = 21;
+        const EFFECT_WORK: usize = 20;
 
         let pure = TypeFact {
             ty: Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice()),
@@ -40092,8 +40092,8 @@ mod tests {
         let (zonked, exact) = measure(&wide);
         assert_eq!(
             exact - narrow_work,
-            7 * (WIDE - NARROW) as usize,
-            "complete row discovery, reconstruction and final scanning own each nullary member"
+            6 * (WIDE - NARROW) as usize,
+            "the canonical append-only row reuses its owned allocation; discovery, reconstruction and final scanning remain paid"
         );
 
         let mut retry = Elaborator::new();

@@ -525,6 +525,7 @@ pub(crate) struct PureImage {
     source_handlers: Vec<HandlerRecord>,
     source_clauses: Vec<ClauseRecord>,
     interface_owners: Vec<InterfaceOwnerRecord>,
+    scope_parameters: Vec<u32>,
     method_catalogs: Vec<MethodCatalogRecord>,
     source_methods: Vec<MethodRecord>,
     inherited_parameters: Vec<InheritedParameterRecord>,
@@ -2441,6 +2442,7 @@ impl PureImage {
         writer.table(&self.source_handlers)?;
         writer.table(&self.source_clauses)?;
         writer.table(&self.interface_owners)?;
+        writer.table(&self.scope_parameters)?;
 
         writer.table(native_fact_table(
             &self.method_catalogs,
@@ -2540,6 +2542,7 @@ impl PureImage {
             source_handlers: reader.table()?,
             source_clauses: reader.table()?,
             interface_owners: reader.table()?,
+            scope_parameters: reader.table()?,
 
             method_catalogs: reader.table()?,
             source_methods: reader.table()?,
@@ -2586,6 +2589,7 @@ impl PureImage {
             || !self.prepared_libraries.is_empty()
             || !self.native_symbols.is_empty()
             || !self.interface_owners.is_empty()
+            || !self.scope_parameters.is_empty()
             || !self.method_catalogs.is_empty()
             || !self.source_methods.is_empty()
             || !self.method_variables.is_empty()
@@ -3364,6 +3368,113 @@ mod tests {
     }
 
     #[test]
+    fn generic_cell_image_rejects_missing_duplicate_donor_and_unsealed_scope_facts() {
+        let (program, sources, relation) =
+            crate::core::validate::generic_cell_source_fixture_for_test(
+                include_str!("../../tests/fixtures/generic-cell/retention-entry.ash"),
+                Some(include_str!(
+                    "../../tests/fixtures/generic-cell/dependency-helper.ash"
+                )),
+            );
+        let provenance = relation
+            .iter()
+            .map(|(module, id)| {
+                (
+                    *module,
+                    Arc::new(
+                        sources
+                            .iter()
+                            .find(|source| source.id() == *id)
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let build = encode_effect_for_build(
+            &program,
+            &provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        let original = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        for case in [
+            "missing",
+            "duplicate",
+            "declaration",
+            "donor",
+            "kind",
+            "prefix",
+        ] {
+            let mut image =
+                PureImage::decode_bytes(&original, &mut TypeWorkBudget::default()).unwrap();
+            let slot = *image
+                .scope_parameters
+                .first()
+                .expect("Cell scope has a canonical identity");
+            match case {
+                "missing" => {
+                    image.scope_parameters.remove(0);
+                }
+                "duplicate" => image.scope_parameters.push(slot),
+                "declaration" => {
+                    image.scope_parameters[0] = (0..image.native_fact_prefixes.unwrap().parameters)
+                        .find(|slot| !image.scope_parameters.contains(slot))
+                        .expect("Cell declaration parameters are separate from scopes");
+                }
+                "donor" => {
+                    let TypeVariableIdentity::Resolved { module, .. } =
+                        image.parameters[slot as usize].id
+                    else {
+                        panic!("source scope identity must be resolved")
+                    };
+                    image.parameters[slot as usize].id = TypeVariableIdentity::Resolved {
+                        module,
+                        local: u32::MAX,
+                    };
+                }
+                "kind" => {
+                    let kind = image.parameters[slot as usize].kind;
+                    assert_eq!(image.kinds[kind as usize], KindRecord::Type);
+                    image.kinds[kind as usize] = KindRecord::EffectRow;
+                }
+                "prefix" => {
+                    let parameter = image.parameters[slot as usize];
+                    let outside = image.native_fact_prefixes.unwrap().parameters;
+                    image.parameters.push(parameter);
+                    image.scope_parameters[0] = outside;
+                }
+                _ => unreachable!(),
+            }
+            let encoded = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+            let image = PureImage::decode_bytes(&encoded, &mut TypeWorkBudget::default()).unwrap();
+            assert!(
+                image
+                    .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+                    .is_err(),
+                "startup must refuse changed expected facts: {case}"
+            );
+            // A caller without expected bytes must still face the complete
+            // canonical inventory and independent source/Core validation.
+            let image = PureImage::decode_bytes(&encoded, &mut TypeWorkBudget::default()).unwrap();
+            assert!(
+                image
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
+                "restoration must independently reject malformed scope facts: {case}"
+            );
+        }
+    }
+
+    #[test]
     fn generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work() {
         for (source, helper, value) in [
             (
@@ -3722,7 +3833,7 @@ mod tests {
         // Many identical resident children would intern into only two flat
         // records. The complete encoder traversal is still paid; interning
         // never awards expansion credit or bypasses the input-derived meter.
-        let ty = IterativeTypeOwner::new(Type::Tuple(vec![Type::Unit; 512].into_boxed_slice()));
+        let ty = IterativeTypeOwner::new(Type::Tuple(vec![Type::Unit; 16_384].into_boxed_slice()));
         let mut encoder = Encoder {
             image: PureImage {
                 effect_dialect: true,
@@ -3752,7 +3863,7 @@ mod tests {
         assert!(encoder.work.used() >= prefix && encoder.work.used() <= total);
         assert_eq!(encoder.work.limit(), total);
         println!(
-            "native preparation gas amplification: input_nodes=1, repeated_children=512, allowance={total}, carried_prefix={prefix}, refusal_used={}",
+            "native preparation gas amplification: input_nodes=1, repeated_children=16384, allowance={total}, carried_prefix={prefix}, refusal_used={}",
             encoder.work.used()
         );
     }
@@ -3955,7 +4066,7 @@ mod tests {
             ));
         }
         assert_eq!(Slice::MINIMUM, 2);
-        assert_eq!(NativeFactPrefixes::MINIMUM, 13);
+        assert_eq!(NativeFactPrefixes::MINIMUM, 12);
     }
     use crate::driver::{RunConfiguration, compile_path};
     use crate::module::ModuleRoots;
@@ -6918,6 +7029,46 @@ impl Encoder<'_> {
                 self.work,
             )?;
         }
+        let mut selected = HashMap::new();
+        charge(self.work, registry.type_variable_count())?;
+        selected
+            .try_reserve(registry.type_variable_count())
+            .map_err(|_| ImageFailure::Resource)?;
+        for (_, parameters) in registry.nominal_parameter_entries() {
+            for parameter in parameters {
+                selected.insert(parameter.id, ());
+            }
+        }
+        for effect in registry.effects() {
+            for parameter in &effect.parameters {
+                selected.insert(parameter.id, ());
+            }
+        }
+        for row in registry.global_parameter_rows() {
+            for id in row.parameters() {
+                selected.insert(*id, ());
+            }
+        }
+        for (_, parameters) in registry.image_interface_owner_definitions() {
+            for parameter in parameters {
+                selected.insert(parameter.id, ());
+            }
+        }
+        // The supported inventory admits only actual Cell scope identities
+        // beyond declaration-owned variables. Preserve their original facts.
+        let mut parameters = Vec::new();
+        for parameter in registry.type_variables() {
+            let key = self.type_variable(parameter.id)?;
+            push(&mut parameters, (key, parameter), self.work)?;
+        }
+        sort_image_records(&mut parameters, |entry| entry.0, self.work)?;
+        for (_, parameter) in parameters {
+            charge(self.work, 1)?;
+            if !selected.contains_key(&parameter.id) {
+                let slot = self.encode_parameter(parameter)?;
+                push(&mut self.image.scope_parameters, slot, self.work)?;
+            }
+        }
         Ok(())
     }
 }
@@ -7395,6 +7546,18 @@ impl Decoder<'_> {
             }
         }
 
+        for slot in &self.image.scope_parameters {
+            charge(self.work, 1)?;
+            let parameter = get(
+                self.fact_table(&self.image.parameters, |p| p.parameters)?,
+                *slot,
+            )?;
+            let id = self.type_variable(parameter.id)?;
+            if id.module().is_none() || parameter_ids.insert(id, ()).is_some() {
+                return Err(ImageFailure::InvalidRecord);
+            }
+        }
+
         charge(self.work, 1)?;
         if parameter_ids.len()
             != self
@@ -7453,6 +7616,42 @@ impl Decoder<'_> {
         }
         registry = registry
             .with_image_kind_facts(canonical_parameters.into_vec(), abstracts, self.work)
+            .map_err(|_| ImageFailure::RegistryAdmission)?;
+        // Interface parameters and their owner rows are ordinary canonical
+        // metadata, independent of the retired source-resource policy codec.
+        let mut interface_parameters = ParameterBuffer(Vec::new());
+        charge(self.work, self.image.scope_parameters.len())?;
+        interface_parameters
+            .0
+            .try_reserve_exact(self.image.scope_parameters.len())
+            .map_err(|_| ImageFailure::Resource)?;
+        for slot in &self.image.scope_parameters {
+            interface_parameters.0.push(self.parameter(*get(
+                self.fact_table(&self.image.parameters, |p| p.parameters)?,
+                *slot,
+            )?)?);
+        }
+
+        for record in &self.image.interface_owners {
+            let parameters = self.parameters(record.parameters)?;
+            charge(self.work, parameters.0.len())?;
+            interface_parameters
+                .0
+                .try_reserve(parameters.0.len())
+                .map_err(|_| ImageFailure::Resource)?;
+            interface_parameters.0.extend(parameters.into_vec());
+        }
+        registry = registry
+            .with_image_source_parameters(interface_parameters.into_vec(), self.work)
+            .map_err(|_| ImageFailure::RegistryAdmission)?;
+        let mut interfaces = Vec::new();
+        for record in &self.image.interface_owners {
+            let id = self.interface_identity(record.id)?;
+            let parameters = self.parameters(record.parameters)?;
+            push(&mut interfaces, (id, parameters.into_vec()), self.work)?;
+        }
+        registry = registry
+            .with_image_interface_owner_definitions(interfaces, self.work)
             .map_err(|_| ImageFailure::RegistryAdmission)?;
         let mut globals = GlobalParameterBuffer(Vec::new());
         charge(self.work, self.image.global_parameters.len())?;

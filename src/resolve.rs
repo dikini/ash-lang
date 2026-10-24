@@ -5574,6 +5574,50 @@ impl Resolver {
         self.global_requirement_counts
             .insert(exported.binder, exported.scheme.requirements.len());
         self.retain_scheme_nominals(&exported.scheme, summary, span)?;
+        if capture_graph_visits
+            .visit(&exported.capture, &mut self.type_work)
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported capture graph tracking exceeded its work budget",
+                )
+            })?
+        {
+            for ty in exported.capture.types(&mut self.type_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported capture type scan exceeded its work budget",
+                )
+            })? {
+                self.retain_capture_type_metadata(ty, summary, span)?;
+            }
+            for effect in exported
+                .capture
+                .effects(&mut self.type_work)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported capture effect scan exceeded its work budget",
+                    )
+                })?
+            {
+                let declaration = summary.effect_by_id(effect).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an exported capture graph references missing effect metadata",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "export-capture-effect",
+                        problem: "missing",
+                    })
+                })?;
+                self.retain_imported_effect(declaration, summary, span)?;
+            }
+        }
         Ok(())
     }
 
@@ -15685,7 +15729,7 @@ mod tests {
         );
         let error = opaque_short
             .expect_err("the opaque-family withheld entry should exhaust candidate staging");
-        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted, "{error:?}");
         assert_eq!(error.primary.span().range().start(), 23);
         assert_eq!(opaque_short_used, private_opaque_used + 3);
 
@@ -15756,6 +15800,36 @@ mod tests {
     }
 
     #[test]
+    fn foreign_binding_resource_cutoffs_remain_resource_failures() {
+        const ENTRY: &str = concat!(
+            "import dependency as D\n",
+            "pub foreign library Test {\n",
+            "profile \"x86_64-unknown-linux-gnu\"\n",
+            "symbol Stop : Unit -> Unit { name \"absent_stop\" }\n",
+            "}\nmain : Unit -> Unit\nmain () = ()\n",
+        );
+        const DEPENDENCY: &str = "pub marker : Unit -> Unit\nmarker value = value\n";
+        let (result, exact_work) =
+            resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, TYPE_WORK_LIMIT);
+        result.expect("the passive void symbol must resolve without a native binding");
+        let mut binding_cutoffs = 0;
+        for limit in 0..exact_work {
+            let (result, used) = resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, limit);
+            let failure = result.expect_err("every short cumulative allowance must refuse publication");
+            assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted, "limit={limit}: {failure:?}");
+            assert!(used <= limit);
+            binding_cutoffs += usize::from(failure.primary.message() ==
+                "foreign symbol binding exceeded its work budget");
+        }
+        assert!(binding_cutoffs > 0, "the cutoffs must reach the actual symbol binder");
+        for _ in 0..2 {
+            let (result, used) = resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, exact_work);
+            result.expect("the exact foreign resolution allowance must retry");
+            assert_eq!(used, exact_work);
+        }
+    }
+
+    #[test]
     fn opaque_family_scan_charges_every_withheld_entry_for_each_public_alias() {
         const DEPENDENCY: &str = concat!(
             "hidden : Unit -> Unit\n",
@@ -15781,7 +15855,7 @@ mod tests {
             resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
         let error =
             short.expect_err("the second complete withheld-order scan should fail atomically");
-        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted, "{error:?}");
         assert_eq!(
             error.primary.message(),
             "opaque constructor-family scan exceeded its type-work budget",
@@ -15812,8 +15886,9 @@ mod tests {
         // Exhaustive dependency-summary admission precedes every selected-name
         // probe. The two fused name/namespace cells are followed by the nominal,
         // family-ordinal, withheld-owner, physical, closure, and two reverse
-        // index cells for this one-nullary-constructor fixture.
-        const SUMMARY_AUTHENTICATION_WORK: usize = 9;
+        // index cells for this one-nullary-constructor fixture. Its original
+        // checked constructor also compares one Source origin before probing.
+        const SUMMARY_AUTHENTICATION_WORK: usize = 9 + 1;
         const NOMINAL_SELECTOR_WORK: usize = 4;
         const CONSTRUCTOR_SELECTOR_WORK: usize = 5;
         const MISSING_SELECTOR_WORK: usize = 8;

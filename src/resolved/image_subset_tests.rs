@@ -43,6 +43,7 @@ fn ordinary_effect_registry() -> ResolvedRegistry {
         })
         .collect::<Vec<_>>()
         .into_boxed_slice();
+    let canonical_parameters = parameters.to_vec();
     ResolvedRegistry::new(Vec::new(), Vec::new()).with_effects(vec![ResolvedEffectDeclaration {
         id: effect,
         public: false,
@@ -67,6 +68,12 @@ fn ordinary_effect_registry() -> ResolvedRegistry {
         origin: Origin::Source(span),
         span,
     }])
+    .with_image_kind_facts(
+        canonical_parameters,
+        Vec::new(),
+        &mut TypeWorkBudget::unbounded(),
+    )
+    .expect("the effect fixture retains its exact canonical type and row parameters")
 }
 
 #[test]

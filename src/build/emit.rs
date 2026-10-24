@@ -258,22 +258,28 @@ mod tests {
         )));
         fs::create_dir(&fixture.0).unwrap();
         fs::write(
-            fixture.0.join("sqlite.ash"),
-            include_str!("../../libraries/sqlite.ash"),
+            fixture.0.join("native.ash"),
+            include_str!("../../tests/fixtures/source-native/native.ash"),
         )
         .unwrap();
-        fs::write(fixture.0.join("entry.ash"), r#"import @ffi.sqlite as Sqlite
-main : Unit -> Sqlite.Scope<Sqlite.OpenError, Sqlite.CloseError, Sqlite.Scope<Sqlite.PrepareError, Sqlite.FinalizeError, Sqlite.Result<Int>>> ! {Sqlite.Initialize}
-main () = resource Sqlite.Connection<C> connection = Sqlite.InMemory {
-    resource Sqlite.Statement<S, C> statement = (connection, "SELECT 42") {
-        match Sqlite.step statement {
-            Sqlite.Row => Sqlite.column_int (statement, 0)
-            Sqlite.Done => Sqlite.Err Sqlite.MissingRow
-            Sqlite.StepError(error) => Sqlite.Err error
-        }
+        fs::write(
+            fixture.0.join("entry.ash"),
+            r#"import @builtin.foreign as F
+import native as Raw
+make : Unit -> F.Address ! {Raw.Make}
+make () = perform Raw.Make.call ()
+main : Unit -> Bool ! {Raw.Make, Raw.Echo, Raw.Release}
+main () = {
+    let address = make ()
+    cleanup fn(ignored) {
+        perform Raw.Release.call address
+    } {
+        F.equal (address, perform Raw.Echo.call address)
     }
 }
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let compiled = compile_path(RunConfiguration {
             entry: fixture.0.join("entry.ash"),
             roots: ModuleRoots::new([("ffi", &fixture.0)]).unwrap(),

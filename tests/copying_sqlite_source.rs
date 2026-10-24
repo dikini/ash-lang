@@ -1139,44 +1139,6 @@ fn imported_connection_diagnostic_is_a_nonconsuming_guarded_native_call() {
 }
 
 #[test]
-fn canonical_string_operations_restore_from_embedded_image_after_source_erasure() {
-    let fixture = Fixture::new();
-    let entry = fixture.0.join("entry.ash");
-    fs::write(&entry, "import @builtin.string as Text\nmain : Unit -> (Int, Bool)\nmain () = match Text.from_utf8 (Text.to_utf8 \"é\") {\n    Text.Decoded(copied) => (Text.byte_length copied, Text.equal (copied, \"é\"))\n    Text.InvalidUtf8 => (999, false)\n}\n").unwrap();
-    let compiled = compile_path(RunConfiguration {
-        entry: entry.clone(),
-        roots: ModuleRoots::empty(),
-    })
-    .unwrap();
-    let executable = fixture.0.join("program");
-    let mut configuration = BuildConfiguration::new(executable.clone());
-    configuration.cargo_target_directory = Some(
-        std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
-            .join("ffi-native-hosts"),
-    );
-    let prepared = prepare_program(&compiled, configuration).unwrap();
-    fs::remove_file(entry).unwrap();
-    let built = build_prepared(prepared).unwrap();
-    let generated = built.generated_source().parent().unwrap();
-    // Pure hosts embed IMAGE inline rather than producing external payloads.
-    assert!(!generated.join("program-image.bin").exists());
-    assert!(!generated.join("expected-facts.bin").exists());
-    fs::remove_file(built.generated_source()).unwrap();
-    let output = Command::new(executable).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
-        "(2, true)"
-    );
-}
-
-#[test]
 fn imported_nested_statement_prepares_and_finalizes_before_connection_close() {
     nested_statement_probe(false, false, false);
 }

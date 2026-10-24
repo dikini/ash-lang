@@ -26066,14 +26066,12 @@ mod tests {
     fn assert_registry_prelude_work(
         validator: &Validator<'_, '_>,
         reserved_source_scan_work: usize,
-        retired_prelude_work: usize,
     ) {
         assert_eq!(validator.type_work.get(), 0);
         validator
             .validate_reserved_builtin_sources()
             .expect("the canonical reserved-source scan succeeds");
         assert_eq!(validator.type_work.get(), reserved_source_scan_work);
-        assert_eq!(retired_prelude_work, 0);
     }
 
     fn run_complete_module_validation_phases(
@@ -26150,9 +26148,7 @@ mod tests {
         // Every supplied module/source pair is visited before the canonical
         // global parameter record and row authentication.
         const RESERVED_SOURCE_SCAN_WORK: usize = 2;
-        const SCALAR_PREFLIGHT_AUTHENTICATION_WORK: usize = 0;
-        const CANONICAL_REGISTRY_RECORDS: usize =
-            RESERVED_SOURCE_SCAN_WORK + SCALAR_PREFLIGHT_AUTHENTICATION_WORK + R;
+        const CANONICAL_REGISTRY_RECORDS: usize = RESERVED_SOURCE_SCAN_WORK + R;
         const ROW_STRUCTURE: usize = 2 * S + 2 * R;
         // The seven stored envelopes contain 42 Type/binder-Kind cells:
         // 3 + 7 + 12 for the resolved value/function/scheme, 1 + 3 + 8 for
@@ -26210,11 +26206,7 @@ mod tests {
         let sources = linked_fixture_sources(&fixture);
         let prelude = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the canonical prelude fixture initializes");
-        assert_registry_prelude_work(
-            &prelude,
-            RESERVED_SOURCE_SCAN_WORK,
-            SCALAR_PREFLIGHT_AUTHENTICATION_WORK,
-        );
+        assert_registry_prelude_work(&prelude, RESERVED_SOURCE_SCAN_WORK);
         let terms = linked_validation_terms(&fixture.program);
         assert_eq!(
             terms,
@@ -26238,7 +26230,7 @@ mod tests {
         );
 
         let exact_work = EXPECTED.total();
-        assert_eq!(exact_work, 267);
+        assert_eq!(exact_work, 266);
         let mut exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the exact module/source relation is canonical");
         exact
@@ -30774,9 +30766,7 @@ mod tests {
         // every pair of Kind nodes. The reserved-source scan also visits
         // the one materialized nominal before binder authentication.
         const RESERVED_SOURCE_SCAN_WORK: usize = 1;
-        const SCALAR_PREFLIGHT_AUTHENTICATION_WORK: usize = 0;
-        const EXACT_WORK: usize =
-            RESERVED_SOURCE_SCAN_WORK + SCALAR_PREFLIGHT_AUTHENTICATION_WORK + KIND_NODES + 2;
+        const EXACT_WORK: usize = RESERVED_SOURCE_SCAN_WORK + KIND_NODES + 2;
 
         fn deep_kind() -> crate::types::Kind {
             let mut kind = crate::types::Kind::Type;
@@ -30860,11 +30850,7 @@ mod tests {
                 );
                 assert!(exact_program.registry.effects().is_empty());
                 let prelude = Validator::new(&exact_program, &[&file]);
-                assert_registry_prelude_work(
-                    &prelude,
-                    RESERVED_SOURCE_SCAN_WORK,
-                    SCALAR_PREFLIGHT_AUTHENTICATION_WORK,
-                );
+                assert_registry_prelude_work(&prelude, RESERVED_SOURCE_SCAN_WORK);
                 let exact = Validator::new(&exact_program, &[&file]);
                 exact
                     .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
@@ -32598,19 +32584,12 @@ mod tests {
         // independent of the conversion's parameter-width term.
         const VALIDATION_ENVELOPE_WORK: usize = 524; // complete structural/source metadata passes
         const RESERVED_SOURCE_SCAN_WORK: usize = 1;
-        const SCALAR_PREFLIGHT_AUTHENTICATION_WORK: usize = 0;
         assert_eq!(measured.module_sources.len(), RESERVED_SOURCE_SCAN_WORK);
         let prelude = Validator::new_modules(&measured.program, &sources, &measured.module_sources)
             .expect("the canonical conversion prelude initializes");
-        assert_registry_prelude_work(
-            &prelude,
-            RESERVED_SOURCE_SCAN_WORK,
-            SCALAR_PREFLIGHT_AUTHENTICATION_WORK,
-        );
-        const EXACT_WORK: usize = RESERVED_SOURCE_SCAN_WORK
-            + SCALAR_PREFLIGHT_AUTHENTICATION_WORK
-            + VALIDATION_ENVELOPE_WORK
-            + NEWTYPE_PARAMETER_WORK;
+        assert_registry_prelude_work(&prelude, RESERVED_SOURCE_SCAN_WORK);
+        const EXACT_WORK: usize =
+            RESERVED_SOURCE_SCAN_WORK + VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;
         assert_eq!(
             validator.newtype_conversion_parameter_work.get(),
             NEWTYPE_PARAMETER_WORK,

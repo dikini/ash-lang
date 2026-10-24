@@ -106,6 +106,39 @@ polymorphic recursive-initializer validation branch makes the two generic Cell
 acquisition cases pass; summary authentication and remaining failures are still
 under repair. This checkpoint is a draft, not an accepted delivery or Main gate.
 
+Ordinary row-work failures were traced to baseline append-only canonicalization
+that reuses its allocation. The corrected fault fixture reaches the actual
+canonical reserve; exact work, one-short and retry checks pass without adding
+phantom charges or changing production row behavior. The [focused record](evidence/slim-ffi-s2-row-work.md)
+pins baseline function/test excerpts and the observed result.
+
+The next draft repairs the ordinary capture/constructor summary closure and
+serializes residual Cell scope identities through the existing canonical image
+parameter inventory. Four Cell image tests pass, including missing, duplicate,
+wrong-owner/kind and unsealed scope-fact refusal independently of expected bytes.
+The restored capture scan, seven diamond/provenance cases, small-stack deep
+constructor comparison and exact combined-registry checks also pass. Seven
+retained integration suites passed 164 cases; their one obsolete counterfeit
+family diagnostic expectation was corrected to `ResourceBuiltinRequired` and
+passed separately. No ordinary escape or original-fact guard was relaxed.
+
+The no-symbol foreign binding path now skips constructing a checker registry,
+restoring the baseline paid classification and all-empty-effects return. This
+fixes two opaque-import budget controls and preserves the depth-32,768,
+256 KiB-stack admission test within its unchanged default limit. Actual foreign
+binding work/storage refusal retains the resource diagnostic; all short source
+resolution cutoffs and fresh exact retries pass for a passive void symbol.
+
+The relational driver receipt was stale before this transition: its October 4
+vector preceded the ordinary immutable global/implementation/constructor
+original checks retained on October 21. The five fixture files and seven
+ordinary comparison bodies match baseline `2766e826`; link work remains 149 and
+linked-evidence work 1,769. The refreshed cumulative boundary is 10,376, with
+exact success, one-short refusal before Core, retry and result `42` passing.
+This changes test accounting, not a production limit. The broader library and
+workspace gate, remaining retirement, S3 example/canary and final review remain
+pending; the checkpoint stays a draft.
+
 The removal preserves ordinary Cell execution and body-free generic resource
 metadata used by kind and import checking. Nonbuiltin provider execution used
 the retired foreign policy engine and now receives the existing unsupported

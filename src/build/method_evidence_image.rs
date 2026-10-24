@@ -941,7 +941,7 @@ pub(super) struct InterfaceIdentity {
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct InterfaceOwnerRecord {
-    id: InterfaceIdentity,
+    pub(super) id: InterfaceIdentity,
     pub(super) parameters: Slice,
 }
 #[derive(Clone, Copy, Debug)]

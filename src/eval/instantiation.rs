@@ -567,9 +567,11 @@ mod tests {
                 &mut TypeWorkBudget::unbounded(),
             )
             .unwrap();
+        // The replacement sorts before the source member, forcing the real
+        // canonicalization allocation rather than the append-only fast path.
         let source = IterativeTypeOwner::new(Type::function_computation(
             Type::Unit,
-            ComputationType::new(Type::Int, fault_row(parameter, 0)),
+            ComputationType::new(Type::Int, fault_row(parameter, 4)),
         ));
         let mut failures = Vec::new();
         for (site, skip) in [
@@ -588,7 +590,11 @@ mod tests {
             if !is_storage_failure(result) {
                 failures.push((site, skip));
             }
-            assert_eq!(row_reservation_fault::hits(), skip + 1);
+            assert_eq!(
+                row_reservation_fault::hits(),
+                skip + 1,
+                "{site:?} skip={skip}"
+            );
         }
         assert!(
             failures.is_empty(),

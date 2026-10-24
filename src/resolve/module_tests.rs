@@ -1267,15 +1267,24 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
     // Complete tagged arguments are traversed for structural determination,
     // rather than dropping their tag at the relationship boundary.
     const COMPLETE_ARGUMENT_WORK: usize = 15;
-    const EXACT_CONSTRAINT_WORK: usize =
-        PREDECESSOR_CONSTRAINT_WORK + RELATIONSHIP_WORK + COMPLETE_ARGUMENT_WORK;
+    // Original constructor and completed implementation publications are
+    // authenticated before relationship coverage. These retained ordinary
+    // checks contribute 44 constraint units independently of foreign policy.
+    const ORIGINAL_FACT_CONSTRAINT_WORK: usize = 44;
+    const EXACT_CONSTRAINT_WORK: usize = PREDECESSOR_CONSTRAINT_WORK
+        + RELATIONSHIP_WORK
+        + COMPLETE_ARGUMENT_WORK
+        + ORIGINAL_FACT_CONSTRAINT_WORK;
     // Canonical and inherited-role authentication retains every visit while
     // sharing four kind-table records and borrowing the two-ID method domain.
     // Complete function synthesis supplies its intrinsic Type without a pair walk.
     // List<X>'s XI installation also scans its one formal's owner kind.
     // Method callable-graph closure adds 27 paid visits even though this
     // fixture's retained types contain no effect identity.
-    const EXACT_TYPE_WORK: usize = 104 + 1 + 27;
+    // Original constructor matching and the implementation's immutable capture
+    // comparison contribute another 30 type-work units before this boundary.
+    const ORIGINAL_FACT_TYPE_WORK: usize = 30;
+    const EXACT_TYPE_WORK: usize = 104 + 1 + 27 + ORIGINAL_FACT_TYPE_WORK;
     assert_eq!(
         (measured_constraint.used(), measured_type.used()),
         (EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK),
@@ -1607,7 +1616,7 @@ fn public_admission_rejects_one_short_constructor_closure_without_publishing_out
             )
             .expect("the complete body-free constructor closure should resolve");
             let exact_work = measured.used();
-            assert!(exact_work <= TYPE_WORK_LIMIT);
+            assert!(exact_work <= TYPE_WORK_LIMIT, "{exact_work}");
             drop(measured_module);
 
             let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
@@ -1788,7 +1797,11 @@ fn diamond_routes_require_complete_fact_agreement_before_route_mutation() {
                     &mut TypeWorkBudget::default(),
                     &mut crate::interface::InterfaceConstraintBudget::default(),
                 )
-                .expect("the coherent alternate route must authenticate independently");
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "alternate {mutation:?} must authenticate (reverse={reverse}): {error:?}"
+                    )
+                });
             let conflicting = if reverse {
                 [&right_summary, &left_summary]
             } else {
@@ -1885,7 +1898,7 @@ fn hidden_diamond_facts_require_complete_provenance_agreement_in_dependency_orde
                     &mut TypeWorkBudget::default(),
                     &mut crate::interface::InterfaceConstraintBudget::default(),
                 )
-                .expect("the coherent hidden route must authenticate independently");
+                .unwrap_or_else(|error| panic!("hidden alternate {mutation:?} must authenticate (reverse={reverse}): {error:?}"));
             let importer = module_named(&graph, "entry.ash");
             let summaries = if reverse {
                 [&right_summary, &left_summary]
@@ -2054,6 +2067,70 @@ fn targeted_constructor_diamond_authenticates_its_hidden_owner_before_deduplicat
         assert_eq!(error.reason, ResolveReason::InternalState);
         let second_import = importer.dependencies()[1].import_span();
         assert_eq!(error.primary.span().source(), second_import.source());
+    }
+}
+
+#[test]
+fn duplicate_constructor_payload_routes_compare_foreign_nominal_provenance() {
+    for reverse in [false, true] {
+        let tree = TempTree::create();
+        let first = if reverse { "right" } else { "left" };
+        let second = if reverse { "left" } else { "right" };
+        let entry =
+            format!("import {first} (Wrap as FirstWrap)\nimport {second} (Wrap as SecondWrap)\n",);
+        let graph = load(
+            &tree,
+            &entry,
+            &[
+                ("left.ash", "pub import base (Container, Wrap)\n"),
+                ("right.ash", "pub import base (Container, Wrap)\n"),
+                (
+                    "base.ash",
+                    "type Secret = Secret\n\npub type Container = Wrap(Secret)\n",
+                ),
+            ],
+        );
+        let base = module_named(&graph, "base.ash");
+        let base_summary = check_module(
+            resolve_module(base, &[]).expect("the constructor-payload base should resolve"),
+        )
+        .expect("the constructor-payload base should check")
+        .into_exports();
+        let left = module_named(&graph, "left.ash");
+        let left_summary = check_module(
+            resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+        )
+        .expect("the left facade should check")
+        .into_exports();
+        let right = module_named(&graph, "right.ash");
+        let mut right_summary = check_module(
+            resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+        )
+        .expect("the right facade should check")
+        .into_exports();
+        assert!(right_summary.corrupt_hidden_diamond_fact_for_test(
+            SummaryHiddenDiamondMutationForTest::NominalOrigin,
+        ));
+        right_summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the coherent foreign-payload closure should authenticate independently");
+
+        let importer = module_named(&graph, "entry.ash");
+        let summaries = if reverse {
+            [&right_summary, &left_summary]
+        } else {
+            [&left_summary, &right_summary]
+        };
+        let error = resolve_with(importer, &summaries)
+            .expect_err("duplicate constructors should compare foreign payload nominal provenance");
+        assert_eq!(error.reason, ResolveReason::InternalState);
+        assert_eq!(
+            error.primary.span().source(),
+            importer.dependencies()[1].import_span().source(),
+        );
     }
 }
 

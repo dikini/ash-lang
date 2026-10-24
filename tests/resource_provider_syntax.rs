@@ -28,18 +28,6 @@ fn provider_declaration_reuses_type_effect_and_handler_syntax() {
 }
 
 #[test]
-fn resource_type_instance_can_appear_in_nested_expression_positions() {
-    let source = SourceFile::new("client.ash", "main : Unit -> Int\nmain () = resource Sqlite.Connection<C> db = config {\nresource Sqlite.Statement<S> stmt = (db, sql) {\n42\n}\n}\n").unwrap();
-    let tree = parse(lex(&source).unwrap());
-    assert!(
-        tree.parse_diagnostics().is_empty(),
-        "{:?}",
-        tree.parse_diagnostics()
-    );
-    assert!(project_module(&source, &tree).is_ok());
-}
-
-#[test]
 fn missing_and_duplicate_provider_fields_are_rejected() {
     for source_text in [
         DEFINITION.replace("input OpenConfig\n", ""),
@@ -49,35 +37,6 @@ fn missing_and_duplicate_provider_fields_are_rejected() {
         let tree = parse(lex(&source).unwrap());
         assert!(!tree.parse_diagnostics().is_empty());
         assert!(project_module(&source, &tree).is_err());
-    }
-}
-
-#[test]
-fn resource_instances_parse_complete_written_arguments_before_definition_selection() {
-    for arguments in ["", "C,", "{| Delta},"] {
-        let source = SourceFile::new("bad-instance.ash", format!("main : Unit -> Int\nmain () = resource Lib.Connection<{arguments}> db = 0 {{\n    42\n}}\n")).unwrap();
-        let tree = parse(lex(&source).unwrap());
-        assert!(!tree.parse_diagnostics().is_empty(), "{arguments}");
-        assert!(project_module(&source, &tree).is_err());
-    }
-    for arguments in [
-        "C, D",
-        "C, Int, { | Delta }",
-        "Int",
-        "C -> C",
-        "{| Delta}, C",
-    ] {
-        let source = SourceFile::new(
-            "retained-instance.ash",
-            format!("main : Unit -> Int\nmain () = resource Lib.Connection<{arguments}> db = 0 {{\n    42\n}}\n"),
-        ).unwrap();
-        let tree = parse(lex(&source).unwrap());
-        assert!(
-            tree.parse_diagnostics().is_empty(),
-            "{arguments}: {:?}",
-            tree.parse_diagnostics()
-        );
-        assert!(project_module(&source, &tree).is_ok());
     }
 }
 

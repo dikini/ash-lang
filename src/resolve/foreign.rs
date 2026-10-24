@@ -195,14 +195,33 @@ impl Resolver {
         declarations: &mut ResolvedDeclarations,
         _dependencies: &[DependencyExports<'_>],
     ) -> Result<(), ResolveError> {
+        self.type_work.charge(prepared.len()).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                surface.span,
+                "foreign symbol inventory classification exceeded its work budget",
+            )
+        })?;
+        if prepared.iter().all(|library| library.effects.is_empty()) {
+            return Ok(());
+        }
         let checking_registry = declarations
             .registry
             .checker_view(&self.imported, &mut self.type_work)
-            .map_err(|_| {
+            .map_err(|failure| {
+                let reason = match failure {
+                    crate::resolved::ResolvedBuildFailure::TypeResource => {
+                        ResolveReason::TypeResourceExhausted
+                    }
+                    crate::resolved::ResolvedBuildFailure::ConstraintResource => {
+                        ResolveReason::ConstraintResourceExhausted
+                    }
+                    _ => ResolveReason::InternalState,
+                };
                 error(
-                    ResolveReason::InternalState,
+                    reason,
                     surface.span,
-                    "foreign checking registry is inconsistent",
+                    "foreign checking registry could not be prepared",
                 )
             })?;
         let mut symbols = Vec::new();
@@ -231,11 +250,22 @@ impl Resolver {
                     &mut self.type_work,
                 )
                 .map_err(|failure| {
-                    error(
-                        ResolveReason::ForeignContract,
-                        failure.span(),
-                        &failure.to_string(),
-                    )
+                    if matches!(failure.reason(),
+                        crate::foreign::checked_source::ForeignAdmissionReason::WorkExhausted
+                        | crate::foreign::checked_source::ForeignAdmissionReason::StorageRefused)
+                    {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            failure.span(),
+                            "foreign symbol binding exceeded its work budget",
+                        )
+                    } else {
+                        error(
+                            ResolveReason::ForeignContract,
+                            failure.span(),
+                            &failure.to_string(),
+                        )
+                    }
                 })?;
                 symbols.try_reserve(1).map_err(|_| {
                     error(
@@ -258,12 +288,17 @@ impl Resolver {
             declarations.effects[index].native_contract = Some(Arc::clone(&symbol));
             registry
                 .retain_native_symbol(symbol, &mut self.type_work)
-                .map_err(|_| {
-                    error(
-                        ResolveReason::InternalState,
-                        surface.span,
-                        "could not retain foreign operation",
-                    )
+                .map_err(|failure| {
+                    let reason = match failure {
+                        crate::resolved::ResolvedBuildFailure::TypeResource => {
+                            ResolveReason::TypeResourceExhausted
+                        }
+                        crate::resolved::ResolvedBuildFailure::ConstraintResource => {
+                            ResolveReason::ConstraintResourceExhausted
+                        }
+                        _ => ResolveReason::InternalState,
+                    };
+                    error(reason, surface.span, "could not retain foreign operation")
                 })?;
         }
         Ok(())

@@ -101,3 +101,44 @@ fn generic_cell_reuses_named_resource_grammar_and_primary_initializer() {
     }
     assert!(!parses("resource Cell.Cell<R, Int> c = make () {\n42\n}"));
 }
+
+#[test]
+fn named_cell_acquisitions_can_nest_in_expression_positions() {
+    let source = SourceFile::new("client.ash", "main : Unit -> Int\nmain () = resource Cell.Cell<C, Int> outer = config {\nresource Cell.Cell<S, Int> inner = (read outer) {\n42\n}\n}\n").unwrap();
+    let tree = parse(lex(&source).unwrap());
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    assert!(project_module(&source, &tree).is_ok());
+}
+
+#[test]
+fn named_cell_arguments_parse_completely_before_family_resolution() {
+    for arguments in ["", "C,", "{| Delta},"] {
+        let source = SourceFile::new("bad-instance.ash", format!("main : Unit -> Int\nmain () = resource Cell.Cell<{arguments}> db = 0 {{\n    42\n}}\n")).unwrap();
+        let tree = parse(lex(&source).unwrap());
+        assert!(!tree.parse_diagnostics().is_empty(), "{arguments}");
+        assert!(project_module(&source, &tree).is_err());
+    }
+    for arguments in [
+        "C, D",
+        "C, Int, { | Delta }",
+        "Int",
+        "C -> C",
+        "{| Delta}, C",
+    ] {
+        let source = SourceFile::new(
+            "retained-instance.ash",
+            format!("main : Unit -> Int\nmain () = resource Cell.Cell<{arguments}> db = 0 {{\n    42\n}}\n"),
+        ).unwrap();
+        let tree = parse(lex(&source).unwrap());
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{arguments}: {:?}",
+            tree.parse_diagnostics()
+        );
+        assert!(project_module(&source, &tree).is_ok());
+    }
+}
