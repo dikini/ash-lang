@@ -1,0 +1,2408 @@
+{
+  "status": "FOCUSED_PREPARATION_GATES_PASS_NO_OUTPUT_EXECUTION_NO_FCORE_ACCEPTANCE",
+  "tested_source": "531e76778e438b26dafdee63a5d05af7aec2997b",
+  "tested_tree": "3fc3ccc83382ee48382707b5d195d5887ebedca3",
+  "base_retained_PR126": "8f0c5f46c6e43ddf9efe7117f2a01eab92694cf5",
+  "new_docs_only_base_reconciliation_pending": "52d4e122b7330cf29b7283bd4f5696704e64d4aa",
+  "scope": "Portable unconfigured static launcher preparation and external complete closure DATA assembly only",
+  "counts": {
+    "distinct_passing_tests": 36,
+    "passing_occurrences": 38,
+    "historical_native_build_ignored": 2,
+    "actual_compile_only_selected": 3,
+    "full_workspace_gate": false
+  },
+  "ordinary": {
+    "head": "4e13cbba680accf5981b78e640eb4d9c4a8af38b",
+    "cases": [
+      {
+        "name": "external-api-refreshed",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--test",
+          "checked_closure_assembly_api",
+          "--",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 2.563,
+        "log": "/tmp/ash-native-prep-external-api-refreshed.log",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "name": "checked_root_environment",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "build::checked_root_environment::tests::",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 0.2,
+        "log": "/tmp/ash-native-prep-checked_root_environment.log",
+        "summaries": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2327 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "name": "checked_request",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "build::checked_request::tests::",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 8.417,
+        "log": "/tmp/ash-native-prep-checked_request.log",
+        "summaries": [
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2325 filtered out; finished in 8.19s"
+        ]
+      },
+      {
+        "name": "checked_root_project",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "build::checked_root_project::tests::",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 0.164,
+        "log": "/tmp/ash-native-prep-checked_root_project.log",
+        "summaries": [
+          "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2326 filtered out; finished in 0.02s"
+        ]
+      },
+      {
+        "name": "checked_root_identity",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "build::checked_root_identity::tests::",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 0.146,
+        "log": "/tmp/ash-native-prep-checked_root_identity.log",
+        "summaries": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2329 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "name": "checked_link",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "build::checked_link::tests::",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 1.811,
+        "log": "/tmp/ash-native-prep-checked_link.log",
+        "summaries": [
+          "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2323 filtered out; finished in 1.67s"
+        ]
+      },
+      {
+        "name": "checked_native_build",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "build::checked_native_build::tests::",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 1.907,
+        "log": "/tmp/ash-native-prep-checked_native_build.log",
+        "summaries": [
+          "test result: ok. 3 passed; 0 failed; 2 ignored; 0 measured; 2325 filtered out; finished in 1.67s"
+        ]
+      },
+      {
+        "name": "checked_receipt",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "build::checked_receipt::tests::",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 1.381,
+        "log": "/tmp/ash-native-prep-checked_receipt.log",
+        "summaries": [
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 2322 filtered out; finished in 1.12s"
+        ]
+      },
+      {
+        "name": "clippy",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "--tests",
+          "--",
+          "-D",
+          "clippy::correctness",
+          "-D",
+          "clippy::suspicious"
+        ],
+        "exit": 0,
+        "seconds": 161.385,
+        "log": "/tmp/ash-native-prep-clippy.log",
+        "summaries": []
+      }
+    ],
+    "status": "ordinary_terminal_pass",
+    "no_native_output_execution": true
+  },
+  "test_only_delta_refresh": {
+    "head": "531e76778e438b26dafdee63a5d05af7aec2997b",
+    "cases": [
+      {
+        "name": "external-api-final",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--test",
+          "checked_closure_assembly_api",
+          "--",
+          "--nocapture"
+        ],
+        "exit": 0,
+        "seconds": 1.81,
+        "log": "/tmp/ash-native-prep-external-api-final.log"
+      },
+      {
+        "name": "clippy-final",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--offline",
+          "--locked",
+          "-p",
+          "ash",
+          "--lib",
+          "--tests",
+          "--",
+          "-D",
+          "clippy::correctness",
+          "-D",
+          "clippy::suspicious"
+        ],
+        "exit": 0,
+        "seconds": 0.87,
+        "log": "/tmp/ash-native-prep-clippy-final.log"
+      }
+    ]
+  },
+  "compile_only": [
+    {
+      "label": "launcher",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "ash",
+        "--lib",
+        "build::checked_root_build::tests::genuine_fixed_launcher_compile_link_has_separate_provenance_without_startup",
+        "--",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit": 0,
+      "test_seconds": 179.6,
+      "log": "/tmp/ash-native-prep-launcher-compile.log",
+      "log_sha256": "beff450aca495c5c0e4adf553b4b9b7a1ba66a7bbb5c72757a8812cfbacf676d",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2329 filtered out; finished in 179.60s"
+    },
+    {
+      "label": "four-role",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "ash",
+        "--lib",
+        "build::checked_root_build::tests::genuine_root_and_leaf_compile_link_matches_receipt_without_startup",
+        "--",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit": 0,
+      "test_seconds": 405.08,
+      "log": "/tmp/ash-native-prep-four-role-compile.log",
+      "log_sha256": "62e64c1b67018aab0c28b2ea1c3c2f7b3bac376fae28dcacdf90f546de4e0957",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2329 filtered out; finished in 405.08s"
+    },
+    {
+      "label": "status",
+      "argv": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "ash",
+        "--lib",
+        "build::checked_root_build::tests::genuine_output_status_root_and_leaf_compile_link_matches_receipt_without_startup",
+        "--",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit": 0,
+      "test_seconds": 246.89,
+      "log": "/tmp/ash-native-prep-status-compile.log",
+      "log_sha256": "73fa313920616e7f2f38c698d294215bce1d091e09cd7cea56552bc7b62960d0",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2329 filtered out; finished in 246.89s"
+    }
+  ],
+  "cleanup_unit": {
+    "exit": 0,
+    "log": "/tmp/ash-native-prep-cleanup-unit.log",
+    "sha256": "90f566feea966ec9515920ddabdbeae5e12eded353d7e06c72899f97d1d5dfc6",
+    "summary": "1 passed; 0 failed; 0 ignored"
+  },
+  "command_environment": {
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "offline_locked": true,
+    "profile": "ordinary dev/debug; no extra cache or raised control limits"
+  },
+  "format_scope": "New external integration test rustfmt check passes; preexisting compact formatting in touched modules remains qualified baseline, not whole-workspace format pass.",
+  "clippy_scope": "Ash --lib --tests; configured correctness/suspicious denied; exits0. Final external test complexity warning removed; existing unused/dead-code warnings remain.",
+  "source_tools_configuration_readback": "250-source slice plus316 actual/explicit dependency inputs equal frozen commit/current bytes; seven tool digests and closed Cargo config bytes equal before/after. Build-script output associations preserved; this is not a complete transitive tool/runtime proof.",
+  "cache_scope": "Generated leaf source/BuildData, actual Cargo-relative dep-info and retained rlib/rmeta were joined to observed link-input bytes. Cache reuse is explicit; no fresh/cold leaf compilation claim. Four-role shared cache pathname was overwritten by subsequent status build; pre-overwrite copies remain preserved.",
+  "four_role_transient_inputs": 18,
+  "transient_scope": "These inputs were observed by the trusted linker before cleanup; they are not independently present now.",
+  "ignored": [
+    {
+      "selector": "build::checked_native_build::tests::native_build_actual_helper_header_abi_and_changed_input_refusals",
+      "state": "IGNORED_NOT_RUN",
+      "reason": "Separate historical explicit helper/header compile-query control. This assignment ran generated four-role/status actual NativeBuild ABI/header/archive and missing-release paths. Standalone broader donor coverage remains for a separately assigned native-build profile change/checkpoint."
+    },
+    {
+      "selector": "build::checked_native_build::tests::native_build_actual_static_receipt_and_independent_provenance",
+      "state": "IGNORED_NOT_RUN",
+      "reason": "Separate historical static-host compile-link observation. This assignment instead ran actual generated launcher/four-role/status roots and complete-request donors; no extra historical host image was built. Root owns any later standalone coverage assignment."
+    }
+  ],
+  "artifacts": {
+    "source_head": "531e76778e438b26dafdee63a5d05af7aec2997b",
+    "earlier_250_slice_equal": true,
+    "actual_316_dependency_readback_equal": true,
+    "seven_tools_equal": true,
+    "closed_cargo_configurations": [
+      {
+        "path": "/home/dikini/.cargo/config.toml",
+        "bytes": 63,
+        "sha256": "13ed130670278614272c1fca1af627d4e427b8d306cd530a96f0d7555dbcd6a5",
+        "equals_before": true
+      },
+      {
+        "path": "/home/dikini/Projects/ash-lang/.cargo/config.toml",
+        "bytes": 59,
+        "sha256": "c7d5610250d3bfb8f5060e4339a45ff53a7dec34d77af83573926761f58bc0be",
+        "equals_before": true
+      },
+      {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/.cargo/config.toml",
+        "bytes": 82,
+        "sha256": "2eb887744ac35113f513a449e09d637cf4ae0e08e8361bd7b3401e41e37051f9",
+        "equals_before": true
+      }
+    ],
+    "cases": [
+      {
+        "label": "launcher",
+        "directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230",
+        "image": {
+          "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/ash-checked-launcher",
+          "bytes": 50692656,
+          "sha256": "12ea5528288ecddabf079f9ccd8b89a6e37a1ed337da39f55f79d10fe8e62fd4"
+        },
+        "elf_type": 2,
+        "machine": 62,
+        "program_headers": 12,
+        "never_executed": true,
+        "lifecycles": [
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/launcher-clean/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "45cc5b358a089f1346e276ac4837976d1ab8ffd4903a5d1f4dac2cea46745045"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 124,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/cargo-0/cargo.lifecycle.json",
+              "bytes": 104,
+              "sha256": "22605e85bb2b532eab46a4cb933c94eb16e42bc6e1988dcde4af382e28e95ee6"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 24,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          }
+        ],
+        "file_inventory": [
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/ash-checked-launcher",
+            "bytes": 50692656,
+            "sha256": "12ea5528288ecddabf079f9ccd8b89a6e37a1ed337da39f55f79d10fe8e62fd4"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/cargo-0/cargo.lifecycle.json",
+            "bytes": 104,
+            "sha256": "22605e85bb2b532eab46a4cb933c94eb16e42bc6e1988dcde4af382e28e95ee6"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/cargo-0/cargo.stderr",
+            "bytes": 27806,
+            "sha256": "098e094ac505da513d68143fc5bfeb7df7bec5120970ea170823a830e5a1e4e2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/cargo-0/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/invocation.json",
+            "bytes": 17033,
+            "sha256": "38c7c756a1e03b5fc1ac747a8e9b1aa84e0e4729e73e544336f680ba355a64f8"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/limits.json",
+            "bytes": 226,
+            "sha256": "e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/link.map",
+            "bytes": 78041540,
+            "sha256": "43de1b4cd2b4603df0a046588bced43e86c888c8ec9399eb307bb7dab3cab22f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/link.stderr",
+            "bytes": 15025,
+            "sha256": "47459717c9484ed7c43d33a34430836962e0a5a7dfcac2096d819427e239821e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/observer.py",
+            "bytes": 19565,
+            "sha256": "c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/output.json",
+            "bytes": 148,
+            "sha256": "2d28578f20d8d0b659e0404666a936a6e5c0576bf7e17dbce46eff308b95a083"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/record.json",
+            "bytes": 84588,
+            "sha256": "32a6790e4f5689fca19afbcd33f00f7a982f95b092f72d034c4e9454a922d38b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/selected-bfd/invocation.json",
+            "bytes": 10406,
+            "sha256": "f3b87e2f2e526d4d708fbd813d8650851667967016446eab61f6149a8b04aa75"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/selected-bfd/ld.bfd",
+            "bytes": 4194,
+            "sha256": "46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/selected-bfd/tool.json",
+            "bytes": 772,
+            "sha256": "0f03c1d645eefebd4337b70ab4494479223e64267bc718391f7c6e87717e7e01"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/launcher-build.log",
+            "bytes": 27844,
+            "sha256": "7c40a53fb7d2ba5dd41d09bb864f27569d8d83e53166cae3027839a1aaa4d512"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/launcher-clean/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "45cc5b358a089f1346e276ac4837976d1ab8ffd4903a5d1f4dac2cea46745045"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/launcher-clean/cargo.stderr",
+            "bytes": 38,
+            "sha256": "2587d7fde73e6532bab687ca11ab933dff043932bd150352fc6c750546f349c8"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/launcher-clean/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/launcher-configuration.json",
+            "bytes": 4185,
+            "sha256": "e7002975c082227ba0e314d1355831647c1397075f3d638223cb3d60e115472e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/launcher-provenance.json",
+            "bytes": 100780,
+            "sha256": "b9134e250220b311bc60d6a260df279aa38043143bcb183350781278dfbf3716"
+          }
+        ]
+      },
+      {
+        "label": "four-role",
+        "directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797",
+        "image": {
+          "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/program",
+          "bytes": 100725544,
+          "sha256": "3a895b183543a705c927fa4bdd4ec63d0568d978c7f0327b13f62280f96efb1e"
+        },
+        "elf_type": 2,
+        "machine": 62,
+        "program_headers": 12,
+        "never_executed": true,
+        "lifecycles": [
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/lock-cargo/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "104e19fb02d0a9f2918ac294915c5e5a41ec41ef5f94e77fa3157394dcb4a6f9"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 312,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/cargo-1/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "bf302c0c544f12059b91ed6e7ae579e79c199212cca0208d34f59541f714a687"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 410,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/cargo-0/cargo.lifecycle.json",
+              "bytes": 109,
+              "sha256": "f7db4a6f57b76fe10d1919f51d1f56a379c4ebf5eb6766b1a4c83cc8008300bf"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 322,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(25856)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/lock-cargo/cargo.lifecycle.json",
+              "bytes": 104,
+              "sha256": "2f581f6821355cefe760d7303f9ea17ad8b44e9334f5c5120a78776fa95596d0"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 90,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/cargo-1/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "37f14e3c741c8cce81e7ce2c89bcd4912928c892e37c557ea540cb162043ac49"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 227,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/cargo-0/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "be6cc77bb15decd034d5633ae9c0ced9d768f5de1d6240ee0103a2b04f1b08fc"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 100,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          }
+        ],
+        "file_inventory": [
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/abi.c",
+            "bytes": 802,
+            "sha256": "109df7581c2dffeae7738f2cc6583c291fe100abdf9582e8c7924a23ae4fd91c"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/actual-0.d",
+            "bytes": 1504,
+            "sha256": "edfe843cd89ef6db7110b3d8674ca9ca47b858459c19c58af76ef1397c89c5c2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/actual-1.d",
+            "bytes": 1367,
+            "sha256": "c2d7dde4b5f6ea07accfec02462614a31614eed15600a8095f1d436c2d44dffb"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-0.lifecycle.json",
+            "bytes": 83,
+            "sha256": "ce49b55ef73103a5f546ef15dc7bd6af133b0f748376ba5f9c527beef7abc6d6"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-0.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-0.stdout",
+            "bytes": 17,
+            "sha256": "08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-1.lifecycle.json",
+            "bytes": 83,
+            "sha256": "32a462772c17edddcae0d1953ba6ed18ade687e74a25f9fe0ea08901fcf17858"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-1.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-1.stdout",
+            "bytes": 7,
+            "sha256": "a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-10.lifecycle.json",
+            "bytes": 83,
+            "sha256": "79bd2156aa7a367d0e4f621e89b84efe72f70c0e155ef26603898997992fa2d7"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-10.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-10.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-11.lifecycle.json",
+            "bytes": 83,
+            "sha256": "92650d2d8776486e2b7ca70a3f63cfc5e3b4b752141a85e9adc12b64d0504fc5"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-11.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-11.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-2.lifecycle.json",
+            "bytes": 83,
+            "sha256": "37ed468a62a87341a441e4a073ba6a3184b90282a7b7f84fb02200ac2a70081f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-2.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-2.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-3.lifecycle.json",
+            "bytes": 83,
+            "sha256": "d46875e68c45f39a97bfb0b649a44a6a2c3d6c089d45c841b9ff40b87d664ec3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-3.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-3.stdout",
+            "bytes": 1194,
+            "sha256": "46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-4.lifecycle.json",
+            "bytes": 83,
+            "sha256": "9328a2ac9e9b26d150aad5bc97276c2117b2ec46b2b61876805402f9f2c1f308"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-4.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-4.stdout",
+            "bytes": 11345,
+            "sha256": "f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-5.lifecycle.json",
+            "bytes": 83,
+            "sha256": "26c887760f7364cdd582a1cb033adee5ea2162e4e3170788ccb87caca4a90274"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-5.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-5.stdout",
+            "bytes": 41,
+            "sha256": "2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-6.lifecycle.json",
+            "bytes": 83,
+            "sha256": "d53b419b4ae3f30ad1baa23520c93b526ab06e0162857a745e87c17a49eaff48"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-6.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-6.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-7.lifecycle.json",
+            "bytes": 83,
+            "sha256": "309693e551684adfc4475e0b8ffd27831455ee147bc35b83dca517a2080d3655"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-7.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-7.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-8.lifecycle.json",
+            "bytes": 83,
+            "sha256": "98332c32f17b3e5e8579a877479a2e61b8a49d9be80344bd83f62e90ac6b3250"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-8.stderr",
+            "bytes": 4213,
+            "sha256": "a86b73db639dadac64a87a264b7136c8ed65b65867238ce2f9bd73bc60e52efb"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-8.stdout",
+            "bytes": 28630,
+            "sha256": "08996ce5edb32d9ee396c830780e26fa507b16617c2689e71013dfa8ef0d8393"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-9.lifecycle.json",
+            "bytes": 83,
+            "sha256": "41afcba4768f6873e9292a070c792b6894a3ce9ad59bdb5ab09ed01f8c0ad75f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-9.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/command-9.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/discover-0.d",
+            "bytes": 1504,
+            "sha256": "edfe843cd89ef6db7110b3d8674ca9ca47b858459c19c58af76ef1397c89c5c2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/discover-1.d",
+            "bytes": 1367,
+            "sha256": "c2d7dde4b5f6ea07accfec02462614a31614eed15600a8095f1d436c2d44dffb"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/helper.c",
+            "bytes": 851,
+            "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/helper.o",
+            "bytes": 2128,
+            "sha256": "1ec0835d19205b3183d47ef2d6bada5f89d511b6a4f77c5053c4218d3d8cfb92"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/libchecked-owner.a",
+            "bytes": 2376,
+            "sha256": "e05aae49579f3f204cb7dc01b35148b9554af7e317fd5e5fa9bf65dd7800fc41"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/inputs/native-22-0/owner.h",
+            "bytes": 333,
+            "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/abi.c",
+            "bytes": 802,
+            "sha256": "109df7581c2dffeae7738f2cc6583c291fe100abdf9582e8c7924a23ae4fd91c"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/actual-0.d",
+            "bytes": 1552,
+            "sha256": "3b1b13ce46d8d43770ca01a92d047036e6f53e8a0019d87628ffb0b1bfc96cdd"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/actual-1.d",
+            "bytes": 1399,
+            "sha256": "87048c6ef8e8d5ff6210caf961d6fe5d0a3fcddcb44b4e62395c299682b6b3f1"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-0.lifecycle.json",
+            "bytes": 84,
+            "sha256": "00b080615727e65444cd21655fb90b4d1a74f5a646f4920fab17b64cf68c62e3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-0.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-0.stdout",
+            "bytes": 17,
+            "sha256": "08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-1.lifecycle.json",
+            "bytes": 84,
+            "sha256": "bd4c428a67d7cb18c77698d43ab081450f590b859548d016375e4b2d66d35bdb"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-1.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-1.stdout",
+            "bytes": 7,
+            "sha256": "a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-10.lifecycle.json",
+            "bytes": 84,
+            "sha256": "9a6666c6c26cbdcf396a6d2c53a1b007e2e68e447555be01f7c907c29c35c99a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-10.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-10.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-11.lifecycle.json",
+            "bytes": 84,
+            "sha256": "270dd4ab0e0aaec97f5df67d8cf472bca518345984cc2834548e09dc87ee1989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-11.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-11.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-2.lifecycle.json",
+            "bytes": 84,
+            "sha256": "d48cf49656ce9e122911e3c7d598be5ce5f6dc8d1f066f63bde2a8c6b22c6f2b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-2.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-2.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-3.lifecycle.json",
+            "bytes": 84,
+            "sha256": "5422aadfb697f872439a78d22774ca8ccde21e7fc159bc65138a2d916b41503a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-3.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-3.stdout",
+            "bytes": 1194,
+            "sha256": "46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-4.lifecycle.json",
+            "bytes": 84,
+            "sha256": "c5a6cf8e96459161fe4c33f3169cc2ee6936000eac68d917c735a624fedfa347"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-4.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-4.stdout",
+            "bytes": 11345,
+            "sha256": "f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-5.lifecycle.json",
+            "bytes": 84,
+            "sha256": "f2641a01c4650079996df33138f9eaec1589ea2da665f0b408439ef13399f5b3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-5.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-5.stdout",
+            "bytes": 41,
+            "sha256": "2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-6.lifecycle.json",
+            "bytes": 84,
+            "sha256": "3944261651558075a3fd46d7823b74f27994dcc245d7db924bad4009979ddb5e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-6.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-6.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-7.lifecycle.json",
+            "bytes": 84,
+            "sha256": "384ef61e31da7bbf78958d1b9e832088383de95405ddbc8729afbaf46bf038d6"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-7.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-7.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-8.lifecycle.json",
+            "bytes": 84,
+            "sha256": "dc9a0a680880a6d5a61490aa38d9ccb4f973de91fdcea2448f9f784c50889054"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-8.stderr",
+            "bytes": 4341,
+            "sha256": "811075679eff27e6531c3f9ecc31186a5fa25bcb6e334509df9b85160b3157bf"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-8.stdout",
+            "bytes": 28630,
+            "sha256": "08996ce5edb32d9ee396c830780e26fa507b16617c2689e71013dfa8ef0d8393"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-9.lifecycle.json",
+            "bytes": 84,
+            "sha256": "46bd62a3a3f9de0986ba926d0da9faec316b8b7901cb5056c2da89ecdac5a9a5"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-9.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/command-9.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/discover-0.d",
+            "bytes": 1552,
+            "sha256": "3b1b13ce46d8d43770ca01a92d047036e6f53e8a0019d87628ffb0b1bfc96cdd"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/discover-1.d",
+            "bytes": 1399,
+            "sha256": "87048c6ef8e8d5ff6210caf961d6fe5d0a3fcddcb44b4e62395c299682b6b3f1"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/helper.c",
+            "bytes": 859,
+            "sha256": "0f77fce79cbc09bf16dd3cb8af1ad3307790ea5f4cb3e241371ce1531dc40393"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/helper.o",
+            "bytes": 2136,
+            "sha256": "2e8526a51e64507ae288f1f92ea47d3537ba39a0af3a596e387834f51f1c5fe0"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/libchecked-owner.a",
+            "bytes": 2392,
+            "sha256": "c9058f8daa746649aec2b46d06b75b8bb3d4ee0d8794c5f89a41518e781d0b4b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/inputs/native-22-1/owner.h",
+            "bytes": 333,
+            "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/owner.c",
+            "bytes": 859,
+            "sha256": "0f77fce79cbc09bf16dd3cb8af1ad3307790ea5f4cb3e241371ce1531dc40393"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/owner.h",
+            "bytes": 333,
+            "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/Cargo.lock",
+            "bytes": 10485,
+            "sha256": "979dc8fc06ed99565ab152bd273cadc5521ff28d2ba19ece2fdeaaecb85cfec2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/Cargo.toml",
+            "bytes": 999,
+            "sha256": "ad30fe2e446437acfddf82e4c41aa737cf9671bfc06a609c53b72c7062e6780e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/build.rs",
+            "bytes": 12318,
+            "sha256": "c6d29317f134dd66b4e98ad9a440456434fec16ca8fa5d5d7359a50ba1f01989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/cargo-0/cargo.lifecycle.json",
+            "bytes": 109,
+            "sha256": "f7db4a6f57b76fe10d1919f51d1f56a379c4ebf5eb6766b1a4c83cc8008300bf"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/cargo-0/cargo.stderr",
+            "bytes": 41892,
+            "sha256": "73967b9fcb5bcecc8ef0cb8415ca504c44aa497e318bf6e44d22741a5eb6e8f3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/cargo-0/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/cargo-1/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "bf302c0c544f12059b91ed6e7ae579e79c199212cca0208d34f59541f714a687"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/cargo-1/cargo.stderr",
+            "bytes": 38,
+            "sha256": "dcbc1fc33fab9afa9f8cccd7fd0545b6c682040a473e3038dcbe7a5ebed50b15"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/cargo-1/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/invocation.json",
+            "bytes": 23491,
+            "sha256": "fd5d59ade8bc53c654a6c29b343084a5841e27cf5a9e3dad04ed6749810e9c50"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/limits.json",
+            "bytes": 226,
+            "sha256": "e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/link.stderr",
+            "bytes": 18022,
+            "sha256": "7f5b6e4d67746c6a4d327aaaa06978ad65a7696d8ae7e02707259b92aabc5a96"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/observer.py",
+            "bytes": 19565,
+            "sha256": "c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/output.json",
+            "bytes": 150,
+            "sha256": "ca43320f8461b06d74f6f319e4f6dc63628cc9d425000b2e4ddcd87985f953a2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/selected-bfd/invocation.json",
+            "bytes": 13688,
+            "sha256": "2949129a035517ae5f41c1e3f975dbd568ef3b98d5c855b2030ed137d9831626"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/selected-bfd/ld.bfd",
+            "bytes": 4194,
+            "sha256": "46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/checked-link/selected-bfd/tool.json",
+            "bytes": 806,
+            "sha256": "74fa52ce49593204ad6e21b3930f06d3c58c2297e4d4a0e5a74a4d335cdb3a59"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/leaf/Cargo.toml",
+            "bytes": 268,
+            "sha256": "0fd8f26ba3639bed21cbe49987bdbd24004bb5dc428ef549cc96ab4e343c4515"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/leaf/src/leaf-87b320f27060a66052d54fe767a1f4ff006a7bfa16102b78eeb6232f384fe866.rs",
+            "bytes": 10513,
+            "sha256": "87b320f27060a66052d54fe767a1f4ff006a7bfa16102b78eeb6232f384fe866"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/lock-cargo/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "104e19fb02d0a9f2918ac294915c5e5a41ec41ef5f94e77fa3157394dcb4a6f9"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/lock-cargo/cargo.stderr",
+            "bytes": 67,
+            "sha256": "a3436cb2ce3aebb7b3d7010022b6fdd3120db70fabedd4f1f7af7ec0f736db09"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/lock-cargo/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/lock_policy.rs",
+            "bytes": 8913,
+            "sha256": "0372a70dd69497e7b803313b482f1f09a94db40386ee275892053148c689479d"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/native-build.log",
+            "bytes": 41997,
+            "sha256": "5f25815b1aa417f1b54ed6fb679b5fc244630d01350a160ed4c19729be9097be"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/root-config.json",
+            "bytes": 1628,
+            "sha256": "d09c2ca75d4f2c50034689079e13c4dc2304d5d4d6ad69a7db554b53d29c4a4a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/root-shim.rs",
+            "bytes": 4720,
+            "sha256": "63b032b60b9cc6d0c4c7699809382f8d00dfe8f4f565c9ab6a01685104be068d"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/rust-toolchain.toml",
+            "bytes": 103,
+            "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/src/checked-policy.bin",
+            "bytes": 156,
+            "sha256": "5bd3a12c9e6df15fe2a0a8bc391dc7eaae571e053d70a3a28088fc3db15a93c0"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/src/expected-facts.bin",
+            "bytes": 19241,
+            "sha256": "7461206609dddc2d2443fc6f08574540ca128d0315893abc8378ae7e77ebd864"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/missing-release/root/src/program-image.bin",
+            "bytes": 29753,
+            "sha256": "707863f377aa0d218df9a877e37300b968995929faa2d71ca35b25a67a9bd433"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/observation.json",
+            "bytes": 877,
+            "sha256": "111353435043c93b87d726791b540d212a4ebab384b4c89e353cb6257bf6c311"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/owner.c",
+            "bytes": 851,
+            "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/owner.h",
+            "bytes": 333,
+            "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/program",
+            "bytes": 100725544,
+            "sha256": "3a895b183543a705c927fa4bdd4ec63d0568d978c7f0327b13f62280f96efb1e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/Cargo.lock",
+            "bytes": 10485,
+            "sha256": "979dc8fc06ed99565ab152bd273cadc5521ff28d2ba19ece2fdeaaecb85cfec2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/Cargo.toml",
+            "bytes": 999,
+            "sha256": "ad30fe2e446437acfddf82e4c41aa737cf9671bfc06a609c53b72c7062e6780e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/applicability-request.json",
+            "bytes": 752584,
+            "sha256": "99927a841d9d91a7a93e91cd0c1d19e1a915263bd12ae20919b5a1c870791070"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/build.rs",
+            "bytes": 12318,
+            "sha256": "c6d29317f134dd66b4e98ad9a440456434fec16ca8fa5d5d7359a50ba1f01989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/cargo-0/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "be6cc77bb15decd034d5633ae9c0ced9d768f5de1d6240ee0103a2b04f1b08fc"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/cargo-0/cargo.stderr",
+            "bytes": 38677,
+            "sha256": "b434ec3570b51b3caa59c417fa1bdb4ca1ca00facc46c0d76b1a94f71458d849"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/cargo-0/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/cargo-1/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "37f14e3c741c8cce81e7ce2c89bcd4912928c892e37c557ea540cb162043ac49"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/cargo-1/cargo.stderr",
+            "bytes": 38,
+            "sha256": "c6f958ac0827290b5c7ed35aaa4800fd2fb636f5e4d4cb4ac84348ff2c0de9eb"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/cargo-1/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/invocation.json",
+            "bytes": 23459,
+            "sha256": "49a89dbe93e16ed64513f421425cceae1c30f2d88b3569488b5954d9dde8ebc3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/limits.json",
+            "bytes": 226,
+            "sha256": "e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/link.map",
+            "bytes": 158418361,
+            "sha256": "c57f677d26b9220ae33f8fd6eb93423ed9ee44196a028969230f4f3909d67c17"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/link.stderr",
+            "bytes": 18217,
+            "sha256": "0791a39f769db5816458e495453f415361a5177c2e67924db21c38daee5b47f7"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/observer.py",
+            "bytes": 19565,
+            "sha256": "c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/output.json",
+            "bytes": 150,
+            "sha256": "1618405aafb2f3ea33e0be0cbed38f93baf6f3d149e3c40985bf5e0680d025e2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/record.json",
+            "bytes": 112609,
+            "sha256": "f0ff10dbc21bb24edd0a6ec6a25e6cf499b2df4dcfb141aac60594977fab2d52"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/selected-bfd/invocation.json",
+            "bytes": 13624,
+            "sha256": "0feaa08009e36fb82053d3b89944ed37384203648af824ff9205e56da5bfee4b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/selected-bfd/ld.bfd",
+            "bytes": 4194,
+            "sha256": "46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/selected-bfd/tool.json",
+            "bytes": 774,
+            "sha256": "d64deec000584d254a81fbe7ae670bb1fb0a92bfaf18c4ac89007a6e3725fe7d"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/leaf/Cargo.toml",
+            "bytes": 268,
+            "sha256": "0fd8f26ba3639bed21cbe49987bdbd24004bb5dc428ef549cc96ab4e343c4515"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/leaf/src/leaf-87b320f27060a66052d54fe767a1f4ff006a7bfa16102b78eeb6232f384fe866.rs",
+            "bytes": 10513,
+            "sha256": "87b320f27060a66052d54fe767a1f4ff006a7bfa16102b78eeb6232f384fe866"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/link-provenance.json",
+            "bytes": 115886,
+            "sha256": "21029d8445870ac1ee2e3eb7948fcf4aa3900d043ab54f5428733eeb6bbaefa6"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/lock-cargo/cargo.lifecycle.json",
+            "bytes": 104,
+            "sha256": "2f581f6821355cefe760d7303f9ea17ad8b44e9334f5c5120a78776fa95596d0"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/lock-cargo/cargo.stderr",
+            "bytes": 67,
+            "sha256": "a3436cb2ce3aebb7b3d7010022b6fdd3120db70fabedd4f1f7af7ec0f736db09"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/lock-cargo/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/lock_policy.rs",
+            "bytes": 8913,
+            "sha256": "0372a70dd69497e7b803313b482f1f09a94db40386ee275892053148c689479d"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/native-build.log",
+            "bytes": 38782,
+            "sha256": "b266edc0fb1f201e6c844efbff96dde7a08b8f891181b710045ee8f5d854d255"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/native-provenance.json",
+            "bytes": 20950,
+            "sha256": "d479f41f1f3dcee251414bd7483cac7683b9497706b9a36856c074d4338a48e5"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/producer-receipt.bin",
+            "bytes": 750,
+            "sha256": "02ff83f68a4c212a946c90f5c108418e3903db4c1ba86643af4869850a7551d2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/root-config.json",
+            "bytes": 1612,
+            "sha256": "a132da910741a429f04627f0df52e61d6000e689b2b0cdf456a91e0d4af1cbc4"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/root-shim.rs",
+            "bytes": 4720,
+            "sha256": "63b032b60b9cc6d0c4c7699809382f8d00dfe8f4f565c9ab6a01685104be068d"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/rust-toolchain.toml",
+            "bytes": 103,
+            "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/src/checked-policy.bin",
+            "bytes": 156,
+            "sha256": "5bd3a12c9e6df15fe2a0a8bc391dc7eaae571e053d70a3a28088fc3db15a93c0"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/src/expected-facts.bin",
+            "bytes": 19241,
+            "sha256": "7461206609dddc2d2443fc6f08574540ca128d0315893abc8378ae7e77ebd864"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/src/program-image.bin",
+            "bytes": 29753,
+            "sha256": "707863f377aa0d218df9a877e37300b968995929faa2d71ca35b25a67a9bd433"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/selected-artifacts/ash_checked_owner_leaf-2246f7b8bde42fd6.d",
+            "bytes": 768,
+            "sha256": "76922b433dc461d6ea8fc96fb2f3852ccade5a57586de94e253c7d6b16e9ec9a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/selected-artifacts/libash_checked_owner_leaf-2246f7b8bde42fd6.rlib",
+            "bytes": 140812,
+            "sha256": "92a41427db8ebcfde34dde4233dcf413477bcfa16b6e69789c4a1a92d923b3cf"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/selected-artifacts/libash_checked_owner_leaf-2246f7b8bde42fd6.rmeta",
+            "bytes": 37067,
+            "sha256": "de48f5d806e427d6cb5ea052122c4eb1fc4085f7dfac365788d629e31aaf5863"
+          }
+        ]
+      },
+      {
+        "label": "status",
+        "directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064",
+        "image": {
+          "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/program",
+          "bytes": 100708848,
+          "sha256": "42208535335dacece9766bad8761a317d77df6b4230a0b7fcb41277b537ffd4d"
+        },
+        "elf_type": 2,
+        "machine": 62,
+        "program_headers": 12,
+        "never_executed": true,
+        "lifecycles": [
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/lock-cargo/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "9c0bf86e503261a9c8fe973b1f6a01a0a258c6786cc05566ced03304fc20fcd3"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 281,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/cargo-1/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "40943b39d2c6363a28078cfa83181ec5fcf9a1fd79b8ee9a1d2fe014f90f7bad"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 379,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/cargo-0/cargo.lifecycle.json",
+              "bytes": 109,
+              "sha256": "3ad02828398eaf997893be485d9c25c923274c66e71734fa23972ec12baf6449"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 291,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(25856)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/lock-cargo/cargo.lifecycle.json",
+              "bytes": 104,
+              "sha256": "2f581f6821355cefe760d7303f9ea17ad8b44e9334f5c5120a78776fa95596d0"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 90,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/cargo-1/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "30f6045e569de4431d815658a56a939fd61d34cdaf70be43819c2885bb5b60a2"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 196,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          },
+          {
+            "file": {
+              "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/cargo-0/cargo.lifecycle.json",
+              "bytes": 105,
+              "sha256": "be6cc77bb15decd034d5633ae9c0ced9d768f5de1d6240ee0103a2b04f1b08fc"
+            },
+            "record": {
+              "child_reaped": true,
+              "group": 100,
+              "owned_group_empty": true,
+              "result": "Ok(ExitStatus(unix_wait_status(0)))"
+            }
+          }
+        ],
+        "file_inventory": [
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/abi.c",
+            "bytes": 564,
+            "sha256": "60c055dbe06872048bd3c3cc4f098176d3f54b6c8b2627b9fed5208c9a364bc2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/actual-0.d",
+            "bytes": 1504,
+            "sha256": "d19817bb5d0148d952e7cee9b89be151713d35dca969c11308b27788af815568"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/actual-1.d",
+            "bytes": 1367,
+            "sha256": "a092c86b525b6540ed352f7ca059729b525b9e6118ebb9a69dae0b7b11882f60"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-0.lifecycle.json",
+            "bytes": 83,
+            "sha256": "ce49b55ef73103a5f546ef15dc7bd6af133b0f748376ba5f9c527beef7abc6d6"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-0.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-0.stdout",
+            "bytes": 17,
+            "sha256": "08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-1.lifecycle.json",
+            "bytes": 83,
+            "sha256": "32a462772c17edddcae0d1953ba6ed18ade687e74a25f9fe0ea08901fcf17858"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-1.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-1.stdout",
+            "bytes": 7,
+            "sha256": "a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-10.lifecycle.json",
+            "bytes": 83,
+            "sha256": "79bd2156aa7a367d0e4f621e89b84efe72f70c0e155ef26603898997992fa2d7"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-10.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-10.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-11.lifecycle.json",
+            "bytes": 83,
+            "sha256": "92650d2d8776486e2b7ca70a3f63cfc5e3b4b752141a85e9adc12b64d0504fc5"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-11.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-11.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-2.lifecycle.json",
+            "bytes": 83,
+            "sha256": "37ed468a62a87341a441e4a073ba6a3184b90282a7b7f84fb02200ac2a70081f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-2.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-2.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-3.lifecycle.json",
+            "bytes": 83,
+            "sha256": "d46875e68c45f39a97bfb0b649a44a6a2c3d6c089d45c841b9ff40b87d664ec3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-3.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-3.stdout",
+            "bytes": 1194,
+            "sha256": "46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-4.lifecycle.json",
+            "bytes": 83,
+            "sha256": "9328a2ac9e9b26d150aad5bc97276c2117b2ec46b2b61876805402f9f2c1f308"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-4.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-4.stdout",
+            "bytes": 11345,
+            "sha256": "f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-5.lifecycle.json",
+            "bytes": 83,
+            "sha256": "26c887760f7364cdd582a1cb033adee5ea2162e4e3170788ccb87caca4a90274"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-5.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-5.stdout",
+            "bytes": 41,
+            "sha256": "2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-6.lifecycle.json",
+            "bytes": 83,
+            "sha256": "d53b419b4ae3f30ad1baa23520c93b526ab06e0162857a745e87c17a49eaff48"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-6.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-6.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-7.lifecycle.json",
+            "bytes": 83,
+            "sha256": "309693e551684adfc4475e0b8ffd27831455ee147bc35b83dca517a2080d3655"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-7.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-7.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-8.lifecycle.json",
+            "bytes": 83,
+            "sha256": "98332c32f17b3e5e8579a877479a2e61b8a49d9be80344bd83f62e90ac6b3250"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-8.stderr",
+            "bytes": 4213,
+            "sha256": "9207d1387a11e460e352208b5717b7af5f84a0edc49a661b5294937d1145ebff"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-8.stdout",
+            "bytes": 28630,
+            "sha256": "37aa645d92db46a94675efc6a4d30cdfecde453a76b222f1436d846a083ded37"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-9.lifecycle.json",
+            "bytes": 83,
+            "sha256": "41afcba4768f6873e9292a070c792b6894a3ce9ad59bdb5ab09ed01f8c0ad75f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-9.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/command-9.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/discover-0.d",
+            "bytes": 1504,
+            "sha256": "d19817bb5d0148d952e7cee9b89be151713d35dca969c11308b27788af815568"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/discover-1.d",
+            "bytes": 1367,
+            "sha256": "a092c86b525b6540ed352f7ca059729b525b9e6118ebb9a69dae0b7b11882f60"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/helper.c",
+            "bytes": 492,
+            "sha256": "7ac90e51f75bf5821fb1cb210d1fdce2bc19cb249ddef4bdf8d8b0eeb99e8c00"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/helper.o",
+            "bytes": 1632,
+            "sha256": "6659cef9812e9d565e7bccf2611fa79947c3b2afd52c9973561627985d5db39b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/libchecked-owner.a",
+            "bytes": 1802,
+            "sha256": "03d57e296c6c15452a9fb0f0ca15691c4ab15b4faa7f2054f7897224fe9ec602"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/inputs/native-22-0/owner.h",
+            "bytes": 212,
+            "sha256": "0deb6fda0f9b46d114763e50ee41e4727328e33b7ff16caaa999becd53e47c44"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/abi.c",
+            "bytes": 564,
+            "sha256": "60c055dbe06872048bd3c3cc4f098176d3f54b6c8b2627b9fed5208c9a364bc2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/actual-0.d",
+            "bytes": 1552,
+            "sha256": "2474ff6266a032cf42198facd4b4de6f1638ba8c53b36b3b4a1998c1ddb015b0"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/actual-1.d",
+            "bytes": 1399,
+            "sha256": "6972235e1cd6044d36cc307e1b9581d08b1b7df10794864f9fe5b20a2f1b1dbe"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-0.lifecycle.json",
+            "bytes": 84,
+            "sha256": "7e1f9401a8e810da0aef05947df947b0fad9d6b3b1ccfe22fe68ba839060009b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-0.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-0.stdout",
+            "bytes": 17,
+            "sha256": "08cababdf891ccbf96eb376f1e84f279f70302fb13d84e5f98637becdfc6d989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-1.lifecycle.json",
+            "bytes": 84,
+            "sha256": "6d2ce3ed560d9f63b848987485a35ccc0079fe91dd5b99f3f635a684523f4a89"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-1.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-1.stdout",
+            "bytes": 7,
+            "sha256": "a60d64d1829618ea9442646fc24fc2ad143a76611d19f2d7d82aff022e0daae9"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-10.lifecycle.json",
+            "bytes": 84,
+            "sha256": "ccf5742e719ef3ae503cc69d1b5fa73d63dff99af3ddb6abee2a845cb9ea2955"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-10.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-10.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-11.lifecycle.json",
+            "bytes": 84,
+            "sha256": "3944261651558075a3fd46d7823b74f27994dcc245d7db924bad4009979ddb5e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-11.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-11.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-2.lifecycle.json",
+            "bytes": 84,
+            "sha256": "f762c528caeb3e87995d01d2b815869d1595ec33707a05edfbc54c9e23f807b7"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-2.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-2.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-3.lifecycle.json",
+            "bytes": 84,
+            "sha256": "168a82b99ba636ca9b3d5d2c651ab53a39982767e28e101107834d1587b4c5f4"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-3.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-3.stdout",
+            "bytes": 1194,
+            "sha256": "46e3a17a526662b1e9ea90cdabb9b8e2c7ff512ebbdaf0a5fa5eae11649a9462"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-4.lifecycle.json",
+            "bytes": 84,
+            "sha256": "c8008c9ee6139e4cb8c38be900add75d8073eee3e9330e102cc405d7c02a5b9f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-4.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-4.stdout",
+            "bytes": 11345,
+            "sha256": "f8b35bb287bd5470fff1e831e92ae04a3672de1fe0cf6f8ab75c371b2f192c70"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-5.lifecycle.json",
+            "bytes": 84,
+            "sha256": "1fe5a4ca49041f54979c0cd79993cb7a8e2aa40fa1ef70c5233e52b0d15043dc"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-5.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-5.stdout",
+            "bytes": 41,
+            "sha256": "2928a6d39aa09d5b1bfd36a7f92507d7e33238f6d66ddf725aa1de1d712caf67"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-6.lifecycle.json",
+            "bytes": 84,
+            "sha256": "879a66a817ce19745346b73bb5f9d65891df6fdc9e0f6bf08f5a51e0a7350ec7"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-6.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-6.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-7.lifecycle.json",
+            "bytes": 84,
+            "sha256": "bd4c428a67d7cb18c77698d43ab081450f590b859548d016375e4b2d66d35bdb"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-7.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-7.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-8.lifecycle.json",
+            "bytes": 84,
+            "sha256": "6fa5b819786e8befab85166e39b4b286aa045fddf60da0bc3dc23def2ae2cb09"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-8.stderr",
+            "bytes": 4341,
+            "sha256": "d4cc34d5fab1f04b3bcbbbaf085b6a4bd8572dd8925ca3f78d15c1d32deba4bf"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-8.stdout",
+            "bytes": 28630,
+            "sha256": "37aa645d92db46a94675efc6a4d30cdfecde453a76b222f1436d846a083ded37"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-9.lifecycle.json",
+            "bytes": 84,
+            "sha256": "03a73e5489b79ca057f32dbfd27f2140a5ec2bdd3d9cd04212a9d02958f259d7"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-9.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/command-9.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/discover-0.d",
+            "bytes": 1552,
+            "sha256": "2474ff6266a032cf42198facd4b4de6f1638ba8c53b36b3b4a1998c1ddb015b0"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/discover-1.d",
+            "bytes": 1399,
+            "sha256": "6972235e1cd6044d36cc307e1b9581d08b1b7df10794864f9fe5b20a2f1b1dbe"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/helper.c",
+            "bytes": 500,
+            "sha256": "c736e3e87c6fe9a0e12326b41f86c01440b9e9f5ea9d58f96d1ee70ab07cce1f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/helper.o",
+            "bytes": 1640,
+            "sha256": "7a196224dd3130863b34ff3769143494e6b47a60245bb7e107497f8ac470a1b8"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/libchecked-owner.a",
+            "bytes": 1818,
+            "sha256": "91cc1d2aaa33f288ad740970af9593bd7e4478f87e5eb9b6b156a557abbaac54"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/inputs/native-22-1/owner.h",
+            "bytes": 212,
+            "sha256": "0deb6fda0f9b46d114763e50ee41e4727328e33b7ff16caaa999becd53e47c44"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/owner.c",
+            "bytes": 500,
+            "sha256": "c736e3e87c6fe9a0e12326b41f86c01440b9e9f5ea9d58f96d1ee70ab07cce1f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/owner.h",
+            "bytes": 212,
+            "sha256": "0deb6fda0f9b46d114763e50ee41e4727328e33b7ff16caaa999becd53e47c44"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/Cargo.lock",
+            "bytes": 10485,
+            "sha256": "979dc8fc06ed99565ab152bd273cadc5521ff28d2ba19ece2fdeaaecb85cfec2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/Cargo.toml",
+            "bytes": 999,
+            "sha256": "ad30fe2e446437acfddf82e4c41aa737cf9671bfc06a609c53b72c7062e6780e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/build.rs",
+            "bytes": 12318,
+            "sha256": "c6d29317f134dd66b4e98ad9a440456434fec16ca8fa5d5d7359a50ba1f01989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/cargo-0/cargo.lifecycle.json",
+            "bytes": 109,
+            "sha256": "3ad02828398eaf997893be485d9c25c923274c66e71734fa23972ec12baf6449"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/cargo-0/cargo.stderr",
+            "bytes": 41923,
+            "sha256": "8d0e85e9b64a4bdffe02d118252acf15570436e79af38bb786ef0cd20a06c011"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/cargo-0/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/cargo-1/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "40943b39d2c6363a28078cfa83181ec5fcf9a1fd79b8ee9a1d2fe014f90f7bad"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/cargo-1/cargo.stderr",
+            "bytes": 38,
+            "sha256": "dcbc1fc33fab9afa9f8cccd7fd0545b6c682040a473e3038dcbe7a5ebed50b15"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/cargo-1/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/invocation.json",
+            "bytes": 23491,
+            "sha256": "dea4eb79706e52245303851e8f06220b79770e8c03f8ec9b07b9b49d44ac1e61"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/limits.json",
+            "bytes": 226,
+            "sha256": "e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/link.stderr",
+            "bytes": 18053,
+            "sha256": "7e1a5cab8afdb3798b4c89c6d37ca7a480d69b3af5d2301a2c83f3bf685fc4c6"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/observer.py",
+            "bytes": 19565,
+            "sha256": "c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/output.json",
+            "bytes": 150,
+            "sha256": "e00f5c94814a5d96bbd2421dbdca5ab015028f3925a748de58dd76e8580cef7b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/selected-bfd/invocation.json",
+            "bytes": 13688,
+            "sha256": "9b961799f41ff8c93a972edd06b15fcc9a9fc2e4c8c1e767e91f90f6ec76fa41"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/selected-bfd/ld.bfd",
+            "bytes": 4194,
+            "sha256": "46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/checked-link/selected-bfd/tool.json",
+            "bytes": 806,
+            "sha256": "95b8dfe8f4c68dc3bcafca43e7c451cabf2fe4d8153c141492eb5a727126a185"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/leaf/Cargo.toml",
+            "bytes": 268,
+            "sha256": "a6839047c798468a046ce4c0d0df1df96a888bb6885a5b061f8492aab28f1e45"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/leaf/src/leaf-9248c0da70b12c93464ee1fd5aa2554ed366a64dc22774e15772df5156c6eb51.rs",
+            "bytes": 7795,
+            "sha256": "9248c0da70b12c93464ee1fd5aa2554ed366a64dc22774e15772df5156c6eb51"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/lock-cargo/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "9c0bf86e503261a9c8fe973b1f6a01a0a258c6786cc05566ced03304fc20fcd3"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/lock-cargo/cargo.stderr",
+            "bytes": 67,
+            "sha256": "a3436cb2ce3aebb7b3d7010022b6fdd3120db70fabedd4f1f7af7ec0f736db09"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/lock-cargo/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/lock_policy.rs",
+            "bytes": 8913,
+            "sha256": "0372a70dd69497e7b803313b482f1f09a94db40386ee275892053148c689479d"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/native-build.log",
+            "bytes": 42028,
+            "sha256": "2ac25bf1879207216a97f37454cfa926a5b281793aad3a342f47cd2232ac747c"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/root-config.json",
+            "bytes": 1628,
+            "sha256": "8aa19134d71c08151655de1280332de8d7762ef66939380b425e430a5717db28"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/root-shim.rs",
+            "bytes": 4668,
+            "sha256": "e9126774e71c82b310fd848a8585ddc256ab84f8e2833424db26b137fd6f50ca"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/rust-toolchain.toml",
+            "bytes": 103,
+            "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/src/checked-policy.bin",
+            "bytes": 156,
+            "sha256": "29298055558c3460cfb85dcca43d3915b624fd283f4c720d29c4853699549d21"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/src/expected-facts.bin",
+            "bytes": 15404,
+            "sha256": "23091696d5d59ff3fe17bab4143cb83f1bfa5688b092a387de0c14374838c379"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/missing-release/root/src/program-image.bin",
+            "bytes": 22716,
+            "sha256": "9f2fb5f90dddc8b399c3d6bee838aa748e9065053e05aff0a46b3ebc82fd2c41"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/observation.json",
+            "bytes": 886,
+            "sha256": "1db14d1e000c4ff75470c7cdedd7a1a18263137b1e57eb437f862b3f88eb60fe"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/owner.c",
+            "bytes": 492,
+            "sha256": "7ac90e51f75bf5821fb1cb210d1fdce2bc19cb249ddef4bdf8d8b0eeb99e8c00"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/owner.h",
+            "bytes": 212,
+            "sha256": "0deb6fda0f9b46d114763e50ee41e4727328e33b7ff16caaa999becd53e47c44"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/program",
+            "bytes": 100708848,
+            "sha256": "42208535335dacece9766bad8761a317d77df6b4230a0b7fcb41277b537ffd4d"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/Cargo.lock",
+            "bytes": 10485,
+            "sha256": "979dc8fc06ed99565ab152bd273cadc5521ff28d2ba19ece2fdeaaecb85cfec2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/Cargo.toml",
+            "bytes": 999,
+            "sha256": "ad30fe2e446437acfddf82e4c41aa737cf9671bfc06a609c53b72c7062e6780e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/applicability-request.json",
+            "bytes": 708747,
+            "sha256": "53112347fd9b2501a69e92f2c1b93b31f5754860dfbd570ab5bdfabb364f74c6"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/build.rs",
+            "bytes": 12318,
+            "sha256": "c6d29317f134dd66b4e98ad9a440456434fec16ca8fa5d5d7359a50ba1f01989"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/cargo-0/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "be6cc77bb15decd034d5633ae9c0ced9d768f5de1d6240ee0103a2b04f1b08fc"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/cargo-0/cargo.stderr",
+            "bytes": 38620,
+            "sha256": "c4ba3597e6030e6e1c4a00c5e010a41efca1b6685777366b3e6b47d8d469ff15"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/cargo-0/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/cargo-1/cargo.lifecycle.json",
+            "bytes": 105,
+            "sha256": "30f6045e569de4431d815658a56a939fd61d34cdaf70be43819c2885bb5b60a2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/cargo-1/cargo.stderr",
+            "bytes": 38,
+            "sha256": "c6f958ac0827290b5c7ed35aaa4800fd2fb636f5e4d4cb4ac84348ff2c0de9eb"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/cargo-1/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/invocation.json",
+            "bytes": 23459,
+            "sha256": "2bc958c7d12a65dc2417a98c0c0c5b49635a0639357387302d0cbf2129e52b1f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/limits.json",
+            "bytes": 226,
+            "sha256": "e4c1c260d4f2290300831fe92a476d17bc2bdc7998babe304def7dc09622b335"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/link.map",
+            "bytes": 158404449,
+            "sha256": "dd54ac26278f3de46d6715feed09590da72114a7c7abdfd878e64280298b004b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/link.stderr",
+            "bytes": 18217,
+            "sha256": "45b82fe6aa651982ee9acef95b43e2dd81a889c690366e66c675f38e8a12e78b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/observer.py",
+            "bytes": 19565,
+            "sha256": "c7c20d4206377f46d562a95fb72d5a87f4d3ebe02b1b677507e8714e0f8caf1e"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/output.json",
+            "bytes": 150,
+            "sha256": "7b9512c9f67dfacac6edff033d801f2300deae094edf461f44e6410642c05b03"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/record.json",
+            "bytes": 112609,
+            "sha256": "266a0d57a86d877d46566a49a81ae220c14ac926f54af3594f28f49b8f4b2662"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/selected-bfd/invocation.json",
+            "bytes": 13624,
+            "sha256": "6707d9c021b6db88f31dd6fb167272e2e5e0fa0b019d15237a88626bee1795e2"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/selected-bfd/ld.bfd",
+            "bytes": 4194,
+            "sha256": "46d63a1ce4447f93596e198881995337e50bea024a2ac802e796a28b8f14518a"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/selected-bfd/tool.json",
+            "bytes": 774,
+            "sha256": "775d59f8217bc7a8371a3d9755961455b18e443431957db285abef282f7aa09f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/leaf/Cargo.toml",
+            "bytes": 268,
+            "sha256": "a6839047c798468a046ce4c0d0df1df96a888bb6885a5b061f8492aab28f1e45"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/leaf/src/leaf-9248c0da70b12c93464ee1fd5aa2554ed366a64dc22774e15772df5156c6eb51.rs",
+            "bytes": 7795,
+            "sha256": "9248c0da70b12c93464ee1fd5aa2554ed366a64dc22774e15772df5156c6eb51"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/link-provenance.json",
+            "bytes": 115888,
+            "sha256": "c4e2ac9826bd16e51ff5df46d6cd5994dabad2c7e8a32821d464083696fc82ba"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/lock-cargo/cargo.lifecycle.json",
+            "bytes": 104,
+            "sha256": "2f581f6821355cefe760d7303f9ea17ad8b44e9334f5c5120a78776fa95596d0"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/lock-cargo/cargo.stderr",
+            "bytes": 67,
+            "sha256": "a3436cb2ce3aebb7b3d7010022b6fdd3120db70fabedd4f1f7af7ec0f736db09"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/lock-cargo/cargo.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/lock_policy.rs",
+            "bytes": 8913,
+            "sha256": "0372a70dd69497e7b803313b482f1f09a94db40386ee275892053148c689479d"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/native-build.log",
+            "bytes": 38725,
+            "sha256": "e08aca6592cf96b406c72233fb6736838eee5ef451660679679c28334327ccdd"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/native-provenance.json",
+            "bytes": 20953,
+            "sha256": "6ffb7b30b37d5a6746ff1b792e28dd677c62904d8f2ef54dcbd97a7c417c81e5"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/producer-receipt.bin",
+            "bytes": 750,
+            "sha256": "89d7f109440c7a407a2ecfbc597286204da8378a78de9ee260044c861374a60c"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/root-config.json",
+            "bytes": 1612,
+            "sha256": "eb507ca907bbb5285884a965750c8817f4be9fbe15816f80356e14d20e79748f"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/root-shim.rs",
+            "bytes": 4668,
+            "sha256": "e9126774e71c82b310fd848a8585ddc256ab84f8e2833424db26b137fd6f50ca"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/rust-toolchain.toml",
+            "bytes": 103,
+            "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/src/checked-policy.bin",
+            "bytes": 156,
+            "sha256": "29298055558c3460cfb85dcca43d3915b624fd283f4c720d29c4853699549d21"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/src/expected-facts.bin",
+            "bytes": 15404,
+            "sha256": "23091696d5d59ff3fe17bab4143cb83f1bfa5688b092a387de0c14374838c379"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/src/program-image.bin",
+            "bytes": 22716,
+            "sha256": "9f2fb5f90dddc8b399c3d6bee838aa748e9065053e05aff0a46b3ebc82fd2c41"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/selected-artifacts/ash_checked_owner_leaf-2246f7b8bde42fd6.d",
+            "bytes": 768,
+            "sha256": "466852307fdac6e495f4ff0714828b744450253fec8b5f2af700308e8530b85b"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/selected-artifacts/libash_checked_owner_leaf-2246f7b8bde42fd6.rlib",
+            "bytes": 121362,
+            "sha256": "ee042b72122672d0ec8a49b7ee16cdb936fb14c322e98ae1df1a9d4e7be4bcbe"
+          },
+          {
+            "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/selected-artifacts/libash_checked_owner_leaf-2246f7b8bde42fd6.rmeta",
+            "bytes": 34789,
+            "sha256": "cdc043f56486df06850e1673cb2c426e5baec74bdae7c5f0a802b7decaa8de55"
+          }
+        ]
+      }
+    ],
+    "qualification": "No output executed; full maps/images stay at guarded owned paths. Native/header/tool/runtime/premise/context conformity and approvals remain separate."
+  },
+  "preservation": {
+    "packet": "records.tar.gz",
+    "bytes": 749936,
+    "sha256": "0e56abe0fd6b10c9b81d42de22c043d224fd281f850788be772cdf7222cc7d97",
+    "members": 373,
+    "large_files_pinned_but_not_duplicated": [
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/ash-checked-launcher",
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-launcher-compile-22-1792830244388370230/checked-link/link.map",
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/program",
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792830486364058797/root/checked-link/link.map",
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/program",
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-root-compile-22-1792831028407584064/root/checked-link/link.map"
+    ],
+    "physical_directories_guarded": true
+  },
+  "remaining": [
+    "Root exact-head evidence/source review and artifact release",
+    "Reconcile docs-only52d base and prove actual source/tool/config equality before publication; no build solely for Git SHA",
+    "Exact invocation context/capability-drop tool and numeric runtime budget review",
+    "Identical configured app/launcher private literal and fresh configured artifacts",
+    "Six independent finite conformity reviews and protected per-image/launcher approvals",
+    "Separate installation/readback and native one-shot grant",
+    "F-core/full-workspace and retained-result verification/acceptance"
+  ],
+  "no_performed": [
+    "app/launcher/prepared-native-output or selected callback execution",
+    "protected install/provisioning or approval generation",
+    "GitHub publication",
+    "full-workspace gate"
+  ]
+}
