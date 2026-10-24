@@ -14,6 +14,13 @@ mod arena;
 mod checked_control;
 #[cfg(any(test, ash_checked_owner_root = "v1"))]
 mod checked_leaf_transport;
+// Rust-only injected observation controls; expose no physical transport type
+// or constructor to the evaluator tests and no product binding/admission.
+#[cfg(all(test, not(ash_checked_owner_root = "v1")))]
+pub(crate) use checked_leaf_transport::{
+    calls as checked_leaf_calls, null_next as checked_leaf_null_next,
+    reset as checked_leaf_reset,
+};
 #[cfg(test)]
 pub(crate) use checked_control::assert_dependent_header_refused_before_entry;
 // Historical manifest data is needed by generic registration unit tests only.

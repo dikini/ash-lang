@@ -534,15 +534,16 @@ mod tests {
     #[cfg(not(ash_checked_owner_root = "v1"))]
     #[test]
     fn unpublished_leaf_refusal_discard_and_output_failure_dispose_before_reporting() {
-        use crate::foreign::{checked_leaf_transport as leaf,
+        use crate::foreign::{checked_leaf_calls as leaf_calls, checked_leaf_reset as leaf_reset,
+            checked_leaf_null_next as leaf_null_next,
             source_bindings::with_unpublished_leaf_for_test};
         for (discarded, output_failed, blocked, shared_denied, null) in [
             (false, false, false, false, false), (true, false, false, false, false),
             (false, true, false, false, false), (false, false, true, false, false),
             (false, false, false, true, false), (false, false, false, false, true),
         ] {
-            leaf::reset();
-            if null { leaf::null_next(); }
+            leaf_reset();
+            if null { leaf_null_next(); }
             with_unpublished_leaf_for_test(|program, node, checked, owner| {
                 if shared_denied { owner.as_ref().unwrap().install_shared_denial_for_test(); }
                 let mut machine = Machine::new_effect(program);
@@ -571,7 +572,7 @@ mod tests {
                 let result = machine.return_source_resource(boundary, value);
                 assert_eq!(result.is_err(), output_failed);
                 let called = !blocked && !shared_denied && !null;
-                assert_eq!(leaf::calls(), [1, 0, 0, 0, usize::from(called)]);
+                assert_eq!(leaf_calls(), [1, 0, 0, 0, usize::from(called)]);
                 let snapshot = checked.snapshot();
                 assert_eq!(snapshot.k, K::Absent);
                 assert_eq!(snapshot.native, if null { Native::NoOwner } else if called { Native::Consumed } else { Native::Owned });
@@ -588,7 +589,7 @@ mod tests {
                 assert_eq!(checked.retains_backing(), blocked || shared_denied);
                 // Dropping remaining evaluator metadata cannot retry Free.
                 drop(machine);
-                assert_eq!(leaf::calls()[4], usize::from(called));
+                assert_eq!(leaf_calls()[4], usize::from(called));
             });
         }
     }
@@ -596,11 +597,11 @@ mod tests {
     #[cfg(not(ash_checked_owner_root = "v1"))]
     #[test]
     fn huge_typed_refusal_copy_is_funded_after_disposal_and_survives_one_short() {
-        use crate::foreign::{checked_leaf_transport as leaf,
+        use crate::foreign::{checked_leaf_calls as leaf_calls, checked_leaf_reset as leaf_reset,
             source_bindings::with_unpublished_int_refusal_for_test};
         let mut measured = 0;
         for pass in 0..4 {
-            leaf::reset();
+            leaf_reset();
             with_unpublished_int_refusal_for_test(|program, node, checked, owner| {
                 let mut machine = Machine::new_effect(program);
                 machine.control = None; machine.live_resources = 1;
@@ -639,7 +640,7 @@ mod tests {
                 assert!(scope.is_empty()); assert_eq!(guards.len(), 1);
                 assert_eq!(guards[0].native(), ResourceNativeFact::Consumed);
                 drop(machine);
-                assert_eq!(leaf::calls(), [1, 0, 0, 0, 1]);
+                assert_eq!(leaf_calls(), [1, 0, 0, 0, 1]);
             });
         }
     }
