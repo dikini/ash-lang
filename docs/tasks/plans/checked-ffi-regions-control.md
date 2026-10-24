@@ -19,7 +19,16 @@ initial M1 FFI delivery. Each later milestone owns its scoped design gates.
 | [S3 #133](https://github.com/dikini/ash-lang/issues/133) | One small native example with ordinary Ash normal/error handling and existing cleanup/handlers. Foreign/local resources follow the same abstract rules; no new State/copy subsystem is a prerequisite. |
 | [S4 #134](https://github.com/dikini/ash-lang/issues/134) | Integrate the connected product, specification/docs and focused regressions; run the normal workspace gate and independently review delivery. |
 
-[Parent #52](https://github.com/dikini/ash-lang/issues/52) owns the revised delivery. Root assigns each stage. This checkpoint revises planning and issues only;
+[Parent #52](https://github.com/dikini/ash-lang/issues/52) owns the revised delivery. [SQLite canary #133](https://github.com/dikini/ash-lang/issues/133) is required
+during S1 design and S3/S4 integration. After S1 design, exercise representable
+calls and report
+concrete unsupported cases, differences and gaps. Keep contracts/checks in
+ordinary Ash. The small fixture complements rather than replaces the canary.
+Full SQLite coverage is not required now. Discover C-aligned primitive needs as
+they arise and report them for later prioritization; no fixed type catalogue,
+scheduled extension phase or numeric-delivery prerequisite follows.
+
+Root assigns each stage. This checkpoint revises planning and issues only;
 implementation, native runs and product cleanup remain held. Detailed pointer
 API/memory mapping is S1 work, not a decision inherited from earlier drafts.
 
