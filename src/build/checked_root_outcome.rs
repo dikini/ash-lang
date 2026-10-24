@@ -167,15 +167,9 @@ impl<'a> Payload<'a> {
                         // This fixed scratch/traversal envelope was paid before
                         // entry. Check the whole magnitude before any copy; no
                         // narrowing, decimal formatting or BigInt clone.
-                        let size = usize::try_from(integer.magnitude_byte_length()).map_err(|_|RootRefusal::Resource)?;
-                        let end = self.used.checked_add(6).and_then(|n| n.checked_add(size))
-                            .filter(|n| *n <= BYTES).ok_or(RootRefusal::Resource)?;
-                        self.byte(6)?;
-                        let sign_at = self.used; self.byte(0)?;
-                        self.u32(u32::try_from(size).map_err(|_|RootRefusal::Resource)?)?;
-                        let negative = integer.write_magnitude_le(&mut self.bytes[self.used..end])
-                            .ok_or(RootRefusal::Association)?;
-                        self.bytes[sign_at] = u8::from(negative); self.used = end;
+                        let used = super::checked_integer_result::encode(integer, &mut self.bytes[self.used..BYTES])
+                            .ok_or(RootRefusal::Resource)?;
+                        self.used += used;
                     },
                     Value::Unit=>self.byte(0)?, Value::Boolean(v)=>{self.byte(1)?;self.byte(u8::from(*v))?;},
                     Value::Bytes(b)=>{self.byte(2)?;self.blob(b)?;}, Value::BytePrefix(b)=>{self.byte(2)?;self.blob(b.as_bytes())?;},

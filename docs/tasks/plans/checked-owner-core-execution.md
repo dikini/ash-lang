@@ -669,3 +669,10 @@ on the coherent combined source. No heavy launch during the common gate, no
 fake checked fixture, legacy fallback, approval transfer or native execution.
 Stop on a precise missing static/carrier/closure join, not a broader profile
 exception. Future dependent/copied-multioperand E/B is a separate bounded slice.
+
+
+### Current combined output/status source verification
+
+On retained `862c9ea2`, reconcile the four preserved runtime/admission commits and retain all PR124 test aliases, mandatory-readable legacy fixture, guard status pair and byte reservations. Connect the actual physical and generic returned-call paths to the typed Ledger methods; guard status uses that same original ABI/outcome check without creating source K or a closing witness. Controls must distinguish no-O4 from retained, source-E readability from raw status and Synthetic from NativeReady.
+
+Use the existing finite owned runner/cache after source review and explicit root approval: genuine new status source/Core positives and hostile witnesses, exact/short/spent/fresh payment, connected Machine refusal/guard reports, physical retention/loss/denial, optional Integer sign/magnitude codec, affected void/disposal/legacy regressions, both-package targeted Clippy and both two-role/four-role actual nonexecuting compile/link with donor and missing-symbol refusals. The codec's pure ordinary helper is the same encoder called by the root writer; the root-only wrapper test is not counted as an ordinary executed test. No cap increase, native invocation, public authority, legacy fallback or library-name special case is authorized by this source checkpoint.

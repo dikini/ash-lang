@@ -174,6 +174,7 @@ pub(super) enum Observed {
     GuardRetained,
     AcquiredStatus { reply: super::source_runtime::NativeScalarReply, present: bool },
     FinishedStatus { reply: super::source_runtime::NativeScalarReply, consumed: bool },
+    GuardStatus { reply: super::source_runtime::NativeScalarReply, consumed: bool },
 }
 
 // The typed result is authenticated before any disposition is accepted.
@@ -227,7 +228,7 @@ fn status_disposition(
     outcomes.iter().find(|outcome| outcome.predicates.iter().all(|predicate|
         predicate.position == super::source_contract::PreparedNativePosition::Result
             && predicate.value == scalar
-    )).filter(|outcome| outcome.readable).map(|outcome| outcome.consumes)
+    )).map(|outcome| outcome.consumes)
 }
 
 struct GroupState {
@@ -599,6 +600,10 @@ impl<'p> Ledger<'p> {
                 if present { Native::Owned } else { Native::NoOwner }
             }
             (CallKind::Finish, Observed::FinishedStatus { reply, consumed })
+                if status_disposition(&record.header.teardown, reply) == Some(consumed) => {
+                if consumed { Native::Consumed } else { Native::Owned }
+            }
+            (CallKind::GuardDisposal, Observed::GuardStatus { reply, consumed })
                 if status_disposition(&record.header.teardown, reply) == Some(consumed) => {
                 if consumed { Native::Consumed } else { Native::Owned }
             }
@@ -1089,6 +1094,11 @@ impl RuntimeBoundary {
             Observed::GuardRetained
         }).expect("reserved unpublished disposal observation");
     }
+    pub(super) fn guard_disposed_status(&mut self, consumed: bool, reply: super::source_runtime::NativeScalarReply) {
+        let call = self.pending.take().expect("entered unpublished status disposal");
+        self.ledger.observed(call, Observed::GuardStatus { reply, consumed })
+            .expect("reserved original unpublished status disposition");
+    }
     pub(super) fn publish(
         &mut self,
         activation: usize,
@@ -1482,6 +1492,34 @@ mod tests {
         let original = program.registry().source_resource_facts().find(|fact| fact.spelling == "Probe").unwrap();
         let header = CheckedSourceResourceHeader::admit(original, program.registry(), &mut TypeWorkBudget::default()).unwrap();
         test(&header);
+    }
+
+    #[test]
+    fn unpublished_typed_status_disposal_authenticates_original_without_source_k() {
+        use super::super::source_runtime::{NativeScalarReply::Scalar, NativeScalarValue as V};
+        with_status_header(|header| {
+            for (reply, consumed, admitted) in [(Scalar(V::I32(0)),true,true),(Scalar(V::I32(7)),false,true),(Scalar(V::U32(0)),true,false)] {
+                let mut work = TypeWorkBudget::default();
+                let mut ledger = Ledger::reserve(1,1,4,&mut work).unwrap();
+                let group = ledger.group(&mut work).unwrap();
+                let owner = ledger.owner(group,header,&mut work).unwrap();
+                let acquire = ledger.enter(owner,CallKind::Acquire,&header.acquire,&mut work).unwrap();
+                ledger.observed(acquire,Observed::AcquiredStatus {reply:Scalar(V::I32(-11)),present:true}).unwrap();
+                let call = ledger.enter(owner,CallKind::GuardDisposal,&header.teardown,&mut work).unwrap();
+                assert_eq!(ledger.observed(call,Observed::GuardConsumed),Err(Failure::Original));
+                assert_eq!(ledger.observed(call,Observed::GuardRetained),Err(Failure::Original));
+                assert_eq!(ledger.observed(call,Observed::GuardStatus {reply,consumed:!consumed}),Err(Failure::Original));
+                assert_eq!(ledger.observed(call,Observed::GuardStatus {reply,consumed}).is_ok(),admitted);
+                let record = &ledger.records[owner.index];
+                assert_eq!(record.k,K::Absent); assert!(record.closing.is_none());
+                assert_eq!(record.native,if admitted && consumed {Native::Consumed}else{Native::Owned});
+                assert_eq!(record.unresolved,!admitted);
+                assert_eq!(record.access,if admitted {Access::Retired}else{Access::Unpublished});
+                assert!(record.guard_attempted);
+                assert!(ledger.enter(owner,CallKind::GuardDisposal,&header.teardown,&mut work).is_err());
+                assert!(ledger.finish_witness(owner,&mut work).is_err());
+            }
+        });
     }
 
     #[test]

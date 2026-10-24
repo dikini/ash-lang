@@ -942,7 +942,11 @@ impl NativeOwnerGuard {
             };
             *closing_status = raw_status;
             *last_observed_status = raw_status;
-            control.guard_disposed(consumed);
+            if let Some(status) = status {
+                control.guard_disposed_status(consumed, status.reply);
+            } else {
+                control.guard_disposed(consumed);
+            }
             if consumed { *leaf = Some(CheckedLeafBacking::Consumed); }
             self.initialized_bytes = None;
             Ok(())
@@ -981,7 +985,12 @@ impl NativeOwnerGuard {
         };
         match entry {
             crate::foreign::checked_control::FinishEntry::NativeReady => {
-                Ok(self.finish_with_plan(plan, operands, blocked))
+                let result = self.finish_with_plan(plan, operands, blocked);
+                if result.1.is_some_and(|status| !status.valid) {
+                    Err(NativeOwnerAdmissionError::Authority)
+                } else {
+                    Ok(result)
+                }
             }
             crate::foreign::checked_control::FinishEntry::Synthetic(witness) => Ok((
                 NativeOwnerDisposition::Synthetic { guard: self, witness },
@@ -1024,7 +1033,11 @@ impl NativeOwnerGuard {
                 };
                 *closing_status = raw_status;
                 *last_observed_status = raw_status;
-                control.finished(consumed);
+                if let Some(status) = status {
+                    control.finished_status(consumed, status.reply);
+                } else {
+                    control.finished(consumed);
+                }
                 if consumed { *leaf = Some(CheckedLeafBacking::Consumed); }
                 drop(slots);
                 if consumed { Ok((NativeOwnerDisposition::Consumed(Arc::clone(&self.owner)), status)) }
@@ -1055,15 +1068,29 @@ impl NativeOwnerGuard {
             let slot = &mut slots[self.slot];
             let _address = slot.raw.address.expect("admitted live owner");
             (consumes, status) = plan.invoke(operands);
-            // Preserve the actual primitive status alongside the native fact,
-            // before any later source-output/report-capacity refusal.
-            slot.closing_status = status.and_then(NativeOwnerStatus::independent);
+            // No admitted O4 must not overwrite the last observation or turn
+            // an invalid typed reply into known retention. Keep the pending
+            // attempt unresolved, with the same protected backing and no retry.
+            if slot.checked.is_some() && guard_disposal_observation(consumes, status).is_none() {
+                slot.quarantined = true;
+                slot.checked.as_mut().expect("checked slot").output_failed();
+                drop(slots);
+                return (NativeOwnerDisposition::Blocked(self), status);
+            }
+            // Preserve raw admitted status independently of optional source E.
+            slot.closing_status = status.and_then(|status| if slot.checked.is_some() {
+                status.raw_observation()
+            } else { status.independent() });
             slot.last_observed_status = slot.closing_status;
             if consumes {
                 NativeOwnerStorage::record_consumed(&mut slots, self.slot);
             }
             if let Some(checked) = &mut slots[self.slot].checked {
-                checked.finished(consumes);
+                if let Some(status) = status {
+                    checked.finished_status(consumes, status.reply);
+                } else {
+                    checked.finished(consumes);
+                }
             }
             if !consumes {
                 NativeOwnerStorage::quarantine(&mut slots, self.slot);
@@ -1781,7 +1808,7 @@ impl NativeOwnerGuardReady {
         control.observe_acquisition_status(Some(scalar));
         *closing_status = control.acquisition_status();
         *last_observed_status = *closing_status;
-        control.acquired(returned.nonnull());
+        control.acquired_status(returned.nonnull(), scalar);
         drop(slots);
         Ok(NativeOwnerCallReturned { guard: self.guard, prepared_initialized_bytes: None,
             scalar: Some(scalar), offset: None, recorded: true })
@@ -1862,7 +1889,11 @@ impl NativeOwnerCallReturned {
             slots[index].last_observed_status = self.scalar.and_then(observed_scalar_status);
             if let Some(checked) = &mut slots[index].checked {
                 checked.observe_acquisition_status(self.scalar);
-                checked.acquired(present);
+                if let Some(reply) = self.scalar {
+                    checked.acquired_status(present, reply);
+                } else {
+                    checked.acquired(present);
+                }
                 let status = checked.acquisition_status();
                 slots[index].closing_status = status;
                 slots[index].last_observed_status = status;

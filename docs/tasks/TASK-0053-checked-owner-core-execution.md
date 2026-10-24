@@ -478,3 +478,12 @@ remain unsupported rather than being dropped. Full SQLite E/B, dependent
 Prepare/Finalize, BindText/Transient, native conformity, protected execution and
 F7 isolation remain open. No build or new native execution has run for this
 source work; common verification owns the serialized heavy lane.
+
+
+## Combined independent output/status delivery on retained PR124
+
+The current branch starts from actual retained PR124 `862c9ea2`, preserving its verified void disposal and ASHOUT03/ASHOBS03 records. It replays only the parked runtime `38e25461`/`c8c62384` and primary static/Core/typed-Ledger `5b4f9311`/`57ab2530` deltas. The earlier output/status planning paragraphs describe their historical source checkpoints; disposal is now a separate retained delivery.
+
+The combined source joins exact ABI-tagged replies to acquired_status, finished_status and unpublished guard_disposed_status using the same first matching original total outcome relation. Raw observations remain separate from optional source payload copying. Synthetic Finish selects its existing witness before physical preparation; NativeReady retains the actual slot loan through preparation, native call and commit. No-O4 retains the prior observation and unresolved backing without retry. The complete original role/type/row/H/owner correspondence remains independently checked.
+
+Focused genuine-source, typed-status/guard/payment/witness, Integer-result and existing void/disposal regressions are authored with all results UNRUN. Both the existing four-role and new two-role emitted C/header/archive/root/leaf compile-link discriminators are required, with coherent donors and actual missing-symbol negatives; neither output executes. Full dependent/multioperand/copied-input E/B, real SQLite/arena/native behavior, configured per-image approvals/deployment and F-core remain open. No Cargo/Clippy starts until independent coherent source review and root's explicit frozen-runner assignment.

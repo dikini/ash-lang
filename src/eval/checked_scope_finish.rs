@@ -493,6 +493,48 @@ mod tests {
         });
     }
 
+    #[cfg(not(ash_checked_owner_root = "v1"))]
+    #[test]
+    fn genuine_output_status_refusal_preserves_acquisition_and_disposal_inspections() {
+        use crate::foreign::{checked_leaf_reset as reset, checked_leaf_calls as calls,
+            checked_leaf_output_status as output_status, checked_leaf_disposal as disposal,
+            source_bindings::with_output_status_unpublished_for_test};
+        for (consumed, denied, output_failed) in [(true,false,false),(false,false,false),(true,true,false),(true,false,true)] {
+            reset(); output_status(-11); disposal(Some(consumed), Some(if consumed {0}else{7}), true);
+            with_output_status_unpublished_for_test(|program, node, checked, owner| {
+                if denied { owner.as_ref().unwrap().install_shared_denial_for_test(); }
+                let mut machine = Machine::new_effect(program);
+                machine.control = None; machine.live_resources = 1;
+                let mut setup = TypeWorkBudget::default();
+                let mut reports = crate::eval::checked_reports::ResourceReports::reserve(1, &mut setup).unwrap();
+                let slot = reports.reserve_owner(&mut setup).unwrap(); machine.checked_reports = Some(reports);
+                let codec = machine.source_resource_scope(node).unwrap().header().codec;
+                let value = machine.foreign_constructor(codec.acquire[1], Some(Value::Unit), RuntimePhase::Acquisition).unwrap();
+                if output_failed {
+                    let Value::Location(location) = &value else { unreachable!() };
+                    let mut probe = TypeWorkBudget::default();
+                    super::super::resolve_location_with_work(&machine.heap, *location, &mut probe).unwrap();
+                    machine.instantiation_work = TypeWorkBudget::with_limit(probe.used());
+                }
+                let boundary = Box::new(SourceResourceBoundary {
+                    checked: Some(checked.prepaid_scope_observer()), report_slot: Some(slot), node,
+                    key: super::super::ActivationKey(111), environment: super::super::Environment::new(),
+                    owner, dependencies: Vec::new(), phase: super::super::ProviderPhase::Acquire,
+                    payload: None, saved: None, consumed: false, blocked: false, discarded: false,
+                });
+                assert_eq!(machine.return_source_resource(boundary, value).is_err(), output_failed);
+                assert_eq!(checked.snapshot().k, K::Absent);
+                assert_eq!(checked.snapshot().native, if consumed && !denied {Native::Consumed}else{Native::Owned});
+                assert_eq!(checked.snapshot().continuation, CheckedOwnerContinuation::Absent);
+                assert_eq!(calls(), [1,0,0,0,usize::from(!denied)]);
+                let (closings, guards) = machine.checked_reports.take().unwrap().into_inspections();
+                assert!(closings.is_empty()); assert_eq!(guards.len(),1);
+                assert_eq!(guards[0].acquisition_status(),Some(-11));
+                assert_eq!(guards[0].status(),Some(if denied {-11}else if consumed {0}else{7}));
+            });
+        }
+    }
+
     #[test]
     fn successful_unpublished_refusal_and_discard_keep_separate_guard_inspection() {
         for discarded in [false, true] {
