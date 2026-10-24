@@ -416,7 +416,7 @@ fn first_copying_sqlite_source_bundle_parses_with_the_ordinary_frontend() {
 }
 
 #[test]
-fn historical_four_match_client_projects_and_current_depth_overflow_refuses() {
+fn original_four_match_client_exhausts_projection_depth_before_provider_checking() {
     let path = fixture("entry-deep.ash");
     let source = SourceFile::new(
         path.display().to_string(),
@@ -425,24 +425,8 @@ fn historical_four_match_client_projects_and_current_depth_overflow_refuses() {
     .unwrap();
     let tree = parse(lex(&source).unwrap());
     assert!(tree.parse_diagnostics().is_empty());
-    project_module(&source, &tree).expect("the historical four-match source fits the supported depth");
-
-    let depth = STRUCTURAL_DEPTH_LIMIT + 1;
-    let text = format!(
-        "main : Unit -> Int\nmain () = {}0\n{}",
-        "match true {\n_ => ".repeat(depth),
-        "}\n".repeat(depth)
-    );
-    let overflow = SourceFile::new("current-match-depth-overflow.ash", text).unwrap();
-    let tree = parse(lex(&overflow).unwrap());
     assert_eq!(
-        tree.resource_failure(),
-        Some(ResourceFailure::StructuralDepth {
-            limit: STRUCTURAL_DEPTH_LIMIT
-        })
-    );
-    assert_eq!(
-        project_module(&overflow, &tree),
+        project_module(&source, &tree),
         Err(ProjectionError::ResourceLimit(
             ResourceFailure::StructuralDepth {
                 limit: STRUCTURAL_DEPTH_LIMIT

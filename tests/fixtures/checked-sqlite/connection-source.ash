@@ -121,27 +121,13 @@ pub type OpenPolicy = PublishConnection
     | RefuseNoOwner
     | RejectOpen
 pub open_policy : (Int, Bool) -> OpenPolicy
-open_policy (status, nonnull) = match status == 0 {
-    true => match nonnull {
-        true => PublishConnection
-        false => RejectOpen
-    }
-    false => match status == 100 {
-        true => RejectOpen
-        false => match status == 101 {
-            true => RejectOpen
-            false => match status == 21 {
-                true => RejectOpen
-                false => match nonnull {
-                    true => RefusePartial
-                    false => match status == 7 {
-                        true => RefuseNoOwner
-                        false => RejectOpen
-                    }
-                }
-            }
-        }
-    }
+open_policy (status, nonnull) = match (
+    status == 0, status == 100, status == 101, status == 21, status == 7, nonnull
+) {
+    (true, _, _, _, _, true) => PublishConnection
+    (false, false, false, false, _, true) => RefusePartial
+    (false, false, false, false, true, false) => RefuseNoOwner
+    _ => RejectOpen
 }
 
 pub type Execution = Prepared

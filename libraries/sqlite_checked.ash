@@ -189,33 +189,29 @@ pub resource Statement<H, C, S> {
             let enclosing = perform ConnectionOps<Connection<H, C>, ConnectionState<H, C>>.borrow connection
             let length = Text.byte_length sql + 1
             match perform Prepare<H, C, S>.call (enclosing, sql, length) {
-                Foreign.CheckedReturned((status, Foreign.Readable(Foreign.NonNull(state)), tail)) => match prepare_policy (status, true) {
-                    PreparePublish => match tail {
-                        Foreign.Readable(Foreign.NonNull(offset)) => match valid_tail (sql, offset) {
-                            true => Acquired(state, (connection, status))
-                            false => Refused InvalidTail
+                Foreign.CheckedReturned((status, Foreign.Readable(Foreign.NonNull(state)), tail)) => {
+                    let policy = prepare_policy (status, true)
+                    match (policy, prepare_tail_admitted (policy, sql, tail)) {
+                        (PreparePublish, true) => Acquired(state, (connection, status))
+                        (PreparePublish, false) => Refused InvalidTail
+                        _ => {
+                            let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
+                            let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)
+                            Refused (PrepareContradiction status)
                         }
-                        _ => Refused InvalidTail
-                    }
-                    _ => {
-                        let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
-                        let denied = quarantine (enclosing, Foreign.UnexpectedStatus status)
-                        Refused (PrepareContradiction status)
                     }
                 }
-                Foreign.CheckedReturned((status, Foreign.Readable(Foreign.Null), tail)) => match prepare_policy (status, false) {
-                    PrepareEmpty => match tail {
-                        Foreign.Readable(Foreign.NonNull(offset)) => match valid_tail (sql, offset) {
-                            true => Refused EmptySql
-                            false => Refused InvalidTail
+                Foreign.CheckedReturned((status, Foreign.Readable(Foreign.Null), tail)) => {
+                    let policy = prepare_policy (status, false)
+                    match (policy, prepare_tail_admitted (policy, sql, tail)) {
+                        (PrepareEmpty, true) => Refused EmptySql
+                        (PrepareEmpty, false) => Refused InvalidTail
+                        (PrepareNativeFailure, _) => Refused (NativePrepareError status)
+                        _ => {
+                            let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
+                            let denied = quarantine (enclosing, Foreign.ContradictoryNativeResult(status, 0))
+                            Refused (PrepareContradiction status)
                         }
-                        _ => Refused InvalidTail
-                    }
-                    PrepareNativeFailure => Refused (NativePrepareError status)
-                    _ => {
-                        let quarantine : (ConnectionState<H, C>, Foreign.ViolationCause) -> Foreign.CheckedCall<Unit> ! {Foreign.NativeHost<H>} = Foreign.checked_quarantine
-                        let denied = quarantine (enclosing, Foreign.ContradictoryNativeResult(status, 0))
-                        Refused (PrepareContradiction status)
                     }
                 }
                 Foreign.CheckedReturned((status, Foreign.Unreadable, _)) => {
@@ -257,27 +253,13 @@ pub type OpenPolicy = PublishConnection
     | RefuseNoOwner
     | RejectOpen
 pub open_policy : (Int, Bool) -> OpenPolicy
-open_policy (status, nonnull) = match status == 0 {
-    true => match nonnull {
-        true => PublishConnection
-        false => RejectOpen
-    }
-    false => match status == 100 {
-        true => RejectOpen
-        false => match status == 101 {
-            true => RejectOpen
-            false => match status == 21 {
-                true => RejectOpen
-                false => match nonnull {
-                    true => RefusePartial
-                    false => match status == 7 {
-                        true => RefuseNoOwner
-                        false => RejectOpen
-                    }
-                }
-            }
-        }
-    }
+open_policy (status, nonnull) = match (
+    status == 0, status == 100, status == 101, status == 21, status == 7, nonnull
+) {
+    (true, _, _, _, _, true) => PublishConnection
+    (false, false, false, false, _, true) => RefusePartial
+    (false, false, false, false, true, false) => RefuseNoOwner
+    _ => RejectOpen
 }
 
 pub type Execution = Prepared
@@ -375,61 +357,33 @@ pub type PreparePolicy = PreparePublish
     | PrepareNativeFailure
     | PrepareReject
 pub prepare_policy : (Int, Bool) -> PreparePolicy
-prepare_policy (status, nonnull) = match status == 0 {
-    true => match nonnull {
-        true => PreparePublish
-        false => PrepareEmpty
-    }
-    false => match status == 100 {
-        true => PrepareReject
-        false => match status == 101 {
-            true => PrepareReject
-            false => match status == 21 {
-                true => PrepareReject
-                false => match nonnull {
-                    true => PrepareReject
-                    false => PrepareNativeFailure
-                }
-            }
-        }
-    }
+prepare_policy (status, nonnull) = match (
+    status == 0, status == 100, status == 101, status == 21, nonnull
+) {
+    (true, _, _, _, true) => PreparePublish
+    (true, _, _, _, false) => PrepareEmpty
+    (false, false, false, false, false) => PrepareNativeFailure
+    _ => PrepareReject
 }
 
 pub type FinalizePolicy = FinalizeOk
     | FinalizeNativeError
     | FinalizeReject
 pub finalize_policy : Int -> FinalizePolicy
-finalize_policy status = match status == 0 {
-    true => FinalizeOk
-    false => match status == 100 {
-        true => FinalizeReject
-        false => match status == 101 {
-            true => FinalizeReject
-            false => match status == 21 {
-                true => FinalizeReject
-                false => FinalizeNativeError
-            }
-        }
-    }
+finalize_policy status = match (status == 0, status == 100, status == 101, status == 21) {
+    (true, _, _, _) => FinalizeOk
+    (false, false, false, false) => FinalizeNativeError
+    _ => FinalizeReject
 }
 
 ascii_space : Int -> Bool
-ascii_space byte = match byte == 9 {
-    true => true
-    false => match byte == 10 {
-        true => true
-        false => match byte == 11 {
-            true => true
-            false => match byte == 12 {
-                true => true
-                false => match byte == 13 {
-                    true => true
-                    false => byte == 32
-                }
-            }
-        }
-    }
+ascii_space byte = match (
+    byte == 9, byte == 10, byte == 11, byte == 12, byte == 13, byte == 32
+) {
+    (false, false, false, false, false, false) => false
+    _ => true
 }
+
 tail_whitespace : (Bytes, Int) -> Bool
 tail_whitespace (bytes, offset) = match offset == B.length bytes {
     true => true
@@ -443,3 +397,15 @@ tail_whitespace (bytes, offset) = match offset == B.length bytes {
 }
 pub valid_tail : (String, Int) -> Bool
 valid_tail (sql, offset) = tail_whitespace (Text.to_utf8 sql, offset)
+
+readable_tail_admitted : (String, Foreign.Output<Foreign.Nullable<Int>>) -> Bool
+readable_tail_admitted (sql, tail) = match tail {
+    Foreign.Readable(Foreign.NonNull(offset)) => valid_tail (sql, offset)
+    _ => false
+}
+prepare_tail_admitted : (PreparePolicy, String, Foreign.Output<Foreign.Nullable<Int>>) -> Bool
+prepare_tail_admitted (policy, sql, tail) = match policy {
+    PreparePublish => readable_tail_admitted (sql, tail)
+    PrepareEmpty => readable_tail_admitted (sql, tail)
+    _ => false
+}

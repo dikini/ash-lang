@@ -279,3 +279,26 @@ StructuralDepth reason before provider checking. The candidate gate includes
 projection test module), this pure syntax regression and the
 18 original selectors, all UNRUN on the new allowance. No result or acceptance
 transfers from the older allowance, and no native or whole F-core gate opens.
+
+
+### Rejected allowance and DATA-only fallback
+
+The single 256 candidate `c45f185b` was rejected by run `62440`: Clippy and
+29 parser/CST controls passed, but the first full-pipeline ADT worker overflowed
+its existing 512 KiB stack and aborted. The second ADT case and the later 26 tests
+were UNRUN; all 18 dependent/regression selectors were never reached. Source,
+tool, executable and lifecycle evidence was preserved. The 128 allowance and
+historical provider fixture expectation are restored exactly; weights, guards
+and safety assertions are unchanged, with no further numeric increase.
+
+The fallback flattens pure status/ASCII classifiers into Boolean-tuple matches.
+A private helper accepts only policy, String and optional readable Int DATA;
+it inspects/copies the tail only for Publish or Empty, preserving contradiction
+short-circuiting before established-owner denial. State, Host, native operands,
+actual effects and request-specific witnesses stay in the resource clauses.
+Flattened lifecycle tuple matches keep at most three concurrent matches with
+two ordinary blocks (about 98 weighted units before small pattern/discriminant
+costs), rather than the rejected fourth match at 129. Existing pure tail traces
+also exercise valid/invalid/unreadable/null tails and refused-policy cases,
+with a mutant that wrongly inspects/adopts tails for a contradictory policy.
+These are authored UNRUN controls, not native or negative-offset acceptance.

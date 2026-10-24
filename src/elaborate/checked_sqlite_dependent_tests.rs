@@ -175,7 +175,7 @@ fn checked_sqlite_dependent_finish_rejects_duplicate_and_retained_witnesses() {
 fn checked_sqlite_dependent_pure_prepare_and_tail_policy_traces() {
     let policy = SOURCE.split_once("pub type OpenPolicy").unwrap().1;
     let source = format!(
-        "import @builtin.bytes as B\nimport @builtin.string as Text\npub type OpenPolicy{policy}\n{}",
+        "import @builtin.foreign as Foreign\nimport @builtin.bytes as B\nimport @builtin.string as Text\npub type OpenPolicy{policy}\n{}",
         include_str!("../../tests/fixtures/checked-sqlite/dependent-policy-traces.ash")
     );
     let entry = "import producer as SQLite\nmain : Unit -> Bool\nmain () = SQLite.dependent_policy_traces ()\n";
@@ -185,10 +185,14 @@ fn checked_sqlite_dependent_pure_prepare_and_tail_policy_traces() {
     assert!(matches!(result.value, crate::eval::Value::Boolean(true)));
     for (from, to) in [
         (
-            "true => PrepareReject\n                    false => PrepareNativeFailure",
-            "true => PrepareNativeFailure\n                    false => PrepareNativeFailure",
+            "(false, false, false, false, false) => PrepareNativeFailure",
+            "(false, false, false, false, _) => PrepareNativeFailure",
         ),
         ("B.InvalidIndex => false", "B.InvalidIndex => true"),
+        (
+            "PrepareEmpty => readable_tail_admitted (sql, tail)\n    _ => false",
+            "PrepareEmpty => readable_tail_admitted (sql, tail)\n    _ => readable_tail_admitted (sql, tail)",
+        ),
     ] {
         assert_eq!(source.matches(from).count(), 1);
         let changed = source.replace(from, to);

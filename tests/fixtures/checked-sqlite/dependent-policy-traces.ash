@@ -12,7 +12,14 @@ dependent_policy_traces () = match (
     valid_tail ("", 0), valid_tail ("é;", 3), valid_tail ("é;", 2),
     valid_tail ("x;\0", 2),
     ascii_space 9, ascii_space 10, ascii_space 11, ascii_space 12, ascii_space 13, ascii_space 32,
-    ascii_space 8, ascii_space 14
+    ascii_space 8, ascii_space 14,
+    prepare_tail_admitted (PreparePublish, "x; ", Foreign.Readable(Foreign.NonNull 2)),
+    prepare_tail_admitted (PreparePublish, "x; SELECT 2", Foreign.Readable(Foreign.NonNull 2)),
+    prepare_tail_admitted (PreparePublish, "x;", Foreign.Unreadable),
+    prepare_tail_admitted (PreparePublish, "x;", Foreign.Readable(Foreign.Null)),
+    prepare_tail_admitted (PrepareEmpty, "x;", Foreign.Readable(Foreign.NonNull 2)),
+    prepare_tail_admitted (PrepareNativeFailure, "x;", Foreign.Readable(Foreign.NonNull 2)),
+    prepare_tail_admitted (PrepareReject, "x;", Foreign.Readable(Foreign.NonNull 2))
 ) {
     (
         PreparePublish, PrepareEmpty, PrepareNativeFailure, PrepareNativeFailure,
@@ -20,7 +27,8 @@ dependent_policy_traces () = match (
         FinalizeOk, FinalizeNativeError, FinalizeNativeError,
         FinalizeReject, FinalizeReject, FinalizeReject,
         true, true, false, false, false, true, true, false, false,
-        true, true, true, true, true, true, false, false
+        true, true, true, true, true, true, false, false,
+        true, false, false, false, true, false, false
     ) => true
     _ => false
 }

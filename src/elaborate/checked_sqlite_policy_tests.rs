@@ -114,7 +114,7 @@ fn checked_policy_trace_is_ordinary_source_without_native_authority() {
     // Extract the actual pure policy section rather than reimplementing the transition model in Rust.
     let policy = SQLITE.split_once("pub type OpenPolicy").unwrap().1;
     let source = format!(
-        "import @builtin.bytes as B\nimport @builtin.string as Text\npub type OpenPolicy{policy}\n{}",
+        "import @builtin.foreign as Foreign\nimport @builtin.bytes as B\nimport @builtin.string as Text\npub type OpenPolicy{policy}\n{}",
         include_str!("../../tests/fixtures/checked-sqlite/policy-traces.ash")
     );
     let entry =
