@@ -59,9 +59,9 @@ pub(super) fn main() -> std::process::ExitCode {
         as for<'s> fn(&'s mut transport::OwnerCell)
             -> Result<checked_owner_leaf::PreparedTeardown<'s>, checked_owner_leaf::Refusal>);
     std::hint::black_box(checked_owner_leaf::PreparedOutputAcquire::invoke
-        as for<'s, 'i> fn(checked_owner_leaf::PreparedOutputAcquire<'s, 'i>) -> checked_owner_leaf::OutputAcquireReturned);
+        as fn(checked_owner_leaf::PreparedOutputAcquire<'static, 'static>) -> checked_owner_leaf::OutputAcquireReturned);
     std::hint::black_box(checked_owner_leaf::PreparedTeardown::invoke
-        as for<'s> fn(checked_owner_leaf::PreparedTeardown<'s>) -> checked_owner_leaf::DisposalReturned);
+        as fn(checked_owner_leaf::PreparedTeardown<'static>) -> checked_owner_leaf::DisposalReturned);
     // The verifier constructs no caller token: it inspects this running object,
     // the protected approval/current context and fixed authenticated FD roles.
     // The ordinary unconfigured build still refuses MissingDeployment here.
