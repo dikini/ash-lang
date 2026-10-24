@@ -22006,6 +22006,12 @@ impl ResolvedRegistry {
         let mut pending = Pending(definitions);
         work.charge(pending.0.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        // Preserve the wire inventory's owner order while consuming with pop.
+        // Each owner's formal row stays untouched. Pay the bounded staging
+        // traversal before changing the vector, as for neighboring restorers.
+        work.charge(pending.0.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        pending.0.reverse();
         while let Some((id, parameters)) = pending.0.pop() {
             let parameters = ResolvedTypeVariableBuffer(parameters);
             if self
