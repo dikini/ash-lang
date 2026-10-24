@@ -2582,7 +2582,7 @@ fn eval_flow<'a>(
                                     charge(work, 3)?;
                                     let EffectExprKind::Pure(PureExprKind::Computation(
                                         PureComputation::TypeApplication(applied),
-                                    )) = &program.node(selected_application).ok_or_else(invalid)?.kind
+                                    )) = &node(program, selected_application)?.kind
                                     else { return Err(invalid()); };
                                     let [host, state] = applied.arguments() else {
                                         return Err(invalid());
