@@ -3,13 +3,17 @@
 - ID: `TASK-0051`
 - Status: complete (original F3 source/static work)
 - Related: [F3 issue #59](https://github.com/dikini/ash-lang/issues/59),
-  [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md),
+  [historical CP-0024](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md),
   [TASK-0050](TASK-0050-checked-ffi-regions-control-program.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
 
 > This task organizes F3 delivery under accepted CP-0024. It does not define
 > Ash semantics or accept a Linux executor architecture.
+
+This completed task retains historical source/static results under that earlier
+proposal. It supplies no active assignment under the smaller current plan;
+[TASK-0050](TASK-0050-checked-ffi-regions-control-program.md) owns the revision.
 
 ## Dependencies
 

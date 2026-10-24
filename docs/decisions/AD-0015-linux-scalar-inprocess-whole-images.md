@@ -8,6 +8,12 @@
   [TASK-0050](../tasks/TASK-0050-checked-ffi-regions-control-program.md),
   [launch refinement](../design/foreign-authoring/minimal-ffi-launch-and-artifacts.md)
 
+> Planning scope, 2026-10-24: the user replaced this deployment direction for
+> the current FFI delivery. It supplies no active native/protected/isolation
+> assignment. [TASK-0050](../tasks/TASK-0050-checked-ffi-regions-control-program.md)
+> records the smaller plan. This notice changes neither normative Main behavior
+> nor the scope of historical evidence, and does not complete unfinished gates.
+
 ## Decision
 
 Select one initial architecture for owner-free scalar checked FFI: target

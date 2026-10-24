@@ -1,5 +1,9 @@
 # Proposed bounded owner/resource in-process packaging experiment
 
+> Historical experiment record. The user's 2026-10-24 smaller-boundary plan
+> supersedes the assignments below. This document authorizes no further
+> preparation, build, probe, installation or execution under the revised plan.
+
 Status: proposed map-budget amendment for review. Prior build assignments remain
 historical; this amendment does not assign another command. Preparation is authorized; this
 text authorizes no build, candidate execution, provisioning, product change or
@@ -9,9 +13,10 @@ This is the owner/resource comparison under the existing
 [Linux experiment](linux-profile-experiment.md), governed by
 [DN-0057](../DN-0057-checked-ffi-module-boundaries.md),
 [TASK-0050](../../tasks/TASK-0050-checked-ffi-regions-control-program.md) and its
-[F2 plan](../../tasks/plans/checked-ffi-regions-control.md#f2-validate-the-linux-execution-profile).
-Accepted [CP-0024](../../proposals/CP-0024-checked-foreign-host-profile.md)
-continues to own semantic transitions. [AD-0015](../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
+[F2 plan](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/plans/checked-ffi-regions-control.md#f2-validate-the-linux-execution-profile).
+The historically accepted
+[CP-0024](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md)
+governed that earlier transition. [AD-0015](../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
 accepts owner-free scalar images only; its scope and approvals remain unchanged.
 
 ## Question and comparison
