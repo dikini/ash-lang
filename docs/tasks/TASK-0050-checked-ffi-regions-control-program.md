@@ -6,17 +6,16 @@
   [owned plan](plans/checked-ffi-regions-control.md)
 
 > This task records the agreed work boundary and delivery plan. It does not
-> define Ash semantics. The current assignment authorizes retirement of the
-> obsolete launch stack only. New interface and memory mapping remain proposed
-> in CP-0024 pending S1 design review.
+> define Ash semantics. CP-0024 records the independently reviewed, accepted
+> S1 design; S2 implementation follows its retention and assignment.
 
 ## Dependencies
 
-Preserve current Main language behavior and unrelated milestone work. Remove
-the obsolete artifact/receipt/protected-launch stack under the user's explicit
-cleanup authorization; do not reset the whole product tree to Main.
-Root owns issue revisions and subsequent implementation assignments. S1 design
-review must precede new API implementation; earlier local pointer/reset drafts
+Preserve current Main language behavior and unrelated milestone work. PR138
+removed the obsolete artifact/receipt/protected-launch stack under the user's
+cleanup authorization without resetting the product tree to Main.
+Root owns issue revisions and subsequent implementation assignments. Accepted
+S1 design must precede new API implementation; earlier local pointer/reset drafts
 remain unmerged and do not supply accepted technical decisions.
 
 ## Agreed work boundary
@@ -36,9 +35,9 @@ SQLite is a required canary for coverage, differences and concrete gaps, without
 requiring full SQLite implementation initially. C-aligned primitive needs are
 future work discovered and prioritized as needed, not a fixed phase/catalogue.
 
-This records the user's scope, not new normative semantics. S1 must review the
-technical API and memory mapping in [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md)
-before implementation; this task chooses neither.
+This records the user's scope, not new normative semantics. S1 reviewed the
+technical API and memory mapping through [CP-0024](../proposals/CP-0024-checked-foreign-host-profile.md);
+the accepted proposal, rather than this task, governs implementation.
 
 ## Work
 
@@ -60,9 +59,10 @@ report concrete unsupported cases/differences. The small fixture complements it.
 coverage and numeric representation delivery are not required now; discovered
 C-aligned representation gaps are future work to prioritize as needed.
 
-The obsolete artifact/launch retirement is authorized now. S1 API design review
-is next; new API implementation and native examples remain held. See the owned
-plan for the reuse/removal sequence and final verification owner.
+The obsolete artifact/launch retirement is delivered by PR138. S1 has reviewed
+and accepted the concrete Address/Bytes mapping in CP-0024. S2 implementation is
+next after design retention and assignment. See the owned plan for the reuse
+and removal sequence and final verification owner.
 
 ## Progress
 
@@ -71,9 +71,11 @@ The planning/issue revision was delivered by
 clarification delivered by [PR136](https://github.com/dikini/ash-lang/pull/136).
 [Parent #52](https://github.com/dikini/ash-lang/issues/52) tracks the revised work.
 The user subsequently authorized removal of unnecessary code. The first slice
-retires the artifact/receipt/protected-launch build stack while preserving
-ordinary builds and runtime machinery. S1 API design remains next. No API, native
-execution or product implementation is accepted by those documentation changes.
+retired the artifact/receipt/protected-launch build stack in
+[PR138](https://github.com/dikini/ash-lang/pull/138), preserving ordinary builds
+and runtime machinery. S1 accepted nominal opaque Address, synchronous
+read-only Bytes arguments and ordinary symbol effects, without a new memory API.
+This S1 documentation delivery implements no new API or native execution.
 
 The old F1-F8 workplan and checked-host/full-SQLite/deployment assignments are
 superseded. Items #57-64 and the premature #130 are deprecated as active work.
@@ -82,9 +84,10 @@ scope; unfinished old criteria are not claimed satisfied.
 
 ## Verification
 
-For this retirement, run a workspace check and focused ordinary build, image,
-nonforeign and cleanup regressions, then independently review the removed
-dependency closure. Do not run generated native programs or protected operations.
+For S1, independently review the proposed mapping, removal boundary and SQLite
+gaps; check affected documentation links and authority. PR138 recorded the
+retirement workspace check and focused ordinary regressions. S1 runs no compiler
+or native program.
 The developer owns the full normal gate at the integrated slim path plus example
 checkpoint before M1 acceptance and Main integration.
 
