@@ -2019,6 +2019,45 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
 ) -> Result<Control, Failure> {
     Ok(match operation {
         Some(EffectOperation::RegionValueRequest(_)) => Control::Return,
+        Some(EffectOperation::RegionBuffer(buffer)) => {
+            use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
+            let api = crate::resolved::RegionApi::for_module(buffer.api).ok_or(Failure::Invalid)?;
+            charge(budget, 3)?;
+            graph.code.try_reserve(3).map_err(|_| Failure::Resource)?;
+            let service = graph.code.len();
+            data.position_region_request(service, id, index(buffer.context), budget)?;
+            let mut request = Request::effect(
+                &EffectInstance::new(api.default_alloc(), Box::new([])),
+                source,
+                budget,
+            )?;
+            request.operation = Some(crate::types::OperationId::new(api.default_alloc(), 0));
+            graph.code.push(Control::Request(request));
+            let service = if matches!(&buffer.operation,RegionBufferOperation::Intrinsic(intrinsic) if matches!(intrinsic.operation(),Intrinsic::BytesAppendByte {..}|Intrinsic::StringFromUtf8 {..}))
+            {
+                let twice = graph.code.len();
+                data.position(twice, id, budget)?;
+                graph
+                    .code
+                    .push(Control::Sequence(copy_slice(&[service, service], budget)?));
+                let either = graph.code.len();
+                data.position(either, id, budget)?;
+                graph
+                    .code
+                    .push(Control::Choice(copy_slice(&[service, twice], budget)?));
+                either
+            } else {
+                service
+            };
+            let mut children = Vec::new();
+            children
+                .try_reserve_exact(3)
+                .map_err(|_| Failure::Resource)?;
+            children.push(index(buffer.context) + 1);
+            children.extend(buffer.operand.map(|id| index(id) + 1));
+            children.push(service);
+            Control::Sequence(children)
+        }
         Some(EffectOperation::RegionTuple(tuple)) => {
             let mut children = Vec::new();
             charge(budget, tuple.fields.len() + 2)?;

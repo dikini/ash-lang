@@ -554,6 +554,7 @@ impl Error for RuntimeFailure {}
 
 #[derive(Debug)]
 enum Frame {
+    RegionBuffer(region::BufferProgress),
     RegionTuple {
         node: NodeId,
         environment: Environment,
@@ -1019,6 +1020,7 @@ impl<'runtime> Machine<'runtime> {
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
         disposal::check()?;
         match frame {
+            Frame::RegionBuffer(progress) => self.return_region_buffer(progress, value)?,
             Frame::RegionTuple {
                 node,
                 environment,
@@ -1969,12 +1971,14 @@ impl<'runtime> Machine<'runtime> {
         for (shape, value) in shapes.iter().zip(&retained) {
             let pointer = match (shape, value) {
                 (Shape::Address, Value::Address(pointer)) => pointer.as_ptr(),
-                (Shape::Bytes, bytes) if bytes.bytes().is_some() => bytes
-                    .bytes()
-                    .expect("guarded Bytes")
-                    .as_ptr()
-                    .cast_mut()
-                    .cast(),
+                (Shape::Bytes, bytes) => {
+                    let (bytes, string) =
+                        borrowed_bytes(bytes, &self.heap, &mut self.instantiation_work)?;
+                    if string {
+                        return Err(RuntimeFailure::ForeignBinding);
+                    }
+                    bytes.as_ptr().cast_mut().cast()
+                }
                 _ => return Err(RuntimeFailure::ForeignBinding),
             };
             arguments.push(NativeArgument(pointer));
@@ -2729,6 +2733,7 @@ fn dispatch_entry(
                     EffectOperation::Region(_)
                     | EffectOperation::RegionAllocate(_)
                     | EffectOperation::RegionTuple(_)
+                    | EffectOperation::RegionBuffer(_)
                     | EffectOperation::RegionValueRequest(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
@@ -3315,6 +3320,24 @@ fn packed_tuple_location(
     Err(RuntimeFailure::AliasLoop)
 }
 
+fn borrowed_bytes<'a>(
+    value: &'a Value,
+    heap: &'a [HeapCell],
+    work: &mut TypeWorkBudget,
+) -> Result<(&'a [u8], bool), RuntimeFailure> {
+    match value {
+        Value::Bytes(bytes) => Ok((bytes, false)),
+        Value::String(text) => Ok((text.as_bytes(), true)),
+        Value::Location(location) => {
+            let location = packed_tuple_location(heap, *location, work)?;
+            heap[location]
+                .byte_fields()
+                .ok_or(RuntimeFailure::InvalidControlState)
+        }
+        _ => Err(RuntimeFailure::InvalidControlState),
+    }
+}
+
 fn apply_intrinsic(
     intrinsic: crate::core::packed::IntrinsicNode,
     argument: Value,
@@ -3357,15 +3380,27 @@ fn apply_intrinsic(
             Value::Boolean(left.as_ptr() == right.as_ptr())
         }
         (Intrinsic::BytesEmpty, Value::Unit) => Value::Bytes(Arc::from([])),
-        (Intrinsic::BytesLength, bytes) if bytes.bytes().is_some() => Value::Integer(
-            crate::integer::Integer::from_usize(bytes.bytes().expect("guarded byte value").len()),
-        ),
-        (Intrinsic::StringByteLength, Value::String(text)) => {
-            Value::Integer(crate::integer::Integer::from_usize(text.len()))
+        (Intrinsic::BytesLength, bytes) => {
+            let (bytes, string) = borrowed_bytes(&bytes, heap, work)?;
+            if string {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            Value::Integer(crate::integer::Integer::from_usize(bytes.len()))
         }
-        (Intrinsic::StringToUtf8, Value::String(text)) => {
-            charge_runtime_work(work, text.len(), RuntimePhase::Evaluation)?;
-            Value::Bytes(packed_bytes(text.as_bytes(), None)?)
+        (Intrinsic::StringByteLength, text) => {
+            let (bytes, string) = borrowed_bytes(&text, heap, work)?;
+            if !string {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            Value::Integer(crate::integer::Integer::from_usize(bytes.len()))
+        }
+        (Intrinsic::StringToUtf8, text) => {
+            let (bytes, string) = borrowed_bytes(&text, heap, work)?;
+            if !string {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            charge_runtime_work(work, bytes.len(), RuntimePhase::Evaluation)?;
+            Value::Bytes(packed_bytes(bytes, None)?)
         }
         (Intrinsic::StringFromUtf8 { decoded, invalid }, bytes) if bytes.bytes().is_some() => {
             let bytes = bytes.bytes().expect("guarded byte value");
@@ -3418,11 +3453,14 @@ fn apply_intrinsic(
                         HeapCell::Constructor(constructor, payload),
                     )?)
                 }
-                (Intrinsic::BytesEqual, left, right)
-                    if left.bytes().is_some() && right.bytes().is_some() =>
-                {
-                    let left = left.bytes().expect("guarded byte value");
-                    let right = right.bytes().expect("guarded byte value");
+                (operation @ (Intrinsic::BytesEqual | Intrinsic::StringEqual), left, right) => {
+                    let (left, left_string) = borrowed_bytes(left, heap, work)?;
+                    let (right, right_string) = borrowed_bytes(right, heap, work)?;
+                    if left_string != right_string
+                        || left_string != matches!(operation, Intrinsic::StringEqual)
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
                     charge_runtime_work(
                         work,
                         left.len().min(right.len()),
@@ -3430,14 +3468,7 @@ fn apply_intrinsic(
                     )?;
                     Value::Boolean(left == right)
                 }
-                (Intrinsic::StringEqual, Value::String(left), Value::String(right)) => {
-                    charge_runtime_work(
-                        work,
-                        left.len().min(right.len()),
-                        RuntimePhase::Evaluation,
-                    )?;
-                    Value::Boolean(left == right)
-                }
+
                 _ => return Err(RuntimeFailure::InvalidControlState),
             }
         }

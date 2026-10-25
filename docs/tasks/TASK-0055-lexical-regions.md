@@ -83,23 +83,40 @@ responsibility for freeing backing. This adds no Ash finalizer or object graph
 walk. These Rust representation details do not define Ash memory management or
 exempt buffers and captures from region-backed construction.
 
-The next ordinary nominal-record candidate reuses the supplied Value-slot
-storage and the same native adapter. A private discriminant distinguishes a
-nominal record from a tuple containing a constructor function. Ordinary
-constructor functions use explicit allocation effects and operands at their
-caller's selection, including aliases and higher-order calls. Existing guarded
-recursive slots, source-order initialization and aliases remain in use; the
-independent guard rejects transporting an unfinished payload before storage.
-Source and native cases have passed; exact-head review and retention are pending.
+[PR #148](https://github.com/dikini/ash-lang/pull/148) retained ordinary nominal
+storage as `50fb799a469fa7d04f68d506290d2dbae28e35a7`. Its tree equals reviewed
+head `233bff0924abd96b1ef7ba7b892acd3627c3a018`; 111 distinct focused cases
+transfer by exact equality. The same Value-slot storage and native adapter hold
+a private discriminant and optional payload. Constructor functions carry explicit
+caller allocation effects, including aliases and higher-order calls. Existing
+guarded recursive slots and aliases remain; independent validation rejects
+unfinished payload transport and private runtime constructor forgery.
 
-Owned buffers, closure capture storage and the remaining recursive
-initialization/capture/abandonment evidence remain pending. Intrinsic nominal
-replies from `BytesAt`, `StringFromUtf8` and `BytesAppendByte` still use their
-legacy result construction; route these with the forthcoming buffer-storage
-work before R-core. This candidate does not complete ordinary-construction
-acceptance. The host root retains its
-backing through the existing observed heap, but observation-before-root-release
-ordering remains pending. Target-specific discharge, full close/composition,
+The current byte-storage candidate adds actual supplied Bytes/String payloads,
+with one borrowed reader and byte-copy/borrow leaves on the same host adapter.
+A closed Core operation carries explicit context and original operands; its
+existing evaluator control retains preparation, dynamic request and initialization
+progress across suspension. Successful append/decode initializes the byte payload
+before its nominal envelope; invalid alternatives initialize only the envelope.
+`BytesAt`, `StringFromUtf8` and `BytesAppendByte` now use the retained nominal
+initializer. Constructive builtin wrappers expose DefaultAlloc; read-only host
+leaves keep their actual pure rows. Region-enabled EffectCore rejects raw
+constructive intrinsic and literal bypasses; pure/no-region Core remains supported.
+Source/native, allocation suspension/discard, independent Core and image checks
+are delivery evidence; independent review and retention remain pending.
+
+Persistent large-Int digits, closure capture storage and remaining recursive
+initialization/capture/abandonment evidence are still required. No executable
+memory-read-to-Bytes producer exists at the current slim-FFI boundary, whose
+native replies are Address or Unit; its borrowed Bytes argument uses the common
+reader. The native checks distinguish custom supplied-byte construction/read,
+a root-host Bytes argument kept live through a native call, and exact rejection
+of an explicit-region payload sent through an unprotected outward request. The
+last case preserves the existing lexical payload rule; this delivery adds no
+source native-interpretation syntax. This partial candidate does not complete
+ordinary-construction acceptance.
+The host root retains backing through the existing observed heap, but
+observation-before-root-release ordering remains pending. Target-specific discharge, full close/composition,
 connected R-core and all R3–R5 acceptance remain pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
 [#66](https://github.com/dikini/ash-lang/issues/66),

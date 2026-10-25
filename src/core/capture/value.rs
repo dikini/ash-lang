@@ -1405,6 +1405,59 @@ impl Graph {
             },
             Some(EffectOperation::Registration(scope)) => Expr::Forward(index(scope.body)),
             Some(EffectOperation::RegionValueRequest(_)) => Expr::Scalar,
+            Some(EffectOperation::RegionBuffer(buffer)) => {
+                use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
+                let owner = index(buffer.context);
+                let payload = self.push(
+                    Expr::ResidentTuple {
+                        constructor: None,
+                        fields: Vec::new(),
+                        owner,
+                    },
+                    source,
+                    budget,
+                )?;
+                let alternatives = match buffer.operation {
+                    RegionBufferOperation::Intrinsic(intrinsic) => match intrinsic.operation() {
+                        Intrinsic::BytesAppendByte { appended, invalid } => {
+                            Some((appended, invalid, payload))
+                        }
+                        Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                            Some((decoded, invalid, payload))
+                        }
+                        Intrinsic::BytesAt { found, invalid } => {
+                            let scalar = self.push(Expr::Scalar, source, budget)?;
+                            Some((found, invalid, scalar))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((success, invalid, payload)) = alternatives {
+                    let fields = copy_slice(&[payload], budget)?;
+                    let success = self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(success),
+                            fields,
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    let invalid = self.push(
+                        Expr::ResidentTuple {
+                            constructor: Some(invalid),
+                            fields: Vec::new(),
+                            owner,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    Expr::Merge(copy_slice(&[success, invalid], budget)?)
+                } else {
+                    Expr::Forward(payload)
+                }
+            }
             Some(EffectOperation::RegionTuple(tuple)) => {
                 let mut fields = Vec::new();
                 charge(budget, tuple.fields.len())?;
@@ -1820,6 +1873,25 @@ impl Graph {
         Ok(graph)
     }
 
+    pub(super) fn position_region_request(
+        &mut self,
+        code: usize,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let source = self.sources[expression];
+        let request = self.push(
+            Expr::Request {
+                operand: context,
+                scalar: false,
+            },
+            source,
+            budget,
+        )?;
+        self.position(code, request, budget)
+    }
+
     pub(super) fn position(
         &mut self,
         code: usize,
@@ -1881,10 +1953,7 @@ impl Graph {
 }
 
 fn scalar(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit
-    )
+    matches!(ty, Type::Int | Type::Bool | Type::Unit)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

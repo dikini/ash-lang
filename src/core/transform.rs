@@ -123,6 +123,17 @@ impl TransformFamily for EffectOperationFamily {
                 effects,
                 origin,
             ),
+            EffectOperation::RegionBuffer(buffer) => builder.region_operation(
+                EffectOperation::RegionBuffer(super::region::RegionBufferNode {
+                    api: buffer.api,
+                    context: remap(remapped, buffer.context)?,
+                    operand: buffer.operand.map(|id| remap(remapped, id)).transpose()?,
+                    operation: buffer.operation.clone(),
+                }),
+                ty.into_inner(),
+                effects,
+                origin,
+            ),
             EffectOperation::RegionTuple(tuple) => {
                 let mut fields = Vec::new();
                 builder.charge_effect_metadata(tuple.fields.len())?;

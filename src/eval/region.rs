@@ -15,7 +15,240 @@ pub(super) struct BackingRecord {
     pub(super) initialized: bool,
 }
 
+#[derive(Debug)]
+pub(super) struct BufferProgress {
+    node: NodeId,
+    environment: Environment,
+    owner: Option<ActivationKey>,
+    step: u8,
+    prepared: Option<PreparedBuffer>,
+}
+#[derive(Debug)]
+struct PreparedBuffer {
+    bytes: Option<Vec<u8>>,
+    string: bool,
+    constructor: Option<crate::types::ConstructorId>,
+    payload: Option<Value>,
+}
+
 impl Machine<'_> {
+    fn buffer_node(&self, node: NodeId) -> Option<&crate::core::region::RegionBufferNode> {
+        let Some(ExecutableNode::Effect(expression)) = self.program.node(node) else {
+            return None;
+        };
+        if let EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) = &expression.kind {
+            Some(buffer)
+        } else {
+            None
+        }
+    }
+
+    fn prepare_buffer(
+        &mut self,
+        node: NodeId,
+        argument: Value,
+    ) -> Result<PreparedBuffer, RuntimeFailure> {
+        use crate::{
+            core::{packed::Intrinsic, region::RegionBufferOperation},
+            integer::Integer,
+        };
+        let operation = self
+            .buffer_node(node)
+            .ok_or(RuntimeFailure::InvalidControlState)?
+            .operation
+            .clone();
+        let mut prepared = PreparedBuffer {
+            bytes: None,
+            string: false,
+            constructor: None,
+            payload: None,
+        };
+        fn copy(
+            bytes: &[u8],
+            append: Option<u8>,
+            work: &mut crate::types::TypeWorkBudget,
+        ) -> Result<Vec<u8>, RuntimeFailure> {
+            let len = bytes
+                .len()
+                .checked_add(usize::from(append.is_some()))
+                .filter(|len| *len <= isize::MAX as usize)
+                .ok_or(RuntimeFailure::HeapCapacity)?;
+            charge_effect_work(work, len, RuntimePhase::Evaluation)?;
+            let mut output = Vec::new();
+            reserve_control(&mut output, len, RuntimeResource::HeapCells, true)?;
+            output.extend_from_slice(bytes);
+            if let Some(byte) = append {
+                output.push(byte);
+            }
+            Ok(output)
+        }
+        match operation {
+            RegionBufferOperation::StringLiteral(bytes) => {
+                prepared.bytes = Some(copy(&bytes, None, &mut self.instantiation_work)?);
+                prepared.string = true;
+            }
+            RegionBufferOperation::Intrinsic(intrinsic) => match intrinsic.operation() {
+                Intrinsic::BytesEmpty => prepared.bytes = Some(Vec::new()),
+                Intrinsic::StringToUtf8 => {
+                    let (bytes, string) =
+                        borrowed_bytes(&argument, &self.heap, &mut self.instantiation_work)?;
+                    if !string {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    prepared.bytes = Some(copy(bytes, None, &mut self.instantiation_work)?);
+                }
+                Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                    let (bytes, string) =
+                        borrowed_bytes(&argument, &self.heap, &mut self.instantiation_work)?;
+                    if string {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        bytes.len(),
+                        RuntimePhase::Evaluation,
+                    )?;
+                    if std::str::from_utf8(bytes).is_ok() {
+                        prepared.bytes = Some(copy(bytes, None, &mut self.instantiation_work)?);
+                        prepared.string = true;
+                        prepared.constructor = Some(decoded);
+                    } else {
+                        prepared.constructor = Some(invalid);
+                    }
+                }
+                op @ (Intrinsic::BytesAt { .. } | Intrinsic::BytesAppendByte { .. }) => {
+                    let Value::Location(location) = argument else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let location =
+                        packed_tuple_location(&self.heap, location, &mut self.instantiation_work)?;
+                    let Some(fields) = self.heap[location].tuple_fields() else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let [bytes, Value::Integer(integer)] = fields else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let (bytes, string) =
+                        borrowed_bytes(bytes, &self.heap, &mut self.instantiation_work)?;
+                    if string {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    match op {
+                        Intrinsic::BytesAt { found, invalid } => {
+                            if let Some(byte) = integer.to_usize().and_then(|i| bytes.get(i)) {
+                                prepared.constructor = Some(found);
+                                prepared.payload =
+                                    Some(Value::Integer(Integer::from_i64(i64::from(*byte))));
+                            } else {
+                                prepared.constructor = Some(invalid);
+                            }
+                        }
+                        Intrinsic::BytesAppendByte { appended, invalid } => {
+                            if let Some(byte) = integer.to_i64().and_then(|i| u8::try_from(i).ok())
+                            {
+                                prepared.constructor = Some(appended);
+                                prepared.bytes =
+                                    Some(copy(bytes, Some(byte), &mut self.instantiation_work)?);
+                            } else {
+                                prepared.constructor = Some(invalid);
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                _ => return Err(RuntimeFailure::InvalidControlState),
+            },
+        }
+        Ok(prepared)
+    }
+
+    pub(super) fn return_region_buffer(
+        &mut self,
+        mut progress: BufferProgress,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        if progress.step == 0 {
+            let Value::RegionView(owner) = value else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            progress.owner = Some(owner);
+            if let Some(operand) = self
+                .buffer_node(progress.node)
+                .ok_or(RuntimeFailure::InvalidControlState)?
+                .operand
+            {
+                progress.step = 1;
+                let environment = progress.environment.clone();
+                self.frames.push(Frame::RegionBuffer(progress));
+                self.control = Some(Control::Evaluate(operand, environment));
+                return Ok(());
+            }
+            progress.prepared = Some(self.prepare_buffer(progress.node, Value::Unit)?);
+        } else if progress.step == 1 {
+            progress.prepared = Some(self.prepare_buffer(progress.node, value)?);
+        } else {
+            let Value::RegionStorage(storage) = value else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if Some(storage.invocation.owner) != progress.owner {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            let prepared = progress
+                .prepared
+                .as_mut()
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            if progress.step == 2 {
+                let bytes = prepared
+                    .bytes
+                    .take()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let initialized = self.initialize_region_bytes(storage, &bytes, prepared.string)?;
+                if prepared.constructor.is_none() {
+                    self.control = Some(Control::Return(initialized));
+                    return Ok(());
+                }
+                prepared.payload = Some(initialized);
+            } else {
+                let mut fields = Vec::new();
+                reserve_control(&mut fields, 2, RuntimeResource::HeapCells, true)?;
+                fields.push(Value::ConstructorTag(
+                    prepared
+                        .constructor
+                        .ok_or(RuntimeFailure::InvalidControlState)?,
+                ));
+                fields.extend(prepared.payload.take());
+                let initialized = self.initialize_region_tuple(storage, fields)?;
+                self.control = Some(Control::Return(initialized));
+                return Ok(());
+            }
+        }
+        let prepared = progress
+            .prepared
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let (usable_bytes, alignment, step) = if let Some(bytes) = &prepared.bytes {
+            (bytes.len().max(1), 1, 2)
+        } else {
+            (
+                (1 + usize::from(prepared.payload.is_some())) * core::mem::size_of::<Value>(),
+                core::mem::align_of::<Value>(),
+                3,
+            )
+        };
+        progress.step = step;
+        let owner = progress.owner.ok_or(RuntimeFailure::InvalidControlState)?;
+        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+        self.frames.push(Frame::RegionBuffer(progress));
+        self.invoke_region_allocate(
+            Value::RegionView(owner),
+            Value::RegionRequest(crate::eval::value::RegionRequest {
+                usable_bytes,
+                alignment,
+                invocation: None,
+            }),
+        )
+    }
+
     pub(super) fn region_scope(
         &self,
         node: NodeId,
@@ -130,6 +363,19 @@ impl Machine<'_> {
                     invocation: None,
                 },
             )));
+            return Ok(true);
+        }
+        if let Some(buffer) = self.buffer_node(node) {
+            let context = buffer.context;
+            reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+            self.frames.push(Frame::RegionBuffer(BufferProgress {
+                node,
+                environment: environment.clone(),
+                owner: None,
+                step: 0,
+                prepared: None,
+            }));
+            self.control = Some(Control::Evaluate(context, environment.clone()));
             return Ok(true);
         }
         if let Some(tuple) = self.region_tuple(node) {
@@ -420,6 +666,37 @@ impl Machine<'_> {
         let invocation = request
             .invocation
             .ok_or(RuntimeFailure::InvalidControlState)?;
+        if invocation.owner == owner
+            && request.alignment == 1
+            && request.usable_bytes <= isize::MAX as usize
+        {
+            charge_effect_work(
+                &mut self.instantiation_work,
+                request.usable_bytes,
+                RuntimePhase::Evaluation,
+            )?;
+            let mut bytes = Vec::new();
+            reserve_control(
+                &mut bytes,
+                request.usable_bytes,
+                RuntimeResource::HeapCells,
+                true,
+            )?;
+            bytes.resize(request.usable_bytes, 0);
+            let mut bytes = bytes.into_boxed_slice();
+            let locator = Address::new(bytes.as_mut_ptr().cast());
+            reserve_control(&mut self.heap, 1, RuntimeResource::HeapCells, false)?;
+            let location = allocate_heap(&mut self.heap, HeapCell::Bytes(bytes, 0, false))?;
+            return self.register_pending_backing(BackingRecord {
+                locator,
+                extent: request.usable_bytes,
+                usable_bytes: request.usable_bytes,
+                alignment: 1,
+                invocation,
+                location: Some(location),
+                initialized: false,
+            });
+        }
         let cell_bytes = core::mem::size_of::<Value>();
         if invocation.owner != owner
             || request.alignment != core::mem::align_of::<Value>()
@@ -450,6 +727,68 @@ impl Machine<'_> {
             location: Some(location),
             initialized: false,
         })
+    }
+
+    fn initialize_region_bytes(
+        &mut self,
+        storage: RegionStorage,
+        bytes: &[u8],
+        string: bool,
+    ) -> Result<Value, RuntimeFailure> {
+        self.validate_region_storage(storage)?;
+        charge_effect_work(
+            &mut self.instantiation_work,
+            self.frames
+                .len()
+                .saturating_add(bytes.len().saturating_mul(1 + usize::from(string))),
+            RuntimePhase::Access,
+        )?;
+        let record = self
+            .frames
+            .iter_mut()
+            .rev()
+            .find_map(|frame| match frame {
+                Frame::RegionBoundary { key, records, .. }
+                | Frame::RegionCompletion { key, records, .. }
+                    if *key == storage.invocation.owner =>
+                {
+                    records.get_mut(storage.record)
+                }
+                _ => None,
+            })
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if record.initialized
+            || record.usable_bytes != bytes.len().max(1)
+            || record.extent < record.usable_bytes
+            || (string && std::str::from_utf8(bytes).is_err())
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let location = if let Some(location) = record.location {
+            let Some(HeapCell::Bytes(fields, len, kind)) = self.heap.get_mut(location) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            fields[..bytes.len()].copy_from_slice(bytes);
+            *len = bytes.len();
+            *kind = string;
+            location
+        } else {
+            let adapter = self
+                .source_bindings
+                .and_then(|b| b.tuple_storage)
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            reserve_control(&mut self.heap, 1, RuntimeResource::HeapCells, true)?;
+            let backing = super::super::value::NativeByteStorage::initialize(
+                record.locator.clone(),
+                bytes,
+                adapter,
+            );
+            let location = allocate_heap(&mut self.heap, HeapCell::NativeBytes(backing, string))?;
+            record.location = Some(location);
+            location
+        };
+        record.initialized = true;
+        Ok(Value::Location(location))
     }
 
     /// Consume one pending record by moving evaluated fields into its actual
@@ -556,13 +895,19 @@ impl Machine<'_> {
         )?;
         let mut cells = 0usize;
         for record in records.iter().filter(|record| record.initialized) {
-            let fields = record
+            let cell = record
                 .location
                 .and_then(|location| self.heap.get(location))
-                .and_then(HeapCell::stored_fields)
                 .ok_or(RuntimeFailure::InvalidControlState)?;
+            let count = if matches!(cell, HeapCell::Bytes(..) | HeapCell::NativeBytes(..)) {
+                0
+            } else {
+                cell.stored_fields()
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .len()
+            };
             cells = cells
-                .checked_add(fields.len())
+                .checked_add(count)
                 .ok_or(RuntimeFailure::HeapCapacity)?;
         }
         // Charge the whole drop before changing any ownership state. Both the
@@ -583,6 +928,7 @@ impl Machine<'_> {
                 HeapCell::NativeTuple(_) => {
                     drop(std::mem::replace(cell, HeapCell::Uninitialized));
                 }
+                HeapCell::Bytes(..) | HeapCell::NativeBytes(..) => {}
                 _ => return Err(RuntimeFailure::InvalidControlState),
             }
         }
@@ -790,6 +1136,87 @@ mod tests {
         }
     }
     #[test]
+    fn byte_initialization_consumes_actual_backing_atomically_and_rejects_replay() {
+        fn allocated() -> (Machine<'static>, RegionStorage) {
+            let mut machine = prepared_driver();
+            let storage = machine
+                .allocate_host_region_storage(
+                    ActivationKey(9),
+                    Value::RegionRequest(RegionRequest {
+                        usable_bytes: 3,
+                        alignment: 1,
+                        invocation: Some(RegionInvocation {
+                            owner: ActivationKey(9),
+                            serial: 5,
+                        }),
+                    }),
+                )
+                .unwrap();
+            let Value::RegionStorage(storage) = storage else {
+                panic!("pending storage");
+            };
+            machine.instantiation_work = TypeWorkBudget::default();
+            (machine, storage)
+        }
+        let (mut measured, token) = allocated();
+        measured
+            .initialize_region_bytes(token, b"hey", true)
+            .unwrap();
+        let required = measured.instantiation_work.used();
+        for bad in [b"hi".as_slice(), &[255, 255, 255]] {
+            let (mut machine, token) = allocated();
+            assert!(machine.initialize_region_bytes(token, bad, true).is_err());
+            let Frame::RegionBoundary { records, .. } = &machine.frames[0] else {
+                unreachable!()
+            };
+            assert!(!records[0].initialized);
+            assert!(
+                matches!(&machine.heap[records[0].location.unwrap()],HeapCell::Bytes(bytes,0,false) if bytes.as_ref()==[0,0,0])
+            );
+        }
+        for prefix in [0, 17] {
+            let (mut machine, token) = allocated();
+            machine.instantiation_work = TypeWorkBudget::with_limit(prefix + required - 1);
+            machine.instantiation_work.charge(prefix).unwrap();
+            assert!(
+                machine
+                    .initialize_region_bytes(token, b"hey", true)
+                    .is_err()
+            );
+            let Frame::RegionBoundary { records, .. } = &machine.frames[0] else {
+                unreachable!()
+            };
+            let location = records[0].location.unwrap();
+            assert!(!records[0].initialized);
+            let pointer = records[0].locator.as_ptr();
+            assert!(
+                matches!(&machine.heap[location],HeapCell::Bytes(bytes,0,false) if bytes.as_ref()==[0,0,0])
+            );
+            machine.instantiation_work = TypeWorkBudget::with_limit(prefix + required);
+            machine.instantiation_work.charge(prefix).unwrap();
+            let value = machine
+                .initialize_region_bytes(token, b"hey", true)
+                .unwrap();
+            assert_eq!(machine.instantiation_work.used(), prefix + required);
+            assert!(matches!(value,Value::Location(found) if found==location));
+            let HeapCell::Bytes(bytes, 3, true) = &machine.heap[location] else {
+                panic!("same byte backing");
+            };
+            assert_eq!(bytes.as_ref(), b"hey");
+            assert_eq!(
+                bytes.as_ptr().cast_mut().cast::<core::ffi::c_void>(),
+                pointer
+            );
+            machine.instantiation_work = TypeWorkBudget::default();
+            assert!(
+                machine
+                    .initialize_region_bytes(token, b"hey", true)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn host_allocate_reserves_actual_typed_fields_before_initialization() {
         let mut machine = prepared_driver();
         let request = RegionRequest {
@@ -930,6 +1357,8 @@ mod tests {
             initialize,
             fields,
             drop_fields,
+            copy_bytes: |_, _| {},
+            bytes: |_| &[],
         };
         let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
             "main : Unit -> Unit\nmain () = region<R> owner {\n()\n}\n",

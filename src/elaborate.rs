@@ -3011,6 +3011,9 @@ impl CoreLoweringFamily for EffectOperationFamily {
                 effects,
                 origin,
             ),
+            EffectOperation::RegionBuffer(buffer) => {
+                builder.region_operation(EffectOperation::RegionBuffer(buffer), ty, effects, origin)
+            }
             EffectOperation::RegionTuple(tuple) => {
                 builder.region_operation(EffectOperation::RegionTuple(tuple), ty, effects, origin)
             }
@@ -10660,17 +10663,36 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         {
                             let ty = self.clone_type(&function_type.ty)?;
                             let core_ty = self.pure_core_type(&ty)?;
-                            let node = self.builder.intrinsic(
+                            let intrinsic_module = equational
+                                .interface
+                                .name
+                                .id
+                                .module()
+                                .ok_or_else(invalid_state)?;
+                            let descriptor = crate::core::packed::IntrinsicNode::new(
                                 intrinsic,
-                                equational
-                                    .interface
-                                    .name
-                                    .id
-                                    .module()
-                                    .ok_or_else(invalid_state)?,
-                                core_ty,
-                                equational.interface.name.origin.clone(),
-                            )?;
+                                intrinsic_module,
+                            );
+                            let node = if F::EFFECTS && descriptor.constructs_buffer_or_reply() {
+                                self.lower_buffer_intrinsic(
+                                    intrinsic,
+                                    intrinsic_module,
+                                    &ty,
+                                    definition.span(),
+                                )?
+                            } else {
+                                self.builder.intrinsic(
+                                    intrinsic,
+                                    equational
+                                        .interface
+                                        .name
+                                        .id
+                                        .module()
+                                        .ok_or_else(invalid_state)?,
+                                    core_ty,
+                                    equational.interface.name.origin.clone(),
+                                )?
+                            };
                             TypedNode {
                                 node,
                                 ty,
@@ -14049,15 +14071,40 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<(), TypeError> {
         match &current.kind {
             ResolvedExprKind::String(value) => {
-                let node = self.builder.string(
-                    value.as_bytes(),
-                    Type::String,
-                    Origin::Source(current.span),
-                )?;
+                let api =
+                    self.registry.effects().iter().find_map(|effect| {
+                        crate::resolved::RegionApi::for_module(effect.id.module())
+                    });
+                let effects = api.map_or_else(EffectRow::empty, |api| {
+                    EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])))
+                });
+                let node = if F::EFFECTS && api.is_some() {
+                    self.type_work
+                        .charge(value.len())
+                        .map_err(|()| type_resource())?;
+                    let mut bytes = Vec::new();
+                    bytes
+                        .try_reserve_exact(value.len())
+                        .map_err(|_| type_resource())?;
+                    bytes.extend_from_slice(value.as_bytes());
+                    self.initialize_region_buffer(
+                        crate::core::region::RegionBufferOperation::StringLiteral(Arc::from(bytes)),
+                        None,
+                        &Type::String,
+                        &effects,
+                        current.span,
+                    )?
+                } else {
+                    self.builder.string(
+                        value.as_bytes(),
+                        Type::String,
+                        Origin::Source(current.span),
+                    )?
+                };
                 values.push(TypedNode {
                     node,
                     ty: Type::String,
-                    effects: EffectRow::empty(),
+                    effects,
                     provenance: TypeProvenance::atom(Some(current.span)),
                 });
             }
