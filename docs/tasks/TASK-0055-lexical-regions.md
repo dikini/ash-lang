@@ -1,8 +1,9 @@
 # TASK-0055: Lexical regions
 
 - ID: `TASK-0055`
-- Status: active — R1/R2 design and proof preparation
-- Related: [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md),
+- Status: active — R1/R2 candidate retention
+- Related: [CP-0025](../proposals/CP-0025-lexical-region-construction.md) (accepted for transition),
+  [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md),
   [DN-0055](../design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md),
   [AD-0012](../decisions/AD-0012-proof-development-feedback-and-build-reuse.md),
   [M2 #53](https://github.com/dikini/ash-lang/issues/53)
@@ -15,8 +16,9 @@
 M1 is integrated into Main at `0d8df03d4db2e70294487fc2e61f3629ff33b246`
 through [PR #143](https://github.com/dikini/ash-lang/pull/143). Current
 [specification](../../spec/README.md) remains normative. DN-0054 records the
-user-approved intended direction; exact semantic adoption still needs R2's
-accepted proposal and a matching bounded R1 proof.
+user-approved intended direction. CP-0025 is accepted for transition with a
+matching reviewed bounded R1 proof and audited frozen gate; milestone retention
+and retained verification remain pending.
 
 ## Work
 
@@ -26,8 +28,8 @@ construction, explicit region selection, lexical ownership, bulk reclamation,
 region-stored closures and recursive immutable graphs. Usage/lifetime placement
 inference remains a later optimization.
 
-Begin with the bounded R1 model and R2 contract. Hold product R3 until the
-contract and matched proof are accepted. Preserve current Cell, request,
+Hold product R3 until the accepted R2 contract and matched R1 proof delivery are
+retained on the milestone and verified. Preserve current Cell, request,
 capture, cleanup, kind/row and resource-dependency invariants. Return semantic
 gaps to R2 rather than deciding them during implementation.
 
@@ -45,7 +47,27 @@ empty registration seed. A narrow existing-runner directory option preserves
 its checks rather than rebuilding or changing unrelated proofs. This is gate
 preparation, not a region theorem or accepted R2 contract.
 
-R1/R2 deliverables and all R3–R5 acceptance remain pending. Existing issues
+The standalone runner foundation is retained by
+[PR #145](https://github.com/dikini/ash-lang/pull/145) as
+`31fcfa5674f7cbd46ee583507f47a5c0cf21170e`. Its independent review and five
+focused tests cover only gate preparation, not region preservation.
+[CP-0025](../proposals/CP-0025-lexical-region-construction.md) records the
+accepted R2 transition contract: prospective activation, canonical owner-targeted callback
+and one-shot return, actual backing registration, explicit default/cleanup
+operands and fixed paired allocation/release. It is not current Ash.
+
+The reviewed finite model now has eight modules and 195 axiom reports under
+`Coherent` step/trace preservation. Its frozen AD-0012 integration passed using
+eight independently validated cached artifacts and no fresh module compilations.
+The [proof guide](../design/lexical-regions/README.md),
+[correspondence and assumptions](../design/lexical-regions/correspondence.md) and
+[gate/transfer record](../design/lexical-regions/evidence.md) delimit that result.
+Exact source/registration transfer has passed. Independent actual-gate audit
+cleared the bounded evidence; root accepted CP-0025's matched semantic content.
+Current-head review, milestone retention, retained verification and R1/R2 issue
+acceptance remain pending. This delivers no product implementation.
+
+R1/R2 closure and all R3–R5 acceptance remain pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
 [#66](https://github.com/dikini/ash-lang/issues/66),
 [#67](https://github.com/dikini/ash-lang/issues/67),
@@ -55,9 +77,10 @@ verification, integration and author-acceptance obligations.
 
 ## Verification
 
-For this planning delivery, check artifact authority, required coverage,
+For the changed task/plan/proof prose, check artifact authority, required coverage,
 unchanged future acceptance checkboxes, Markdown structure and affected/incoming
-links. Do not run product or proof builds for prose alone.
+links. The frozen proof gate already covers the transferred sources; do not
+repeat it at equal inputs or run product builds for prose alone.
 
 R1 requires frozen mechanized integration and assumption/dependency audits under
 AD-0012. R2 requires reviewed model-to-contract correspondence. Product stages

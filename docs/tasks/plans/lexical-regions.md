@@ -14,7 +14,7 @@ recursive immutable graphs together. Intermediate data-only or explicit-only
 PRs do not complete it. M1's slim FFI and Main integration are complete at
 `0d8df03d4db2e70294487fc2e61f3629ff33b246` / PR #143. Current specification,
 mathematical Int, rank-1 typing and existing resource/Cell/control rules remain
-the baseline until a reviewed R2 transition is accepted and implemented.
+the baseline until the accepted R2 transition is implemented and integrated.
 
 User-approved design directions constrain R1/R2; they are not proof results or
 permission to skip the proposal. Start R1 and R2 together. Hold product R3 until
@@ -37,9 +37,10 @@ the accepted R2 contract and final matching bounded R1 proof are retained.
 The source/Core candidate uses schematic lexical declaration and selection
 forms and monomorphic default-allocation forwarding to an exact region effect.
 A region-independent storage view must preserve actual residency and lifetime.
-These are proposed realizations, not selected grammar, a new raw-memory API or
-an accepted concrete layout. Astra's R2 proposal will record the exact contract;
-use its reviewed version rather than inferring semantics from this plan.
+[CP-0025](../../proposals/CP-0025-lexical-region-construction.md) records the
+accepted transition contract, including the selected source forms and layout
+obligations. It remains distinct from current language truth; use that contract
+rather than inferring semantics from this plan.
 
 Ordinary construction on current Main does not yet carry the proposed allocation
 effect. R2 must state that semantic delta explicitly. Surface `! {}` would include
@@ -56,6 +57,20 @@ its captured allocation context and restoration frames; successful discard
 restores the clause context. Required completion precedes permitted bulk release.
 Native backing remains an ordinary module contract assumption, not compiler
 quarantine, a native-correctness theorem or a new security protocol.
+
+## R1/R2 candidate checkpoint
+
+The [finite model guide](../../design/lexical-regions/README.md),
+[correspondence report](../../design/lexical-regions/correspondence.md) and
+[evidence record](../../design/lexical-regions/evidence.md) describe the reviewed
+eight-module candidate. The frozen gate passed all 195 reports through eight
+independently validated cache reuses, with zero fresh module compilations;
+exact source/registration transfer passed. Independent actual-gate audit has
+cleared this bounded result and root accepted CP-0025's matched semantic content.
+Current-head review, milestone retention and author acceptance remain pending.
+Product R3 remains held until the accepted contract and matched proof are
+retained and verified. This checkpoint changes no
+original acceptance criterion or required product evidence.
 
 ## Ordered deliveries
 
@@ -143,8 +158,9 @@ Use the existing owned worktree and compatible shared cache. Serialize heavy
 compilers, retain successful compatible artifacts and use bounded local feedback
 under AD-0012. No broad benchmark, compiler optimization search, backend matrix,
 new verification framework or repeated full build per small planning edit.
-This planning PR needs Markdown/artifact/link/authority review only; it runs no
-Cargo, Lean or native work.
+The R1 candidate's proof gate and exact transfer are recorded above. Task/plan
+prose requires Markdown/artifact/link/authority review; it does not require
+repeating equal-input proof checks or running product Cargo/native gates.
 
 ## Planning evidence and exclusions
 

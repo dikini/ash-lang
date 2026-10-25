@@ -19,11 +19,16 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed change is listed.
+No proposed changes are listed.
 
 ## Accepted changes
 
-No accepted proposal is listed.
+[CP-0025: Lexical region construction and paired allocators](CP-0025-lexical-region-construction.md)
+is accepted for transition with a reviewed bounded preservation proof and an
+independently audited frozen gate. Milestone retention and retained verification
+remain pending; product R3 is held until the accepted contract and matching proof
+are retained and verified. It is not current Ash.
+
 The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
 retains the completed transition, verified local Main integration and
 historical retrieval commands.
