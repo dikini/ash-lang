@@ -75,8 +75,16 @@ inner close. Whole-record residency is separate from projectable field facts.
 The private binding facade and pending adapter preserve owner/invocation/layout
 and replay guards. This is a partial host tuple result, not R3 acceptance.
 
-Native/custom-provider initialization, nominal records, owned buffers, closure
-capture storage and recursive slots remain pending. The host root retains its
+The custom tuple path uses one host-level adapter at the existing generated
+native boundary. It initializes and reads the supplied address, releases the
+Rust-owned fields in the current `Value` representation before calling the
+paired provider release, then retires logical records. The provider retains
+responsibility for freeing backing. This adds no Ash finalizer or object graph
+walk. These Rust representation details do not define Ash memory management or
+exempt buffers and captures from region-backed construction.
+
+Nominal records, owned buffers, closure capture storage and recursive slots
+remain pending. The host root retains its
 backing through the existing observed heap, but observation-before-root-release
 ordering remains pending. Target-specific discharge, full close/composition,
 connected R-core and all R3–R5 acceptance remain pending. Existing issues

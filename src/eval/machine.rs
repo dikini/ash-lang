@@ -1054,6 +1054,7 @@ impl<'runtime> Machine<'runtime> {
                     records,
                 });
                 self.frames.push(Frame::ApplyArgument { function: release });
+                self.drop_region_rust_fields_before_release()?;
                 self.control = Some(Control::Return(Value::Unit));
             }
             Frame::RegionCompletion {
@@ -1076,7 +1077,7 @@ impl<'runtime> Machine<'runtime> {
                         RuntimePhase::Cleanup,
                     )?;
                     for record in records {
-                        if let Some(location) = record.host_location {
+                        if let Some(location) = record.location {
                             let cell = self
                                 .heap
                                 .get_mut(location)
@@ -1949,7 +1950,7 @@ impl<'runtime> Machine<'runtime> {
                 };
                 let location =
                     resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
-                let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else {
+                let Some(fields) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
                     return Err(RuntimeFailure::ForeignBinding);
                 };
                 if fields.len() != shapes.len() {
@@ -2018,7 +2019,7 @@ impl<'runtime> Machine<'runtime> {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             let location = resolve_location(&self.heap, location)?;
-            let Some(HeapCell::Tuple(elements)) = self.heap.get(location) else {
+            let Some(elements) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             let [handle, Value::Integer(written)] = elements.as_ref() else {
@@ -2078,7 +2079,7 @@ impl<'runtime> Machine<'runtime> {
             };
             let location =
                 resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
-            let Some(HeapCell::Tuple(elements)) = self.heap.get(location) else {
+            let Some(elements) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             let [Value::ResourceHandle(handle), replacement] = elements.as_ref() else {
@@ -3347,7 +3348,7 @@ fn apply_intrinsic(
         }
         (Intrinsic::AddressEqual, Value::Location(location)) => {
             let location = packed_tuple_location(heap, location, work)?;
-            let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             let [Value::Address(left), Value::Address(right)] = fields.as_ref() else {
@@ -3385,7 +3386,7 @@ fn apply_intrinsic(
             Value::Location(location),
         ) => {
             let location = packed_tuple_location(heap, location, work)?;
-            let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             if fields.len() != 2 {
@@ -3456,7 +3457,7 @@ fn apply_byte_lookup(
 ) -> Result<Value, RuntimeFailure> {
     let location = packed_tuple_location(heap, location, work)?;
     let index = {
-        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+        let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let [bytes, Value::Integer(index)] = fields.as_ref() else {
@@ -3486,7 +3487,7 @@ fn apply_byte_lookup(
         )
     })?;
     let payload = if let Some(index) = index {
-        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+        let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let byte = fields[0]
@@ -3616,7 +3617,7 @@ fn matches_pattern_with_work(
                 } else {
                     resolve_location(heap, location)?
                 };
-                let Some(HeapCell::Tuple(elements)) = heap.get(location) else {
+                let Some(elements) = heap.get(location).and_then(HeapCell::tuple_fields) else {
                     return Ok(false);
                 };
                 if patterns.len() != elements.len() {

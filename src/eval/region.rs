@@ -8,9 +8,10 @@ use crate::eval::value::{Address, RegionInvocation, RegionStorage};
 pub(super) struct BackingRecord {
     pub(super) locator: Address,
     pub(super) extent: usize,
+    pub(super) usable_bytes: usize,
     pub(super) alignment: usize,
     pub(super) invocation: RegionInvocation,
-    pub(super) host_location: Option<Location>,
+    pub(super) location: Option<Location>,
     pub(super) initialized: bool,
 }
 
@@ -86,7 +87,7 @@ impl Machine<'_> {
             if Some(storage.invocation.owner) != context {
                 return Err(RuntimeFailure::InvalidControlState);
             }
-            let initialized = self.initialize_host_region_tuple(storage, fields)?;
+            let initialized = self.initialize_region_tuple(storage, fields)?;
             self.control = Some(Control::Return(initialized));
             return Ok(());
         };
@@ -260,7 +261,7 @@ impl Machine<'_> {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let location = packed_tuple_location(&self.heap, location, &mut self.instantiation_work)?;
-        let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else {
+        let Some(fields) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let [allocate, release] = fields.as_ref() else {
@@ -437,16 +438,17 @@ impl Machine<'_> {
         self.register_pending_backing(BackingRecord {
             locator,
             extent: request.usable_bytes,
+            usable_bytes: request.usable_bytes,
             alignment: request.alignment,
             invocation,
-            host_location: Some(location),
+            location: Some(location),
             initialized: false,
         })
     }
 
-    /// Consume one pending record by moving the already evaluated fields into
-    /// the exact typed array supplied by the fixed host allocate callback.
-    pub(super) fn initialize_host_region_tuple(
+    /// Consume one pending record by moving evaluated fields into its actual
+    /// supplied storage. Native access remains at the generated host boundary.
+    pub(super) fn initialize_region_tuple(
         &mut self,
         storage: RegionStorage,
         values: Vec<Value>,
@@ -478,20 +480,107 @@ impl Machine<'_> {
         if record.initialized {
             return Err(RuntimeFailure::InvalidControlState);
         }
-        let location = record
-            .host_location
-            .ok_or(RuntimeFailure::InvalidControlState)?;
-        let Some(HeapCell::Tuple(fields)) = self.heap.get_mut(location) else {
+        if values.len().checked_mul(core::mem::size_of::<Value>()) != Some(record.usable_bytes)
+            || record.extent < record.usable_bytes
+            || record.alignment < core::mem::align_of::<Value>()
+            || (record.locator.as_ptr() as usize) % core::mem::align_of::<Value>() != 0
+        {
             return Err(RuntimeFailure::InvalidControlState);
+        }
+        let location = if let Some(location) = record.location {
+            let Some(HeapCell::Tuple(fields)) = self.heap.get_mut(location) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if fields.len() != values.len() {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            for (field, value) in fields.iter_mut().zip(values) {
+                *field = value;
+            }
+            location
+        } else {
+            let adapter = self
+                .source_bindings
+                .and_then(|bindings| bindings.tuple_storage)
+                .ok_or(RuntimeFailure::ForeignBinding)?;
+            reserve_control(&mut self.heap, 1, RuntimeResource::HeapCells, true)?;
+            let fields = super::super::value::NativeTupleStorage::initialize(
+                record.locator.clone(),
+                values,
+                adapter,
+            );
+            let location = allocate_heap(&mut self.heap, HeapCell::NativeTuple(fields))?;
+            record.location = Some(location);
+            location
         };
-        if fields.len() != values.len() {
-            return Err(RuntimeFailure::InvalidControlState);
-        }
-        for (field, value) in fields.iter_mut().zip(values) {
-            *field = value;
-        }
         record.initialized = true;
         Ok(Value::Location(location))
+    }
+
+    /// Release Rust-owned fields in the current Value representation while
+    /// backing is live. The provider frees backing separately; logical records
+    /// retire only after the paired release returns.
+    pub(super) fn drop_region_rust_fields_before_release(&mut self) -> Result<(), RuntimeFailure> {
+        let index = self
+            .frames
+            .len()
+            .checked_sub(2)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let Some(Frame::RegionCompletion { node, .. }) = self.frames.get(index) else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        // Root observation ordering remains the separate entry completion work.
+        if self
+            .region_scope(*node)
+            .ok_or(RuntimeFailure::InvalidControlState)?
+            .entry
+        {
+            return Ok(());
+        }
+        let Frame::RegionCompletion { records, .. } = &mut self.frames[index] else {
+            unreachable!()
+        };
+        charge_effect_work(
+            &mut self.instantiation_work,
+            records
+                .len()
+                .checked_mul(2)
+                .ok_or(RuntimeFailure::HeapCapacity)?,
+            RuntimePhase::Cleanup,
+        )?;
+        let mut cells = 0usize;
+        for record in records.iter().filter(|record| record.initialized) {
+            let fields = record
+                .location
+                .and_then(|location| self.heap.get(location))
+                .and_then(HeapCell::tuple_fields)
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            cells = cells
+                .checked_add(fields.len())
+                .ok_or(RuntimeFailure::HeapCapacity)?;
+        }
+        // Charge the whole drop before changing any ownership state. Both the
+        // completion and paired release frames remain owned on refusal.
+        charge_effect_work(&mut self.instantiation_work, cells, RuntimePhase::Cleanup)?;
+        for record in records.iter_mut().filter(|record| record.initialized) {
+            let cell = self
+                .heap
+                .get_mut(record.location.ok_or(RuntimeFailure::InvalidControlState)?)
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            record.initialized = false;
+            match cell {
+                HeapCell::Tuple(fields) => {
+                    for field in fields.iter_mut() {
+                        drop(std::mem::replace(field, Value::Unit));
+                    }
+                }
+                HeapCell::NativeTuple(_) => {
+                    drop(std::mem::replace(cell, HeapCell::Uninitialized));
+                }
+                _ => return Err(RuntimeFailure::InvalidControlState),
+            }
+        }
+        disposal::check()
     }
 
     pub(super) fn register_region_backing(
@@ -503,7 +592,7 @@ impl Machine<'_> {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let location = packed_tuple_location(&self.heap, location, &mut self.instantiation_work)?;
-        let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else {
+        let Some(fields) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let [
@@ -541,9 +630,10 @@ impl Machine<'_> {
         self.register_pending_backing(BackingRecord {
             locator,
             extent,
+            usable_bytes: request.usable_bytes,
             alignment,
             invocation,
-            host_location: None,
+            location: None,
             initialized: false,
         })
     }
@@ -811,6 +901,148 @@ mod tests {
         assert_eq!(fields[0].to_string(), "42");
         assert_eq!(fields[1].to_string(), "1");
     }
+    #[test]
+    fn rust_owned_native_fields_are_released_before_provider_call_and_survive_short_work() {
+        use crate::eval::{NativeTupleAdapter, NativeTupleStorage};
+        use std::cell::RefCell;
+        thread_local! { static HELD: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) }; }
+        // A safe test double observes Rust ownership only. The generated-host
+        // test separately checks actual address initialization and reads.
+        fn initialize(_: &mut NativeTupleStorage, values: Vec<Value>) {
+            HELD.with(|held| {
+                assert!(held.borrow().is_empty());
+                *held.borrow_mut() = values;
+            });
+        }
+        fn fields(_: &NativeTupleStorage) -> &[Value] {
+            &[Value::Unit, Value::Unit]
+        }
+        fn drop_fields(_: &mut NativeTupleStorage) {
+            HELD.with(|held| drop(std::mem::take(&mut *held.borrow_mut())));
+        }
+        let adapter = NativeTupleAdapter {
+            initialize,
+            fields,
+            drop_fields,
+        };
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            "main : Unit -> Unit\nmain () = region<R> owner {\n()\n}\n",
+            None,
+        );
+        let mut pending = vec![program.root()];
+        let node = loop {
+            let id = pending.pop().expect("declared region");
+            let kind = &program.node(id).unwrap().kind;
+            if matches!(kind, EffectExprKind::Operation(EffectOperation::Region(scope)) if !scope.entry)
+            {
+                break id;
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        };
+        for short in [true, false] {
+            let bytes: Arc<[u8]> = Arc::from([1_u8, 2, 3]);
+            let mut memory = [0_u128; 256];
+            let pointer = memory.as_mut_ptr().cast();
+            let fields = NativeTupleStorage::initialize(
+                Address::new(pointer),
+                vec![Value::Bytes(Arc::clone(&bytes)), Value::Unit],
+                adapter,
+            );
+            let mut machine = Machine::new_effect(&program);
+            machine.heap.push(HeapCell::NativeTuple(fields));
+            machine.frames.reserve(2);
+            if short {
+                machine.instantiation_work = TypeWorkBudget::with_limit(0);
+            }
+            let result = machine.return_from(
+                Frame::RegionBoundary {
+                    node,
+                    key: ActivationKey(9),
+                    allocate: Value::Unit,
+                    release: Value::Unit,
+                    preceding: Value::Unit,
+                    records: vec![BackingRecord {
+                        locator: Address::new(pointer),
+                        extent: 4096,
+                        usable_bytes: 2 * core::mem::size_of::<Value>(),
+                        alignment: 16,
+                        invocation: RegionInvocation {
+                            owner: ActivationKey(9),
+                            serial: 5,
+                        },
+                        location: Some(0),
+                        initialized: true,
+                    }],
+                },
+                Value::Unit,
+            );
+            assert!(
+                matches!(machine.frames.last(), Some(Frame::ApplyArgument { .. })),
+                "provider call remains pending in its owned frame"
+            );
+            let Frame::RegionCompletion { records, .. } = &machine.frames[0] else {
+                panic!("completion retained")
+            };
+            if short {
+                let RuntimeFailure::Report(report) = result.unwrap_err() else {
+                    panic!("work report")
+                };
+                assert_eq!(
+                    report.primary.resource().unwrap().cause,
+                    ResourceFailureCause::WorkBudgetExhausted
+                );
+                assert!(records[0].initialized);
+                assert_eq!(Arc::strong_count(&bytes), 2);
+                assert!(matches!(machine.heap[0], HeapCell::NativeTuple(_)));
+            } else {
+                result.unwrap();
+                assert!(!records[0].initialized);
+                assert_eq!(
+                    Arc::strong_count(&bytes),
+                    1,
+                    "Rust-owned field was released before invoking provider"
+                );
+                assert!(matches!(machine.heap[0], HeapCell::Uninitialized));
+            }
+            drop(machine);
+            assert_eq!(Arc::strong_count(&bytes), 1);
+        }
+    }
+
+    #[test]
+    fn native_initializer_uses_saved_request_not_larger_backing_capacity() {
+        let mut machine = prepared_driver();
+        let mut memory = [0_u128; 256];
+        let storage = machine
+            .register_pending_backing(BackingRecord {
+                locator: Address::new(memory.as_mut_ptr().cast()),
+                extent: 4096,
+                usable_bytes: core::mem::size_of::<Value>(),
+                alignment: 16,
+                invocation: RegionInvocation {
+                    owner: ActivationKey(9),
+                    serial: 5,
+                },
+                location: None,
+                initialized: false,
+            })
+            .unwrap();
+        let Value::RegionStorage(storage) = storage else {
+            panic!("pending token")
+        };
+        assert_eq!(
+            machine
+                .initialize_region_tuple(storage, vec![Value::Unit, Value::Unit])
+                .unwrap_err(),
+            RuntimeFailure::InvalidControlState
+        );
+        let Frame::RegionBoundary { records, .. } = &machine.frames[0] else {
+            panic!("owner retained")
+        };
+        assert!(!records[0].initialized);
+        assert!(records[0].location.is_none());
+    }
+
     #[test]
     fn close_frame_reservation_failure_keeps_the_owner_and_backing() {
         let mut machine = prepared_driver();

@@ -70,12 +70,77 @@ impl ExecutableProgram {
 
 pub(crate) type Location = usize;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) enum HeapCell {
     Uninitialized,
     Alias(Location),
     Tuple(Box<[Value]>),
+    NativeTuple(NativeTupleStorage),
     Constructor(ConstructorId, Option<Value>),
+}
+
+impl HeapCell {
+    pub(crate) fn tuple_fields(&self) -> Option<&[Value]> {
+        match self {
+            Self::Tuple(fields) => Some(fields),
+            Self::NativeTuple(fields) => Some((fields.adapter.fields)(fields)),
+            _ => None,
+        }
+    }
+}
+
+/// Passive typed-memory leaves emitted once in the existing native host.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct NativeTupleAdapter {
+    pub initialize: fn(&mut NativeTupleStorage, Vec<Value>),
+    pub fields: for<'a> fn(&'a NativeTupleStorage) -> &'a [Value],
+    pub drop_fields: fn(&mut NativeTupleStorage),
+}
+
+/// Unique metadata for initialized values in module-supplied backing.
+/// Drops Rust representation contents without freeing the module's backing.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct NativeTupleStorage {
+    address: Address,
+    len: usize,
+    adapter: NativeTupleAdapter,
+    initialized: bool,
+}
+impl NativeTupleStorage {
+    pub(crate) fn initialize(
+        address: Address,
+        values: Vec<Value>,
+        adapter: NativeTupleAdapter,
+    ) -> Self {
+        let mut storage = Self {
+            address,
+            len: values.len(),
+            adapter,
+            initialized: false,
+        };
+        (adapter.initialize)(&mut storage, values);
+        storage.initialized = true;
+        storage
+    }
+    pub fn address(&self) -> *mut core::ffi::c_void {
+        self.address.as_ptr()
+    }
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+impl Drop for NativeTupleStorage {
+    fn drop(&mut self) {
+        if self.initialized {
+            self.initialized = false;
+            (self.adapter.drop_fields)(self);
+        }
+    }
 }
 
 /// A heap-backed tuple or nominal observation.
@@ -182,7 +247,8 @@ impl ObservedValue {
                                 }
                                 tasks.push(Task::Exit(location));
                                 match cell {
-                                    HeapCell::Tuple(elements) => {
+                                    HeapCell::Tuple(_) | HeapCell::NativeTuple(_) => {
+                                        let elements = cell.tuple_fields().expect("tuple fields");
                                         output.push('(');
                                         tasks.push(Task::Text(")"));
                                         for (index, element) in elements.iter().enumerate().rev() {
@@ -205,8 +271,11 @@ impl ObservedValue {
                                             output.push('(');
                                             tasks.push(Task::Text(")"));
                                             if let Value::Location(payload_location) = payload
-                                                && let Some(HeapCell::Tuple(elements)) =
-                                                    self.heap.cells.get(*payload_location)
+                                                && let Some(elements) = self
+                                                    .heap
+                                                    .cells
+                                                    .get(*payload_location)
+                                                    .and_then(HeapCell::tuple_fields)
                                             {
                                                 for (index, element) in
                                                     elements.iter().enumerate().rev()

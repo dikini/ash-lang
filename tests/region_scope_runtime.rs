@@ -181,3 +181,24 @@ fn discarding_a_field_continuation_abandons_unrequested_tuple_storage() {
         "99"
     );
 }
+
+#[test]
+fn an_outer_cell_cannot_backpatch_a_release_with_its_regions_view() {
+    let failure = run_result(concat!(
+        "import @builtin.generic_cell as Cell\n",
+        "zero : Unit -> Int\nzero () = 0\nmain : Unit -> Unit\n",
+        "main () = region<S> outer {\nresource Cell.Cell<C, Unit -> Int> holder = zero {\n",
+        "region<R> owner {\nlet capture : Unit -> Int = fn(ignored) {\nusing owner {\n42\n}\n}\n",
+        "using outer {\nCell.write (holder, capture)\n}\n}\n}\n}\n",
+    ))
+    .unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("source lifetime rejection")
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("source lifetime rejection: {diagnostic:?}")
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}

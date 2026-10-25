@@ -73,9 +73,11 @@ R3 is active in [draft PR #147](https://github.com/dikini/ash-lang/pull/147);
 no product criterion is complete. Its source tuple path now requests and
 initializes actual supplied host arrays and retires them on ordinary owner
 close. Outer-selected tuples survive an inner close. This extends the explicit
-owner/handler and default-entry control checkpoint. Native/custom initialization,
-other required representations, target-specific discharge, observation-before-root-release
-ordering and full completion remain pending, followed by the connected R-core
+owner/handler and default-entry control checkpoint. Custom tuples now use the
+supplied native address through one generated host adapter; Rust-owned fields
+in the current representation are released before the paired provider frees
+backing. Other required representations, target-specific discharge,
+observation-before-root-release ordering and full completion remain pending, followed by the connected R-core
 gate. This changes no original criterion or required product evidence.
 
 ## Ordered deliveries
