@@ -308,6 +308,15 @@ struct RecursiveMemberRecord {
 
 #[derive(Clone, Copy, Debug)]
 enum NodeTag {
+    RegionBuffer {
+        api: u32,
+        context: u32,
+        operand: Option<u32>,
+        source: u8,
+        module: Option<u32>,
+        operation: u8,
+        bytes: Slice,
+    },
     RegionValueRequest {
         api: u32,
         fields: u32,
@@ -1630,7 +1639,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x15";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x16";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2120,6 +2129,24 @@ impl Wire for NodeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::RegionBuffer {
+                api,
+                context,
+                operand,
+                source,
+                module,
+                operation,
+                bytes,
+            } => {
+                36u8.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                operand.write(writer)?;
+                source.write(writer)?;
+                module.write(writer)?;
+                operation.write(writer)?;
+                bytes.write(writer)
+            }
             Self::RegionValueRequest { api, fields } => {
                 34u8.write(writer)?;
                 api.write(writer)?;
@@ -2375,6 +2402,15 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            36 => Self::RegionBuffer {
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                operand: Wire::read(reader)?,
+                source: Wire::read(reader)?,
+                module: Wire::read(reader)?,
+                operation: Wire::read(reader)?,
+                bytes: Wire::read(reader)?,
+            },
             34 => Self::RegionValueRequest {
                 api: Wire::read(reader)?,
                 fields: Wire::read(reader)?,
@@ -3269,6 +3305,7 @@ impl Decoder<'_> {
             NodeTag::Region { .. }
             | NodeTag::RegionValueRequest { .. }
             | NodeTag::RegionTuple { .. }
+            | NodeTag::RegionBuffer { .. }
             | NodeTag::RegionAllocate { .. }
             | NodeTag::CellScope { .. }
             | NodeTag::Cleanup { .. }
@@ -3566,6 +3603,16 @@ mod tests {
             "type Stream = Next(Int, Stream)\nmain : Unit -> Int\nmain () = region<R> r {\n",
             "let rec ones : Stream = Next(21, ones)\nmatch ones {\n",
             "Next(first, rest) => match rest {\nNext(second, ignored) => first + second\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn byte_storage_image_restores_literal_and_utf8_result_without_sources() {
+        assert_region_image(concat!(
+            "import @builtin.regions as Region\nimport @builtin.string as Text\nimport @builtin.bytes as B\n",
+            "main : Unit -> Int\nmain () = region<R> r {\n",
+            "match Text.from_utf8 (Text.to_utf8 \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\") {\n",
+            "Text.Decoded(text) => Text.byte_length text\nText.InvalidUtf8 => 0\n}\n}\n"
         ));
     }
 
@@ -4905,32 +4952,49 @@ main () = {
 "#,
         );
         let compiled = compile_path(tree.configuration()).unwrap();
-        let (program, provenance) = compiled.pure_build_input().unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
         let mut work = TypeWorkBudget::default();
-        let image = encode(program, provenance, &mut work).unwrap();
+        let image =
+            encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut work)
+                .unwrap()
+                .image;
         let required = work.used();
         for prefix in [0, 7] {
             let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
             short.charge(prefix).unwrap();
             assert!(matches!(
-                encode(program, provenance, &mut short),
-                Err(ImageFailure::Resource)
+                encode_effect_for_build(
+                    program,
+                    provenance,
+                    super::super::NATIVE_TARGET,
+                    &mut short
+                ),
+                Err(NativeImageFailure::Image(ImageFailure::Resource))
             ));
             let mut exact = TypeWorkBudget::with_limit(prefix + required);
             exact.charge(prefix).unwrap();
-            encode(program, provenance, &mut exact).unwrap();
+            encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut exact)
+                .unwrap();
             assert_eq!(exact.used(), prefix + required);
         }
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
         drop(compiled);
         drop(tree);
         let restore = |bytes: &[u8], work: &mut TypeWorkBudget| {
-            PureImage::decode_bytes(bytes, work)?.restore(work)
+            let image = PureImage::decode_bytes(bytes, work)?;
+            image.admit_expected_native_facts(&expected, work)?;
+            image.restore_effect(work)
         };
         let mut measured = TypeWorkBudget::default();
         let restored = restore(&bytes, &mut measured).unwrap();
         assert_eq!(
-            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
             "(255, true, 1, true, true)"
         );
         let required = measured.used();
@@ -4979,14 +5043,24 @@ main () = {
                         .nodes
                         .iter_mut()
                         .find(|node| {
-                            matches!(node.tag, NodeTag::BytesIntrinsic { operation: 4, .. })
+                            matches!(
+                                node.tag,
+                                NodeTag::RegionBuffer {
+                                    source: 1,
+                                    operation: 4,
+                                    ..
+                                }
+                            )
                         })
                         .unwrap();
-                    let NodeTag::BytesIntrinsic { module, operation } = &mut node.tag else {
+                    let NodeTag::RegionBuffer {
+                        module, operation, ..
+                    } = &mut node.tag
+                    else {
                         unreachable!()
                     };
                     if change == 3 {
-                        *module = ordinary;
+                        *module = Some(ordinary);
                     } else {
                         *operation = 255;
                     }
@@ -4994,7 +5068,9 @@ main () = {
                 _ => unreachable!(),
             }
             assert!(
-                changed.restore(&mut TypeWorkBudget::default()).is_err(),
+                changed
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
                 "forged Bytes authority {change}"
             );
         }
@@ -7329,6 +7405,35 @@ impl Encoder<'_> {
                     fields: index(request.fields)?,
                 })
             }
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
+                use crate::core::region::RegionBufferOperation;
+                let (source, module, operation, bytes) = match &buffer.operation {
+                    RegionBufferOperation::StringLiteral(bytes) => {
+                        (0, None, 0, append(&mut self.image.bytes, bytes, self.work)?)
+                    }
+                    RegionBufferOperation::Intrinsic(intrinsic) => {
+                        let tag = self
+                            .encode_node(&PureExprKind::Value(PureValue::Intrinsic(*intrinsic)))?;
+                        let (source, module, operation) = match tag {
+                            NodeTag::BytesIntrinsic { module, operation } => (1, module, operation),
+                            NodeTag::StringIntrinsic { module, operation } => {
+                                (2, module, operation)
+                            }
+                            _ => return Err(ImageFailure::InvalidRecord),
+                        };
+                        (source, Some(module), operation, Slice { start: 0, len: 0 })
+                    }
+                };
+                Ok(NodeTag::RegionBuffer {
+                    api: self.module(buffer.api)?,
+                    context: self.node(buffer.context)?,
+                    operand: buffer.operand.map(|id| self.node(id)).transpose()?,
+                    source,
+                    module,
+                    operation,
+                    bytes,
+                })
+            }
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
                 let start = self.image.node_children.len();
                 for field in &tuple.fields {
@@ -8366,6 +8471,70 @@ impl Decoder<'_> {
                     .with_caller_type_work(self.work, |builder| {
                         builder.region_operation(
                             crate::core::EffectOperation::Region(Box::new(scope)),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionBuffer {
+                api,
+                context,
+                operand,
+                source,
+                module,
+                operation,
+                bytes,
+            } => {
+                use crate::core::{
+                    packed::{Intrinsic, IntrinsicNode},
+                    region::{RegionBufferNode, RegionBufferOperation},
+                };
+                let operation = match (source, module, operation) {
+                    (0, None, 0) => {
+                        let bytes = bytes.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
+                        charge(self.work, bytes.len())?;
+                        let mut copy = Vec::new();
+                        copy.try_reserve_exact(bytes.len())
+                            .map_err(|_| ImageFailure::Resource)?;
+                        copy.extend_from_slice(bytes);
+                        RegionBufferOperation::StringLiteral(Arc::from(copy))
+                    }
+                    (source, Some(module), operation) if bytes == (Slice { start: 0, len: 0 }) => {
+                        let module = *get(&self.modules, module)?;
+                        let owner = |local| NominalTypeId::new(module, local);
+                        let operation = match (source, operation) {
+                            (1, 0) => Intrinsic::BytesEmpty,
+                            (1, 1) => Intrinsic::BytesAppendByte {
+                                appended: ConstructorId::new(owner(0), 0),
+                                invalid: ConstructorId::new(owner(0), 1),
+                            },
+                            (1, 4) => Intrinsic::BytesAt {
+                                found: ConstructorId::new(owner(1), 0),
+                                invalid: ConstructorId::new(owner(1), 1),
+                            },
+                            (2, 1) => Intrinsic::StringToUtf8,
+                            (2, 3) => Intrinsic::StringFromUtf8 {
+                                decoded: ConstructorId::new(owner(0), 0),
+                                invalid: ConstructorId::new(owner(0), 1),
+                            },
+                            _ => return Err(ImageFailure::InvalidRecord),
+                        };
+                        RegionBufferOperation::Intrinsic(IntrinsicNode::new(operation, module))
+                    }
+                    _ => return Err(ImageFailure::InvalidRecord),
+                };
+                let buffer = RegionBufferNode {
+                    api: *get(&self.modules, api)?,
+                    context: *get(nodes, context)?,
+                    operand: operand.map(|id| get(nodes, id).copied()).transpose()?,
+                    operation,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionBuffer(buffer),
                             ty.into_inner(),
                             effects,
                             origin.take(),

@@ -551,7 +551,15 @@ fn render_native_suffix(
     initialize: tuple_initialize,
     fields: tuple_fields,
     drop_fields: tuple_drop_fields,
+    copy_bytes,
+    bytes,
 };
+fn copy_bytes(storage: &ash::eval::NativeByteStorage, bytes: &[u8]) {
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(),storage.address().cast(),bytes.len()); }
+}
+fn bytes(storage: &ash::eval::NativeByteStorage) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(storage.address().cast(),storage.len()) }
+}
 fn tuple_initialize(storage: &mut ash::eval::NativeTupleStorage, values: Vec<ash::eval::Value>) {
     let pointer = storage.address().cast::<ash::eval::Value>();
     for (index, value) in values.into_iter().enumerate() {

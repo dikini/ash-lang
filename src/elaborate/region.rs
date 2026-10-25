@@ -1,6 +1,7 @@
 //! Lower lexical owners and selections to explicit provider pairs and handlers.
 
 use super::*;
+use crate::module::ModuleId;
 use crate::{
     core::{
         packed::Intrinsic,
@@ -24,6 +25,93 @@ pub(super) struct SelectionProgress {
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    fn saved_region_context(
+        &mut self,
+        api: RegionApi,
+        span: Span,
+    ) -> Result<(TypedBinder, NodeId, NodeId), TypeError> {
+        let context = self
+            .builder
+            .binder(Type::Nominal(api.region_view()), Origin::Source(span))?;
+        let context_value = self.builder.variable(
+            context.id(),
+            Type::Nominal(api.region_view()),
+            Origin::Source(span),
+        )?;
+        let unit = self.builder.unit(Type::Unit, Origin::Source(span))?;
+        let instance = EffectInstance::new(api.default_alloc(), Box::new([]));
+        let row = self.core_effect_row(&EffectRow::singleton(instance.clone()))?;
+        let query = self.push_effect_core(
+            Type::Nominal(api.region_view()),
+            row,
+            Origin::Source(span),
+            EffectOperation::Request(RequestNode::new(
+                instance,
+                crate::types::OperationId::new(api.default_alloc(), 1),
+                unit,
+            )),
+        )?;
+        Ok((context, context_value, query))
+    }
+
+    pub(super) fn initialize_region_buffer(
+        &mut self,
+        operation: crate::core::region::RegionBufferOperation,
+        operand: Option<NodeId>,
+        ty: &Type,
+        effects: &EffectRow,
+        span: Span,
+    ) -> Result<NodeId, TypeError> {
+        let api = self.region_api_at(span)?;
+        let (context, context_value, query) = self.saved_region_context(api, span)?;
+        let row = self.core_effect_row(effects)?;
+        let result = self.clone_type(ty)?;
+        let node = self.push_effect_core(
+            result,
+            row,
+            Origin::Source(span),
+            EffectOperation::RegionBuffer(crate::core::region::RegionBufferNode {
+                api: api.module(),
+                context: context_value,
+                operand,
+                operation,
+            }),
+        )?;
+        let result = self.clone_type(ty)?;
+        Ok(self
+            .builder
+            .binding(context, query, node, result, Origin::Source(span))?)
+    }
+
+    pub(super) fn lower_buffer_intrinsic(
+        &mut self,
+        intrinsic: Intrinsic,
+        module: ModuleId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<NodeId, TypeError> {
+        let function = ty.function_view().ok_or_else(invalid_state)?;
+        let domain = self.clone_type(function.domain())?;
+        let parameter = self.builder.binder(domain, Origin::Source(span))?;
+        let domain = self.clone_type(function.domain())?;
+        let operand = self
+            .builder
+            .variable(parameter.id(), domain, Origin::Source(span))?;
+        let body = self.initialize_region_buffer(
+            crate::core::region::RegionBufferOperation::Intrinsic(
+                crate::core::packed::IntrinsicNode::new(intrinsic, module),
+            ),
+            Some(operand),
+            function.value(),
+            function.effects().ok_or_else(invalid_state)?,
+            span,
+        )?;
+        let ty = self.clone_type(ty)?;
+        Ok(self
+            .builder
+            .function(parameter, body, ty, Origin::Source(span))?)
+    }
+
     pub(super) fn initialize_region_tuple(
         &mut self,
         operands: Vec<NodeId>,
@@ -52,28 +140,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.type_work
             .charge(operands.len())
             .map_err(|()| type_resource())?;
-        let context = self
-            .builder
-            .binder(Type::Nominal(api.region_view()), Origin::Source(span))?;
-        let context_value = self.builder.variable(
-            context.id(),
-            Type::Nominal(api.region_view()),
-            Origin::Source(span),
-        )?;
-        let unit = self.builder.unit(Type::Unit, Origin::Source(span))?;
-        let default = EffectInstance::new(api.default_alloc(), Box::new([]));
-        let default_row = EffectRow::singleton(default.clone());
-        let query_row = self.core_effect_row(&default_row)?;
-        let query = self.push_effect_core(
-            Type::Nominal(api.region_view()),
-            query_row,
-            Origin::Source(span),
-            EffectOperation::Request(RequestNode::new(
-                default,
-                crate::types::OperationId::new(api.default_alloc(), 1),
-                unit,
-            )),
-        )?;
+        let (context, context_value, query) = self.saved_region_context(api, span)?;
+        let default_row =
+            EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
         let request = self.push_effect_core(
             Type::Nominal(api.request()),
             EffectRow::empty(),

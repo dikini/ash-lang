@@ -1573,6 +1573,8 @@ pub fn load_module_graph(
                     } else if packed {
                         admit_builtin_packed(
                             segments[0].text == "bytes",
+                            builtin_region
+                                .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?,
                             graph_identity,
                             import.span,
                             &mut budget,
@@ -1847,6 +1849,7 @@ fn admit_builtin_foreign(
 
 fn admit_builtin_packed(
     bytes: bool,
+    region: ModuleId,
     graph: u32,
     import_span: Span,
     budget: &mut GraphBudget,
@@ -1882,13 +1885,19 @@ fn admit_builtin_packed(
         graph,
         value,
     };
+    budget.charge_edge()?;
+    let service_span = surface.span;
     staged.push(StagedModule {
         id,
         canonical_path: path,
         owners: OwnerSet::from_paths(&[], budget)?,
         source,
         surface,
-        dependencies: Vec::new(),
+        dependencies: vec![ModuleDependency {
+            target: region,
+            import_span: service_span,
+            region_service: true,
+        }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
     });

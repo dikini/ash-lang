@@ -76,15 +76,22 @@ close. Outer-selected tuples survive an inner close. This extends the explicit
 owner/handler and default-entry control checkpoint. Custom tuples now use the
 supplied native address through one generated host adapter; Rust-owned fields
 in the current representation are released before the paired provider frees
-backing. The next ordinary nominal-record candidate reuses those slots and the
-same adapter for a private discriminant and optional payload, with explicit
-caller-selected constructor functions and existing guarded recursive aliases.
-Its review and retention remain pending. Intrinsic nominal replies from
-`BytesAt`, `StringFromUtf8` and `BytesAppendByte` remain with the pending
-buffer-storage work. Buffers, closure storage, full recursive initialization
-and abandonment evidence, target-specific discharge,
-observation-before-root-release ordering and full completion remain pending, followed by the connected R-core
-gate. This changes no original criterion or required product evidence.
+backing. [PR #148](https://github.com/dikini/ash-lang/pull/148) retained ordinary
+nominal storage as `50fb799a469fa7d04f68d506290d2dbae28e35a7`, matching the
+reviewed tree and 111 distinct focused cases. It uses the same slots/adapter for
+a private discriminant and payload, explicit caller-selected constructor
+functions and existing guarded recursive aliases.
+
+The current byte candidate reuses the owner service, records and retirement for
+actual Bytes/String backing. One closed Core operation retains explicit context,
+original operands and local prepare/request/init progress. The same native
+adapter adds byte copy/borrow; successful append/decode initializes payload before
+its nominal envelope, while invalid alternatives initialize only the envelope.
+This also covers the intrinsic replies from `BytesAt`, `StringFromUtf8` and
+`BytesAppendByte`. Independent review and retention are pending. Large-Int digits,
+closure storage, remaining recursive initialization/abandonment evidence,
+target-specific discharge, observation-before-root-release ordering and full
+completion remain required, followed by the connected R-core gate. This changes no original criterion or required product evidence.
 
 ## Ordered deliveries
 

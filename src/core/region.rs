@@ -138,3 +138,20 @@ pub(crate) fn allocation_effects(
     )?
     .map_err(|_| ())
 }
+
+/// Closed byte construction. Its request layout is computed locally after the
+/// explicit context and original operand have each been evaluated once.
+/// Allocation uses that context's existing service; no payload enters Request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegionBufferNode {
+    pub(crate) api: ModuleId,
+    pub(crate) context: NodeId,
+    pub(crate) operand: Option<NodeId>,
+    pub(crate) operation: RegionBufferOperation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RegionBufferOperation {
+    StringLiteral(std::sync::Arc<[u8]>),
+    Intrinsic(super::packed::IntrinsicNode),
+}

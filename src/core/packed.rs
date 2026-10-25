@@ -86,13 +86,23 @@ pub struct IntrinsicNode {
     module: ModuleId,
 }
 impl IntrinsicNode {
-    pub(super) const fn new(operation: Intrinsic, module: ModuleId) -> Self {
+    pub(crate) const fn new(operation: Intrinsic, module: ModuleId) -> Self {
         Self { operation, module }
     }
     /// Returns the selected operation.
     #[must_use]
     pub const fn operation(self) -> Intrinsic {
         self.operation
+    }
+    pub(crate) const fn constructs_buffer_or_reply(self) -> bool {
+        matches!(
+            self.operation,
+            Intrinsic::BytesEmpty
+                | Intrinsic::BytesAppendByte { .. }
+                | Intrinsic::BytesAt { .. }
+                | Intrinsic::StringToUtf8
+                | Intrinsic::StringFromUtf8 { .. }
+        )
     }
     /// Returns its canonical compiler-owned module.
     #[must_use]

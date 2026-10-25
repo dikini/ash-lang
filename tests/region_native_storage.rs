@@ -12,6 +12,8 @@ pub foreign library RegionFixture {
     symbol Make : Unit -> F.Address { name "region_make" }
     symbol Allocate : F.Address -> F.Address { name "region_allocate" }
     symbol Release : F.Address -> Unit { name "region_release" }
+    symbol Inspect : Bytes -> Unit { name "region_inspect" }
+    symbol InspectHost : Bytes -> Unit { name "region_inspect_host" }
 }
 "#;
 const ENTRY: &str = r#"import native as Raw
@@ -47,6 +49,7 @@ const C: &str = r#"#include <stdio.h>
 #include <string.h>
 struct block { void *bytes; struct block *next; };
 struct state { struct block *blocks; };
+static struct state *current;
 static void trace(char tag) {
     const char *path = getenv("ASH_REGION_TRACE");
     if (!path) abort();
@@ -56,6 +59,7 @@ static void trace(char tag) {
 void *region_make(void) {
     struct state *state = calloc(1, sizeof *state);
     if (!state) abort();
+    current = state;
     trace('m');
     return state;
 }
@@ -71,9 +75,20 @@ void *region_allocate(void *opaque) {
     trace('a');
     return block->bytes;
 }
+void region_inspect_host(const unsigned char *bytes) {
+    if (bytes[0] != 42 || bytes[1] != 42) abort();
+    trace('b');
+}
+void region_inspect(const unsigned char *bytes) {
+    int found = 0;
+    for (struct block *block = current->blocks; block; block = block->next)
+        found |= block->bytes == bytes;
+    if (!found || bytes[0] != 42 || bytes[1] != 42) abort();
+    trace('b');
+}
 void region_release(void *opaque) {
     struct state *state = opaque;
-    if (!state->blocks) abort();
+    /* The fixed pair also releases an owner abandoned before its first block. */
     while (state->blocks) {
         struct block *block = state->blocks;
         unsigned char *bytes = block->bytes;
@@ -87,6 +102,7 @@ void region_release(void *opaque) {
     }
     trace('r');
     free(state);
+    current = NULL;
 }
 "#;
 
@@ -103,9 +119,168 @@ fn custom_region_stores_nullary_and_payload_nominal_records_in_supplied_backing(
     run_native("nominal", &source, b"maar");
 }
 
+#[test]
+fn custom_region_stores_string_bytes_in_supplied_backing() {
+    let source = ENTRY
+        .replace(
+            "import native as Raw",
+            "import native as Raw\nimport @builtin.string as Text",
+        )
+        .replace(
+            "match (20, 22) {\n            (left, right) => left + right\n        }",
+            "Text.byte_length \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"",
+        );
+    run_native("string", &source, b"mar");
+}
+
+#[test]
+fn custom_region_initializes_buffer_payloads_before_intrinsic_result_records() {
+    let source = ENTRY
+        .replace(
+            "import native as Raw",
+            "import native as Raw\nimport @builtin.string as Text\nimport @builtin.bytes as B",
+        )
+        .replace(
+            "match (20, 22) {\n            (left, right) => left + right\n        }",
+            r#"let original = Text.to_utf8 "*"
+        match B.append_byte (original, 42) {
+            B.BytesAppended(joined) => match Text.from_utf8 joined {
+                Text.Decoded(text) => match B.at (Text.to_utf8 text, 1) {
+                    B.ByteAt(value) => value
+                    B.InvalidIndex => 0
+                }
+                Text.InvalidUtf8 => 0
+            }
+            B.InvalidByte => 0
+        }"#,
+        );
+    run_native("buffer-results", &source, b"maaaaaaaaaar");
+}
+
+#[test]
+fn foreign_bytes_payload_cannot_cross_an_unprotected_region_request() {
+    let source = ENTRY
+        .replace(
+            "import native as Raw",
+            "import native as Raw\nimport @builtin.string as Text",
+        )
+        .replace(
+            "! {Raw.Make, Raw.Allocate, Raw.Release}",
+            "! {Raw.Make, Raw.Allocate, Raw.Release, Raw.Inspect}",
+        )
+        .replace(
+            "match (20, 22) {\n            (left, right) => left + right\n        }",
+            r#"let packed = Text.to_utf8 "**"
+        let _ = perform Raw.Inspect.call packed
+        42"#,
+        );
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!("ash-region-native-outward-{nonce}"));
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("native.ash"), NATIVE).unwrap();
+    fs::write(directory.join("entry.ash"), source).unwrap();
+    let failure = compile_path(RunConfiguration {
+        entry: directory.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    fs::remove_dir_all(directory).unwrap();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("source lifetime rejection");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("{diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn foreign_bytes_argument_borrows_live_root_host_backing() {
+    run_native(
+        "root-byte-borrow",
+        r#"import native as Raw
+import @builtin.string as Text
+main : Unit -> Int ! {Raw.InspectHost}
+main () = {
+    let packed = Text.to_utf8 "**"
+    let _ = perform Raw.InspectHost.call packed
+    42
+}
+"#,
+        b"b",
+    );
+}
+
+fn suspended_buffer_entry(discard_at: Option<usize>) -> String {
+    let body = r#"let original = Text.to_utf8 "*"
+        match B.append_byte (original, 42) {
+            B.BytesAppended(joined) => (B.length joined) + 40
+            B.InvalidByte => 0
+        }"#;
+    let handler = if let Some(at) = discard_at {
+        format!(
+            "match next == {at} {{\ntrue => {{\nlet done = discard\n42\n}}\nfalse => resume ()\n}}"
+        )
+    } else {
+        "resume ()".to_owned()
+    };
+    let expected = discard_at.unwrap_or(5);
+    ENTRY
+        .replace("import native as Raw", "import native as Raw\nimport @builtin.string as Text\nimport @builtin.bytes as B\nimport @builtin.cell as Cell")
+        .replace("provider<R> :", "effect Pause {\nnext : Unit -> Unit\n}\nprovider<R> :")
+        .replace("! {Raw.Allocate}", "! {Raw.Allocate, Pause}")
+        .replace("let backing = perform Raw.Allocate.call state", "let _ = perform Pause.next ()\n        let backing = perform Raw.Allocate.call state")
+        .replace("match (20, 22) {\n            (left, right) => left + right\n        }",body)
+        .replace("    region<R> owner =", "    resource cell<C> ticks = 0 {\n    let result = handle (region<R> owner =")
+        .replace("\n    }\n}\n", &format!("\n    }}) with Pause {{\nnext ignored => {{\nlet next = (Cell.read ticks) + 1\nlet _ = Cell.write (ticks, next)\n{handler}\n}}\n}}\nmatch (Cell.read ticks) == {expected} {{\ntrue => result\nfalse => 0\n}}\n}}\n}}\n"))
+}
+
+#[test]
+fn buffer_allocation_suspension_retains_payload_and_envelope_progress() {
+    run_native("buffer-resume", &suspended_buffer_entry(None), b"maaaaar");
+}
+
+#[test]
+fn buffer_allocation_discard_at_envelope_releases_initialized_payload_backing() {
+    run_native(
+        "buffer-discard",
+        &suspended_buffer_entry(Some(5)),
+        b"maaaar",
+    );
+}
+
+#[test]
+fn buffer_allocation_discard_before_first_backing_never_calls_allocate() {
+    run_native(
+        "buffer-first-discard",
+        &suspended_buffer_entry(Some(1)),
+        b"mr",
+    );
+}
+
+#[test]
+fn buffer_allocation_discard_before_payload_does_not_replay_earlier_operands() {
+    run_native(
+        "buffer-payload-discard",
+        &suspended_buffer_entry(Some(4)),
+        b"maaar",
+    );
+}
+
 fn run_native(name: &str, entry: &str, expected_trace: &[u8]) {
-    let directory =
-        std::env::temp_dir().join(format!("ash-region-native-{name}-{}", std::process::id()));
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "ash-region-native-{name}-{}-{nonce}",
+        std::process::id()
+    ));
     fs::create_dir(&directory).unwrap();
     fs::write(directory.join("native.ash"), NATIVE).unwrap();
     fs::write(directory.join("entry.ash"), entry).unwrap();

@@ -8309,9 +8309,14 @@ impl Resolver {
             let kind = (|| -> Result<ResolvedDefinitionKind, ResolveError> {
                 let kind = match &definition.kind {
                     SurfaceDefinitionKind::Equational(equational) => {
-                        let annotation = ResolvedTypeOccurrenceOwner::new(
-                            self.resolve_type(&equational.interface.annotation)?,
-                        );
+                        let annotation = ResolvedTypeOccurrenceOwner::new(self.resolve_type_mode(
+                            &equational.interface.annotation,
+                            (self.module.is_builtin_bytes() || self.module.is_builtin_string())
+                                && matches!(
+                                    global.spelling.as_str(),
+                                    "length" | "equal" | "byte_length"
+                                ),
+                        )?);
                         let requirements = ResolvedRequirementBuffer(
                             self.resolve_requirements(
                                 RequirementOwner::Global(global.id),

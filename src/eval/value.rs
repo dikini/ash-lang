@@ -76,10 +76,19 @@ pub(crate) enum HeapCell {
     Alias(Location),
     Tuple(Box<[Value]>),
     NativeTuple(NativeTupleStorage),
+    Bytes(Box<[u8]>, usize, bool),
+    NativeBytes(NativeByteStorage, bool),
     Constructor(ConstructorId, Option<Value>),
 }
 
 impl HeapCell {
+    pub(crate) fn byte_fields(&self) -> Option<(&[u8], bool)> {
+        match self {
+            Self::Bytes(bytes, len, string) => Some((&bytes[..*len], *string)),
+            Self::NativeBytes(bytes, string) => Some(((bytes.adapter.bytes)(bytes), *string)),
+            _ => None,
+        }
+    }
     pub(super) fn stored_fields(&self) -> Option<&[Value]> {
         match self {
             Self::Tuple(fields) => Some(fields),
@@ -112,6 +121,37 @@ pub struct NativeTupleAdapter {
     pub initialize: fn(&mut NativeTupleStorage, Vec<Value>),
     pub fields: for<'a> fn(&'a NativeTupleStorage) -> &'a [Value],
     pub drop_fields: fn(&mut NativeTupleStorage),
+    pub copy_bytes: fn(&NativeByteStorage, &[u8]),
+    pub bytes: for<'a> fn(&'a NativeByteStorage) -> &'a [u8],
+}
+
+/// Unique borrowed-byte metadata; the paired provider owns backing release.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct NativeByteStorage {
+    address: Address,
+    len: usize,
+    adapter: NativeTupleAdapter,
+}
+impl NativeByteStorage {
+    pub(crate) fn initialize(address: Address, bytes: &[u8], adapter: NativeTupleAdapter) -> Self {
+        let storage = Self {
+            address,
+            len: bytes.len(),
+            adapter,
+        };
+        (adapter.copy_bytes)(&storage, bytes);
+        storage
+    }
+    pub fn address(&self) -> *mut core::ffi::c_void {
+        self.address.as_ptr()
+    }
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 /// Unique metadata for initialized values in module-supplied backing.
@@ -264,6 +304,19 @@ impl ObservedValue {
                                 }
                                 tasks.push(Task::Exit(location));
                                 match cell {
+                                    cell if cell.byte_fields().is_some() => {
+                                        let (bytes, string) =
+                                            cell.byte_fields().expect("byte backing");
+                                        if string {
+                                            output.push_str(&format!(
+                                                "{:?}",
+                                                std::str::from_utf8(bytes)
+                                                    .expect("validated UTF-8")
+                                            ));
+                                        } else {
+                                            output.push_str(&format!("{bytes:?}"));
+                                        }
+                                    }
                                     cell if cell.tuple_fields().is_some() => {
                                         let elements = cell.tuple_fields().expect("tuple fields");
                                         output.push('(');

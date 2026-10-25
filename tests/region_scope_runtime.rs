@@ -278,3 +278,39 @@ fn an_outer_cell_cannot_backpatch_a_release_with_its_regions_view() {
     };
     assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
 }
+
+#[test]
+fn owned_byte_payloads_cannot_escape_their_declared_region() {
+    for (ty, expression) in [
+        ("String", "\"region bytes\""),
+        ("Bytes", "Text.to_utf8 \"region bytes\""),
+    ] {
+        let source = format!(
+            "import @builtin.string as Text\nmain : Unit -> {ty}\nmain () = region<R> owner {{\n{expression}\n}}\n"
+        );
+        let failure = run_result(&source).unwrap_err();
+        let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+            panic!("expected source lifetime rejection, got {failure:?}");
+        };
+        let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+            diagnostic.failure()
+        else {
+            panic!("expected source resource escape, got {diagnostic:?}");
+        };
+        assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+    }
+}
+
+#[test]
+fn selected_string_and_byte_copies_survive_an_inner_close() {
+    assert_eq!(
+        run(concat!(
+            "import @builtin.string as Text\nimport @builtin.bytes as B\n",
+            "make : Unit -> String\nmake () = \"region bytes\"\n",
+            "main : Unit -> Int\nmain () = region<R> outer {\n",
+            "let kept = region<S> inner {\nusing outer {\nmake ()\n}\n}\n",
+            "B.length (Text.to_utf8 kept)\n}\n"
+        )),
+        "12"
+    );
+}

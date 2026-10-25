@@ -10233,6 +10233,66 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     // Keep original-fact comparison temporaries out of the shared value frame.
 
+    fn validate_intrinsic_identity(
+        &self,
+        intrinsic: super::packed::IntrinsicNode,
+        id: NodeId,
+    ) -> Result<(), ValidationError> {
+        use super::packed::Intrinsic;
+        match intrinsic.operation() {
+            _ if intrinsic.authentic_module() => {}
+            _ => return Err(ValidationError::new(ValidationReason::Registry, Some(id))),
+        }
+        let result = match intrinsic.operation() {
+            Intrinsic::BytesAppendByte { appended, invalid } => {
+                Some((appended, invalid, Type::Bytes, 0))
+            }
+            Intrinsic::BytesAt { found, invalid } => Some((found, invalid, Type::Int, 1)),
+            Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                Some((decoded, invalid, Type::String, 0))
+            }
+            _ => None,
+        };
+        if let Some((success, invalid, payload, local)) = result {
+            let owner = crate::types::NominalTypeId::new(intrinsic.module(), local);
+            if success != ConstructorId::new(owner, 0) || invalid != ConstructorId::new(owner, 1) {
+                return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+            }
+            let nominal = self
+                .program
+                .registry
+                .nominal(owner)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+            if nominal.declaration_kind != crate::resolved::ResolvedNominalDeclarationKind::Data
+                || !self
+                    .program
+                    .registry
+                    .nominal_parameters(owner)
+                    .is_some_and(<[_]>::is_empty)
+                || nominal.representation.is_some()
+                || nominal.constructors.as_ref() != [success, invalid]
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+            }
+            for (constructor, expected_payload) in [(success, Some(payload)), (invalid, None)] {
+                let fact = self
+                    .program
+                    .registry
+                    .constructor(constructor)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+                let payload_matches = match (&fact.payload, &expected_payload) {
+                    (Some(actual), Some(expected)) => self.same_type_charged(actual, expected)?,
+                    (None, None) => true,
+                    _ => false,
+                };
+                if !payload_matches || fact.owner != owner {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate_value(
         &self,
         id: NodeId,
@@ -10241,6 +10301,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<(), ValidationError> {
         let expected = match value {
             PureValue::String(string) => {
+                if F::ALLOWS_EFFECTFUL_TYPES && self.region_enabled.get() {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
                 self.charge_type_work(string.bytes().len())?;
                 if std::str::from_utf8(string.bytes()).is_err() {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
@@ -10248,65 +10311,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 Type::String
             }
             PureValue::Intrinsic(intrinsic) => {
-                use super::packed::Intrinsic;
-                match intrinsic.operation() {
-                    _ if intrinsic.authentic_module() => {}
-                    _ => return Err(ValidationError::new(ValidationReason::Registry, Some(id))),
+                if F::ALLOWS_EFFECTFUL_TYPES
+                    && self.region_enabled.get()
+                    && intrinsic.constructs_buffer_or_reply()
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
-                let result = match intrinsic.operation() {
-                    Intrinsic::BytesAppendByte { appended, invalid } => {
-                        Some((appended, invalid, Type::Bytes, 0))
-                    }
-                    Intrinsic::BytesAt { found, invalid } => Some((found, invalid, Type::Int, 1)),
-                    Intrinsic::StringFromUtf8 { decoded, invalid } => {
-                        Some((decoded, invalid, Type::String, 0))
-                    }
-                    _ => None,
-                };
-                if let Some((success, invalid, payload, local)) = result {
-                    let owner = crate::types::NominalTypeId::new(intrinsic.module(), local);
-                    if success != ConstructorId::new(owner, 0)
-                        || invalid != ConstructorId::new(owner, 1)
-                    {
-                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
-                    }
-                    let nominal = self.program.registry.nominal(owner).ok_or_else(|| {
-                        ValidationError::new(ValidationReason::Registry, Some(id))
-                    })?;
-                    if nominal.declaration_kind
-                        != crate::resolved::ResolvedNominalDeclarationKind::Data
-                        || !self
-                            .program
-                            .registry
-                            .nominal_parameters(owner)
-                            .is_some_and(<[_]>::is_empty)
-                        || nominal.representation.is_some()
-                        || nominal.constructors.as_ref() != [success, invalid]
-                    {
-                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
-                    }
-                    for (constructor, expected_payload) in
-                        [(success, Some(payload)), (invalid, None)]
-                    {
-                        let fact =
-                            self.program
-                                .registry
-                                .constructor(constructor)
-                                .ok_or_else(|| {
-                                    ValidationError::new(ValidationReason::Registry, Some(id))
-                                })?;
-                        let payload_matches = match (&fact.payload, &expected_payload) {
-                            (Some(actual), Some(expected)) => {
-                                self.same_type_charged(actual, expected)?
-                            }
-                            (None, None) => true,
-                            _ => false,
-                        };
-                        if !payload_matches || fact.owner != owner {
-                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
-                        }
-                    }
-                }
+                self.validate_intrinsic_identity(*intrinsic, id)?;
                 intrinsic.expected_type()
             }
             PureValue::Integer(integer) => integer.expected_type(),
@@ -13699,6 +13710,55 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         use super::effect::{EffectExprKind, EffectOperation, ResumeUse};
         let mut has_discard = false;
         match &node.kind {
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
+                use super::region::RegionBufferOperation;
+                let api = crate::resolved::RegionApi::for_module(buffer.api)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+                if !self.same_type_charged(
+                    &self.node(buffer.context)?.ty,
+                    &Type::Nominal(api.region_view()),
+                )? {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                match &buffer.operation {
+                    RegionBufferOperation::StringLiteral(bytes) => {
+                        self.charge_type_work(bytes.len())?;
+                        if buffer.operand.is_some()
+                            || node.ty != Type::String
+                            || std::str::from_utf8(bytes).is_err()
+                        {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        }
+                    }
+                    RegionBufferOperation::Intrinsic(intrinsic) => {
+                        self.validate_intrinsic_identity(*intrinsic, id)?;
+                        if !intrinsic.constructs_buffer_or_reply() {
+                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                        }
+                        let expected = intrinsic.expected_type();
+                        let function = expected.function_view().ok_or_else(|| {
+                            ValidationError::new(ValidationReason::NodeType, Some(id))
+                        })?;
+                        let operand = buffer.operand.ok_or_else(|| {
+                            ValidationError::new(ValidationReason::NodeType, Some(id))
+                        })?;
+                        if !self.same_type_charged(&self.node(operand)?.ty, function.domain())?
+                            || !self.same_type_charged(&node.ty, function.value())?
+                        {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        }
+                    }
+                }
+                let mut expected =
+                    EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+                for child in std::iter::once(buffer.context).chain(buffer.operand) {
+                    expected =
+                        self.union_effect_rows_charged(&expected, &self.node(child)?.effects, id)?;
+                }
+                if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
             EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) => {
                 let api = crate::resolved::RegionApi::for_module(request.api)
                     .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
@@ -14664,6 +14724,21 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     let row = match &node.kind {
                         EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => {
                             EffectRow::empty()
+                        }
+                        EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
+                            let api = crate::resolved::RegionApi::for_module(buffer.api)
+                                .ok_or_else(|| {
+                                    ValidationError::new(ValidationReason::Registry, Some(id))
+                                })?;
+                            let mut row = EffectRow::singleton(EffectInstance::new(
+                                api.default_alloc(),
+                                Box::new([]),
+                            ));
+                            for child in std::iter::once(buffer.context).chain(buffer.operand) {
+                                row =
+                                    self.union_effect_rows_charged(&row, child_row(child)?, id)?;
+                            }
+                            row
                         }
                         EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
                             let mut row = EffectRow::empty();
@@ -19823,6 +19898,163 @@ mod tests {
         let refs = sources.iter().collect::<Vec<_>>();
         let donor = super::super::validate_effect_modules(copy, &refs, &relation).unwrap();
         (donor, sources, relation)
+    }
+
+    #[test]
+    fn region_buffer_independent_validation_rejects_forged_layout_rows_and_identity() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        use super::super::region::RegionBufferOperation;
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            "import @builtin.bytes as B\nmain : Unit -> String\nmain () = \"bytes\"\n",
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        for change in 0..6 {
+            let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+            let index=copied.nodes.iter().position(|node|matches!(&node.kind,EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) if matches!(buffer.operation,RegionBufferOperation::StringLiteral(_)))).unwrap();
+            let unit = copied
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(
+                        node.kind,
+                        EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(_)))
+                    )
+                })
+                .unwrap();
+            let unit = node_id(copied.arena, unit).unwrap();
+            if change == 0 {
+                copied.nodes[index].effects = EffectRow::empty();
+            } else {
+                let EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) =
+                    &mut copied.nodes[index].kind
+                else {
+                    unreachable!()
+                };
+                match change {
+                    1 => {
+                        buffer.operand = Some(buffer.context);
+                        buffer.context = unit;
+                    }
+                    2 => {
+                        buffer.operation = RegionBufferOperation::StringLiteral(Arc::from([255u8]))
+                    }
+                    3 => buffer.operand = Some(unit),
+                    4 | 5 => {
+                        let module = donor
+                            .registry()
+                            .constructors()
+                            .iter()
+                            .find(|info| info.owner.module().is_builtin_bytes())
+                            .unwrap()
+                            .owner
+                            .module();
+                        let operation = if change == 4 {
+                            crate::core::packed::Intrinsic::StringToUtf8
+                        } else {
+                            let owner = crate::types::NominalTypeId::new(module, 0);
+                            crate::core::packed::Intrinsic::BytesAppendByte {
+                                appended: ConstructorId::new(owner, 1),
+                                invalid: ConstructorId::new(owner, 0),
+                            }
+                        };
+                        buffer.operation = RegionBufferOperation::Intrinsic(
+                            crate::core::packed::IntrinsicNode::new(operation, module),
+                        );
+                        buffer.operand = Some(unit);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let id = node_id(copied.arena, index).unwrap();
+            let error = super::super::validate_effect_modules(copied, &refs, &relation)
+                .err()
+                .unwrap_or_else(|| panic!("forgery case {change} admitted"));
+            assert_eq!(
+                error.reason,
+                if change < 4 {
+                    ValidationReason::NodeType
+                } else {
+                    ValidationReason::Registry
+                },
+                "case {change}"
+            );
+            assert_eq!(error.node, Some(id), "case {change}");
+        }
+    }
+
+    #[test]
+    fn region_effect_core_rejects_raw_buffer_leaves_but_pure_core_retains_them() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        use super::super::region::RegionBufferOperation;
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            "import @builtin.string as Text\nmain : Unit -> String\nmain () = \"bytes\"\n",
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        let module = donor
+            .registry()
+            .constructors()
+            .iter()
+            .find(|info| info.owner.module().is_builtin_string())
+            .unwrap()
+            .owner
+            .module();
+        for intrinsic in [false, true] {
+            let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+            let index=copied.nodes.iter().position(|node|matches!(&node.kind,EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) if matches!(buffer.operation,RegionBufferOperation::StringLiteral(_)))).unwrap();
+            let origin = copied.nodes[index].origin.clone().unwrap();
+            let descriptor = crate::core::packed::IntrinsicNode::new(
+                crate::core::packed::Intrinsic::StringToUtf8,
+                module,
+            );
+            let ty = if intrinsic {
+                descriptor.expected_type()
+            } else {
+                Type::String
+            };
+            let value = if intrinsic {
+                PureValue::Intrinsic(descriptor)
+            } else {
+                PureValue::String(crate::core::packed::StringNode::new(Arc::from(
+                    b"bytes".as_slice(),
+                )))
+            };
+            let mut pure = CoreBuilder::new();
+            let pure_node = if intrinsic {
+                pure.intrinsic(descriptor.operation(), module, ty.clone(), origin.clone())
+                    .unwrap()
+            } else {
+                pure.string(b"bytes".as_slice(), ty.clone(), origin.clone())
+                    .unwrap()
+            };
+            validate_modules(pure.finish(pure_node).unwrap(), &refs, &relation).unwrap();
+            let raw = node_id(copied.arena, copied.nodes.len()).unwrap();
+            copied.nodes.push(StoredNode {
+                dialect: copied.nodes[index].dialect,
+                ty: ty.clone(),
+                effects: EffectRow::empty(),
+                origin: Some(origin.clone()),
+                kind: EffectExprKind::Pure(PureExprKind::Value(value)),
+            });
+            let saved = node_id(copied.arena, copied.nodes.len()).unwrap();
+            copied.nodes.push(StoredNode {
+                dialect: copied.nodes[index].dialect,
+                ty: copied.nodes[index].ty.clone(),
+                effects: copied.nodes[index].effects.clone(),
+                origin: copied.nodes[index].origin.clone(),
+                kind: copied.nodes[index].kind.clone(),
+            });
+            let binder =
+                TypedBinder::new(copied.arena, BinderId::Generated(u32::MAX - 19), ty, origin);
+            copied.nodes[index].kind = EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::Bind(crate::core::binding::BindingNode::new(binder, raw, saved)),
+            ));
+            let error =
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+            assert_eq!(error.reason, ValidationReason::NodeType);
+            assert_eq!(error.node, Some(raw));
+        }
     }
 
     #[test]
