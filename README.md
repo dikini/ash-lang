@@ -22,20 +22,24 @@ The [`ash` tool guide](docs/tools/ash.md) explains module roots, invocation,
 output and failures, including [explicit native link inputs](docs/tools/ash.md#native-link-inputs)
 and [generated-host linkage checks](docs/tools/ash.md#generated-host-linkage-checks).
 
+Foreign libraries use source signatures and native link names on
+`x86_64-unknown-linux-gnu`. Opaque Address, readonly synchronous Bytes pointers
+and actual void returns form the supported boundary. Ordinary Ash modules own
+null checks and cleanup policy; see the [foreign rules](spec/static-semantics.md#source-foreign-declarations).
+
 The annotated `mini-ash` and `modular-ash` Git tags retain the earlier single-file
 and passive-module/interface milestones. The completed library and effect
 increments add explicit implementation selection, higher-kinded parameters,
 relational interfaces, module and local `newtype`, scoped evidence, checked
-one-shot resume/discard, cells, native buffers, synchronous hooks and cleanup.
+one-shot resume/discard, cells, synchronous hooks and cleanup.
 Current source contains no dialect selector; the tags retain historical
 milestone states rather than selectable compiler modes.
 
-The [earlier Main feature inventory](docs/project/implemented-features.md)
-records the specified capabilities and bounded Rust-authored provider experiments
-of its named historical snapshot. Those experiments remain separate evidence
-from the bounded Ash-authored foreign-interface profile in the specification. The
+The [feature inventory](docs/project/implemented-features.md) records current
+product boundaries and distinguishes historical experimental evidence from the
+specified foreign interface. The
 [design-note scope summary](docs/design/README.md#implementation-and-evidence-boundaries)
-identifies implemented slices, experimental evidence, and open directions.
+identifies implemented slices, historical evidence and open directions.
 
 Project artifacts answer different questions:
 

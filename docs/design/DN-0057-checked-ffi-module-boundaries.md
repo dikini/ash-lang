@@ -12,11 +12,11 @@
 > accepts no architecture and authorizes no product implementation.
 
 The narrow owner-free scalar GNU in-process realization is now selected by
-[AD-0015](../decisions/AD-0015-linux-scalar-inprocess-whole-images.md), under
+[AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md), under
 explicit trusted closure and refusal obligations. That accepted non-language
 choice does not adopt the remaining exploration here, approve an executable or
 complete isolated/SQLite/owner deployment evidence.
-[AD-0016](../decisions/AD-0016-linux-owner-inprocess-whole-images.md) later
+[AD-0016](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md) later
 selects the owner/resource GNU in-process whole-image mechanism under explicit
 trusted closure and host-loss premises. Per-image strict approval, connected
 checked runtime/admission and deployment enforcement remain separate gates;

@@ -70,6 +70,6 @@ F-core checkpoint remain separate and pending. PM schedules F-core; the
 developer runs it.
 
 The existing [row semantics](../../../../spec/static-semantics.md) govern this
-implementation correction. See [TASK-0051](../../TASK-0051-checked-ffi-contract-carriers.md)
+implementation correction. See [TASK-0051](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0051-checked-ffi-contract-carriers.md)
 and [issue #114](https://github.com/dikini/ash-lang/issues/114) for scope and
 remaining milestone work. No specification transition is introduced.

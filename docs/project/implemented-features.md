@@ -1,16 +1,13 @@
-# Implemented features on Main
+# Implemented features
 
-This inventory describes Main at
-`5c5fb914ff3ee729305a2d8a2df86ff348725e84`, inspected on 2026-10-09.
-It lists implemented capabilities and their boundaries, with specification,
-design and test references. It is project documentation, not a new language
-specification or an assertion that every design in a linked note is implemented.
+This inventory describes the product boundaries in the connected smaller-FFI
+checkpoint. The [specification](../../spec/README.md) governs language semantics;
+accepted [decisions](../decisions/README.md) govern non-language architecture.
+Test links identify regression obligations, not a new execution receipt.
 
-The [specification](../../spec/README.md) governs current Ash semantics.
-Accepted [architectural decisions](../decisions/README.md) govern compiler
-architecture. Main also retains bounded DN-0036 experiments that deliberately
-extend beyond the specification. Those capabilities are listed separately.
-Uncommitted drafts and paused worktrees are excluded.
+Main integration and final human acceptance remain separate gates; this inventory
+does not mark them complete. Historical experiments and receipts retain only
+their original input, scope and checkpoint claims.
 
 ## Specified language features
 
@@ -24,7 +21,7 @@ retained evidence, rather than reporting a new test run.
 | Primitive values: mathematical `Int`, `Bool` and `Unit`; integer addition, multiplication and equality, with strict operand order. Ash integer arithmetic does not overflow. | [Primitive typing](../../spec/static-semantics.md#primitive-operations), [execution](../../spec/dynamic-semantics.md#primitive-operations); [DN-0006](../design/DN-0006-initial-type-system.md). | [Integer tests](../../tests/integer.rs), [primitive pipeline](../../tests/primitive_vertical.rs). |
 | Functions: equational and operational definitions, anonymous functions, curried application and lexical closures. | [Function presentations](../../spec/syntax.md#global-function-presentations), [application](../../spec/dynamic-semantics.md#application); [DN-0005](../design/DN-0005-surface-function-definitions.md). | [Functions](../../tests/functions.rs), [semantic cases](../../tests/semantics.rs). |
 | Sequential bindings and lexical shadowing, including typed local bindings and blocks. | [Blocks](../../spec/static-semantics.md#blocks), [local scope](../../spec/name-resolution.md#local-scope); [DN-0006](../design/DN-0006-initial-type-system.md). | [Bindings](../../tests/bindings.rs), [resolution](../../tests/resolution.rs). |
-| Global and explicit local recursion, including checked recursive groups. Guarded cyclic data has finite observation; this is separate from experimental cyclic Arena construction. | [Recursive groups](../../spec/static-semantics.md#recursive-block-groups), [execution](../../spec/dynamic-semantics.md#recursive-bindings), [observation](../../spec/dynamic-semantics.md#observation); [DN-0008](../design/DN-0008-typed-core-and-elaboration.md). | [Recursion](../../tests/recursion.rs), [specification examples](../../tests/spec_examples.rs). |
+| Global and explicit local recursion, including checked recursive groups. Guarded cyclic data has finite observation. | [Recursive groups](../../spec/static-semantics.md#recursive-block-groups), [execution](../../spec/dynamic-semantics.md#recursive-bindings), [observation](../../spec/dynamic-semantics.md#observation); [DN-0008](../design/DN-0008-typed-core-and-elaboration.md). | [Recursion](../../tests/recursion.rs), [specification examples](../../tests/spec_examples.rs). |
 | Rank-1 polymorphism, inference, explicit declaration parameters and ordinary monomorphic value positions. No first-class source schemes or polymorphic recursion. | [Inference and restrictions](../../spec/static-semantics.md#inference-and-rank-1-restrictions), [explicit Core operations](../../spec/elaboration.md#explicit-rank-1-operations); [rank-1 evidence](../design/mini-ash/rank-1-polymorphism/evidence.md). | [Polymorphism](../../tests/polymorphism.rs). |
 | Structural tuples, nominal algebraic data, constructor values, typed patterns and exhaustive matches/equations. | [Data typing](../../spec/static-semantics.md#tuples-and-constructors), [coverage](../../spec/static-semantics.md#patterns-matches-and-coverage); [DN-0007](../design/DN-0007-data-and-pattern-typing.md). | [Data and ADTs](../../tests/data_and_adts.rs), [corpus](../../tests/corpus.rs). |
 | Module `newtype`: distinct nominal identity over one representation, explicit construction/matching, and allocation-free erasure after validation. | [Type/constructor scope](../../spec/name-resolution.md#type-and-constructor-scope), [type erasure](../../spec/dynamic-semantics.md#type-instantiation-and-erasure); [module newtype evidence](../design/effect-ash/module-newtype-evidence.md). | [Module newtypes](../../tests/module_newtypes.rs), [resource interactions](../../tests/newtype_resources.rs). |
@@ -39,9 +36,11 @@ retained evidence, rather than reporting a new test run.
 | Declared effects and computation rows, generic row tails, exact effect identities and checked row exclusions. A linked entry must have an empty effect row. | [Computation rows](../../spec/static-semantics.md#computation-types-and-effect-rows), [effects](../../spec/static-semantics.md#effects); [DN-0009](../design/DN-0009-effects-handlers-and-continuations.md). | [Effect rows](../../tests/effect_rows.rs), [typing](../../tests/effect_typing.rs), [modules](../../tests/effect_modules.rs). |
 | Exhaustive lexical handlers, `perform`, single-use non-escaping `resume`, and checked owned `discard`. Discard closes recursively owned captures in structural order and skips abandoned results. | [Effects](../../spec/static-semantics.md#effects), [handler execution](../../spec/dynamic-semantics.md#effect-handlers-and-completion); [capture/discard evidence](../design/effect-ash/capture-discard-evidence.md), [DN-0033](../design/DN-0033-direct-effects-and-continuation-capabilities.md). | [Effect execution](../../tests/effect_runtime.rs), [independent Core](../../tests/effect_core.rs). |
 | Scoped mutable integer cells through sealed `@builtin.cell`: fresh runtime activations, reusable non-owning handles, dependency escape checks and one release on completion or owned abandonment. | [Cell typing](../../spec/static-semantics.md#scoped-cells-and-resource-dependencies), [execution](../../spec/dynamic-semantics.md#scoped-cell-execution); [resource evidence](../design/effect-ash/resource-scope-evidence.md). | [Resource typing](../../tests/resource_scope_typing.rs), [runtime](../../tests/resource_scope_runtime.rs), [Core](../../tests/resource_scope_core.rs). |
-| Ordinary Ash source zeroed buffers through declared `Buffer<R>` and its sealed associated provider: typed acquisition/read/write failures, bounds checks, nested outcomes, one owner and one release. No source pointers. | [Native-buffer typing](../../spec/static-semantics.md#scoped-native-buffers), [execution](../../spec/dynamic-semantics.md#scoped-native-buffer-execution); [narrow provider evidence](../design/effect-ash/narrow-foreign-provider-evidence.md). | [Native-buffer runtime](../../tests/native_buffer_runtime.rs), [interactions](../../tests/native_buffer_interactions.rs), [source library](../../libraries/native_buffer.ash), [counted generated hosts](../../tests/native_buffer_source.rs). |
 | Synchronous typed hooks: lexical roots and registrations, outer-before-inner transformers, checked callback effects/dependencies and owner preservation across resume/discard. | [Hook typing](../../spec/static-semantics.md#synchronous-typed-hooks), [execution](../../spec/dynamic-semantics.md#synchronous-hook-execution); [hook evidence](../design/effect-ash/synchronous-hooks-evidence.md), [DN-0012](../design/DN-0012-coeffects-and-hooks.md). | [Hook runtime](../../tests/hooks_runtime.rs), [typing](../../tests/hooks_typing.rs), [Core](../../tests/hooks_core.rs). |
 | Scoped cleanup actions: retain one `Unit -> Unit` action, invoke it on normal completion or admitted abandonment, preserve the body result, and reject skipped outside/running completion. Typed reporting can keep ordered cleanup failures separate from body outcomes. | [Cleanup typing](../../spec/static-semantics.md#scoped-cleanup-actions), [execution/reporting](../../spec/dynamic-semantics.md#scoped-cleanup-actions); [cleanup evidence](../design/effect-ash/reliable-cleanup-evidence.md). | [Abandonment](../../tests/cleanup_abandonment.rs), [reporting](../../tests/cleanup_reporting.rs), [partial acquisition](../../tests/cleanup_partial_acquisition.rs). |
+| Managed immutable `Bytes`, UTF-8 `String`, string literals and ordinary construction, access, equality and UTF-8 conversion functions. No native binding is needed for these operations. | [Primitive expressions](../../spec/static-semantics.md#primitive-expressions), [byte/string modules](../../spec/name-resolution.md#independent-byte-and-string-modules). | [Byte/string tests](../../tests/bytes_strings.rs), [string literals](../../tests/string_literals.rs), [packed Core](../../tests/packed_core.rs). |
+| Generic cells through `@builtin.generic_cell`: fixed ordinary payload type, current contents and read snapshots, complete operation identity, dependency admission and scoped completion. | [Generic-cell foundation](../../spec/static-semantics.md#generic-cell-foundation), [cell execution](../../spec/dynamic-semantics.md#scoped-cell-execution). | [Resource typing](../../tests/resource_scope_typing.rs), [runtime](../../tests/resource_scope_runtime.rs), [Core](../../tests/resource_scope_core.rs). |
+| Passive foreign symbols and canonical opaque Address with pure null/equality, readonly synchronous Bytes pointers and actual C void. Each symbol is an ordinary effect and may be handled by ordinary source handlers. Module-authored checks and cleanup supply policy. Raw Address adds no ownership, memory-access or resource escape authority. | [Foreign declarations](../../spec/static-semantics.md#source-foreign-declarations), [execution](../../spec/dynamic-semantics.md#native-symbol-execution). | [Slim FFI](../../tests/ffi_slim.rs), [source admission](../../tests/foreign_source_admission.rs), [native host cases](../../tests/program_build_native.rs). |
 
 ## Compiler and execution tools
 
@@ -54,75 +53,50 @@ semantics.
 | One modular pipeline, with separate parsing, resolution, checking, linking, Core validation and evaluation boundaries. Failures retain their owning stage. | [AD-0005](../decisions/AD-0005-parser-architecture.md), [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md), [validation boundary](../../spec/elaboration.md#validation-boundary). | [Driver](../../src/driver.rs), [architecture checks](../../tests/architecture.rs). |
 | Typed Pure and Effect Core dialects, explicit evidence/type operations, independently checked transformed Core and ordered resolved-global binder authority. | [AD-0007](../decisions/AD-0007-typed-core-dialects.md), [AD-0009](../decisions/AD-0009-ordered-resolved-global-binder-authority.md); [DN-0008](../design/DN-0008-typed-core-and-elaboration.md). | [Core validation](../../tests/core_validation.rs), [interface validation](../../tests/interface_validation.rs), [validator](../../src/core/validate.rs), [transforms](../../src/core/transform.rs). |
 | Explicit evaluator machine with ordered frames and owned completion state, bounded work, fallible allocation and iterative disposal. | [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md), [dynamic semantics](../../spec/dynamic-semantics.md). | [Machine](../../src/eval/machine.rs), [runtime diagnostics](../../tests/runtime_diagnostics.rs), [effect milestone review](../design/effect-ash/milestone-closure-evidence.md). |
-| CLI execution of one entry module with named roots and value/type output. No stdin program or general foreign-binding CLI. | [`ash` tool guide](../tools/ash.md). | [CLI](../../tests/cli.rs), [module CLI](../../tests/module_cli.rs), [public driver](../../src/driver.rs). |
+| CLI execution of one entry module with named roots and value/type output. No stdin program or implicit native host build. | [`ash` tool guide](../tools/ash.md). | [CLI](../../tests/cli.rs), [module CLI](../../tests/module_cli.rs), [public driver](../../src/driver.rs). |
 | Structured diagnostics, causal source labels, human/short/JSON presentation and English/Bulgarian localization. | [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md), [diagnostic options](../tools/ash.md#diagnostic-formats-and-locales). | [Presentation](../../tests/diagnostic_presentation.rs), [JSON](../../tests/diagnostic_json.rs), [catalogues](../../tests/diagnostic_catalogues.rs). |
-| Root Cargo workspace with compiler, native-buffer backing, foreign adapters and verification tooling. Unsafe native implementation stays in backing/adapter crates. | [Dependency policy](dependencies.md), [DN-0036 package](../design/provider-experiments/README.md). | [Workspace](../../Cargo.toml), [foreign adapters](../../foreign-adapter/src/lib.rs), [verification tool](../../xtask/src/main.rs). |
+| Generated whole-program Rust hosts with typed pointer/void bridges, explicit static/shared inputs and independently reconstructed private Core. No stable Core wire format or implicit native compilation during ordinary run. | [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md), [build guide](../tools/ash.md#building-an-executable). | [Native hosts](../../tests/program_build_native.rs), [program builds](../../tests/program_build.rs), [normal preparation](../../tests/foreign_native_program_preparation.rs). |
+| Cumulative input-derived compiler, rewrite, preparation and startup work allowances, paid sizing, overflow/exhaustion checks and separate depth limits. An allowance is no universal complexity or native correctness guarantee. | [AD-0013 gas policy](../decisions/AD-0013-generated-native-bridges-and-program-builds.md#native-preparation-and-startup-gas), [failure/work rules](../../spec/static-semantics.md#failure-ownership-and-constraint-resources). | [Work reporting](../../tests/compiler_work_reporting.rs), [preparation regressions](../../tests/foreign_native_program_preparation.rs). |
+| Root Cargo workspace containing the compiler and verification tooling. Native calls reside in explicitly generated linked hosts. | [Dependency policy](dependencies.md), [generated builds](../decisions/AD-0013-generated-native-bridges-and-program-builds.md). | [Workspace](../../Cargo.toml), [bridge generation](../../src/build/bridge.rs), [verification tool](../../xtask/src/main.rs). |
 
-## Experimental features retained on Main
+## Foreign boundary and historical evidence
 
-The following DN-0036 capabilities run through the existing Ash compiler, Core
-and evaluator. They are implemented and tested within the stated fragments.
-They do **not** establish current normative Ash semantics, production adoption,
-a general FFI or a formal proof of foreign-library correctness. The current
-specification remains the baseline; the linked candidate contracts describe the
-experimental extensions.
+The supported mapping is whole Unit to no C arguments; whole Address or Bytes
+to one pointer; flat Address/Bytes tuples to pointers in order; Address results
+to pointers; Unit results to actual C void. Bytes is argument-only. Its backing
+is held through the synchronous call, without hidden length, NUL or encoding.
+Native code must not mutate or free managed backing. A retained or returned
+pointer requires the module to keep the original Bytes alive for later use;
+Address does not infer that relation.
 
-| Feature and implemented boundary | Candidate design and specification baseline | Implementation evidence |
-| --- | --- | --- |
-| Library-defined resource families, distinct from instances; typed initializer evaluated once in the preceding scope, fresh owned identity, retained dependencies and lexical escape rejection. | [P-1 contract](../design/provider-experiments/semantics.md#selected-first-execution-contract), [DN-0036](../design/DN-0036-foreign-library-and-memory-provider-experiments.md); baseline [cell dependencies](../../spec/static-semantics.md#scoped-cells-and-resource-dependencies). | [Provider declarations](../../tests/resource_provider_resolution.rs), [SQLite source](../../tests/provider_sqlite_source.rs), [Arena source](../../tests/provider_arena_source.rs). |
-| Complete ordered Type/EffectRow owner arguments, kind/tag/saturation checks, imported owner metadata and one specialization bridge for row-free and mixed cases. Native ABI argument arrays remain Type-only. | [Owner-row contract](../design/provider-experiments/semantics.md#selected-complete-owner-row-arguments); baseline [kinds/rows](../../spec/static-semantics.md#kinds-monotypes-and-schemes). | [Owner rows](../../tests/provider_owner_rows.rs), [provider control](../../tests/provider_control_source.rs). |
-| Immutable checked provider-template specialization, retained occurrence/evidence authority, freshened local identities, relocated catalogs and descriptor-backed scopes independently authenticated in final Effect Core. | [Implementation correspondence](../design/provider-experiments/semantics.md#implementation-correspondence-at-the-common-checkpoint); baseline [Core validation](../../spec/elaboration.md#validation-boundary). | [Provider Core](../../src/core/provider.rs), [specialization](../../src/core/provider/specialization.rs), [source/transform evidence](../../tests/provider_sqlite_source.rs). |
-| Additive `run_path_with_foreign_runtime` API with bindings authenticated against original manifests/operations. Guarded acquisition, non-owning state views, Current/Enclosing access checks and lifecycle finish retain one native owner. | [State/native authority](../design/provider-experiments/semantics.md#state-and-native-authority), [public setup](../design/provider-experiments/README.md); baseline [entry/linking](../../spec/elaboration.md#module-linking-and-entry-generation). | [Driver](../../src/driver.rs), [foreign runtime contracts](../../src/foreign/runtime.rs), [binding/conversion boundaries](../../tests/foreign_codec_failures.rs). |
-| Scope reports: `NotAcquired(I)` or `Completed(T, Completion<E>)`, where completion is `Closed`, `ConsumedError(E)` or `RetainedError(E)`. Body results remain nested; acquisition refusal skips the body. | [Report algebra](../design/provider-experiments/semantics.md#report-algebra-and-failure-order); baseline [native-buffer outcomes](../../spec/dynamic-semantics.md#scoped-native-buffer-execution). | [SQLite acquisition](../../tests/provider_sqlite_source.rs), [completion/control](../../tests/provider_control_source.rs), [retention](../../tests/provider_retention_source.rs). |
-| Resource control: resume without reacquisition, structural owned discard, cleanup using still-live outer resources, ordinary handler precedence, formal open-row Ash callback, and the separate same-substitution/body-row witness with different captured-control demands. | [Handler specialization](../design/provider-experiments/semantics.md#handler-template-answer-and-row-instantiation), [common deliveries](../design/provider-experiments/plan.md#common-support-deliveries-2026-10-04); baseline [handlers](../../spec/dynamic-semantics.md#effect-handlers-and-completion). | [Common control](../../tests/provider_control_source.rs), [SQLite control](../../tests/provider_sqlite_control.rs). |
-| Retained native owners lose source access, retain their dependency owners and remain quarantined until ordered host teardown. No automatic source retry or SQLite `close_v2` substitution. | [State/native authority](../design/provider-experiments/semantics.md#state-and-native-authority); baseline [cleanup limits](../../spec/dynamic-semantics.md#scoped-cleanup-actions). | [Dependency retention](../../tests/provider_retention_source.rs), [conversion/disposition failures](../../tests/foreign_codec_failures.rs). |
-| Packed `Bytes`, UTF-8 `String`, string literals and builtin copying/conversion operations, including ordinary invalid-byte/invalid-UTF-8 alternatives. This extension can run through `run_path` without native bindings. | [Copying values/literals](../design/provider-experiments/semantics.md#selected-copying-values-and-literals-sqlite-workstream); baseline [lexical structure](../../spec/lexical-structure.md), [primitives](../../spec/static-semantics.md#primitive-expressions). | [String syntax](../../tests/string_literals.rs), [packed values](../../tests/bytes_strings.rs), [packed Core](../../tests/packed_core.rs). |
-| SQLite S-01: in-memory connection, `SELECT ?1`, bind 42, step and copy; statement finalization precedes connection close. Result: `Completed(Completed(Ok(42), Closed), Closed)`. Repeated/simultaneous scopes use distinct activations. | [SQLite contract](../design/provider-experiments/contracts.md#sqlite-inventory), [source recipe](../design/provider-experiments/README.md#reproducing-common-source-cases); baseline [resource dependencies](../../spec/static-semantics.md#scoped-cells-and-resource-dependencies). | [Public SQLite source tests](../../tests/provider_sqlite_source.rs). |
-| SQLite copying API: Unicode TEXT, blobs, integers, NULL and empty values; independent result copies; reset/clear behavior; checked width/index/type/protocol failures. FLOAT columns are rejected rather than introducing Ash Float. | [Copying protocol](../design/provider-experiments/semantics.md#sqlite-copying-profile-and-conversion-outcomes), [SQLite delivery](../design/provider-experiments/sqlite-copying-delivery-2026-10-08/README.md). | [Copying regressions](../../tests/provider_sqlite_copying.rs), [native adapter](../../foreign-adapter/src/ash_bindings.rs). |
-| SQLite sessions: statement reuse, transactions, imported generic row helpers, file persistence/reopen and separate body/completion errors. Native failures are distinguished from injected failure cases. | [SQLite workstream obligations](../design/provider-experiments/contracts.md#sqlite-copying-workstream-obligations), [packaged programs](../design/provider-experiments/examples/sqlite-copying/README.md). | [Session regressions](../../tests/provider_sqlite_sessions.rs), [native host receipts](../design/provider-experiments/arena-regression-2026-10-09/packaged-host-receipt.json). |
-| Basic Arena lifecycle through the same generic engine: typed configuration/refusal, opaque state, native acquire/usage/release, repeated/nested scopes and zero-capacity cases. Fresh `(64, 4)` reports `(0, 64, 0, 4)`. | [Arena contract](../design/provider-experiments/contracts.md#arena-contract), [common correspondence](../design/provider-experiments/semantics.md#implementation-correspondence-at-the-common-checkpoint). | [Arena lifecycle](../../tests/provider_arena_source.rs), [native backing](../../foreign-adapter/src/arena.rs). |
-| Selected scalar Arena storage: sealed Layout evidence and a finite storage-provider family for Unit, Bool and checked signed-64 Int; typed allocation/load, scoped references, usage accounting, alignment/capacity/refusal checks and release. Scalar references may be used inside ordinary aggregates/closures but cannot escape. | [A-0 candidate](../design/provider-experiments/semantics.md#selected-arena-contract-a-0), [scalar results](../design/provider-experiments/arena-results.md), [selected delivery](../design/provider-experiments/arena-selected-2026-10-08/README.md). | [Scalar allocation/control/escape tests](../../tests/provider_arena_allocation.rs), [codec](../../foreign-adapter/src/arena_codec.rs). |
-| Charged compiler-work reporting for source checking, final elaboration and independent Core; calibrated public-driver allowances with an explicit maximum 10% accepted deficit and named optimization target. A larger allowance is not an optimization or a CPU/memory measurement. | [Admission policy](../design/provider-experiments/calibrated-admission-2026-10-08/README.md), [measured delivery](../design/provider-experiments/arena-regression-2026-10-09/README.md#fresh-baseline-verification). | [Work-report API](../../src/compiler_work.rs), [reporting regressions](../../tests/compiler_work_reporting.rs), [calibration native checks](../../tests/resource_calibration_native.rs). |
+The direct SQLite version/source-id getter canary checks non-null and repeat
+pointer equality. It does not read text or establish full SQLite coverage.
+Numeric slots, out-pointers, callbacks, variadics, structs by value, nested tuples
+and Address-to-Bytes/String or arbitrary memory-read/write operations remain
+unsupported. Existing scoped cleanup and handlers express binding policy;
+foreign behavior remains assumed rather than ensured.
 
-## Boundaries and deferred features
+[DN-0036](../design/DN-0036-foreign-library-and-memory-provider-experiments.md)
+and its pinned evidence preserve earlier provider, SQLite and Arena experiments.
+Those experiments do not establish current product APIs. Their native owner,
+status, window, host, quarantine, codec and manifest/adapter execution routes are
+retired. Ordinary cells, resource-family kind/import metadata, cleanup, capture,
+rows and generic compiler validation remain separate product mechanisms.
+Nonbuiltin provider execution is unsupported. No current full SQLite, arena
+storage or compiler-managed foreign resource lifecycle is claimed.
 
-The inventory does not claim the full scope of DN-0036 is complete.
-[Arena results](../design/provider-experiments/arena-results.md#regression-only-scope-and-deferred-work-2026-10-09)
-distinguish the verified scalar baseline from failed wider experimental rounds.
-The unverified wider recovery commit `1aef8c1` is not merged into this Main.
+## Boundaries and verification
 
-| Scope | Status at this Main |
-| --- | --- |
-| Wider stored Arena payloads, immutable graph sharing, closures as stored payloads, nested loading, graph copying and scratch scopes | Partial work outside the verified Main delivery. Using a scalar reference inside a closure does not establish storing that closure in an arena. |
-| Abstract Layout forwarding, borrowed storage families, generic stored Ref/Link, borrowed-family discard and wider terminal composition | No complete verified delivery. Some source/Core work exists in recovery; failed connected cases remain open. |
-| General borrowing, retained SQLite input/view APIs, Arena cyclic construction and sharing-preserving cyclic copy | Future DN-0036 work. Ordinary copied SQLite values and guarded recursive Ash data do not supply these capabilities. |
-| Ash-authored foreign manifests, general host ABI declarations/linking and a foreign-binding CLI | Separate [DN-0037](../design/DN-0037-ash-authored-foreign-library-interfaces.md) program. Rust-authored manifests/adapters remain the experimental mechanism. |
-| Concurrency, processes, asynchronous calls, foreign callbacks, dynamic loading, Arena-owner transport, native-owner reference counting and tracing GC | Excluded from the delivered experiment. The executed open-row callback is an ordinary Ash callback, not a foreign callback ABI. |
-| General Float semantics | Not implemented on Main. [DN-0019](../design/DN-0019-primitive-feature-composition.md) records a separate Float prototype; SQLite FLOAT rejection is not Float support. |
-| Proposition/proof terms, general associated-type projections, existential packaging, first-class polymorphic values and multi-shot/escaping resumptions | No delivered source-language support. Existing compiler evidence and external Lean models do not introduce source proof authority. |
+The source language remains rank-1. Proposition/proof terms, general associated
+projections, existential packaging, first-class polymorphic values and escaping
+or multi-shot resumptions have no delivered source support. General borrowing,
+regions, retained control, workers and concurrency remain separately scoped
+future work. The retained Float experiment does not introduce Float semantics.
 
-## Verification and provenance
-
-The [integration receipt](../design/provider-experiments/arena-regression-2026-10-09/integration-receipt.json)
-records `cargo xtask verify` passing on `7e754bd`: all six stages, 3,475 test
-passes, zero failures and one existing ignored generated-calibration case.
-The signed Main merge `5c5fb914` retains the complete tree of its documentation
-parent `c672801`; that parent's executable inputs retain the verified source.
-This inventory was checked against Main's source and existing receipts; writing
-it does not constitute a new compiler/test run.
-
-The [connected baseline report](../design/provider-experiments/arena-regression-2026-10-09/README.md)
-also records 39 public cases, five stack/dictionary regressions, 49 adapter unit
-cases, ten backing cases, five packaged SQLite hosts and the scalar Arena host.
-All six packaged hosts complete within the nominal compiler-work budgets;
-none uses the accepted-deficit allowance in that receipt.
-
-Finite native tests support the selected adapters' behavior. Native ABI,
-representation and destruction remain foreign assumptions. Retained Lean models
-establish only their stated modeled properties; there is no blanket formal
-proof of the experimental provider engine, adapters or complete compiler.
-
-The [experiment reproduction recipe](../design/provider-experiments/main-delivery-2026-10-08/README.md#reproduce)
-provides commands for the public integration cases and native hosts. Historical
-execution reports preserve their original checkpoint wording; the commit at
-the top of this inventory identifies the Main snapshot summarized here.
+Examples and regression references must match the connected implementation.
+The [normal verification guide](verification.md), final-head independent review
+and transition acceptance remain separate requirements. Neither this inventory,
+a larger work allowance nor historical native receipts completes them. Finite
+native observations establish only the exercised calls and ordinary invariants;
+they do not certify a native binary, foreign lifetimes or complete compiler
+correctness.

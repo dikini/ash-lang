@@ -1,7 +1,7 @@
 # Generated Ash static packaging evidence
 
 This bounded [F2 experiment](../../linux-profile-experiment.md) belongs to
-[TASK-0050](../../../../tasks/TASK-0050-checked-ffi-regions-control-program.md)
+[TASK-0050](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/TASK-0050-checked-ffi-regions-control-program.md)
 and [DN-0057](../../../DN-0057-checked-ffi-module-boundaries.md).
 It changes no product code or source semantics and accepts no architecture.
 

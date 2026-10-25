@@ -16,14 +16,14 @@ termination requests and observation of actual process termination. Exact
 platform mechanisms belong to a deployment profile; this document requires
 no particular executable format, syscall, allocator or process-control API.
 
-Current Ash's [native-buffer execution](../../../spec/dynamic-semantics.md#scoped-native-buffer-execution)
+Current Ash's [native-buffer execution](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/spec/dynamic-semantics.md#scoped-native-buffer-execution)
 prepares storage and release work before native allocation, keeps internal
 exhaustion terminal, and gives no unconditional teardown guarantee. Its
 [typed failure reporting](../../../spec/dynamic-semantics.md#typed-failure-reporting)
 keeps body outcomes separate from completion errors. These are constraints
 to preserve, not evidence that general FFI already exists.
-The experimental [runtime](../../../src/foreign/runtime.rs) and
-[evaluator](../../../src/eval/foreign.rs) additionally distinguish consumed and
+The experimental [runtime](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/src/foreign/runtime.rs) and
+[evaluator](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/src/eval/foreign.rs) additionally distinguish consumed and
 retained owners from fallible error conversion. Transfer that distinction
 without adopting the whole experimental adapter architecture.
 

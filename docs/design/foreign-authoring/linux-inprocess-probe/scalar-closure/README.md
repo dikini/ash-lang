@@ -1,6 +1,6 @@
 # Scalar in-process closure architecture evidence
 
-[AD-0015](../../../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
+[AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
 selects the narrow owner-free scalar GNU in-process architecture. The
 [owner acceptance readback](acceptance-receipt.json) records explicit delegated
 acceptance after independent preparation review. This evidence creates no

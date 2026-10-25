@@ -10,7 +10,7 @@ exclude runtime loading or implement checked runtime O/K/groups.
 The [governing experiment](../linux-owner-inprocess-experiment.md),
 [static packaging](../linux-owner-static-packaging-evidence/README.md) and
 [header/closure evidence](../linux-owner-header-closure-evidence/README.md)
-retain their separate claims. [AD-0015](../../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
+retain their separate claims. [AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
 remains owner-free scalar only. No decision or current Main semantic change
 is created by this evidence. All four whole-scope issue #58 boxes remain unchecked.
 

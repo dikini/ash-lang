@@ -2,7 +2,7 @@
 
 This is partial TASK-0053 implementation evidence on retained PR101
 `c51089c8b6de76384361283f671d1f2dbf3ad58e`, under
-[the task](../../../TASK-0053-checked-owner-core-execution.md). It does not change
+[the task](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0053-checked-owner-core-execution.md). It does not change
 Ash semantics or approve public execution.
 
 The existing physical owner slot now retains the checked boundary journal.

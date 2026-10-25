@@ -396,12 +396,18 @@ fn export_candidates_keep_withheld_type_and_constructor_namespaces_separate() {
 
 #[test]
 fn repeated_summary_imports_share_one_graph_type_work_budget() {
-    const PAYLOAD_WIDTH: usize = 10_000;
-    const DEPENDENT_COUNT: usize = TYPE_WORK_LIMIT / PAYLOAD_WIDTH + 2;
+    const PAYLOAD_WIDTH: usize = 32;
+    const CONSTRUCTOR_NAME_BYTES: usize = 4_096;
+    // Original authentication prepays both spelling byte slices in TypeWork.
+    // Keep the payload modest so its independent constraint comparisons do not
+    // exhaust that ledger before the repeated summary imports reach TypeWork.
+    const DEPENDENT_COUNT: usize = TYPE_WORK_LIMIT / (2 * CONSTRUCTOR_NAME_BYTES) + 2;
 
     let tree = TempTree::create();
     let mut base = String::with_capacity(PAYLOAD_WIDTH * 5 + 32);
-    base.push_str("pub type Wide =\nWide(");
+    base.push_str("pub type Wide =\n");
+    base.push_str(&"W".repeat(CONSTRUCTOR_NAME_BYTES));
+    base.push('(');
     for index in 0..PAYLOAD_WIDTH {
         if index > 0 {
             base.push_str(", ");
@@ -410,6 +416,18 @@ fn repeated_summary_imports_share_one_graph_type_work_budget() {
     }
     base.push_str(")\n");
     tree.write("base.ash", &base);
+
+    let control = tree.write(
+        "control.ash",
+        "import base as Base\nmain : Unit -> Int\nmain () = 0\n",
+    );
+    let observation = run_path(RunConfiguration {
+        entry: control,
+        roots: ModuleRoots::empty(),
+    })
+    .expect("one complete summary import must fit all ordinary budgets");
+    assert_eq!(observation.value_display(), "0");
+    assert_eq!(observation.type_display(), "Int");
 
     let mut entry = String::new();
     for index in 0..DEPENDENT_COUNT {

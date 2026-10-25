@@ -1,6 +1,6 @@
 # Trusted static image-pinning evidence
 
-This is bounded [TASK-0050 F2](../../../tasks/TASK-0050-checked-ffi-regions-control-program.md)
+This is bounded [TASK-0050 F2](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/TASK-0050-checked-ffi-regions-control-program.md)
 evidence for the [Linux launch experiment](../linux-profile-experiment.md), retained
 under [DN-0057](../../DN-0057-checked-ffi-module-boundaries.md). It accepts no
 architecture or semantics and changes no product runtime. The trusted diagnostic

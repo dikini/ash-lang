@@ -1628,7 +1628,7 @@ explicit scope. The case ledger changes only after actual source observations.
 ### Completed native checkpoint
 
 N0's copying adapter is implemented in the root workspace's
-[foreign-adapter](../../../foreign-adapter/README.md) crate. Its 21 tests,
+[foreign-adapter](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/foreign-adapter/README.md) crate. Its 21 tests,
 warnings-denied Clippy and rustdoc checks, formatting and diff checks passed.
 Independent review confirmed the pinned header and runtime provenance and the
 safe API's consumption, refusal, partial-owner and copying contracts. Recorded
@@ -1753,7 +1753,7 @@ proofs are under review; template publication, capture and execution remain
 pending. This is a batched regression checkpoint, not whole-worktree verification
 or an executed S-01 case.
 
-The private [lifecycle-entry proof](../../../src/core/provider/entry.rs) and
+The private [lifecycle-entry proof](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/src/core/provider/entry.rs) and
 composed flow now passed independent contract and Rust/API quality review.
 They compare canonical local declaration/template identities, ordered source
 and generated formals, separate answer/row binders, exact input and state types,
@@ -2085,7 +2085,7 @@ checks existing behavior across the new representation; it does not establish
 experimental source admission or whole-worktree verification.
 
 The concrete S-01 library/client bundle and its
-[preparation tests](../../../tests/provider_sqlite_source.rs) now exist. Four
+[preparation tests](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/tests/provider_sqlite_source.rs) now exist. Four
 tests passed: shallow source parsing/projection, preservation of the original
 frontend depth failure, and SQLite resolution against normally checked
 registered dependencies, plus the concrete client's public-driver failure at
@@ -2117,7 +2117,7 @@ The implementation derives `ResourceApi` from builtin module IDs, uses fixed
 payload alternatives. Those facts identify extension seams; they do not define
 the experimental resource contract. The affected current contracts are
 [resource typing](../../../spec/static-semantics.md#scoped-cells-and-resource-dependencies),
-[native-buffer execution](../../../spec/dynamic-semantics.md#scoped-native-buffer-execution),
+[native-buffer execution](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/spec/dynamic-semantics.md#scoped-native-buffer-execution),
 [source grammar](../../../spec/syntax.md) and
 [entry checking](../../../spec/static-semantics.md#globals-and-modules).
 
@@ -2202,7 +2202,7 @@ source again. Canonical Core lowering must retain outer type quantification and
 the ordered method-dictionary domains of every requirement; the scheme's value
 type alone omits those domains.
 
-The private [external-global catalog](../../../src/elaborate/provider_globals.rs)
+The private [external-global catalog](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/src/elaborate/provider_globals.rs)
 now projects completed checked modules and admitted imports into those full
 Core schemes. It retains defining binders, checked constrained schemes, origins
 and shared capture/control summaries, and rejects conflicting duplicate
@@ -3229,7 +3229,7 @@ are required observations. This map records dependencies, not runtime support.
 
 ## First source fixture
 
-The [source library](../../../tests/fixtures/provider-experiments/sqlite-copying/sqlite.ash)
+The [source library](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/tests/fixtures/provider-experiments/sqlite-copying/sqlite.ash)
 declares and exports the resource assemblies and effects in `semantics.md`.
 It re-exports native configuration and lifecycle error families,
 defines its own operation result and error families, and provides pure functions
@@ -3237,11 +3237,11 @@ defines its own operation result and error families, and provides pure functions
 latter constructs actual UTF-8 bytes for `SELECT ?1`. Current equational globals
 require a positive pattern count; these are functions called with `()`, rather
 than unimplemented global value definitions. The client fixture has no direct
-native calls. The [client](../../../tests/fixtures/provider-experiments/sqlite-copying/entry.ash)
+native calls. The [client](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/tests/fixtures/provider-experiments/sqlite-copying/entry.ash)
 uses an ordinary generic helper with explicit argument, row and provider
 requirement. The originally planned four nested matches exceed the existing
 frontend depth budget; that source is retained in
-[entry-deep.ash](../../../tests/fixtures/provider-experiments/sqlite-copying/entry-deep.ash)
+[entry-deep.ash](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/tests/fixtures/provider-experiments/sqlite-copying/entry-deep.ash)
 as a frontend failure, not a resource-safety rejection. Factoring preserves the
 query, call order and nested result:
 
@@ -3977,12 +3977,12 @@ are retained in
 
 ### SQLite compiler work measurement (receipt 109)
 
-The [Rust harness](../../../tests/support/sqlite_copying.rs) installs the exact
+The [Rust harness](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/tests/support/sqlite_copying.rs) installs the exact
 provider and SQLite manifests and binding, then calls
 `run_path_with_foreign_runtime` on an Ash entry path. Only the entry and its
 loaded import dependencies enter Ash compilation. Copying all fixture files into
 the temporary directory does not compile unrelated entries. Embedded strings
-such as the reset program in the [copying test](../../../tests/provider_sqlite_copying.rs)
+such as the reset program in the [copying test](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/tests/provider_sqlite_copying.rs)
 are written as Ash files and compiled through the same public driver. Rust
 fixture setup, assertions, Cargo compilation and native SQLite execution do not
 consume the compiler's `TypeWorkBudget`.
