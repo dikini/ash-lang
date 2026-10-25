@@ -9,7 +9,7 @@ use crate::{
     resolved::ResolvedModuleProgram,
     source::Span,
     types::{
-        EffectRowVariable, IterativeTypeOwner, Kind, KindedArgument, Type, TypeWorkBudget,
+        IterativeTypeOwner, Kind, KindedArgument, Type, TypeWorkBudget,
         clone_kinded_argument_with_budget, substitute_type_and_row_variables_with,
     },
 };
@@ -112,168 +112,10 @@ impl<'a> LinkedLexicalSource<'a> {
     }
 }
 
-fn equation_row(
-    scheme: &Type,
-    arity: usize,
-    work: &mut TypeWorkBudget,
-    span: Span,
-) -> Result<Option<crate::types::EffectRow>, EvidenceValidationFailure> {
-    if arity == 0 {
-        return Err(invalid_root(span));
-    }
-    let mut remainder = scheme;
-    let mut effects = None;
-    for _ in 0..arity {
-        work.charge(1).map_err(|()| type_resource(span))?;
-        let function = remainder
-            .function_view()
-            .ok_or_else(|| invalid_root(span))?;
-        effects = function.effects();
-        remainder = function.value();
-    }
-    let Some(effects) = effects else {
-        return Ok(None);
-    };
-    if !matches!(
-        effects.tail().map(|tail| tail.variable()),
-        Some(EffectRowVariable::Rigid(_))
-    ) {
-        return crate::types::clone_effect_row_with_budget(effects, work)
-            .map(Some)
-            .map_err(|()| type_resource(span));
-    }
-    let mut rows = HashMap::new();
-    crate::types::qualify_scheme_row_replacements_with_budget(
-        scheme,
-        &HashMap::new(),
-        &mut rows,
-        true,
-        work,
-    )
-    .map_err(|()| type_resource(span))?;
-    let qualified = IterativeTypeOwner::new(
-        substitute_type_and_row_variables_with(
-            scheme,
-            &HashMap::new(),
-            &rows,
-            |cells| work.charge(cells),
-            || (),
-        )
-        .map_err(|()| type_resource(span))?
-        .map_err(|_| invalid_root(span))?,
-    );
-    let mut remainder = &*qualified;
-    let mut effects = None;
-    for _ in 0..arity {
-        work.charge(1).map_err(|()| type_resource(span))?;
-        let function = remainder
-            .function_view()
-            .ok_or_else(|| invalid_root(span))?;
-        effects = function.effects();
-        remainder = function.value();
-    }
-    effects
-        .map(|row| crate::types::clone_effect_row_with_budget(row, work))
-        .transpose()
-        .map_err(|()| type_resource(span))
-}
-
-fn lexical_equation_row(
-    program: &ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
-    source: &crate::resolved::ResolvedLexicalEvidence,
-    group: &crate::resolved::ResolvedImplementationMethodGroup,
-    arity: usize,
-    budget: &mut InterfaceConstraintBudget,
-    work: &mut TypeWorkBudget,
-    span: Span,
-) -> Result<Option<crate::types::EffectRow>, EvidenceValidationFailure> {
-    let method = group.method.ok_or_else(|| invalid_root(span))?;
-    charge(budget, 2, span)?;
-    let canonical = registry
-        .method(program, method)
-        .ok_or_else(|| unknown(span))?;
-    let interface = registry
-        .interface(program, method.interface())
-        .ok_or_else(|| unknown(span))?;
-    if source.application.interface.id != interface.id
-        || group.identity.is_some()
-        || interface.parameters.len() != source.application.arguments.len()
-        || canonical.authoritative_type_parameters().len() != group.contextual_parameters.len()
-    {
-        return Err(invalid_root(span));
-    }
-    let count = interface
-        .parameters
-        .len()
-        .checked_add(group.contextual_parameters.len())
-        .ok_or_else(|| type_resource(span))?;
-    work.charge(
-        count
-            .checked_add(source.application.arguments.len())
-            .ok_or_else(|| type_resource(span))?,
-    )
-    .map_err(|()| type_resource(span))?;
-    let row_count = source
-        .application
-        .arguments
-        .iter()
-        .filter(|argument| matches!(&argument.ty, KindedArgument::RowArg(_)))
-        .count();
-    let mut replacements = OwnerReplacements {
-        types: HashMap::new(),
-        rows: HashMap::new(),
-    };
-    replacements
-        .types
-        .try_reserve(count - row_count)
-        .map_err(|_| type_resource(span))?;
-    replacements
-        .rows
-        .try_reserve(row_count)
-        .map_err(|_| type_resource(span))?;
-    for (parameter, argument) in interface
-        .parameters
-        .iter()
-        .zip(&source.application.arguments)
-    {
-        let argument = clone_kinded_argument_with_budget(&argument.ty, work)
-            .map_err(|()| type_resource(span))?;
-        if replacements.insert_discarding_previous(parameter.id, argument) {
-            return Err(invalid_root(span));
-        }
-    }
-    for (parameter, contextual) in canonical
-        .authoritative_type_parameters()
-        .iter()
-        .zip(&group.contextual_parameters)
-    {
-        work.charge(1).map_err(|()| type_resource(span))?;
-        if parameter.kind == Kind::EffectRow
-            || !crate::types::same_kind_with_budget(&parameter.kind, &contextual.kind, work)
-                .map_err(|()| type_resource(span))?
-            || replacements.insert_discarding_previous(
-                parameter.id,
-                KindedArgument::TypeArg(Type::Variable(contextual.id)),
-            )
-        {
-            return Err(invalid_root(span));
-        }
-    }
-    let scheme = IterativeTypeOwner::new(
-        substitute_type_and_row_variables_with(
-            canonical.value_type(),
-            &replacements.types,
-            &replacements.rows,
-            |cells| work.charge(cells),
-            || (),
-        )
-        .map_err(|()| type_resource(span))?
-        .map_err(|_| invalid_root(span))?,
-    );
-    equation_row(&scheme, arity, work, span)
-}
-
+#[expect(
+    clippy::too_many_arguments,
+    reason = "source authority, lexical scope chain and independent ledgers remain distinct inputs"
+)]
 pub(super) fn lexical_context_rows(
     program: &ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,

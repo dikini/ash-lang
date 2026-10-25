@@ -289,7 +289,6 @@ pub(super) struct Graph {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 pub(super) fn observed_control_call_graph_for_test() -> Graph {
     let source = crate::source::SourceFile::new("observed-call.ash", "x").unwrap();
     let span = source
@@ -420,21 +419,6 @@ impl Graph {
         );
         Ok(offset)
     }
-
-    /// Append the authenticated original value graph and install its exact
-    /// clause-pattern ports at the actual generated handler control position.
-    /// The caller separately proves original template/operation/owner identity.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "exact original handler/body and control/callable relocation coordinates stay distinct at sealed graph admission"
-    )]
-
-    /// Retain actual lexical initializers available at this checked flow call.
-    /// These are local slots, never imported/global source definitions.
-
-    /// Inspect only the selected closure's retained dependencies. Metadata
-    /// slots require an authenticated concrete instantiation from the caller;
-    /// unresolved lexical slots and privileged values never become scalars.
 
     // A cut freezes lexical inputs, not the initializers or local binders that
     // execution has yet to produce. Functions contribute their actual captures.
@@ -877,10 +861,6 @@ impl Graph {
         }
         Ok(bindings)
     }
-
-    /// Raw selected-producer occurrences outside authenticated source cuts
-    /// retain no ordinary source-call authority. Adapter construction uses
-    /// its separate canonical import relation, never these raw occurrences.
 
     fn build_adapters(
         &mut self,
@@ -1495,27 +1475,11 @@ impl Graph {
         Ok(handler)
     }
 
-    fn constructor_payload(
-        &mut self,
-        constructor: ConstructorId,
-        payload: usize,
-        source: Span,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<usize, Failure> {
-        let function = self.push(Expr::Constructor(constructor), source, budget)?;
-        self.push(
-            Expr::Call {
-                function,
-                arguments: copy_slice(&[payload], budget)?,
-                scalar: false,
-                type_application: false,
-            },
-            source,
-            budget,
-        )
-    }
-
     #[cfg(test)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "graph, imported summaries, method adapters and work owner remain distinct inputs"
+    )]
     pub(super) fn build<F: CoreOperationFamily>(
         nodes: &[StoredNode<F>],
         globals: &[(BinderId, crate::core::NodeId)],
@@ -1539,10 +1503,6 @@ impl Graph {
         )
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the sealed conditional clause ports accompany the existing actual typed-node and selected-evidence graph inputs"
-    )]
     #[expect(
         clippy::too_many_arguments,
         reason = "the same typed value graph preserves source ordinals within the authenticated actual-root domain"
@@ -3274,8 +3234,6 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
-    /// Seed a real source callable with an independently checked closed-data input.
-
     pub(super) fn revision(&self) -> usize {
         self.revision
     }
@@ -3355,45 +3313,7 @@ impl<'a> Analysis<'a> {
         self.slot(expression, context, budget)
     }
 
-    pub(super) fn calls(
-        &mut self,
-        code: usize,
-        context: usize,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<CallSuccessors, Failure> {
-        let port = self.port(code, context, budget)?;
-        self.close(budget)?;
-        let (expression, _) = self.slots[port].key;
-        let Expr::Call { function, .. } = self.graph.expressions[expression] else {
-            return Err(Failure::Invalid);
-        };
-        let function = self.slot(function, context, budget)?;
-        let mut targets = Vec::new();
-        let mut unknown = false;
-        let mut returns = false;
-        for atom in copy_slice(&self.slots[function].atoms, budget)? {
-            match atom {
-                Atom::Closure(target, _) => {
-                    let context =
-                        self.context(context, Transition::Invoke(expression, target), budget)?;
-                    let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
-                    targets.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    targets.push((target, context));
-                }
-                Atom::Unknown => unknown = true,
-                Atom::Constructor(_) | Atom::IndependentCallable => returns = true,
-                _ => {}
-            }
-        }
-        Ok(CallSuccessors {
-            targets,
-            unknown,
-            returns,
-        })
-    }
-
     // Only discover's exact observed-State record supplies a delivered prefix.
-    // Other callers keep calls().
     pub(super) fn calls_after(
         &mut self,
         code: usize,
@@ -3514,15 +3434,6 @@ impl<'a> Analysis<'a> {
         };
         self.link(result, body, creation, budget)
     }
-
-    /// Called only after selecting the exact authenticated native interpreter.
-    /// Installation demands no value convergence and publishes no result atom.
-
-    /// Observe every tuple alternative and field through the current queue
-    /// reader. Empty inputs are pending; any present foreign atom is invalid.
-
-    /// Called only after the control and value queues reach a joint fixed
-    /// point. Re-read live fields; a permanently empty obligation cannot pass.
 
     /// Conditional birth witnesses are existing original predecessor ports.
     /// The lexical walk excludes this resource and all subtree-bound symbols.
@@ -5132,6 +5043,8 @@ impl<'a> Analysis<'a> {
         Ok(resources)
     }
 }
+
+type EvidenceKey = (crate::interface::RequirementId, crate::interface::MethodId);
 
 #[cfg(test)]
 mod tests {
@@ -10409,5 +10322,3 @@ mod tests {
     }
     // ASH_INPUT169_END_TESTS
 }
-
-type EvidenceKey = (crate::interface::RequirementId, crate::interface::MethodId);

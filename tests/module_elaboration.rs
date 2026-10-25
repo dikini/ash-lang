@@ -134,9 +134,9 @@ fn contains_inference(root: &Type) -> bool {
                 pending.push(Task::Type(argument));
                 pending.push(Task::Type(function));
             }
-            Task::Type(
-                Type::ResourceApply(_, arguments),
-            ) => pending.extend(arguments.iter().map(Task::Argument)),
+            Task::Type(Type::ResourceApply(_, arguments)) => {
+                pending.extend(arguments.iter().map(Task::Argument))
+            }
             Task::Type(Type::EffectfulFunction(domain, codomain)) => {
                 pending.push(Task::Row(codomain.effects()));
                 pending.push(Task::Type(codomain.value()));

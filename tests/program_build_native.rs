@@ -249,7 +249,7 @@ fn generated_pointer_hosts_preserve_native_calls_and_bytes_with_both_linkages() 
         let executable = build_case(
             &fixture,
             &format!("{linkage}-pointers"),
-            &source,
+            source,
             &[("native.ash", NATIVE)],
             input,
         );

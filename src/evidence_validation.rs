@@ -2748,13 +2748,11 @@ pub(crate) fn validate_interface_evidence_with_budget(
     drop(kind_environments);
     if has_contextual_parameters {
         for owner in method_evidence.lexical_owners() {
-            let resource_identity = match owner.resource.as_ref() {
-                Some(crate::core::dialect::MethodEvidenceResourceOwner::Builtin(acquisition)) => {
-                    Some((acquisition.identity, acquisition.provider, acquisition.span))
-                }
-
-                None => None,
-            };
+            let resource_identity = owner.resource.as_ref().map(
+                |crate::core::dialect::MethodEvidenceResourceOwner::Builtin(acquisition)| {
+                    (acquisition.identity, acquisition.provider, acquisition.span)
+                },
+            );
             if let Some((identity, provider, span)) = resource_identity
                 && owner.method.declaration() == 0
             {
@@ -3364,6 +3362,7 @@ fn checked_interface_method_search_width(
         .ok_or_else(|| resource(span))
 }
 
+#[cfg(test)]
 fn imported_seed_is_polymorphic(
     methods: &[MethodEvidenceMethod],
     selected: ImplMethodId,
@@ -4733,7 +4732,6 @@ fn collect_method_evidence_occurrences(
                             registry,
                             Some(ExpectedEquation::Global {
                                 binder: checked.binder,
-                                arity: equation.patterns.len(),
                             }),
                             None,
                             owner,
@@ -4805,11 +4803,7 @@ fn collect_method_evidence_occurrences(
                                             program,
                                             registry,
                                             None,
-                                            Some(LinkedLocalScope::Equation {
-                                                source,
-                                                method,
-                                                arity: equation.patterns.len(),
-                                            }),
+                                            Some(LinkedLocalScope::Equation { source, method }),
                                             owner,
                                             &equation.body,
                                             methods,
@@ -4851,7 +4845,6 @@ fn collect_method_evidence_occurrences(
                         registry,
                         Some(ExpectedEquation::Implementation {
                             method: method.identity.ok_or_else(|| invalid_root(method.span))?,
-                            arity: equation.patterns.len(),
                         }),
                         None,
                         owner,
@@ -5123,11 +5116,7 @@ fn collect_method_evidence_expression_occurrences<'a>(
                                         .map_err(|_| resource(equation.span))?;
                                     let context = row_contexts.len();
                                     row_contexts.push((
-                                        LinkedLocalScope::Equation {
-                                            source,
-                                            method,
-                                            arity: equation.patterns.len(),
-                                        },
+                                        LinkedLocalScope::Equation { source, method },
                                         row_head,
                                     ));
                                     pending.push((&equation.body, Some(context)));
@@ -5239,11 +5228,7 @@ fn collect_method_evidence_expression_occurrences<'a>(
                                         .map_err(|_| resource(equation.span))?;
                                     let context = row_contexts.len();
                                     row_contexts.push((
-                                        LinkedLocalScope::Equation {
-                                            source,
-                                            method,
-                                            arity: equation.patterns.len(),
-                                        },
+                                        LinkedLocalScope::Equation { source, method },
                                         row_head,
                                     ));
                                     pending.push((&equation.body, Some(context)));
@@ -6022,10 +6007,7 @@ fn validate_definition<'a>(
                     .ok_or_else(|| unknown(definition.span()))?;
                 let equation_scope = EvidenceScope {
                     local_scopes: &[],
-                    expected_equation: Some(ExpectedEquation::Global {
-                        binder,
-                        arity: equation.patterns.len(),
-                    }),
+                    expected_equation: Some(ExpectedEquation::Global { binder }),
                     ..scope
                 };
                 validate_expression(
@@ -6118,7 +6100,6 @@ fn validate_implementation<'a>(
                 local_scopes: &[],
                 expected_equation: Some(ExpectedEquation::Implementation {
                     method: checked_method.id,
-                    arity: equation.patterns.len(),
                 }),
                 ..scope
             };
@@ -6610,8 +6591,8 @@ fn validate_occurrence<'a>(
 
 #[derive(Clone, Copy)]
 enum ExpectedEquation {
-    Global { binder: BinderId, arity: usize },
-    Implementation { method: ImplMethodId, arity: usize },
+    Global { binder: BinderId },
+    Implementation { method: ImplMethodId },
 }
 
 #[derive(Clone, Copy)]
@@ -7911,7 +7892,6 @@ enum LinkedLocalScope<'a> {
     Equation {
         source: &'a crate::resolved::ResolvedLexicalEvidence,
         method: &'a crate::resolved::ResolvedImplementationMethodGroup,
-        arity: usize,
     },
     Method(&'a crate::resolved::ResolvedImplementationMethodGroup),
     Nominal(NominalTypeId),
@@ -8191,11 +8171,7 @@ fn schedule_lexical_block<'a>(
                                 .map_err(|_| resource(equation.span))?;
                             let index = method_scopes.len();
                             method_scopes.push((
-                                LinkedLocalScope::Equation {
-                                    source,
-                                    method,
-                                    arity: equation.patterns.len(),
-                                },
+                                LinkedLocalScope::Equation { source, method },
                                 method_head.1,
                             ));
                             Some(index)
@@ -9436,6 +9412,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::err_expect,
+        reason = "avoid recursively formatting an unexpected deep validated program on the small test stack"
+    )]
     fn deep_public_linked_value_kinding_fits_the_default_budget_on_a_small_stack() {
         const DEPTH: usize = 32_768;
         const GENERATED_ORIGIN_DEPTH: usize = 16_384;
@@ -10355,7 +10335,6 @@ mod tests {
         let context = OriginalLexicalContext {
             equation: Some(ExpectedEquation::Global {
                 binder: scheme.binder,
-                arity: original.equations[0].patterns.len(),
             }),
             owner: Some(RequirementOwner::Global(scheme.binder)),
             local_head: None,
@@ -10463,7 +10442,6 @@ mod tests {
             variables: &variables,
             expected_equation: Some(ExpectedEquation::Global {
                 binder: scheme.binder,
-                arity: original.equations[0].patterns.len(),
             }),
         };
         let run = |body: &ResolvedExpr| {
@@ -10588,7 +10566,6 @@ mod tests {
         let context = OriginalLexicalContext {
             equation: Some(ExpectedEquation::Global {
                 binder: scheme.binder,
-                arity: original.equations[0].patterns.len(),
             }),
             owner: Some(RequirementOwner::Global(scheme.binder)),
             local_head: Some(1),

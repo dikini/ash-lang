@@ -76,7 +76,7 @@ impl PartialEq for NativeInterpretation {
 }
 impl Eq for NativeInterpretation {}
 
-/// Explicit ordinary or checked-host interpretation over the shared body/vector.
+/// Native symbol interpretation over the shared body and operation vector.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeInterpretNode {
     pub(super) body: NodeId,
@@ -84,13 +84,6 @@ pub struct NativeInterpretNode {
 }
 
 impl NativeInterpretNode {
-    pub(crate) fn new(body: NodeId, interpretations: Box<[NativeInterpretation]>) -> Self {
-        Self {
-            body,
-            interpretations,
-        }
-    }
-
     #[must_use]
     pub const fn body(&self) -> NodeId {
         self.body
@@ -297,9 +290,6 @@ impl HandlerNode {
     }
     pub(crate) fn hook_registration(&self) -> Option<&crate::resolved::HookRegistrationContract> {
         self.hook_registration.as_deref()
-    }
-    pub(crate) fn has_hook_contracts(&self) -> bool {
-        self.hook_root.is_some() || self.hook_registration.is_some()
     }
     pub(crate) fn with_hook_root(
         mut self,
@@ -1048,9 +1038,7 @@ impl CoreBuilder<EffectOperationFamily> {
                         .ok_or(super::BuildError::InvalidPayload)?;
                     // Operand work is intrinsic even while the owner output is
                     // bottom. At the fixed point it is included in that output.
-                    let owner_output = match &self.nodes[owner].kind {
-                        _ => &self.nodes[owner].effects,
-                    };
+                    let owner_output = &self.nodes[owner].effects;
                     let output = owner_output
                         .union_with_budget(
                             &self.nodes[resume.value.index()?].effects,

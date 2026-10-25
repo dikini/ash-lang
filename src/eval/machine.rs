@@ -365,11 +365,6 @@ pub struct Evaluation {
 }
 
 impl Evaluation {
-    #[cfg(test)]
-    pub(crate) fn retained_effect_trace(&self) -> Option<&[EffectTraceEvent]> {
-        self.effect_trace.as_deref()
-    }
-
     pub(crate) fn into_observation_parts(self) -> (Value, Arc<ObservedHeap>) {
         (self.value, self.heap)
     }
@@ -3295,9 +3290,6 @@ fn apply_byte_lookup(
 }
 
 #[inline(never)]
-/// A pure scan creates only an ordinary result. No prepared-input token,
-/// pointer or native permission can be derived from this preflight.
-
 fn allocate_heap(heap: &mut Vec<HeapCell>, cell: HeapCell) -> Result<Location, RuntimeFailure> {
     admit_heap_cell(heap.len())?;
     let location = heap.len();
@@ -3486,14 +3478,6 @@ pub fn evaluate_effect_with_source_native_program(
     machine.source_bindings = Some(bindings);
     machine.run()
 }
-
-/// Evaluates validated Effect Core using identity-bound executable host bindings.
-///
-/// Retained native owners stay in the borrowed host runtime after source return.
-///
-/// # Errors
-/// Rejects changed manifest facts, absent bindings, malformed codecs or runtime
-/// ownership failures before the corresponding native acquisition.
 
 fn apply_primitive(
     primitive: Primitive,

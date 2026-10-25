@@ -266,7 +266,6 @@ define_kind_site_profiles! {
     // Private build encoding borrows checked trees; reconstruction guards own
     // staged records under the same cumulative TypeWorkBudget and Core gate.
     FieldBuildCoreBorrow => (Field, Borrowed, Core, CarrierRetention, PreservedCarrier, CoreAdmission, Type, CoreTree),
-    FieldBuildNodeBorrow => (Field, Borrowed, Core, CarrierRetention, PreservedCarrier, CoreAdmission, Type, CoreTreeAndResolvedTreeAndRegistryTree),
     FieldBuildTypeBorrow => (Field, Borrowed, Canonical, CarrierRetention, PreservedCarrier, CoreAdmission, Type, TypeTree),
     FieldBuildCoreOwned => (Field, Owned, Core, CarrierRetention, PreservedCarrier, CoreAdmission, Type, CoreTree),
     FieldBuildRegistryOwned => (Field, Owned, Registry, CarrierRetention, PreservedCarrier, CoreAdmission, Type, RegistryTree),
@@ -492,7 +491,6 @@ const KIND_SITES: &[KindSite] = &[
     // checked interface facts and canonical registry without retaining copies.
     // Source resource headers, immutable defining forests, final copying claims,
     // and native owner receipts retain the owners of their completed phase.
-    kind_site!("src/core/dialect.rs::ImageNodeView.$alias", FieldBuildNodeBorrow),
     // Source control originals, complete row claims and borrowed graph views.
     // Source readiness and flat host storage share the exact original status
     // symbol. Its existing checked owner disposes Type/Row facts iteratively;
@@ -613,12 +611,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_resource_family::Parts.provider", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_resource_family::Parts.requirements", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_resource_handlers::Clauses.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
-    kind_site!("src/resolved.rs::$fn_clone_family_application_with_budget::Arguments.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
-    kind_site!("src/resolved.rs::$impl_ResourceFamilyTypeFact::$fn_from_template_with_budget::Assembly.actuals", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
-    kind_site!("src/resolved.rs::$impl_ResourceFamilyTypeFact::$fn_from_template_with_budget::Assembly.applications", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
-    kind_site!("src/resolved.rs::$impl_ResourceFamilyTypeFact::$fn_from_template_with_budget::Assembly.effects", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
-    kind_site!("src/resolved.rs::$impl_ResourceFamilyTypeFact::$fn_from_template_with_budget::Assembly.parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
-    kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.family_template", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedResourceDefinition.family_template", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedResourceFamilyTemplate.handlers", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedResourceFamilyTemplate.interpreted", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
@@ -784,8 +776,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_structural_with_inference::Task.RowTail.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_structural_with_inference::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_with_effects_with_budget::Owned.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
-    kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.arguments", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
-    kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.actuals", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::NonMaterializedNominalKind.Ordinary.0", FieldRegistryCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree),
     // Interface declarations, facts and original owner records borrow the
     // same immutable parameter allocation. The sized record alone owns its
@@ -879,8 +869,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::ModuleBodyChecking.facts", FieldProviderGlobalsMixed),
     kind_site!("src/elaborate.rs::ModuleBodyChecking.globals", FieldProviderGlobalsMixed, Owned),
     kind_site!("src/evidence.rs::PreflightedEvidencePublication.publication", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork),
-    kind_site!("src/interface.rs::EvidenceSelection.original", FieldSharedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
-    kind_site!("src/interface.rs::OriginalEvidenceOwner.plan", FieldSharedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/kind.rs::KindEnvironments.imported_resource_owners", FieldOwnerKindRegistryBorrow),
     kind_site!("src/parser/project.rs::ExpressionTask.FinishProviderResource.arguments", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceProviderResourceExpr.arguments", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
@@ -893,9 +881,6 @@ const KIND_SITES: &[KindSite] = &[
     // temporary typed control/value graph. Nothing enters executable authority.
     kind_site!("src/core/dialect.rs::MethodEvidenceDomain.source_parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/validate.rs::MonotypeVariableKinds.CatalogOwner.0", FieldProviderKindBorrow),
-    kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.effects", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
-    kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.parameters", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
-    kind_site!("src/resolved.rs::$impl_ResourceTypeFact::$fn_from_definition_with_budget::Assembly.types", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ImportedFacts.resource_facts", FieldResourceFactsShared),
     kind_site!("src/core/validate.rs::BorrowedClauseContract.effect", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
     kind_site!("src/core/validate.rs::BorrowedClauseContract.clause", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
@@ -909,7 +894,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/eval/machine.rs::Frame.TypeApplication.caller", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
     kind_site!("src/evidence.rs::PendingOccurrence.application", FieldBorrowedTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTypeTree),
     kind_site!("src/evidence.rs::PendingOccurrence.method_arguments", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTypeTree),
-    kind_site!("src/evidence.rs::PendingOccurrence.value_type", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTypeTree),
     kind_site!("src/evidence.rs::PendingOccurrence.selection", FieldBorrowedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence_validation.rs::MethodEvidenceInputs.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
     kind_site!("src/resolve.rs::ResolvedDeclarations.resources", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
@@ -982,7 +966,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/capture/control.rs::Analysis.types", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::Analysis.labels", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork, Shared),
     kind_site!("src/core/capture/control.rs::Analysis.cleanup_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/core/capture.rs::Substitutions.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/core/capture.rs::TypeArguments.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/resolved.rs::CheckedGlobalScheme.capture", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
     kind_site!("src/resolved.rs::ExportedGlobal.capture", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Shared),
@@ -4446,12 +4429,8 @@ fn fields_from_sources(sources: &[(&str, &str)]) -> Vec<ProductionField> {
 #[test]
 fn imported_catalog_authentication_has_an_exact_compile_time_inventory() {
     let helper = "same_imported_method_evidence_catalog";
-    for path in ["src/core/dialect.rs"] {
-        assert!(is_allowed_private_core_method_evidence_identifier(
-            path, helper
-        ));
-    }
     for path in [
+        "src/core/dialect.rs",
         "src/core/validate.rs",
         "src/core/transform.rs",
         "src/core/provider.rs",
@@ -8026,7 +8005,6 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                 identifier,
                 // Canonical Layout/family authentication; no runtime selection.
                 "MethodEvidenceResourceOwner"
-
                     | "MethodEvidenceAdapter"
                     | "MethodEvidenceLexicalOwner"
                     | "LexicalEvidenceId"
@@ -8066,7 +8044,6 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "method_evidence_producer_matches"
                     | "requires_method_evidence_implementation_owner"
                     | "requirement_position"
-                    | "same_imported_method_evidence_catalog"
                     | "same_interface_application_with_budget"
                     | "target_requirement"
                     | "with_registry_and_method_evidence"

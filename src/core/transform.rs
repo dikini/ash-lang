@@ -245,8 +245,7 @@ impl TransformFamily for EffectOperationFamily {
                     .hook_root()
                     .map(|root| {
                         builder.charge_effect_metadata(1)?;
-                        let copied =
-                            root.with_target(copy_effect_instance(builder, &root.target)?);
+                        let copied = root.with_target(copy_effect_instance(builder, &root.target)?);
                         Ok::<_, TransformError>(copied)
                     })
                     .transpose()?;

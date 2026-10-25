@@ -165,6 +165,17 @@ or native program.
 The developer owns the full normal gate at the integrated slim path plus example
 checkpoint before M1 acceptance and Main integration.
 
+The final S2 cleanup restores the builtin Cell export-shape authentication call,
+retires only caller-proven provider staging and unused projection factories, and
+recovers two ordinary constructor-original tests with an ordinary source fixture.
+Independent bounded reviews cleared those changes. Workspace formatting and the
+exact all-target, all-feature strict Clippy command pass on Rust 1.97.1 with one
+job and the existing shared target (`/tmp/slim-clippy8.log`, SHA256
+`91891357356a542d4d7fe7e7ab3d627c65f293a97e0c48f344b4be6e530868df`).
+Fresh library, architecture, embedded-image and static/shared native checks on
+this final candidate remain pending, together with frozen-head review. S3 and
+the connected normal workspace checkpoint remain separate milestone obligations.
+
 ## Discoveries
 
 Existing foreign declarations contain compiler-interpreted policy. Existing

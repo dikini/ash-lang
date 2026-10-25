@@ -577,7 +577,10 @@ fn minus_and_slash_remain_unknown_characters() {
     let source = SourceFile::new("operators.ash", "- /").unwrap();
     let lexed = lex(&source).unwrap();
     assert_eq!(lexed.diagnostics.len(), 2);
-    for (diagnostic, spelling, start) in [( &lexed.diagnostics[0], "-", 0), (&lexed.diagnostics[1], "/", 2)] {
+    for (diagnostic, spelling, start) in [
+        (&lexed.diagnostics[0], "-", 0),
+        (&lexed.diagnostics[1], "/", 2),
+    ] {
         assert_eq!(diagnostic.reason, LexReason::UnknownCharacter);
         assert_eq!(diagnostic.found.as_deref(), Some(spelling));
         assert_eq!(diagnostic.primary.span().range().start(), start);
@@ -637,7 +640,10 @@ fn rejected_negative_sign_keeps_the_following_unsigned_integer() {
     assert_eq!(lexed.diagnostics.len(), 1);
     assert_eq!(lexed.diagnostics[0].reason, LexReason::UnknownCharacter);
     assert_eq!(lexed.diagnostics[0].found.as_deref(), Some("-"));
-    assert_eq!(lexed.tokens[0].kind, TokenKind::Integer(Integer::parse_decimal("42").unwrap()));
+    assert_eq!(
+        lexed.tokens[0].kind,
+        TokenKind::Integer(Integer::parse_decimal("42").unwrap())
+    );
     assert_range(&lexed.tokens[0], 1, 3);
     assert_range(&lexed.tokens[1], 3, 3);
 }

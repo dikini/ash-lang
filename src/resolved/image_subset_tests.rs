@@ -44,36 +44,37 @@ fn ordinary_effect_registry() -> ResolvedRegistry {
         .collect::<Vec<_>>()
         .into_boxed_slice();
     let canonical_parameters = parameters.to_vec();
-    ResolvedRegistry::new(Vec::new(), Vec::new()).with_effects(vec![ResolvedEffectDeclaration {
-        id: effect,
-        public: false,
-        spelling: "Ordinary".to_owned(),
-        parameters,
-        operations: Box::new([ResolvedEffectOperation {
-            id: OperationId::new(effect, 0),
-            spelling: "request".to_owned(),
-            annotation: ResolvedType {
-                ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
-                provenance: ResolvedTypeProvenance::new(
-                    vec![ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
+    ResolvedRegistry::new(Vec::new(), Vec::new())
+        .with_effects(vec![ResolvedEffectDeclaration {
+            id: effect,
+            public: false,
+            spelling: "Ordinary".to_owned(),
+            parameters,
+            operations: Box::new([ResolvedEffectOperation {
+                id: OperationId::new(effect, 0),
+                spelling: "request".to_owned(),
+                annotation: ResolvedType {
+                    ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
                 origin: Origin::Source(span),
                 span,
-            },
+            }]),
+            native_contract: None,
             origin: Origin::Source(span),
             span,
-        }]),
-        native_contract: None,
-        origin: Origin::Source(span),
-        span,
-    }])
-    .with_image_kind_facts(
-        canonical_parameters,
-        Vec::new(),
-        &mut TypeWorkBudget::unbounded(),
-    )
-    .expect("the effect fixture retains its exact canonical type and row parameters")
+        }])
+        .with_image_kind_facts(
+            canonical_parameters,
+            Vec::new(),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .expect("the effect fixture retains its exact canonical type and row parameters")
 }
 
 #[test]

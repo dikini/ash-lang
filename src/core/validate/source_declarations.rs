@@ -39,7 +39,6 @@ enum NominalRole {
 #[derive(Clone, Copy, Debug)]
 struct NominalCoordinate {
     origin: Span,
-    name: Span,
     role: NominalRole,
 }
 
@@ -273,7 +272,6 @@ fn original_span(mut origin: &Origin, work: &mut TypeWorkBudget) -> Result<Span,
 #[derive(Clone, Copy)]
 struct ResourceBinderCoordinate {
     scope: Span,
-    family: Option<Span>,
     argument: Span,
     position: usize,
     arguments: usize,
@@ -317,7 +315,6 @@ impl ResourceBinderCoordinates {
                     &mut result.bindings,
                     ResourceBinderCoordinate {
                         scope: span(node, tokens, work)?,
-                        family: None,
                         argument: identity.ok_or_else(registry)?,
                         position: 0,
                         arguments: 1,
@@ -513,9 +510,11 @@ impl DeclarationCoordinates {
                             constructors = constructors.checked_add(1).ok_or_else(resource)?;
                         }
                     }
+                    let origin = span(node, tokens, work)?;
+                    // Validate the written name without retaining unused policy metadata.
+                    name(node, tokens, work)?;
                     let coordinate = NominalCoordinate {
-                        origin: span(node, tokens, work)?,
-                        name: name(node, tokens, work)?,
+                        origin,
                         role: NominalRole::Data {
                             newtype: node.kind == NodeKind::NewtypeDeclaration,
                             constructors,
@@ -529,7 +528,6 @@ impl DeclarationCoordinates {
                         &mut ordinary_resources,
                         NominalCoordinate {
                             origin: name,
-                            name,
                             role: NominalRole::Resource {
                                 source: false,
                                 ordinal: 0,
@@ -644,23 +642,20 @@ impl DeclarationCoordinates {
             else {
                 return Err(registry());
             };
-            match word.as_str() {
-                "symbol" => {
-                    let origin = span(child, tokens, work)?;
-                    let coordinate = EffectCoordinate {
-                        origin,
-                        span: origin,
-                        name: name(child, tokens, work)?,
-                        foreign: Some(SymbolCoordinate {
-                            library,
-                            member,
-                            symbol,
-                        }),
-                    };
-                    push(&mut self.effects, coordinate, work)?;
-                    symbol = symbol.checked_add(1).ok_or_else(resource)?;
-                }
-                _ => {}
+            if word == "symbol" {
+                let origin = span(child, tokens, work)?;
+                let coordinate = EffectCoordinate {
+                    origin,
+                    span: origin,
+                    name: name(child, tokens, work)?,
+                    foreign: Some(SymbolCoordinate {
+                        library,
+                        member,
+                        symbol,
+                    }),
+                };
+                push(&mut self.effects, coordinate, work)?;
+                symbol = symbol.checked_add(1).ok_or_else(resource)?;
             }
             member = member.checked_add(1).ok_or_else(resource)?;
         }

@@ -537,31 +537,12 @@ impl Request {
     }
 }
 
-#[derive(Default)]
-struct Substitutions(HashMap<TypeVariableId, Type>);
-
 #[derive(Debug)]
 struct TypeArguments(Vec<Type>);
-
-impl Substitutions {
-    fn insert(&mut self, variable: TypeVariableId, ty: Type) {
-        if let Some(displaced) = self.0.insert(variable, ty) {
-            discard_type_iteratively(displaced);
-        }
-    }
-}
 
 impl Drop for TypeArguments {
     fn drop(&mut self) {
         for ty in self.0.drain(..) {
-            discard_type_iteratively(ty);
-        }
-    }
-}
-
-impl Drop for Substitutions {
-    fn drop(&mut self) {
-        for (_, ty) in self.0.drain() {
             discard_type_iteratively(ty);
         }
     }
@@ -604,6 +585,7 @@ pub(crate) struct CleanupRequirement {
     pub(crate) code: usize,
     pub(crate) source: Span,
     pub(crate) context: usize,
+    #[cfg(test)]
     request: ActualRequestContext,
     pub(crate) expected: EffectRow,
     pub(crate) row: EffectRow,
@@ -725,10 +707,6 @@ impl Drop for MethodAdapter {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "original implementation and lexical evidence preserve selected method targets"
-)]
 pub(crate) fn selection_targets<'a>(
     selection: &crate::interface::EvidenceSelection,
     requested: Option<crate::interface::MethodId>,
@@ -1473,15 +1451,12 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
             if self.retain_node(preparation, id, budget)? {
                 continue;
             }
-            match (self.operation)(&node.kind) {
-                Some(EffectOperation::Resource(resource)) => {
-                    preparation
-                        .bound
-                        .try_reserve(1)
-                        .map_err(|_| Failure::Resource)?;
-                    preparation.bound.push(resource.acquisition.identity);
-                }
-                _ => {}
+            if let Some(EffectOperation::Resource(resource)) = (self.operation)(&node.kind) {
+                preparation
+                    .bound
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                preparation.bound.push(resource.acquisition.identity);
             }
             if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
                 F::pure(&node.kind)
@@ -1631,13 +1606,10 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
         let mut header = MetadataVariables::default();
         retain_type_variables(&mut header, &node.ty, budget)?;
         retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
-        match (self.operation)(&node.kind) {
-            Some(EffectOperation::Handler(handler)) => {
-                for argument in handler.effect().arguments() {
-                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
-                }
+        if let Some(EffectOperation::Handler(handler)) = (self.operation)(&node.kind) {
+            for argument in handler.effect().arguments() {
+                retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
             }
-            _ => {}
         }
         if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
             F::pure(&node.kind)
@@ -1684,13 +1656,10 @@ impl NodeMetadataHeaders {
         let mut header = MetadataVariables::default();
         retain_type_variables(&mut header, &node.ty, budget)?;
         retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
-        match operation(&node.kind) {
-            Some(EffectOperation::Handler(handler)) => {
-                for argument in handler.effect().arguments() {
-                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
-                }
+        if let Some(EffectOperation::Handler(handler)) = operation(&node.kind) {
+            for argument in handler.effect().arguments() {
+                retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
             }
-            _ => {}
         }
         if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
             F::pure(&node.kind)
@@ -1749,12 +1718,9 @@ fn retain_function_metadata<F: CoreOperationFamily>(
         headers.retain(value, nodes, id, operation, budget)?;
         // These are subtree bindings, not header facts: collect them for every
         // reader and preserve the original final whole-subtree exclusion.
-        match operation(&node.kind) {
-            Some(EffectOperation::Resource(resource)) => {
-                bound.try_reserve(1).map_err(|_| Failure::Resource)?;
-                bound.push(resource.acquisition.identity);
-            }
-            _ => {}
+        if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
+            bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+            bound.push(resource.acquisition.identity);
         }
         if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
             F::pure(&node.kind)
@@ -2024,21 +1990,11 @@ fn compile_pure_capture_control<F: CoreOperationFamily>(
     })
 }
 
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the existing selected scope and original borrowed projections retain authority without a copied environment"
-)]
-
 #[expect(
     clippy::too_many_arguments,
-    reason = "source-resource phase temporaries must not enlarge ordinary capture-control frames"
+    reason = "capture control construction borrows nodes, metadata and the existing work owner"
 )]
 #[inline(never)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "borrowed operation inputs keep legacy control construction separate from provider-group temporaries"
-)]
 fn compile_other_capture_control<F: CoreOperationFamily>(
     id: usize,
     node: &StoredNode<F>,
@@ -2192,10 +2148,6 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
 }
 
 #[inline(never)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "conditional completion edges accompany the same actual capture compilation inputs without an invented handler frame"
-)]
 fn compile_with_boundary<F: CoreOperationFamily>(
     nodes: &[StoredNode<F>],
     values: &[Value],
@@ -2340,10 +2292,6 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
     check_nodes_with_methods(nodes, globals, imports, operation, &[], &[], budget)
 }
 
-/// Final Core admission reuses layout facts from independent type validation
-/// of this exact immutable node slice. The sealed view grants no authority to
-/// source method names or headers copied from another arena.
-
 fn check_nodes_with_methods<F: CoreOperationFamily>(
     nodes: &[StoredNode<F>],
     globals: &[(BinderId, NodeId)],
@@ -2357,9 +2305,6 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
         nodes, globals, imports, operation, methods, adapters, None, budget,
     )
 }
-
-/// Query roots are actual nodes, not invented global definitions. Lexical
-/// bindings and callable groups are reconstructed from the checked graph.
 
 pub(crate) fn infer_cleanup_rows<F: CoreOperationFamily>(
     builder: &CoreBuilder<F>,

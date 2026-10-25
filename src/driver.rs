@@ -814,9 +814,6 @@ pub fn compile_path(configuration: RunConfiguration) -> Result<CompiledProgram, 
     )
 }
 
-/// Authoring-only catalogue. No partial compilation or executable binding is
-/// exposed; the retained Arcs are the originals used by ordinary admission.
-
 fn compile_path_for_execution(
     configuration: RunConfiguration,
 ) -> Result<CompiledProgram, FileFailure> {
@@ -843,18 +840,6 @@ fn compile_path_for_execution(
 pub fn execute(program: &CompiledProgram) -> Result<Observation, FileFailure> {
     execute_with_consumer(program, evaluate)
 }
-
-/// Evaluates checked Core using authenticated executable foreign bindings.
-///
-/// The borrowed runtime authenticates original operation contracts before native
-/// use and keeps retained owners quarantined until host teardown. It does not
-/// compile source or generate bindings. This supports the existing experimental
-/// host-registration path; it does not claim generated native-program support.
-/// Observation metadata preparation precedes all native execution.
-///
-/// # Errors
-/// Returns structured runtime, foreign-binding or conversion failures with the
-/// unchanged compilation ledger and no compile-time source context.
 
 fn execute_with_consumer<E>(
     program: &CompiledProgram,
@@ -962,16 +947,6 @@ where
         compilation_work,
     })
 }
-
-/// Executes a modular Ash graph with authenticated executable foreign bindings.
-///
-/// The configuration retains its source registrations. The runtime must bind
-/// those original entries; equal names do not authorize native dispatch. It is
-/// borrowed so retained native owners remain quarantined until host teardown.
-///
-/// # Errors
-/// Returns the same input, compiler and runtime failures as [`run_path`], plus
-/// foreign binding or conversion failures before the associated native use.
 
 #[cfg(test)]
 fn run_path_with_consumers<I, V, E>(
@@ -1152,10 +1127,6 @@ where
     .map_err(|failure| failure.with_compilation_work(compilation_work))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the optional authoring consumer shares the complete compiler pipeline without changing ordinary paths"
-)]
 fn compile_graph_with_report<I, V>(
     graph: &ModuleGraph,
     constraint_work: &mut InterfaceConstraintBudget,
@@ -1891,8 +1862,8 @@ fn refuse_unbound_source_native_entry(core: &CompiledCore) -> Result<(), Runtime
 /// this function neither registers callbacks nor selects them by source name.
 ///
 /// # Errors
-/// Refuses missing or changed bindings before Ash execution and retains runtime
-/// failures without retrying a returned external call.
+/// Refuses changed supplied bindings before Ash execution. A missing selected
+/// binding fails at invocation. Runtime failures never retry a returned external call.
 pub fn execute_with_source_native_bindings(
     program: &CompiledProgram,
     bindings: &mut crate::foreign::source_runtime::SourceNativeBindings,

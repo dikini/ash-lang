@@ -770,9 +770,7 @@ fn eligible_local_relay_generalizes_higher_kinded_parameters() {
                     work.push((Payload::Type(domain), true));
                     work.push((Payload::Row(codomain.effects()), below_function));
                 }
-                Payload::Type(
-                    ash::types::Type::ResourceApply(_, arguments),
-                ) => work.extend(
+                Payload::Type(ash::types::Type::ResourceApply(_, arguments)) => work.extend(
                     arguments
                         .iter()
                         .map(|argument| (Payload::Argument(argument), below_function)),

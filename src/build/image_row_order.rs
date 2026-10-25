@@ -1,7 +1,7 @@
 //! Portable order keys for unordered row partitions, before structural interning.
 use super::{
-    Encoder, ImageFailure, StructuralInput, Type, TypeVariableIdentity,
-    TypeWorkBudget, Unsupported, charge, index, push,
+    Encoder, ImageFailure, StructuralInput, Type, TypeVariableIdentity, TypeWorkBudget,
+    Unsupported, charge, index, push,
 };
 use crate::types::{EffectInstance, EffectRow, EffectRowVariable, Kind, KindedArgument};
 use std::cmp::Ordering;

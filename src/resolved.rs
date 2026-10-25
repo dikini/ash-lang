@@ -745,10 +745,6 @@ impl ResolvedModule {
         Ok(())
     }
 
-    pub(crate) fn defining_sources(&self) -> &[(ModuleId, Arc<crate::source::SourceFile>)] {
-        &self.defining_sources
-    }
-
     /// Returns the defining canonical module identity.
     #[must_use]
     pub const fn module(&self) -> ModuleId {
@@ -4605,10 +4601,6 @@ impl ImportedFacts {
             .filter_map(|identity| self.nominals.get(identity))
     }
 
-    pub(crate) fn has_implementation_for(&self, interface: InterfaceId) -> bool {
-        self.implemented_interfaces.contains(&interface)
-    }
-
     pub(crate) fn retain_implemented_interface(
         &mut self,
         interface: InterfaceId,
@@ -5947,6 +5939,7 @@ impl CheckedInterfaceMethodFact {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn clone_with_binder_authority(
         source: &Self,
         type_parameters: Box<[ResolvedTypeVariable]>,
@@ -6313,6 +6306,7 @@ fn share_checked_interface_fact(
     fact.clone_with_budget(type_work)
 }
 
+#[cfg(test)]
 pub(crate) fn clone_checked_interface_fact(
     fact: &CheckedInterfaceFact,
     source: Option<&ResolvedInterfaceDeclaration>,
@@ -8680,6 +8674,7 @@ fn same_resolved_type_provenance_with_constraint_budget(
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)
 }
 
+#[cfg(test)]
 pub(crate) fn same_resolved_type_provenance_with_budget(
     left: &ResolvedTypeProvenance,
     right: &ResolvedTypeProvenance,
@@ -10044,6 +10039,7 @@ impl ExportSummary {
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
+        self.authenticate_resource_facts()?;
         if self.terms.len() != self.term_order.len()
             || self.nominals.len() != self.nominal_order.len()
             || self.constructors.len() != self.constructor_order.len()
@@ -13375,41 +13371,9 @@ impl ExportSummary {
         self.implemented_interfaces.iter().copied()
     }
 
-    fn retain_resource_alias(
-        &mut self,
-        spelling: &str,
-        fact: &Arc<ResourceTypeFact>,
-        work: &mut TypeWorkBudget,
-    ) -> Result<(), ResolvedBuildFailure> {
-        work.charge(
-            spelling
-                .len()
-                .checked_mul(2)
-                .and_then(|count| count.checked_add(2))
-                .ok_or(ResolvedBuildFailure::TypeResource)?,
-        )
-        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        if self.resource_types.contains_key(spelling) {
-            return Err(ResolvedBuildFailure::InvalidState);
-        }
-        self.resource_types
-            .try_reserve(1)
-            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        self.resource_type_order
-            .try_reserve(1)
-            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        let key = try_clone_string(spelling).map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        let order = try_clone_string(spelling).map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        self.resource_types.insert(key, Arc::clone(fact));
-        self.resource_type_order.push(order);
-        Ok(())
-    }
-
     pub(crate) fn defining_sources(&self) -> &[(ModuleId, Arc<crate::source::SourceFile>)] {
         &self.defining_sources
     }
-
-    /// Returns identity-authenticated, body-free foreign registration facts.
 
     #[cfg(test)]
     pub(crate) fn corrupt_builtin_fact_for_test(
@@ -13703,9 +13667,7 @@ impl ExportSummary {
         Ok(())
     }
 
-    /// Reads original checked contracts after body-free summary authentication.
-    /// A closed outward row does not remove the native profile requirement.
-
+    /// Authenticates one symbol against its retained original defining fact.
     fn authenticate_source_native_effect(
         &self,
         effect: &ResolvedEffectDeclaration,
@@ -17398,12 +17360,6 @@ impl ResolvedGlobalParameterRow {
     }
 }
 
-/// Authenticated foreign declarations currently admit the StateAccess key and
-/// undetermined interfaces. Keep the existing fixed-key comparison tariff.
-
-/// A single-use proof of the scalar table for this exact immutable registry.
-/// It carries no source-table, owner, native or executable authority.
-
 /// Immutable resolved metadata for one source file.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResolvedRegistry {
@@ -17618,22 +17574,6 @@ impl NonMaterializedNominalKind {
             Self::RowBearingResource(id) => {
                 budget.charge(1)?;
                 Ok(Self::RowBearingResource(*id))
-            }
-        }
-    }
-
-    fn same_with_budget(&self, other: &Self, budget: &mut TypeWorkBudget) -> Result<bool, ()> {
-        match (self, other) {
-            (Self::Ordinary(left), Self::Ordinary(right)) => {
-                same_kind_with_charge(left, right, || budget.charge(1))
-            }
-            (Self::RowBearingResource(left), Self::RowBearingResource(right)) => {
-                budget.charge(1)?;
-                Ok(left == right)
-            }
-            _ => {
-                budget.charge(1)?;
-                Ok(false)
             }
         }
     }
@@ -19375,12 +19315,7 @@ impl ResolvedRegistry {
         )
     }
 
-    /// Returns foreign manifests authenticated by reserved-path admission.
-
-    /// Looks up native privilege by its defining operation identity.
-
-    /// Reports whether an effect is registered native authority.
-
+    /// Retains one original symbol at its exact defining effect/operation identity.
     pub(crate) fn retain_native_symbol(
         &mut self,
         symbol: Arc<crate::foreign::checked_source::CheckedForeignSymbol>,
@@ -20093,7 +20028,7 @@ impl ResolvedRegistry {
         {
             return Ok(false);
         }
-        return Ok(self.effects.is_empty()
+        Ok(self.effects.is_empty()
             && self.effect_positions.is_empty()
             && self.owner_definitions.is_empty()
             && self.owner_definition_positions.is_empty()
@@ -20104,7 +20039,7 @@ impl ResolvedRegistry {
             && self
                 .nominal_parameters
                 .values()
-                .all(|parameters| parameters.is_empty()));
+                .all(|parameters| parameters.is_empty()))
     }
 
     /// Builds the semantic registry view needed while checking one module.
@@ -20118,10 +20053,6 @@ impl ResolvedRegistry {
     ) -> Result<Self, ResolvedBuildFailure> {
         self.checker_view_retaining_registered_originals(imported, budget)
     }
-
-    /// A closed Source-original proof also needs the authenticated private rows
-    /// of registered ordinary foreign imports. This does not change source
-    /// constructor access, sealed SourceForeign owner/access roles, or images.
 
     fn checker_view_retaining_registered_originals(
         &self,
@@ -20653,7 +20584,9 @@ impl ResolvedRegistry {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             for identity in registry.abstract_nominal_names.keys() {
-                type_work.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                type_work
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                 if !registry.abstract_nominal_kinds.contains_key(identity)
                     || registry.nominal(*identity).is_some()
                 {
@@ -20947,12 +20880,6 @@ impl ResolvedRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn remove_type_variable_for_core_test(mut self, id: TypeVariableId) -> Self {
-        assert!(self.type_variables.remove(&id).is_some());
-        self
-    }
-
-    #[cfg(test)]
     pub(crate) fn replace_effects_for_core_test(
         mut self,
         effects: Vec<ResolvedEffectDeclaration>,
@@ -20962,25 +20889,6 @@ impl ResolvedRegistry {
             effects.into_boxed_slice(),
         ));
         self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rebuild_effect_identity_tables_for_core_test(
-        mut self,
-        effects: Vec<ResolvedEffectDeclaration>,
-    ) -> Self {
-        // This fixture starts with only effect owners. Reconstruct every
-        // corresponding table rather than testing a stale-position mismatch.
-        assert!(
-            self.owner_definitions
-                .iter()
-                .all(|value| matches!(value.owner, OwnerId::Effect(_)))
-        );
-        self.owner_definitions.clear();
-        self.owner_definition_positions.clear();
-        self.owner_signatures = OwnerSignatures::default();
-        self.native_symbols.clear();
-        self.with_effects(effects)
     }
 
     /// Looks up one canonical effect declaration by stable identity.
@@ -21050,34 +20958,6 @@ impl ResolvedRegistry {
         if let Some(replaced) = self.type_variables.insert(parameter.id, parameter.into()) {
             drop(replaced);
         }
-    }
-
-    /// Compares or copies passive canonical parameter metadata. An existing
-    /// mirror must agree completely; this never creates a defining owner row.
-    fn retain_checker_type_variable(
-        &mut self,
-        parameter: &ResolvedTypeVariable,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), ResolvedBuildFailure> {
-        budget
-            .charge(1)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        if let Some(actual) = self.type_variables.get(&parameter.id) {
-            if !same_checker_type_variable_with_budget(actual, parameter, budget)
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            return Ok(());
-        }
-        self.type_variables
-            .try_reserve(1)
-            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-        let retained = clone_resolved_type_variable_with_budget(parameter, budget)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        let displaced = self.type_variables.insert(parameter.id, retained.into());
-        debug_assert!(displaced.is_none());
-        Ok(())
     }
 
     /// Installs one checker-view binder from immutable canonical authority.
@@ -29285,11 +29165,19 @@ mod tests {
                     let name = registry.nominals[0].id;
                     let kind = if matches!(mutation, Mutation::AbstractMismatchedKeys) {
                         NominalTypeId::new(module, u32::MAX)
-                    } else { name };
-                    registry.abstract_nominal_names.insert(name, "abstract".to_owned());
-                    registry.abstract_nominal_kinds.insert(kind, NonMaterializedNominalKindFact {
-                        kind: NonMaterializedNominalKind::Ordinary(Kind::Type), origin: span,
-                    });
+                    } else {
+                        name
+                    };
+                    registry
+                        .abstract_nominal_names
+                        .insert(name, "abstract".to_owned());
+                    registry.abstract_nominal_kinds.insert(
+                        kind,
+                        NonMaterializedNominalKindFact {
+                            kind: NonMaterializedNominalKind::Ordinary(Kind::Type),
+                            origin: span,
+                        },
+                    );
                 }
                 Mutation::CanonicalValueIdentity => {
                     let id = registry.nominal_parameters[&registry.nominals[0].id][0].id;
@@ -31646,9 +31534,11 @@ mod tests {
                         }],
                     )]),
                 );
-                let original =
-                    ConstructorOriginal::from_checked(&defining_registry, &mut TypeWorkBudget::unbounded())
-                        .expect("the constructor fixture retains its defining family");
+                let original = ConstructorOriginal::from_checked(
+                    &defining_registry,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("the constructor fixture retains its defining family");
                 let imported_constructor = ImportedConstructorFact {
                     original: Some(original),
                     id: constructor,
@@ -37155,119 +37045,6 @@ impl ResourceFamilyTypeFact {
             .chain(self.provided.instance.arguments())
             .chain(self.interpreted.instance.arguments())
     }
-
-    fn from_template_with_budget(
-        template: &ResolvedResourceFamilyTemplate,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Self, ()> {
-        struct Assembly {
-            parameters: ResolvedTypeVariableBuffer,
-            applications: Vec<ResolvedInterfaceApplication>,
-            effects: Vec<ResolvedEffectInstance>,
-            actuals: Vec<crate::types::KindedArgument>,
-        }
-        impl Drop for Assembly {
-            fn drop(&mut self) {
-                for application in self.applications.drain(..) {
-                    discard_resolved_interface_application(application);
-                }
-                for effect in self.effects.drain(..) {
-                    drop(effect.instance);
-                    discard_origin_iteratively(effect.origin);
-                }
-                for actual in self.actuals.drain(..) {
-                    crate::types::discard_kinded_argument_iteratively(actual);
-                }
-            }
-        }
-        impl Assembly {
-            fn finish(
-                mut self,
-                template: &ResolvedResourceFamilyTemplate,
-            ) -> ResourceFamilyTypeFact {
-                // Every remaining move is infallible; the assembly owns partial copies.
-                let parameter =
-                    std::mem::replace(&mut self.parameters, ResolvedTypeVariableBuffer(Vec::new()))
-                        .into_vec()
-                        .pop()
-                        .expect("one family payload parameter retained");
-                let mut applications = std::mem::take(&mut self.applications);
-                let provider = applications
-                    .pop()
-                    .expect("family provider retained after requirements");
-                let mut effects = std::mem::take(&mut self.effects).into_iter();
-                ResourceFamilyTypeFact {
-                    parameter,
-                    requirements: applications.into_boxed_slice(),
-                    provider,
-                    provider_application: crate::interface::InterfaceApplication::new_kinded(
-                        template.provider.interface.id,
-                        std::mem::take(&mut self.actuals).into_boxed_slice(),
-                    ),
-                    provided: effects.next().expect("family provided effect retained"),
-                    interpreted: effects.next().expect("family interpreted effect retained"),
-                    origin: template.origin.clone(),
-                    span: template.span,
-                }
-            }
-        }
-        let count = template.requirements.len().checked_add(1).ok_or(())?;
-        budget.charge(count.checked_add(3).ok_or(())?)?;
-        charge_retained_origin(&template.origin, budget)?;
-        let mut assembly = Assembly {
-            parameters: ResolvedTypeVariableBuffer(Vec::new()),
-            applications: Vec::new(),
-            effects: Vec::new(),
-            actuals: Vec::new(),
-        };
-        assembly.parameters.try_reserve(1).map_err(|_| ())?;
-        assembly
-            .parameters
-            .push(clone_resolved_type_variable_with_budget(
-                &template.parameter,
-                budget,
-            )?);
-        assembly
-            .applications
-            .try_reserve_exact(count)
-            .map_err(|_| ())?;
-        assembly.effects.try_reserve_exact(2).map_err(|_| ())?;
-        assembly
-            .actuals
-            .try_reserve_exact(template.provider.arguments.len())
-            .map_err(|_| ())?;
-        for application in template
-            .requirements
-            .iter()
-            .chain(std::iter::once(&template.provider))
-        {
-            assembly
-                .applications
-                .push(clone_family_application_with_budget(application, budget)?);
-        }
-        for effect in [&template.provided, &template.interpreted] {
-            charge_retained_origin(&effect.origin, budget)?;
-            budget.charge(effect.argument_provenance.len())?;
-            assembly.effects.push(ResolvedEffectInstance {
-                instance: crate::types::clone_effect_instance_with_budget(
-                    &effect.instance,
-                    budget,
-                )?,
-                argument_provenance: effect.argument_provenance.clone(),
-                origin: effect.origin.clone(),
-                span: effect.span,
-            });
-        }
-        for argument in &template.provider.arguments {
-            assembly
-                .actuals
-                .push(crate::types::clone_kinded_argument_with_budget(
-                    &argument.ty,
-                    budget,
-                )?);
-        }
-        Ok(assembly.finish(template))
-    }
 }
 
 impl ResolvedRegistry {
@@ -37313,58 +37090,6 @@ pub(crate) fn authenticate_resource_family_scope(
         return Err(ResolvedBuildFailure::InvalidState);
     }
     Ok(())
-}
-
-fn clone_family_application_with_budget(
-    source: &ResolvedInterfaceApplication,
-    budget: &mut TypeWorkBudget,
-) -> Result<ResolvedInterfaceApplication, ()> {
-    struct Arguments(Vec<ResolvedOwnerArgument>);
-    impl Arguments {
-        fn into_boxed_slice(mut self) -> Box<[ResolvedOwnerArgument]> {
-            std::mem::take(&mut self.0).into_boxed_slice()
-        }
-    }
-    impl Drop for Arguments {
-        fn drop(&mut self) {
-            for argument in self.0.drain(..) {
-                argument.discard_iteratively();
-            }
-        }
-    }
-    budget.charge(
-        source
-            .interface
-            .spelling
-            .len()
-            .checked_add(source.arguments.len())
-            .ok_or(())?,
-    )?;
-    charge_retained_origin(&source.interface.origin, budget)?;
-    let spelling = try_clone_string(&source.interface.spelling).map_err(|_| ())?;
-    let mut arguments = Arguments(Vec::new());
-    arguments
-        .0
-        .try_reserve_exact(source.arguments.len())
-        .map_err(|_| ())?;
-    for argument in &source.arguments {
-        charge_retained_origin(&argument.origin, budget)?;
-        arguments.0.push(ResolvedOwnerArgument {
-            ty: crate::types::clone_kinded_argument_with_budget(&argument.ty, budget)?,
-            provenance: argument.provenance.clone(),
-            origin: argument.origin.clone(),
-            span: argument.span,
-        });
-    }
-    Ok(ResolvedInterfaceApplication {
-        interface: ResolvedInterfaceOccurrence {
-            id: source.interface.id,
-            spelling,
-            origin: source.interface.origin.clone(),
-        },
-        arguments: arguments.into_boxed_slice(),
-        span: source.span,
-    })
 }
 
 /// Disposes experimental templates with iterative expression and type traversal.
@@ -37423,191 +37148,6 @@ pub struct ResourceTypeFact {
     pub family_template: Option<ResourceFamilyTypeFact>,
     /// Defining declaration provenance.
     pub origin: Origin,
-}
-
-impl ResourceTypeFact {
-    /// Copies body-free templates under the shared type-work ledger.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn from_definition_with_budget(
-        definition: &ResolvedResourceDefinition,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Self, ()> {
-        if let Some(family) = &definition.family_template {
-            authenticate_resource_family_scope(
-                &family.parameter,
-                &definition.parameters,
-                &definition.answer,
-                budget,
-            )
-            .map_err(|_| ())?;
-        }
-        struct Assembly {
-            parameters: ResolvedTypeVariableBuffer,
-            types: Vec<ResolvedType>,
-            arguments: Vec<ResolvedOwnerArgument>,
-            effects: Vec<ResolvedEffectInstance>,
-            actuals: Vec<crate::types::KindedArgument>,
-            family_template: Option<ResourceFamilyTypeFact>,
-        }
-        impl Drop for Assembly {
-            fn drop(&mut self) {
-                for ty in self.types.drain(..) {
-                    discard_resolved_type(ty);
-                }
-                for argument in self.arguments.drain(..) {
-                    argument.discard_iteratively();
-                }
-                for actual in self.actuals.drain(..) {
-                    crate::types::discard_kinded_argument_iteratively(actual);
-                }
-                for effect in self.effects.drain(..) {
-                    drop(effect.instance);
-                    discard_origin_iteratively(effect.origin);
-                }
-            }
-        }
-        impl Assembly {
-            fn finish(
-                mut self,
-                definition: &ResolvedResourceDefinition,
-                interface_spelling: String,
-            ) -> ResourceTypeFact {
-                // All remaining moves are infallible; the partial assembly owns iterative disposal.
-                let mut parameters =
-                    std::mem::replace(&mut self.parameters, ResolvedTypeVariableBuffer(Vec::new()))
-                        .into_vec();
-                let answer = parameters
-                    .pop()
-                    .expect("the answer was retained after the formals");
-                let mut arguments = std::mem::take(&mut self.types);
-                let mut first = arguments.drain(..3);
-                let input = first.next().expect("input retained");
-                let state = first.next().expect("state retained");
-                let result = first.next().expect("result retained");
-                drop(first);
-                let arguments = std::mem::take(&mut self.arguments).into_boxed_slice();
-                let mut effects = std::mem::take(&mut self.effects).into_iter();
-                ResourceTypeFact {
-                    id: definition.id,
-                    family: definition.family,
-                    parameters: parameters.into_boxed_slice(),
-                    answer,
-                    input,
-                    state,
-                    result,
-                    provider: ResolvedInterfaceApplication {
-                        interface: ResolvedInterfaceOccurrence {
-                            id: definition.provider.interface.id,
-                            spelling: interface_spelling,
-                            origin: definition.provider.interface.origin.clone(),
-                        },
-                        arguments,
-                        span: definition.provider.span,
-                    },
-                    provider_application: crate::interface::InterfaceApplication::new_kinded(
-                        definition.provider.interface.id,
-                        std::mem::take(&mut self.actuals).into_boxed_slice(),
-                    ),
-                    provided: effects.next().expect("provided effect retained"),
-                    interpreted: effects.next().expect("interpreted effect retained"),
-                    family_template: self.family_template.take(),
-                    origin: definition.origin.clone(),
-                }
-            }
-        }
-        fn ty(source: &ResolvedType, budget: &mut TypeWorkBudget) -> Result<ResolvedType, ()> {
-            charge_retained_origin(&source.origin, budget)?;
-            Ok(ResolvedType {
-                ty: clone_type_with_budget(&source.ty, budget)?,
-                provenance: source.provenance.clone(),
-                origin: source.origin.clone(),
-                span: source.span,
-            })
-        }
-        fn effect(
-            source: &ResolvedEffectInstance,
-            budget: &mut TypeWorkBudget,
-        ) -> Result<ResolvedEffectInstance, ()> {
-            charge_retained_origin(&source.origin, budget)?;
-            budget.charge(source.argument_provenance.len())?;
-            Ok(ResolvedEffectInstance {
-                instance: crate::types::clone_effect_instance_with_budget(
-                    &source.instance,
-                    budget,
-                )?,
-                argument_provenance: source.argument_provenance.clone(),
-                origin: source.origin.clone(),
-                span: source.span,
-            })
-        }
-        // Charge final provenance copies before retaining any unguarded final fields.
-        budget.charge(definition.provider.interface.spelling.len())?;
-        let interface_spelling =
-            try_clone_string(&definition.provider.interface.spelling).map_err(|_| ())?;
-        charge_retained_origin(&definition.provider.interface.origin, budget)?;
-        charge_retained_origin(&definition.origin, budget)?;
-        let count = definition
-            .provider
-            .arguments
-            .len()
-            .checked_add(3)
-            .ok_or(())?;
-        budget.charge(count.checked_add(2).ok_or(())?)?;
-        let mut assembly = Assembly {
-            parameters: clone_resolved_type_variable_buffer_with_budget(
-                &definition.parameters,
-                budget,
-            )?,
-            types: Vec::new(),
-            arguments: Vec::new(),
-            effects: Vec::new(),
-            actuals: Vec::new(),
-            family_template: None,
-        };
-        assembly.parameters.try_reserve(1).map_err(|_| ())?;
-        assembly
-            .parameters
-            .push(clone_resolved_type_variable_with_budget(
-                &definition.answer,
-                budget,
-            )?);
-        assembly.types.try_reserve_exact(count).map_err(|_| ())?;
-        assembly.effects.try_reserve_exact(2).map_err(|_| ())?;
-        for source in [&definition.input, &definition.state, &definition.result] {
-            assembly.types.push(ty(source, budget)?);
-        }
-        assembly
-            .arguments
-            .try_reserve_exact(definition.provider.arguments.len())
-            .map_err(|_| ())?;
-        assembly
-            .actuals
-            .try_reserve_exact(definition.provider.arguments.len())
-            .map_err(|_| ())?;
-        for argument in &definition.provider.arguments {
-            assembly.arguments.push(ResolvedOwnerArgument {
-                ty: crate::types::clone_kinded_argument_with_budget(&argument.ty, budget)?,
-                provenance: argument.provenance.clone(),
-                origin: argument.origin.clone(),
-                span: argument.span,
-            });
-            assembly
-                .actuals
-                .push(crate::types::clone_kinded_argument_with_budget(
-                    &argument.ty,
-                    budget,
-                )?);
-        }
-        for source in [&definition.provided, &definition.interpreted] {
-            assembly.effects.push(effect(source, budget)?);
-        }
-        assembly.family_template = definition
-            .family_template
-            .as_ref()
-            .map(|family| ResourceFamilyTypeFact::from_template_with_budget(family, budget))
-            .transpose()?;
-        Ok(assembly.finish(definition, interface_spelling))
-    }
 }
 
 impl Drop for ResourceTypeFact {
@@ -37725,18 +37265,6 @@ impl ExportSummary {
                 .get(spelling)
                 .map(|fact| (spelling.as_str(), fact))
         })
-    }
-    /// Test-only fixture seam; normal summaries require T1 lifecycle validation.
-    #[cfg(test)]
-    pub(crate) fn insert_resource_type_for_test(
-        &mut self,
-        spelling: String,
-        fact: Arc<ResourceTypeFact>,
-    ) {
-        if !self.resource_types.contains_key(&spelling) {
-            self.resource_type_order.push(spelling.clone());
-        }
-        self.resource_types.insert(spelling, fact);
     }
 }
 

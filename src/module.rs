@@ -71,11 +71,6 @@ const FOREIGN_SOURCE: &str = concat!(
     "pub equal : (Address, Address) -> Bool\nequal value = equal value\n",
 );
 
-/// Immutable coordinate data; matching these bytes alone grants no builtin role.
-
-/// Exact declaration and formal ranges for the compiler-owned opaque extent.
-/// These coordinates authenticate the role, never an exported display spelling.
-
 /// A validated name for one configured module root.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ModuleRootName(String);
@@ -125,9 +120,6 @@ impl ModuleRoots {
     pub fn empty() -> Self {
         Self::default()
     }
-
-    /// Attaches an immutable host-authored registration table.
-    #[must_use]
 
     /// Validates names, rejects duplicates, and canonicalizes configured paths.
     ///
@@ -351,8 +343,6 @@ pub struct LoadedModule {
 }
 
 impl LoadedModule {
-    /// Returns authenticated foreign admission metadata, when host-registered.
-
     /// Returns this module's graph-local identity.
     #[must_use]
     pub const fn id(&self) -> ModuleId {

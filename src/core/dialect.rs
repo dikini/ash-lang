@@ -510,207 +510,11 @@ impl MethodEvidenceCatalog {
     }
 }
 
-/// Compare emitted rows with independently reconstructed imported facts. The
-/// selection plans are immutable staged inputs: exact plan/root identity is
-/// required in addition to every independently derived catalog row.
-pub(crate) fn same_imported_method_evidence_catalog(
-    left: &MethodEvidenceCatalog,
-    right: &MethodEvidenceCatalog,
-    work: &mut TypeWorkBudget,
-) -> Result<bool, ()> {
-    fn ids<T: PartialEq>(a: &[T], b: &[T], work: &mut TypeWorkBudget) -> Result<bool, ()> {
-        work.charge(a.len())?;
-        Ok(a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a == b))
-    }
-    fn types(a: &[Type], b: &[Type], work: &mut TypeWorkBudget) -> Result<bool, ()> {
-        work.charge(a.len())?;
-        if a.len() != b.len() {
-            return Ok(false);
-        }
-        for (a, b) in a.iter().zip(b) {
-            if !same_type_with_budget(a, b, work)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-    fn parameters(
-        a: &[(TypeVariableId, Kind)],
-        b: &[(TypeVariableId, Kind)],
-        work: &mut TypeWorkBudget,
-    ) -> Result<bool, ()> {
-        work.charge(a.len())?;
-        if a.len() != b.len() {
-            return Ok(false);
-        }
-        for ((a, ak), (b, bk)) in a.iter().zip(b) {
-            if a != b || !crate::types::same_kind_with_charge(ak, bk, || work.charge(1))? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-    fn app(
-        a: &InterfaceApplication,
-        b: &InterfaceApplication,
-        work: &mut TypeWorkBudget,
-    ) -> Result<bool, ()> {
-        work.charge(1)?;
-        if a.interface() != b.interface() {
-            return Ok(false);
-        }
-        work.charge(a.arguments().len())?;
-        if a.arguments().len() != b.arguments().len() {
-            return Ok(false);
-        }
-        let type_work = work;
-        for (left, right) in a.arguments().iter().zip(b.arguments()) {
-            match (left, right) {
-                (
-                    crate::types::KindedArgument::TypeArg(left),
-                    crate::types::KindedArgument::TypeArg(right),
-                ) => {
-                    if !same_type_with_budget(left, right, type_work)? {
-                        return Ok(false);
-                    }
-                }
-                _ => {
-                    if !crate::types::same_kinded_argument_with_budget(left, right, type_work)? {
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-        Ok(true)
-    }
-    work.charge(
-        left.lookup_work()
-            .ok_or(())?
-            .checked_add(right.lookup_work().ok_or(())?)
-            .ok_or(())?,
-    )?;
-    if !left.lexical_owners.is_empty()
-        || !right.lexical_owners.is_empty()
-        || left.methods.len() != right.methods.len()
-        || left.implementation_owners.len() != right.implementation_owners.len()
-        || left.domains.len() != right.domains.len()
-        || left.occurrences.len() != right.occurrences.len()
-        || left.adapters.len() != right.adapters.len()
-        || left.concrete_sources.len() != right.concrete_sources.len()
-        || left.expectations.len() != right.expectations.len()
-    {
-        return Ok(false);
-    }
-    for (a, b) in left.methods.iter().zip(&right.methods) {
-        work.charge(
-            a.spelling
-                .len()
-                .saturating_add(b.spelling.len())
-                .saturating_add(a.inherited_parameters.len())
-                .saturating_add(b.inherited_parameters.len()),
-        )?;
-        if a.id != b.id
-            || a.spelling != b.spelling
-            || a.inherited_parameters != b.inherited_parameters
-            || !ids(&a.interface_parameters, &b.interface_parameters, work)?
-            || !parameters(&a.parameters, &b.parameters, work)?
-            || !same_type_with_budget(&a.value_type, &b.value_type, work)?
-        {
-            return Ok(false);
-        }
-    }
-    for (a, b) in left
-        .implementation_owners
-        .iter()
-        .zip(&right.implementation_owners)
-    {
-        if a.implementation != b.implementation
-            || a.binder != b.binder
-            || a.head_type_parameter_count != b.head_type_parameter_count
-            || !parameters(&a.source_parameters, &b.source_parameters, work)?
-            || !app(&a.application, &b.application, work)?
-        {
-            return Ok(false);
-        }
-    }
-    for (a, b) in left.domains.iter().zip(&right.domains) {
-        if !parameters(&a.source_parameters, &b.source_parameters, work)?
-            || a.owner != b.owner
-            || a.requirement != b.requirement
-            || a.requirement_position != b.requirement_position
-            || a.method != b.method
-            || a.method_position != b.method_position
-            || !app(&a.application, &b.application, work)?
-        {
-            return Ok(false);
-        }
-    }
-    for (a, b) in left.occurrences.iter().zip(&right.occurrences) {
-        if a.slot != b.slot
-            || a.scope != b.scope
-            || a.scope_binder != b.scope_binder
-            || a.target_owner != b.target_owner
-            || a.target_requirement != b.target_requirement
-            || a.checked_method != b.checked_method
-            || !app(&a.checked_application, &b.checked_application, work)?
-            || !types(&a.method_arguments, &b.method_arguments, work)?
-            || a.selection != b.selection
-        {
-            return Ok(false);
-        }
-        match (&a.checked_value_type, &b.checked_value_type) {
-            (None, None) => {}
-            (Some(a), Some(b)) if same_type_with_budget(a, b, work)? => {}
-            _ => return Ok(false),
-        }
-    }
-    for (a, b) in left.adapters.iter().zip(&right.adapters) {
-        if a.selection_node != b.selection_node
-            || a.implementation != b.implementation
-            || a.binder != b.binder
-            || !ids(&a.source_parameters, &b.source_parameters, work)?
-            || !types(&a.head_arguments, &b.head_arguments, work)?
-            || a.prerequisites.len() != b.prerequisites.len()
-        {
-            return Ok(false);
-        }
-        work.charge(a.prerequisites.len())?;
-        for (a, b) in a.prerequisites.iter().zip(&b.prerequisites) {
-            if a.owner != b.owner
-                || a.requirement != b.requirement
-                || a.method != b.method
-                || a.producer != b.producer
-                || !app(&a.application, &b.application, work)?
-                || !ids(&a.interface_parameters, &b.interface_parameters, work)?
-                || !parameters(&a.method_parameters, &b.method_parameters, work)?
-                || !same_type_with_budget(&a.value_type, &b.value_type, work)?
-            {
-                return Ok(false);
-            }
-        }
-    }
-    for (a, b) in left.concrete_sources.iter().zip(&right.concrete_sources) {
-        if a.occurrence != b.occurrence
-            || a.selection_node != b.selection_node
-            || a.implementation != b.implementation
-            || a.binder != b.binder
-            || !types(&a.head_arguments, &b.head_arguments, work)?
-            || !ids(&a.prerequisites, &b.prerequisites, work)?
-        {
-            return Ok(false);
-        }
-    }
-    ids(&left.expectations, &right.expectations, work)
-}
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum MethodEvidenceCatalogMutationForTest {
     WrongRequirementPosition,
     WrongMethodPosition,
-    WrongDomainSourceParameter,
-    WrongDomainParameterKind,
-    WrongDomainParameterOrder,
     WrongMethodScheme,
     WrongCanonicalMethodParameter,
     WrongAdapterBinder,
@@ -765,30 +569,6 @@ impl MethodEvidenceCatalog {
                     true
                 })
             }
-            MethodEvidenceCatalogMutationForTest::WrongDomainSourceParameter => self
-                .domains
-                .iter_mut()
-                .find_map(|domain| domain.source_parameters.first_mut())
-                .is_some_and(|parameter| {
-                    parameter.0 = TypeVariableId::generated(u32::MAX);
-                    true
-                }),
-            MethodEvidenceCatalogMutationForTest::WrongDomainParameterKind => self
-                .domains
-                .iter_mut()
-                .find_map(|domain| domain.source_parameters.first_mut())
-                .is_some_and(|parameter| {
-                    parameter.1 = Kind::EffectRow;
-                    true
-                }),
-            MethodEvidenceCatalogMutationForTest::WrongDomainParameterOrder => self
-                .domains
-                .iter_mut()
-                .find(|domain| domain.source_parameters.len() > 1)
-                .is_some_and(|domain| {
-                    domain.source_parameters.swap(0, 1);
-                    true
-                }),
             MethodEvidenceCatalogMutationForTest::WrongMethodPosition => {
                 self.domains.first_mut().is_some_and(|domain| {
                     domain.method_position = domain.method_position.saturating_add(1);
@@ -1510,12 +1290,6 @@ pub(crate) struct MethodEvidenceAnchor {
     pub(crate) expectation: usize,
 }
 
-/// Exact ordinary Layout producers retained from one sealed builder catalogue.
-/// This source-analysis view does not establish final independent Core validity.
-
-/// Original occurrence/selection identity comes from the sealed builder's
-/// catalogue and anchors. Origins are current admitted node metadata, not
-/// original-span authority. Borrowing the exact node slice freezes this view.
 /// Names the closed pure Core dialect selected by Ash.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AshPureDialect;
@@ -1962,44 +1736,7 @@ impl UnvalidatedProgram {
     }
 }
 
-/// Passive fields borrowed for encoding one recorded Core node.
-type ImageNodeView<'a, F> = (
-    &'a Type,
-    &'a <F as CoreOperationFamily>::Effects,
-    &'a Option<Origin>,
-    &'a <F as CoreOperationFamily>::Kind,
-);
-
 impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
-    /// Passive borrowed records for image encoding. These do not admit execution.
-    pub(crate) fn image_root(&self) -> NodeId {
-        self.root
-    }
-    pub(crate) fn image_node_count(&self) -> usize {
-        self.nodes.len()
-    }
-    pub(crate) fn image_node_index(&self, id: NodeId) -> Option<usize> {
-        if id.arena != self.arena {
-            return None;
-        }
-        let index = id.index().ok()?;
-        (index < self.nodes.len()).then_some(index)
-    }
-    pub(crate) fn image_node(&self, index: usize) -> Option<ImageNodeView<'_, F>> {
-        self.nodes
-            .get(index)
-            .map(|node| (&node.ty, &node.effects, &node.origin, &node.kind))
-    }
-
-    pub(crate) fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
-        &self.method_evidence
-    }
-
-    /// Borrows recorded anchor claims; original admission authenticates them.
-    pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
-        &self.method_evidence_anchors
-    }
-
     pub(super) fn discard_iteratively(mut self) {
         self.discard_contents();
     }
@@ -3432,14 +3169,6 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         clone_type_with_budget(ty, &mut self.type_work).map_err(|()| BuildError::TypeWorkExceeded)
     }
 
-    pub(super) fn clone_owner_argument_for_rebuild(
-        &mut self,
-        argument: &crate::types::KindedArgument,
-    ) -> Result<crate::types::KindedArgument, BuildError> {
-        crate::types::clone_kinded_argument_with_budget(argument, &mut self.type_work)
-            .map_err(|()| BuildError::TypeWorkExceeded)
-    }
-
     pub(super) fn clone_effect_row_for_rebuild(
         &mut self,
         row: &EffectRow,
@@ -3996,20 +3725,6 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.requires_type_rewrite || !self.deferred_cleanup_rows.is_empty()
     }
 
-    #[allow(clippy::type_complexity)] // Borrowed arena, nodes and original catalog form one view.
-
-    /// Borrows a preparation node. The caller charges node and edge traversal;
-    /// this view grants no validation or executable admission.
-    pub(crate) fn compiler_node_kind(&self, node: NodeId) -> Result<&F::Kind, BuildError> {
-        if self.arena != Some(node.arena()) {
-            return Err(BuildError::InvalidNodeId);
-        }
-        self.nodes
-            .get(node.index()?)
-            .map(|stored| &stored.kind)
-            .ok_or(BuildError::InvalidNodeId)
-    }
-
     /// Finishes unchecked construction at `root`.
     ///
     /// # Errors
@@ -4209,6 +3924,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
 
     /// A committed row solution must rewrite effect metadata even when the
     /// previous type rewrite found no remaining type inference.
+    #[cfg(test)]
     pub(crate) fn complete_cleanup_row(&mut self, id: crate::types::InferenceVariableId) {
         self.settled_zonk_nodes.clear();
         self.deferred_cleanup_rows.remove(&id);
@@ -4264,35 +3980,6 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         });
         self.requires_type_rewrite |= requires_type_rewrite;
         Ok(NodeId::new(arena, index))
-    }
-
-    /// Recognizes an immediately selected constructor through type applications.
-    /// This query reports syntax identity; it grants no lifecycle authority.
-    pub(crate) fn direct_constructor(
-        &mut self,
-        mut node: NodeId,
-    ) -> Result<Option<crate::types::ConstructorId>, BuildError> {
-        loop {
-            self.type_work
-                .charge(1)
-                .map_err(|()| BuildError::TypeWorkExceeded)?;
-            if self.arena != Some(node.arena()) {
-                return Err(BuildError::InvalidNodeId);
-            }
-            let stored = self
-                .nodes
-                .get(node.index().map_err(|_| BuildError::InvalidNodeId)?)
-                .ok_or(BuildError::InvalidNodeId)?;
-            match F::pure(&stored.kind) {
-                Some(PureExprKind::Value(PureValue::Constructor(constructor))) => {
-                    return Ok(Some(constructor.constructor()));
-                }
-                Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) => {
-                    node = application.function()
-                }
-                _ => return Ok(None),
-            }
-        }
     }
 
     pub(crate) const fn node_checkpoint(&self) -> usize {

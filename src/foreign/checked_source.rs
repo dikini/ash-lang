@@ -225,13 +225,12 @@ pub(crate) fn bind_foreign_symbol(
         .iter()
         .chain(operation.annotation.ty.function_view().map(|f| f.value()))
     {
-        if let Type::Nominal(id) = field {
-            if id.module().is_builtin_foreign()
-                && (*id != NominalTypeId::new(id.module(), 0)
-                    || context.registry.nominal_kind(*id).is_none())
-            {
-                return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
-            }
+        if let Type::Nominal(id) = field
+            && id.module().is_builtin_foreign()
+            && (*id != NominalTypeId::new(id.module(), 0)
+                || context.registry.nominal_kind(*id).is_none())
+        {
+            return Err(failure(ForeignAdmissionReason::InvalidSignature, span));
         }
     }
     let source_signature = IterativeTypeOwner::new(

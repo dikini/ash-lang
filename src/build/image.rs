@@ -726,7 +726,6 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
         prepared_libraries: HashMap::new(),
         native_symbols: HashMap::new(),
 
-
         origin_records: HashMap::new(),
         origin_spans: HashMap::new(),
         original_native_symbols: Vec::new(),
@@ -3749,8 +3748,6 @@ mod tests {
         let mut empty = TypeWorkBudget::with_limit(1);
         size(&[], 0, &mut empty).unwrap();
         assert!(empty.finish_sizing(total(0, 0, 32).unwrap()).is_err());
-
-
     }
 
     #[test]
@@ -3781,7 +3778,6 @@ mod tests {
             remapped: Vec::new(),
             prepared_libraries: HashMap::new(),
             native_symbols: HashMap::new(),
-
 
             origin_records: HashMap::new(),
             origin_spans: HashMap::new(),
@@ -4520,7 +4516,6 @@ mod tests {
                 prepared_libraries: HashMap::new(),
                 native_symbols: HashMap::new(),
 
-
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
                 original_native_symbols: Vec::new(),
@@ -4983,7 +4978,6 @@ main () = {
                 prepared_libraries: HashMap::new(),
                 native_symbols: HashMap::new(),
 
-
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
                 original_native_symbols: Vec::new(),
@@ -5114,7 +5108,6 @@ main () = {
                 remapped: Vec::new(),
                 prepared_libraries: HashMap::new(),
                 native_symbols: HashMap::new(),
-
 
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
@@ -8375,16 +8368,14 @@ fn encode_native_preparation(
     let mut identities = Vec::new();
     charge(work, program.node_count())?;
     for node in program.nodes() {
-        match &node.kind {
-            crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resource(
-                scope,
-            )) => {
-                if !scope.acquisition.builtin.is_builtin_resource() {
-                    return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
-                }
-                push(&mut identities, scope.acquisition.identity, work)?;
+        if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Resource(
+            scope,
+        )) = &node.kind
+        {
+            if !scope.acquisition.builtin.is_builtin_resource() {
+                return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
             }
-            _ => {}
+            push(&mut identities, scope.acquisition.identity, work)?;
         }
     }
     if !program

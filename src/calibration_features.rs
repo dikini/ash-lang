@@ -212,7 +212,6 @@ fn seed_module<'a>(
                 .map(|handler| Visit::Handler(handler, 0)),
         );
     }
-
 }
 
 fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {

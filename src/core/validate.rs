@@ -682,10 +682,6 @@ impl ValidationError {
         )
     }
 
-    pub(crate) fn is_row_union_ambiguous(&self) -> bool {
-        self.cause == Some(ValidationCause::RowUnionAmbiguous)
-    }
-
     fn row_removal_failure(error: crate::types::EffectRowError, node: NodeId) -> Self {
         Self::with_cause(
             match error {
@@ -8855,15 +8851,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                     let kind = match variable_kinds {
                         MonotypeVariableKinds::Core(type_binders) => match identity {
-                            crate::types::TypeVariableId::Resolved { .. } => {
-                                if let Some(parameter) =
-                                    self.program.registry.type_variable(identity)
-                                {
-                                    Some(&parameter.kind)
-                                } else {
-                                    None
-                                }
-                            }
+                            crate::types::TypeVariableId::Resolved { .. } => self
+                                .program
+                                .registry
+                                .type_variable(identity)
+                                .map(|parameter| &parameter.kind),
                             crate::types::TypeVariableId::Generated(_) => {
                                 type_binders.get(&identity).map(|(kind, _)| *kind)
                             }
@@ -9475,19 +9467,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     return Ok(false);
                 }
                 let canonical = match parameter {
-                    crate::types::TypeVariableId::Resolved { .. } => {
-                        if let Some(parameter) = self.program.registry.type_variable(*parameter) {
-                            Some(&parameter.kind)
-                        } else {
-                            None
-                        }
-                    }
+                    crate::types::TypeVariableId::Resolved { .. } => self
+                        .program
+                        .registry
+                        .type_variable(*parameter)
+                        .map(|parameter| &parameter.kind),
                     crate::types::TypeVariableId::Generated(_) => {
-                        if let Some((kind, _)) = type_binders.get(parameter) {
-                            Some(*kind)
-                        } else {
-                            None
-                        }
+                        type_binders.get(parameter).map(|(kind, _)| *kind)
                     }
                 };
                 let Some(canonical) = canonical else {

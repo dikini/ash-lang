@@ -293,20 +293,6 @@ impl Control {
         single.into_iter().chain(multiple.iter())
     }
 
-    pub(super) fn requests_mut(&mut self) -> impl Iterator<Item = &mut Request> {
-        let (single, multiple): (Option<&mut Request>, &mut [Request]) = match self {
-            Self::Request(request)
-            | Self::Handler {
-                effect: request, ..
-            }
-            | Self::Resource {
-                effect: request, ..
-            } => (Some(request), &mut []),
-            Self::NativeInterpret { effects, .. } => (None, effects),
-            _ => (None, &mut []),
-        };
-        single.into_iter().chain(multiple.iter_mut())
-    }
     fn children(
         &self,
         graph: &SummaryGraph,
@@ -1262,12 +1248,6 @@ fn relocate_provider_resource_occurrence(
     }
     Ok(restored.unwrap_or(owner))
 }
-
-/// Binds a generated handler to the nearest exact Resource code on every
-/// possible enclosing path. Different occurrences or missing paths fail closed.
-
-/// Capture End connects to the surviving clause continuation. Every path must
-/// reach the bound owner; a nearer different occurrence cannot fall through.
 
 // Buckets restrict candidate comparisons; only full equality admits a duplicate.
 // The constructor owns this index, and the borrowed first-occurrence vector stays authoritative.
@@ -3660,18 +3640,10 @@ impl<'a> Analysis<'a> {
                 continue;
             }
             self.check_payload(state, event, &selected.prefix, budget)?;
-            let Frame::Handler {
-                code: handler,
-                context: _,
-                ..
-            } = selected.boundary.frame
-            else {
+            let Frame::Handler { code: handler, .. } = selected.boundary.frame else {
                 return Err(Failure::Invalid);
             };
-            let Control::Handler {
-                clauses, effect: _, ..
-            } = &self.graph.code[handler]
-            else {
+            let Control::Handler { clauses, .. } = &self.graph.code[handler] else {
                 return Err(Failure::Invalid);
             };
             for (ordinal, clause) in clauses.iter().enumerate() {
@@ -4287,7 +4259,7 @@ impl<'a> Analysis<'a> {
         self.cleanup_rows
             .try_reserve(requests.len())
             .map_err(|_| Failure::Resource)?;
-        for request in requests {
+        for _request in requests {
             let mut retained_copy = Vec::new();
             charge(budget, retained.len())?;
             retained_copy
@@ -4305,7 +4277,8 @@ impl<'a> Analysis<'a> {
                 code: discard,
                 source,
                 context: discard_context,
-                request,
+                #[cfg(test)]
+                request: _request,
                 expected: clone_effect_row_with_budget(&expected, budget)
                     .map_err(|_| Failure::Resource)?,
                 row: clone_effect_row_with_budget(&row, budget).map_err(|_| Failure::Resource)?,

@@ -1109,9 +1109,7 @@ pub(crate) fn match_implementation_head_in_environment(
         candidate_parameters,
         &[candidate],
         &[goal],
-        HeadMatchPolicy::Implementation {
-            validate_goal: true,
-        },
+        true,
     )
 }
 
@@ -1130,16 +1128,8 @@ pub(crate) fn match_implementation_application_head_in_environment(
         candidate_parameters,
         candidate,
         goal,
-        HeadMatchPolicy::Implementation {
-            validate_goal: true,
-        },
+        true,
     )
-}
-
-#[derive(Clone, Copy)]
-enum HeadMatchPolicy {
-    Implementation { validate_goal: bool },
-    ScopedFamily { validate_goal: bool },
 }
 
 /// Capability for one exact goal vector whose complete roots have already
@@ -1193,9 +1183,7 @@ pub(crate) fn match_implementation_application_head_against_canonical_goal(
         candidate_parameters,
         candidate,
         goal.roots,
-        HeadMatchPolicy::Implementation {
-            validate_goal: false,
-        },
+        false,
     )
 }
 
@@ -1206,7 +1194,7 @@ fn match_implementation_application_head_with_goal_validation(
     candidate_parameters: &[TypeVariableId],
     candidate: &[&KindedArgument],
     goal: &[&KindedArgument],
-    policy: HeadMatchPolicy,
+    validate_goal: bool,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
     if candidate.len() != goal.len() {
         return Err(HeadMatchFailure::InvalidState);
@@ -1238,7 +1226,7 @@ fn match_implementation_application_head_with_goal_validation(
         candidate_parameters,
         &left,
         &right,
-        policy,
+        validate_goal,
     )
 }
 
@@ -1249,7 +1237,7 @@ fn match_type_application_head_with_goal_validation(
     candidate_parameters: &[TypeVariableId],
     candidate: &[&Type],
     goal: &[&Type],
-    policy: HeadMatchPolicy,
+    validate_goal: bool,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
     if candidate.len() != goal.len() {
         return Err(HeadMatchFailure::InvalidState);
@@ -1265,7 +1253,7 @@ fn match_type_application_head_with_goal_validation(
         goal,
         constraint_budget,
         type_budget,
-        policy,
+        validate_goal,
         |parameter, binding, constraint_budget, _type_budget| {
             let expected =
                 canonical_type_variable_kind(registry, parameter, span, constraint_budget)
@@ -1312,9 +1300,7 @@ where
         &[goal],
         constraint_budget,
         type_budget,
-        HeadMatchPolicy::Implementation {
-            validate_goal: true,
-        },
+        true,
         |_, _, _, _| Ok(()),
     )
 }
@@ -1325,7 +1311,7 @@ fn match_implementation_head_with<I, F>(
     goal: &[&Type],
     constraint_budget: &mut InterfaceConstraintBudget,
     type_budget: &mut TypeWorkBudget,
-    policy: HeadMatchPolicy,
+    validate_goal: bool,
     mut authenticate_binding: F,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure>
 where
@@ -1363,20 +1349,9 @@ where
     }
 
     for candidate in candidate {
-        let parameters = match policy {
-            HeadMatchPolicy::Implementation { .. } => Some(&positions),
-            HeadMatchPolicy::ScopedFamily { .. } => None,
-        };
-        validate_match_type(candidate, parameters, constraint_budget)?;
+        validate_match_type(candidate, Some(&positions), constraint_budget)?;
     }
-    if matches!(
-        policy,
-        HeadMatchPolicy::Implementation {
-            validate_goal: true
-        } | HeadMatchPolicy::ScopedFamily {
-            validate_goal: true
-        }
-    ) {
+    if validate_goal {
         for goal in goal {
             validate_match_type(goal, None, constraint_budget)?;
         }
@@ -1404,15 +1379,7 @@ where
             .map_err(|()| HeadMatchFailure::ConstraintResource)?;
         if let Type::Variable(variable) = candidate {
             let Some(position) = positions.get(variable).copied() else {
-                if !matches!(policy, HeadMatchPolicy::ScopedFamily { .. }) {
-                    return Err(HeadMatchFailure::InvalidState);
-                }
-                if !matches!(goal, Type::Variable(_))
-                    || !match_types_equal(candidate, goal, constraint_budget)?
-                {
-                    return Ok(None);
-                }
-                continue;
+                return Err(HeadMatchFailure::InvalidState);
             };
             if let Some(previous) = bindings[position] {
                 if !match_types_equal(previous, goal, constraint_budget)? {
@@ -3574,11 +3541,6 @@ struct EvidencePlan {
 /// Read-only view of one structural evidence node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EvidenceNode<'a> {
-    /// Provisional exact source family selection. Independent admission checks
-    /// the original family certificate and complete goal before executable use.
-
-    /// One exact dictionary from the original sealed foreign Layout policy.
-
     /// One exact lexical source and its interface method order.
     Lexical {
         /// Canonical source selected at the occurrence's lexical scope.
@@ -3608,8 +3570,6 @@ pub enum EvidenceNode<'a> {
 
 impl<'a> EvidenceNode<'a> {
     /// Returns dictionaries passed as runtime arguments to this producer.
-    /// Family prerequisites authenticate its scope-bound dictionaries; lowering
-    /// the family method reads that scope's forwarding binder instead.
     pub(crate) const fn executable_prerequisites(self) -> Option<&'a [EvidenceNodeId]> {
         match self {
             Self::Implementation { prerequisites, .. } => Some(prerequisites),
@@ -3623,133 +3583,9 @@ impl<'a> EvidenceNode<'a> {
 pub struct EvidenceSelection {
     plan: Arc<EvidencePlan>,
     root: EvidenceNodeId,
-    original: Option<OriginalEvidenceOwner>,
-}
-
-/// A fixed-level pin to the original selected plan. It never retains another
-/// specialized selection or grants authority to its reconstructed payloads.
-#[derive(Clone, Debug)]
-struct OriginalEvidenceOwner {
-    plan: Arc<EvidencePlan>,
-    root: EvidenceNodeId,
 }
 
 impl EvidenceSelection {
-    fn canonical_original(&self) -> (&Arc<EvidencePlan>, EvidenceNodeId) {
-        self.original
-            .as_ref()
-            .map_or((&self.plan, self.root), |original| {
-                (&original.plan, original.root)
-            })
-    }
-
-    /// Preserves the exact independently checked immutable selection owner.
-    /// Specialized payload equality is checked separately by final admission.
-    pub(crate) fn same_original_owner(&self, other: &Self) -> bool {
-        let (left, left_root) = self.canonical_original();
-        let (right, right_root) = other.canonical_original();
-        left_root == right_root && Arc::ptr_eq(left, right)
-    }
-
-    /// Reconstructs a complete view of the canonical original selection using
-    /// the caller's simultaneous template substitution and local relocation.
-    /// This projection never checks source or selects an implementation. Final
-    /// Core must compare every original node and rewritten payload independently.
-    #[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
-    pub(crate) fn specialize_with<E>(
-        &self,
-        types: &mut TypeWorkBudget,
-        constraints: &mut InterfaceConstraintBudget,
-        mut rewrite_type: impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
-        mut rewrite_argument: impl FnMut(
-            &KindedArgument,
-            &mut TypeWorkBudget,
-        ) -> Result<KindedArgument, E>,
-        mut rewrite_lexical: impl FnMut(
-            LexicalEvidenceId,
-            &mut TypeWorkBudget,
-        ) -> Result<LexicalEvidenceId, E>,
-        mut type_resource: impl FnMut() -> E,
-        mut constraint_resource: impl FnMut() -> E,
-        mut invalid: impl FnMut() -> E,
-    ) -> Result<Self, E> {
-        let (original, root) = self.canonical_original();
-        // The additional immutable original owner is a retained Arc cell.
-        types.charge(1).map_err(|()| type_resource())?;
-        if root.index() >= original.nodes.len() {
-            return Err(invalid());
-        }
-        types
-            .charge(original.application.arguments().len())
-            .map_err(|()| type_resource())?;
-        let mut arguments = InterfaceArgumentBuffer(Vec::new());
-        arguments
-            .0
-            .try_reserve_exact(original.application.arguments().len())
-            .map_err(|_| type_resource())?;
-        for argument in original.application.arguments() {
-            arguments.0.push(rewrite_argument(argument, types)?);
-        }
-        let application = InterfaceApplication::new_kinded(
-            original.application.interface(),
-            arguments.into_boxed_slice(),
-        );
-        let mut builder = EvidenceSelectionBuilder::new();
-        for node in &original.nodes {
-            match node {
-                EvidenceNodeData::Lexical { source, methods } => {
-                    let source = rewrite_lexical(*source, types)?;
-                    builder
-                        .push_lexical(source, methods, constraints)
-                        .map_err(|()| constraint_resource())?;
-                }
-                EvidenceNodeData::Abstract {
-                    requirement,
-                    methods,
-                } => {
-                    builder
-                        .push_abstract(*requirement, methods, constraints)
-                        .map_err(|()| constraint_resource())?;
-                }
-                EvidenceNodeData::Implementation {
-                    implementation,
-                    substitution,
-                    prerequisites,
-                    methods,
-                } => {
-                    types
-                        .charge(substitution.len())
-                        .map_err(|()| type_resource())?;
-                    let mut replacements = Vec::new();
-                    replacements
-                        .try_reserve_exact(substitution.len())
-                        .map_err(|_| type_resource())?;
-                    for replacement in substitution {
-                        replacements.push(EvidenceSubstitution::new(
-                            replacement.parameter,
-                            rewrite_type(&replacement.argument, types)?,
-                        ));
-                    }
-                    builder
-                        .push_implementation(
-                            *implementation,
-                            replacements.into_boxed_slice(),
-                            prerequisites,
-                            methods,
-                            constraints,
-                        )
-                        .map_err(|()| constraint_resource())?;
-                }
-            }
-        }
-        let mut specialized = builder.finish(root, application).map_err(|()| invalid())?;
-        specialized.original = Some(OriginalEvidenceOwner {
-            plan: Arc::clone(original),
-            root,
-        });
-        Ok(specialized)
-    }
-
     /// Returns the checked interface obligation authenticated by this selection.
     #[must_use]
     pub fn interface(&self) -> InterfaceId {
@@ -3834,7 +3670,6 @@ impl EvidenceSelectionBuilder {
     }
 
     #[allow(clippy::too_many_arguments)] // Complete source identity, goal, and prerequisite order are independent claims.
-
     pub(crate) fn push_lexical(
         &mut self,
         source: LexicalEvidenceId,
@@ -3916,7 +3751,6 @@ impl EvidenceSelectionBuilder {
                 nodes: self.nodes.into_boxed_slice(),
             }),
             root,
-            original: None,
         })
     }
 
@@ -3974,13 +3808,6 @@ impl FinalOccurrenceOwner {
         work.charge(1)?;
         Ok(Self {
             allocation: Arc::new(FinalOccurrenceAllocation { _identity: 0 }),
-        })
-    }
-
-    pub(crate) fn clone_with_budget(&self, work: &mut TypeWorkBudget) -> Result<Self, ()> {
-        work.charge(1)?;
-        Ok(Self {
-            allocation: Arc::clone(&self.allocation),
         })
     }
 
