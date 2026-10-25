@@ -33,6 +33,20 @@ ownership contexts, and typed state transitions. Lexical scope is the first
 ownership scheme; a fixed arena with bulk reclamation is the first storage
 and reclamation composition.
 
+The agreed M2 delivery includes default placement for ordinary construction,
+explicit region selection, lexical ownership, bulk reclamation, closures and
+recursive immutable graphs. R1's bounded module-backed model (with fixed capacity as an instance) and mechanized
+preservation gate must support R2's matching contract, including construction,
+projection, failure, suspension, escape and refusal. The complete permission,
+channel and alternative-ownership explorations below are not M2 prerequisites.
+The approved closest-live default, caller-selected fresh construction, complete
+allocator pair and surface-default/Core-explicit policy are recorded in
+[DN-0054](DN-0054-base-lexical-region-memory-contracts.md). Exact source/Core
+contracts, layouts and matched proof remain R1/R2 work under
+[TASK-0055](../tasks/TASK-0055-lexical-regions.md). Usage- and
+lifetime-based automatic placement inference is a later optimization, not a
+substitute for required default placement.
+
 A future comparison considers sequential processes communicating through
 dedicated channels. It tests ownership across communication without requiring
 shared mutable storage. It remains separate from the first sequential proof
@@ -106,8 +120,10 @@ not a reinterpretation of those handles as exclusive references.
   construction, access compatibility, lifetime schemes, and completion rules.
   Do not promote one protocol's exclusion or phase rule into a base axiom.
 - Keep other ownership schemes, owner transport, moving collection, concurrency,
-  implicit construction lowering, and source proof syntax outside the first
-  proof model. The channel comparison below explores additional obligations;
+  usage/lifetime-based placement inference, and source proof syntax outside
+  the first proof model. Default and explicit placement remain in M2; R2/R3
+  must supply their exact source/Core contract and model correspondence.
+  The channel comparison below explores additional obligations;
   it does not enlarge that model's established evidence or authorize execution.
 
 ## Candidate directions
@@ -333,8 +349,8 @@ ordinary access ends without granting a longer usable lifetime.
 These are obligations to establish, not theorems obtained by naming a region.
 Once placement is fixed, an escaping use rejects rather than silently
 extending the owner scope or shortening the object's required lifetime.
-Initial placement inference may instead select an existing enclosing region,
-as explored below. Other schemes must establish the same validity relationship
+A later placement-inference optimization may instead select an existing
+enclosing region, as explored below; this does not replace M2's approved closest-live default. Other schemes must establish the same validity relationship
 under their own owner rules.
 
 ### Establishing and discovering ownership
@@ -347,12 +363,13 @@ executing the construction does not acquire ownership merely by allocating.
 Aliasing and borrowing preserve that relationship. Ownership transfer would
 require a separate scheme rule.
 
-For the inference comparison, consider a variant where each entered lexical
+For the later inference-optimization comparison, consider a variant where each entered lexical
 scope activation `s` successfully establishes one region `r_s`, owned by `s`
 and available for that activation's lifetime. This is a candidate variant,
-not a change to DN-0035 or DN-0054's explicit allocation baseline, where an
-ordinary binding, block, or call does not acquire a region. It selects no
-physical representation or source annotation syntax.
+not M2's selected default behavior or a replacement for R2's call-boundary
+design. M2's ordinary blocks and calls acquire no region; explicit selection scopes
+new construction without moving existing values. This variant selects no physical
+representation or source annotation syntax.
 
 The three annotation variations constrain the same relationships:
 
@@ -1173,7 +1190,7 @@ that argument remain to be specified and discharged.
 | --- | --- | --- |
 | Lexical ownership | The scope determines the region owner and lifetime; required object uses stay within it. | A handle or hidden capture remains usable after the scope ends. |
 | Nested placement and projection | Inner storage retains outer references; an independent projected outer reference can return. | An inline view loses its inner backing dependency. |
-| Sequential inferred placement | Local-only construction stays local; use in a sibling activation selects a suitable common enclosing region before allocation and derives its storage owner. | Inference relocates an existing object, changes binding visibility, or silently extends an owner. |
+| Later inferred-placement comparison | Local-only construction stays local; use in a sibling activation selects a suitable common enclosing region before allocation and derives its storage owner. | Inference relocates an existing object, changes binding visibility, or silently extends an owner. |
 | Annotation constraints | Region annotations resolve their established owners; storage-owner annotations select among that owner's compatible regions. | Equal lifetimes fabricate ownership, conflicting annotations are ignored, or one owner is assumed to have only one region outside that variant. |
 | Placement versus dependency validity | A longer-lived region permits later use only when retained dependencies permit it too. | Outward placement makes an expired inner resource usable or bypasses the request-payload boundary. |
 | Ownership versus access | Aliases use the same object without creating completion owners. | Copying a handle permits another region release. |
@@ -1282,13 +1299,16 @@ Product adoption requires the proposal or decision and task workflow.
   effects, usage, lifetime, and transport contracts without conflating them?
 
 To resume: first fix the state, context compatibility, and transition premises
-for lexical ownership with a fixed arena; then prove validity preservation and
+for lexical ownership parameterized by the allocator contract, with fixed
+capacity as an instance; then prove validity preservation and
 exercise the nested/projection, cycle, capture, and failure counterexamples.
-Specify the required-use summaries and check the sequential placement heuristic
-against the local, sibling-use, annotation, and dependency counterexamples.
-Use those results to identify the extra obligations for a second reclamation
-policy or ownership scheme. Source syntax and runtime representation can follow
-once that comparison exposes the facts they must preserve.
+For M2, bound that model and its proof obligations to the agreed construction,
+closure, graph, lifetime and completion cases; R2 must match it to default and
+explicit placement with source/Core correspondence. This is not an assignment
+to finish every algebra or permission variation in this note. The required-use
+placement heuristic and comparisons with a second reclamation or ownership
+scheme remain separate later work; they do not postpone M2's default placement
+or require inference before its contract can be designed.
 The dedicated-channel case supplies a later comparison: start with copied,
 independent data, then compare transportable regions under the same message
 protocol. Preserve the separation between memory safety and progress claims.

@@ -28,18 +28,30 @@ Ash handlers and cleanup. [Native behavior and binding examples](../libraries/RE
 record the supported path and concrete gaps. The
 [accepted transition](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/proposals/CP-0024-checked-foreign-host-profile.md)
 and its [S1-S4 plan](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/tasks/plans/checked-ffi-regions-control.md)
-remain historical delivery records; the specification now describes this branch's
-implemented boundary. This product checkpoint does not complete the separate
-human Main integration and acceptance gate. The previous F1-F8, checked-host,
+remain historical delivery records. [PR #143](https://github.com/dikini/ash-lang/pull/143)
+completed the separately authorized Main integration at
+`0d8df03d4db2e70294487fc2e61f3629ff33b246`; the specification describes that
+implemented boundary and M1 is complete. The previous F1-F8, checked-host,
 protected-launch, isolation and full SQLite assignments remain superseded or
 deferred, not completed.
 
 Overall [program #51](https://github.com/dikini/ash-lang/issues/51) still tracks
 later [M2 #53](https://github.com/dikini/ash-lang/issues/53),
 [M3 #54](https://github.com/dikini/ash-lang/issues/54) and
-[M4 #55](https://github.com/dikini/ash-lang/issues/55). Their regions, retained
-control and worker scope remains unchanged and later; it is not required for the
-initial M1 FFI delivery. Each later milestone owns its scoped design gates.
+[M4 #55](https://github.com/dikini/ash-lang/issues/55). M2's agreed delivery
+scope includes default placement for ordinary construction and explicit region
+selection, lexical ownership, bulk reclamation, closures and recursive immutable
+graphs. Only usage/lifetime-based placement inference is deferred as a placement
+optimization. Closest-live defaults, caller-selected construction, the paired allocator
+interface and fully explicit Core are approved directions; exact source/Core
+contracts, layouts and their matched proof still require R1/R2 acceptance; [DN-0054](design/DN-0054-base-lexical-region-memory-contracts.md)
+and [DN-0055](design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md) remain
+informative. R1's bounded model/proof and R2's matching contract are design gates,
+not a demand to complete the wider algebra before M2. [TASK-0055](tasks/TASK-0055-lexical-regions.md) and its
+[execution plan](tasks/plans/lexical-regions.md) organize staged R1/R2 work.
+Product R3 remains held until the accepted contract and matched bounded proof
+are retained; this planning delivery executes neither proofs nor product work. M3 retained control and M4 workers
+remain separate later milestones.
 
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its
