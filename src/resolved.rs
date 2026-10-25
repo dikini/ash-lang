@@ -35,6 +35,38 @@ use crate::{
     },
 };
 
+/// Fixed private facts supplied by the authenticated compiler region module.
+/// These coordinates never establish source authority without its source pin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionApi {
+    module: ModuleId,
+}
+
+impl RegionApi {
+    pub(crate) fn for_module(module: ModuleId) -> Option<Self> {
+        module.is_builtin_region().then_some(Self { module })
+    }
+
+    pub(crate) fn module(self) -> ModuleId {
+        self.module
+    }
+    pub(crate) fn request(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 0)
+    }
+    pub(crate) fn storage(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 1)
+    }
+    pub(crate) fn storage_view(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 2)
+    }
+    pub(crate) fn region_view(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 3)
+    }
+    pub(crate) fn default_alloc(self) -> EffectId {
+        EffectId::new(self.module, 0)
+    }
+}
+
 /// The fixed relation admitted by the loader's private resource origins.
 /// This descriptor contains identities only; ordinary registries own its facts.
 #[derive(Clone, Copy)]
@@ -12936,35 +12968,56 @@ impl ExportSummary {
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                 }
             }
-            for effect in resolved.effects.iter().chain(resolved.imported.effects()) {
-                if !referenced_effects.contains(&effect.id)
-                    || summary.effect_positions.contains_key(&effect.id)
-                {
-                    continue;
-                }
-                type_work
-                    .charge(2)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                summary
-                    .effects
-                    .try_reserve(1)
-                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                summary
-                    .effect_positions
-                    .try_reserve(1)
-                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                let position = summary.effects.len();
-                summary.effects.push(
-                    clone_resolved_effect_with_budget(effect, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                );
-                if summary
-                    .effect_positions
-                    .insert(effect.id, position)
-                    .is_some()
-                {
+            loop {
+                let first_new = summary.effects.len();
+                for effect in resolved.effects.iter().chain(resolved.imported.effects()) {
+                    type_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    if !referenced_effects.contains(&effect.id)
+                        || summary.effect_positions.contains_key(&effect.id)
                     {
-                        return Err(ResolvedBuildFailure::InvalidState);
+                        continue;
+                    }
+                    type_work
+                        .charge(2)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    summary
+                        .effects
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    summary
+                        .effect_positions
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    let position = summary.effects.len();
+                    summary.effects.push(
+                        clone_resolved_effect_with_budget(effect, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                    );
+                    if summary
+                        .effect_positions
+                        .insert(effect.id, position)
+                        .is_some()
+                    {
+                        {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    }
+                }
+                if summary.effects.len() == first_new {
+                    break;
+                }
+                // Newly retained operation signatures can expose further private
+                // effects. Close that inventory before authenticating any row.
+                for effect in &summary.effects[first_new..] {
+                    for operation in &effect.operations {
+                        collect_effect_identities(
+                            &operation.annotation.ty,
+                            &mut referenced_effects,
+                            type_work,
+                        )
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                     }
                 }
             }
@@ -22832,6 +22885,19 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                 }
             }
 
+            ResolvedExprKind::Region(region) => {
+                budget.charge(1)?;
+                bound.try_reserve(1).map_err(|_| ())?;
+                bound.insert(region.handle.id);
+                pending.push(&region.body);
+                if let Some(provider) = &region.provider {
+                    pending.push(provider);
+                }
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                pending.push(&selection.region);
+                pending.push(&selection.body);
+            }
             ResolvedExprKind::Resource(resource) => {
                 budget.charge(1)?;
                 bound.try_reserve(1).map_err(|_| ())?;
@@ -22958,6 +23024,32 @@ pub enum ResolvedExprKind {
     Discard(ResolvedDiscardExpr),
     /// A scoped resource acquisition with a rigid, nongeneralized identity.
     Resource(Box<ResolvedResourceExpr>),
+    /// A prospective region identity, prepared before its access binder is live.
+    Region(Box<ResolvedRegionExpr>),
+    /// Explicit fresh-allocation selection with a restoration boundary.
+    RegionSelection(Box<ResolvedRegionSelectionExpr>),
+}
+
+/// Resolved lexical ownership of a region and its optional allocator pair.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedRegionExpr {
+    /// The same rigid identity is in scope during provider preparation and the body.
+    pub identity: ResolvedTypeVariable,
+    /// Region access is bound only after the provider has been prepared.
+    pub handle: Binder,
+    /// An explicit provider, evaluated in the preceding allocation context.
+    pub provider: Option<Box<ResolvedExpr>>,
+    /// The owner-scoped computation.
+    pub body: Box<ResolvedExpr>,
+}
+
+/// Resolved selection of an already live allocation context.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedRegionSelectionExpr {
+    /// The actual access operand; this selection acquires no owner.
+    pub region: Box<ResolvedExpr>,
+    /// The computation whose fresh constructions use that operand.
+    pub body: Box<ResolvedExpr>,
 }
 
 /// The callback binding is also the unique lexical cleanup owner.
@@ -23631,6 +23723,18 @@ fn discard_resolved_body_work(
                 }
             }
 
+            ResolvedExprKind::Region(region) => {
+                discard_resolved_type_variable(region.identity);
+                discard_binder(region.handle);
+                if let Some(provider) = region.provider {
+                    expressions.push(*provider);
+                }
+                expressions.push(*region.body);
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                expressions.push(*selection.region);
+                expressions.push(*selection.body);
+            }
             ResolvedExprKind::Resource(resource) => {
                 discard_resolved_type_variable(resource.identity);
                 discard_binder(resource.handle);

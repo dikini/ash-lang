@@ -1,6 +1,8 @@
 //! Bidirectional typed elaboration from resolved surface syntax to pure Core.
 
 mod cleanup_rows;
+mod region;
+use region::{RegionProgress, SelectionProgress};
 
 use std::{
     cell::RefCell,
@@ -3003,11 +3005,23 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::RegionValueRequest(request) => builder.region_operation(
+                EffectOperation::RegionValueRequest(request),
+                ty,
+                effects,
+                origin,
+            ),
+            EffectOperation::RegionTuple(tuple) => {
+                builder.region_operation(EffectOperation::RegionTuple(tuple), ty, effects, origin)
+            }
             EffectOperation::NativeInterpret(boundary) => {
                 let (body, interpretations) = boundary.into_parts();
                 builder.native_interpret(body, interpretations, ty, effects, origin)
             }
 
+            operation @ (EffectOperation::Region(_) | EffectOperation::RegionAllocate(_)) => {
+                builder.region_operation(operation, ty, effects, origin)
+            }
             EffectOperation::Cleanup(scope) => builder.cleanup_scope(scope, ty, effects, origin),
             EffectOperation::Registration(scope) => {
                 builder.registration_scope(scope, ty, effects, origin)
@@ -4163,7 +4177,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if !F::EFFECTS {
             return Err(invalid_state());
         }
-        let result = self.elaborate_module_program(program);
+        let result = self
+            .elaborate_module_program(program)
+            .and_then(|body| self.wrap_region_entry(body));
         self.clear_capture_uses();
         match result {
             Ok(typed) => {
@@ -10486,6 +10502,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let Some(module) = name.id.module() else {
             return Ok(None);
         };
+        if module.is_builtin_region() {
+            return Ok(Some(match name.spelling.as_str() {
+                "usable_bytes" => Intrinsic::RegionRequestBytes,
+                "alignment" => Intrinsic::RegionRequestAlignment,
+                "from_backing" => {
+                    let function = ty.function_view().ok_or_else(invalid_state)?;
+                    let Type::Application(_, owner) = function.value() else {
+                        return Err(invalid_state());
+                    };
+                    let Type::Variable(owner) = &**owner else {
+                        return Err(invalid_state());
+                    };
+                    let Type::Tuple(fields) = function.domain() else {
+                        return Err(invalid_state());
+                    };
+                    let [_, Type::Nominal(address), _, _] = fields.as_ref() else {
+                        return Err(invalid_state());
+                    };
+                    Intrinsic::RegionFromBacking {
+                        owner: *owner,
+                        address_module: address.module(),
+                    }
+                }
+                _ => return Err(invalid_state()),
+            }));
+        }
         if module.is_builtin_foreign() {
             return Ok(Some(match name.spelling.as_str() {
                 "null" => Intrinsic::AddressNull,
@@ -10601,7 +10643,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             self.builtin_intrinsic(&equational.interface.name, &function_type.ty)?
                         {
                             let ty = self.clone_type(&function_type.ty)?;
-                            let core_ty = self.clone_type(&ty)?;
+                            let core_ty = self.pure_core_type(&ty)?;
                             let node = self.builder.intrinsic(
                                 intrinsic,
                                 equational
@@ -14256,6 +14298,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ResolvedExprKind::Resource(resource) => {
                 self.schedule_resource(resource, current.span, tasks)?;
             }
+            ResolvedExprKind::Region(region) => {
+                self.schedule_region(region, current.span, tasks)?
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                self.schedule_selection(selection, current.span, tasks)?
+            }
             ResolvedExprKind::Perform(request) => {
                 self.schedule_perform(request, current.span, tasks)?;
             }
@@ -14392,6 +14440,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ElaborationTask::FinishHookBody { .. } => return Err(invalid_state()),
             ElaborationTask::ResourceBody { resource, span } => {
                 self.step_resource_body(resource, span, context, tasks, values)?;
+            }
+            ElaborationTask::RegionBody { source, span } => {
+                self.region_body(source, span, context, tasks, values)?
+            }
+            ElaborationTask::FinishRegion(progress) => {
+                self.finish_region(*progress, context, values)?
+            }
+            ElaborationTask::SelectionBody { source, span } => {
+                self.selection_body(source, span, tasks, values)?
+            }
+            ElaborationTask::FinishSelection(progress) => {
+                self.finish_selection(*progress, values)?
             }
             ElaborationTask::FinishResource(progress) => {
                 self.step_resource_completion(progress, context, values)?;
@@ -15235,8 +15295,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .charge(1)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let ty = IterativeTypeOwner::new(Type::Tuple(types.into_boxed_slice()));
-        let core_ty = self.clone_type(&ty)?;
-        let node = self.builder.tuple(nodes, core_ty, Origin::Source(span))?;
+        let api = self
+            .registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()));
+        if let Some(api) = api {
+            let allocation =
+                EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+            effects = self.union_effects(&effects, &allocation, span)?;
+        }
+        let node = if F::EFFECTS && api.is_some() {
+            self.initialize_region_tuple(nodes, &ty, &effects, span)?
+        } else {
+            let core_ty = self.clone_type(&ty)?;
+            self.builder.tuple(nodes, core_ty, Origin::Source(span))?
+        };
         Ok(TypedNode {
             node,
             effects,
@@ -21388,6 +21462,16 @@ struct CleanupActionProgress {
 }
 
 enum ElaborationTask<'a> {
+    RegionBody {
+        source: &'a crate::resolved::ResolvedRegionExpr,
+        span: Span,
+    },
+    FinishRegion(Box<RegionProgress<'a>>),
+    SelectionBody {
+        source: &'a crate::resolved::ResolvedRegionSelectionExpr,
+        span: Span,
+    },
+    FinishSelection(Box<SelectionProgress>),
     FinishFunction {
         has_ambient_rows: bool,
         direct_binder: Option<BinderId>,
@@ -22763,7 +22847,11 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
         ElaborationTask::Equation(_) => {}
         ElaborationTask::FinishCleanupAction(_) => {}
-        ElaborationTask::ResourceBody { .. }
+        ElaborationTask::RegionBody { .. }
+        | ElaborationTask::FinishRegion(_)
+        | ElaborationTask::SelectionBody { .. }
+        | ElaborationTask::FinishSelection(_)
+        | ElaborationTask::ResourceBody { .. }
         | ElaborationTask::FinishCleanup { .. }
         | ElaborationTask::BeginCleanupBinding { .. }
         | ElaborationTask::FinishHookBody { .. }
@@ -23994,6 +24082,16 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.extend(match_expression.arms.iter().map(|arm| &arm.body));
             }
 
+            ResolvedExprKind::Region(region) => {
+                work.push(&region.body);
+                if let Some(provider) = &region.provider {
+                    work.push(provider);
+                }
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                work.push(&selection.body);
+                work.push(&selection.region);
+            }
             ResolvedExprKind::Resource(resource) => {
                 work.push(&resource.body);
                 work.push(&resource.initializer);
@@ -26469,6 +26567,16 @@ fn resume_usage_with_budget(
                     push(&mut tasks, Task::Visit(&matched.scrutinee), budget)?;
                 }
 
+                ResolvedExprKind::Region(region) => {
+                    push(&mut tasks, Task::Visit(&region.body), budget)?;
+                    if let Some(provider) = &region.provider {
+                        push(&mut tasks, Task::Visit(provider), budget)?;
+                    }
+                }
+                ResolvedExprKind::RegionSelection(selection) => {
+                    push(&mut tasks, Task::Visit(&selection.body), budget)?;
+                    push(&mut tasks, Task::Visit(&selection.region), budget)?;
+                }
                 ResolvedExprKind::Resource(resource) => {
                     push(&mut tasks, Task::Visit(&resource.body), budget)?;
                     push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
@@ -26675,6 +26783,16 @@ fn contains_resume_owner_with_budget(
                 }
             }
 
+            ResolvedExprKind::Region(region) => {
+                schedule(&mut pending, &region.body, budget)?;
+                if let Some(provider) = &region.provider {
+                    schedule(&mut pending, provider, budget)?;
+                }
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                schedule(&mut pending, &selection.body, budget)?;
+                schedule(&mut pending, &selection.region, budget)?;
+            }
             ResolvedExprKind::Resource(resource) => {
                 schedule(&mut pending, &resource.body, budget)?;
                 schedule(&mut pending, &resource.initializer, budget)?;
@@ -26952,6 +27070,8 @@ pub(crate) fn checked_program_contains_effect_syntax(
     while let Some(expression) = work.pop() {
         match &expression.kind {
             ResolvedExprKind::Cleanup(_)
+            | ResolvedExprKind::Region(_)
+            | ResolvedExprKind::RegionSelection(_)
             | ResolvedExprKind::Resource(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
@@ -27205,6 +27325,17 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                 }
             }
 
+            ResolvedExprKind::Region(region) => {
+                binders.push(region.handle.id);
+                expressions.push(&region.body);
+                if let Some(provider) = &region.provider {
+                    expressions.push(provider);
+                }
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                expressions.push(&selection.body);
+                expressions.push(&selection.region);
+            }
             ResolvedExprKind::Resource(resource) => {
                 binders.push(resource.handle.id);
                 expressions.push(&resource.body);

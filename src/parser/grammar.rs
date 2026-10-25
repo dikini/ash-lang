@@ -21,6 +21,8 @@ pub(super) enum ExpressionPrefixForm {
     Handler,
     Resume,
     Resource,
+    Region,
+    RegionSelection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,6 +148,8 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
         ExpressionPrefixForm::Handler,
         ExpressionPrefixForm::Resume,
         ExpressionPrefixForm::Resource,
+        ExpressionPrefixForm::Region,
+        ExpressionPrefixForm::RegionSelection,
     ],
     expression: ExpressionDialect {
         primary_forms: &[
@@ -1579,6 +1583,8 @@ pub(super) fn expression(parser: &mut Parser<'_>) {
         Some(ExpressionPrefixForm::Handler) => handler_expression(parser),
         Some(ExpressionPrefixForm::Resume) => resume_expression(parser),
         Some(ExpressionPrefixForm::Resource) => resource_expression(parser),
+        Some(ExpressionPrefixForm::Region) => region_expression(parser),
+        Some(ExpressionPrefixForm::RegionSelection) => region_selection_expression(parser),
 
         None => expression::operator_expression(parser),
     }
@@ -1596,6 +1602,8 @@ fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
             ExpressionPrefixForm::Handler => parser.at(&TokenKind::Handle),
             ExpressionPrefixForm::Resume => parser.at(&TokenKind::Resume),
             ExpressionPrefixForm::Resource => parser.at(&TokenKind::Resource),
+            ExpressionPrefixForm::Region => parser.at(&TokenKind::Region),
+            ExpressionPrefixForm::RegionSelection => parser.at(&TokenKind::Using),
         })
 }
 
@@ -1641,6 +1649,29 @@ fn resource_expression(parser: &mut Parser<'_>) {
     let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Greater);
     binder(parser);
     let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
+    expression::primary_expression(parser);
+    block(parser);
+    parser.finish();
+}
+
+fn region_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::RegionExpression);
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::Less, ExpectedForm::Type);
+    expect_upper_identifier(parser);
+    let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Greater);
+    binder(parser);
+    if parser.at(&TokenKind::Equal) {
+        let _ = parser.bump();
+        expression::primary_expression(parser);
+    }
+    block(parser);
+    parser.finish();
+}
+
+fn region_selection_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::RegionSelectionExpression);
+    let _ = parser.bump();
     expression::primary_expression(parser);
     block(parser);
     parser.finish();
@@ -2822,6 +2853,10 @@ mod tests {
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Handler) => "handler parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Resume) => "resume parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Resource) => "resource parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::Region) => "region parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::RegionSelection) => {
+                "region selection parser"
+            }
 
             ShadowPrefixForm::Mock(node) => mock_nested_feature::parse(node),
         }

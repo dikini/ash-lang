@@ -70,12 +70,77 @@ impl ExecutableProgram {
 
 pub(crate) type Location = usize;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) enum HeapCell {
     Uninitialized,
     Alias(Location),
     Tuple(Box<[Value]>),
+    NativeTuple(NativeTupleStorage),
     Constructor(ConstructorId, Option<Value>),
+}
+
+impl HeapCell {
+    pub(crate) fn tuple_fields(&self) -> Option<&[Value]> {
+        match self {
+            Self::Tuple(fields) => Some(fields),
+            Self::NativeTuple(fields) => Some((fields.adapter.fields)(fields)),
+            _ => None,
+        }
+    }
+}
+
+/// Passive typed-memory leaves emitted once in the existing native host.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct NativeTupleAdapter {
+    pub initialize: fn(&mut NativeTupleStorage, Vec<Value>),
+    pub fields: for<'a> fn(&'a NativeTupleStorage) -> &'a [Value],
+    pub drop_fields: fn(&mut NativeTupleStorage),
+}
+
+/// Unique metadata for initialized values in module-supplied backing.
+/// Drops Rust representation contents without freeing the module's backing.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct NativeTupleStorage {
+    address: Address,
+    len: usize,
+    adapter: NativeTupleAdapter,
+    initialized: bool,
+}
+impl NativeTupleStorage {
+    pub(crate) fn initialize(
+        address: Address,
+        values: Vec<Value>,
+        adapter: NativeTupleAdapter,
+    ) -> Self {
+        let mut storage = Self {
+            address,
+            len: values.len(),
+            adapter,
+            initialized: false,
+        };
+        (adapter.initialize)(&mut storage, values);
+        storage.initialized = true;
+        storage
+    }
+    pub fn address(&self) -> *mut core::ffi::c_void {
+        self.address.as_ptr()
+    }
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+impl Drop for NativeTupleStorage {
+    fn drop(&mut self) {
+        if self.initialized {
+            self.initialized = false;
+            (self.adapter.drop_fields)(self);
+        }
+    }
 }
 
 /// A heap-backed tuple or nominal observation.
@@ -96,6 +161,11 @@ impl ObservedHeap {
             registry,
             cells: cells.into_boxed_slice(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cells_for_test(&self) -> &[HeapCell] {
+        &self.cells
     }
 
     #[cfg(test)]
@@ -135,6 +205,11 @@ impl ObservedValue {
                     active.remove(&location);
                 }
                 Task::Value(value) => match value {
+                    Value::RegionRequest(_) => output.push_str("<allocation-request>"),
+                    Value::RegionStorage(_) => output.push_str("<storage>"),
+                    Value::RegionBackingFunction(_) => output.push_str("<function>"),
+                    Value::RegionView(_) => output.push_str("<region-view>"),
+                    Value::RegionHostFunction { .. } => output.push_str("<function>"),
                     Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
 
                     Value::Intrinsic(_) => output.push_str("<function>"),
@@ -172,7 +247,8 @@ impl ObservedValue {
                                 }
                                 tasks.push(Task::Exit(location));
                                 match cell {
-                                    HeapCell::Tuple(elements) => {
+                                    HeapCell::Tuple(_) | HeapCell::NativeTuple(_) => {
+                                        let elements = cell.tuple_fields().expect("tuple fields");
                                         output.push('(');
                                         tasks.push(Task::Text(")"));
                                         for (index, element) in elements.iter().enumerate().rev() {
@@ -195,8 +271,11 @@ impl ObservedValue {
                                             output.push('(');
                                             tasks.push(Task::Text(")"));
                                             if let Value::Location(payload_location) = payload
-                                                && let Some(HeapCell::Tuple(elements)) =
-                                                    self.heap.cells.get(*payload_location)
+                                                && let Some(elements) = self
+                                                    .heap
+                                                    .cells
+                                                    .get(*payload_location)
+                                                    .and_then(HeapCell::tuple_fields)
                                             {
                                                 for (index, element) in
                                                     elements.iter().enumerate().rev()
@@ -297,12 +376,51 @@ impl fmt::Debug for Address {
     }
 }
 
+/// Immediate request facts; selected invocation metadata is compiler-private.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct RegionRequest {
+    pub(crate) usable_bytes: usize,
+    pub(crate) alignment: usize,
+    pub(crate) invocation: Option<RegionInvocation>,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegionInvocation {
+    pub(crate) owner: ActivationKey,
+    pub(crate) serial: u64,
+}
+
+/// A pending registered allocation; this token does not expose initialized data.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct RegionStorage {
+    pub(crate) invocation: RegionInvocation,
+    pub(crate) record: usize,
+}
+
 /// A fully evaluated Ash value.
 ///
 /// Values intentionally do not implement host equality because Ash functions
 /// have no equality operation or observable identity.
 #[derive(Clone, Debug)]
 pub enum Value {
+    /// Private, nonrecursive allocation request descriptor.
+    RegionRequest(RegionRequest),
+    /// Private, pending supplied storage token.
+    RegionStorage(RegionStorage),
+    /// The checked backing adapter bound by lexical type instantiation.
+    RegionBackingFunction(ActivationKey),
+    /// Non-owning explicit access to one published lexical region.
+    RegionView(ActivationKey),
+    /// A host member bound to its prospective owner's lexical activation.
+    RegionHostFunction {
+        /// Exact activation reserved before provider evaluation.
+        owner: ActivationKey,
+        /// True for the paired release member.
+        release: bool,
+    },
     /// Opaque C data pointer. Copying this value neither owns nor retains its target.
     Address(Address),
     /// Immutable finite bytes in ordinary shared storage.
@@ -350,6 +468,11 @@ impl Value {
 impl fmt::Display for Value {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RegionRequest(_) => formatter.write_str("<allocation-request>"),
+            Self::RegionStorage(_) => formatter.write_str("<storage>"),
+            Self::RegionBackingFunction(_) => formatter.write_str("<function>"),
+            Self::RegionView(_) => formatter.write_str("<region-view>"),
+            Self::RegionHostFunction { .. } => formatter.write_str("<function>"),
             Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
 
             Self::Intrinsic(_) => formatter.write_str("<function>"),

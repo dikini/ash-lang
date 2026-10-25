@@ -19,6 +19,7 @@ struct NativeBinding {
 #[derive(Debug, Default)]
 pub struct SourceNativeBindings {
     entries: HashMap<OperationId, NativeBinding>,
+    pub(crate) tuple_storage: Option<crate::eval::NativeTupleAdapter>,
 }
 impl SourceNativeBindings {
     pub(crate) fn insert(

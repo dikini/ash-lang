@@ -1451,6 +1451,13 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
             if self.retain_node(preparation, id, budget)? {
                 continue;
             }
+            if let Some(EffectOperation::Region(scope)) = (self.operation)(&node.kind) {
+                preparation
+                    .bound
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                preparation.bound.push(scope.identity);
+            }
             if let Some(EffectOperation::Resource(resource)) = (self.operation)(&node.kind) {
                 preparation
                     .bound
@@ -1718,6 +1725,10 @@ fn retain_function_metadata<F: CoreOperationFamily>(
         headers.retain(value, nodes, id, operation, budget)?;
         // These are subtree bindings, not header facts: collect them for every
         // reader and preserve the original final whole-subtree exclusion.
+        if let Some(EffectOperation::Region(scope)) = operation(&node.kind) {
+            bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+            bound.push(scope.identity);
+        }
         if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
             bound.try_reserve(1).map_err(|_| Failure::Resource)?;
             bound.push(resource.acquisition.identity);
@@ -2007,6 +2018,66 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Control, Failure> {
     Ok(match operation {
+        Some(EffectOperation::RegionValueRequest(_)) => Control::Return,
+        Some(EffectOperation::RegionTuple(tuple)) => {
+            let mut children = Vec::new();
+            charge(budget, tuple.fields.len() + 2)?;
+            children
+                .try_reserve_exact(tuple.fields.len() + 2)
+                .map_err(|_| Failure::Resource)?;
+            children.push(index(tuple.context) + 1);
+            children.extend(tuple.fields.iter().map(|child| index(*child) + 1));
+            children.push(index(tuple.storage) + 1);
+            Control::Sequence(children)
+        }
+        Some(EffectOperation::Region(scope)) if scope.entry => Control::Sequence(copy_slice(
+            &[
+                index(scope.preceding) + 1,
+                index(scope.provider) + 1,
+                index(scope.body) + 1,
+            ],
+            budget,
+        )?),
+        Some(EffectOperation::Region(scope)) => {
+            let api = crate::resolved::RegionApi::for_module(scope.api).ok_or(Failure::Invalid)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let owner = graph.code.len();
+            data.position(owner, id, budget)?;
+            graph.code.push(Control::Resource {
+                body: index(scope.body) + 1,
+                effect: Request::effect(
+                    &EffectInstance::new(api.default_alloc(), Box::new([])),
+                    source,
+                    budget,
+                )?,
+            });
+            Control::Sequence(copy_slice(
+                &[index(scope.preceding) + 1, index(scope.provider) + 1, owner],
+                budget,
+            )?)
+        }
+        Some(EffectOperation::RegionAllocate(allocation)) => {
+            let api =
+                crate::resolved::RegionApi::for_module(allocation.api).ok_or(Failure::Invalid)?;
+            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let service = graph.code.len();
+            data.position(service, id, budget)?;
+            let mut request = Request::effect(
+                &EffectInstance::new(api.default_alloc(), Box::new([])),
+                source,
+                budget,
+            )?;
+            request.operation = Some(crate::types::OperationId::new(api.default_alloc(), 0));
+            graph.code.push(Control::Request(request));
+            Control::Sequence(copy_slice(
+                &[
+                    index(allocation.context) + 1,
+                    index(allocation.request) + 1,
+                    service,
+                ],
+                budget,
+            )?)
+        }
         Some(EffectOperation::NativeInterpret(boundary)) => {
             let members = boundary.interpretations().len();
             charge(budget, members)?;
@@ -2560,6 +2631,10 @@ fn build_capture_graph<F: CoreOperationFamily>(
     for (id, node) in nodes.iter().enumerate() {
         let active = domain.is_none_or(|domain| domain.contains(&id));
         if active {
+            if matches!(operation(&node.kind), Some(EffectOperation::Region(_))) {
+                resource_scope
+                    .get_or_insert(node.origin.as_ref().ok_or(Failure::Invalid)?.primary_span());
+            }
             if let Some(EffectOperation::Cleanup(scope)) = operation(&node.kind) {
                 resource_scope.get_or_insert(scope.span);
             }
@@ -2764,6 +2839,9 @@ fn solve_capture_values<F: CoreOperationFamily>(
                     }
                     Some(EffectOperation::NativeInterpret(boundary)) => {
                         value = values[index(boundary.body())].copy(budget)?;
+                    }
+                    Some(EffectOperation::Region(scope)) => {
+                        value = values[index(scope.body)].copy(budget)?;
                     }
                     Some(EffectOperation::Resource(resource)) => {
                         value = values[index(resource.body)].copy(budget)?;

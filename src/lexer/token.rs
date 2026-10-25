@@ -54,6 +54,10 @@ pub enum TokenKind {
     Resume,
     /// Scoped acquisition of the builtin cell resource.
     Resource,
+    /// The `region` lexical allocation-owner declaration.
+    Region,
+    /// The `using` lexical allocation-selection expression.
+    Using,
     /// The `hook` reserved word.
     Hook,
     /// The `register` reserved word.

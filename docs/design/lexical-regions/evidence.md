@@ -3,9 +3,9 @@
 The [model and module guide](README.md) and [single correspondence report](correspondence.md)
 define this evidence's scope. CP-0025 is accepted for transition after independent
 source/map review and actual frozen-gate audit. Frozen integration and exact
-transfer have passed; current-head review, milestone retention, retained
-verification and R1/R2 issue acceptance remain pending. This record closes no
-product criterion or issue checkbox.
+transfer passed. Exact-head review and [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924` retain the reviewed tree;
+retained verification and R1/R2 acceptance are complete. This closes no product
+criterion. R3 is active and partial.
 
 ## Frozen integration and transfer
 
@@ -56,10 +56,16 @@ the source/registration hashes and preserved toolchain. Local development runs
 are superseded for integration evidence; they do not become extra acceptance
 gates.
 
-## Remaining ownership
+## Retention and remaining ownership
 
-Root has cleared the independent gate audit and semantic adoption. Root owns
-publication and milestone integration. The author supplies the retained verification and
-acceptance readback after integration; the reviewer checks that record.
-Until those steps complete, R1/R2 remain candidate deliveries and product R3
-remains held. Main integration retains its separate gate.
+[PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924` is the sole-parent squash of the independently reviewed delivery.
+Its tree matches reviewed `7ba507d3ab2a9dbbec174040ac72f13d5b891ad2`, and
+all ten source/registry/toolchain pins match the gate. The independent
+[exact-head delivery review](https://github.com/dikini/ash-lang/pull/146#pullrequestreview-5643751020)
+and subsequent retained/acceptance review completed before R1/R2 closure.
+The retained verification receipt is `/tmp/ash-m2-pr146-retained-verification.json`
+(SHA-256 `54227c9b4a9c4925a4021a0cc614efe14a884e8874e17a5f13d3a3b73dd78e61`);
+final issue readback is `/tmp/ash-m2-acceptance-final-readback1.json`
+(SHA-256 `51bd69f868de1eb0769a1d0cae863205ba238657ee6666da2e3ce9353f85df15`).
+R3–R5 remain active/pending under TASK-0055; root owns integration and
+acceptance. Main integration retains its separate gate.

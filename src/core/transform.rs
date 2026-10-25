@@ -92,6 +92,9 @@ impl TransformFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             binders.push(resource.handle.id());
         }
+        if let EffectExprKind::Operation(EffectOperation::Region(scope)) = kind {
+            binders.push(scope.access.id());
+        }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
             _ => return Ok(()),
@@ -114,6 +117,64 @@ impl TransformFamily for EffectOperationFamily {
         let effects = copy_expression_row(builder, expression)?;
         let origin = copy_origin(builder, expression.origin()?)?;
         match operation {
+            EffectOperation::RegionValueRequest(request) => builder.region_operation(
+                EffectOperation::RegionValueRequest(request.clone()),
+                ty.into_inner(),
+                effects,
+                origin,
+            ),
+            EffectOperation::RegionTuple(tuple) => {
+                let mut fields = Vec::new();
+                builder.charge_effect_metadata(tuple.fields.len())?;
+                fields
+                    .try_reserve_exact(tuple.fields.len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                for field in &tuple.fields {
+                    fields.push(remap(remapped, *field)?);
+                }
+                builder.region_operation(
+                    EffectOperation::RegionTuple(super::region::RegionTupleNode {
+                        api: tuple.api,
+                        context: remap(remapped, tuple.context)?,
+                        storage: remap(remapped, tuple.storage)?,
+                        fields: fields.into_boxed_slice(),
+                    }),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::Region(scope) => {
+                let access_type = copy_type(builder, scope.access.ty())?;
+                let access_id = copy_binder_id(builder, scope.access.id())?;
+                let access_origin = copy_origin(builder, scope.access.origin())?;
+                let access = builder.resolved_binder(access_id, access_type, access_origin)?;
+                let identity = copy_variable_id(builder, scope.identity)?;
+                builder.region_operation(
+                    EffectOperation::Region(Box::new(super::region::RegionScopeNode {
+                        entry: scope.entry,
+                        api: scope.api,
+                        identity,
+                        access,
+                        preceding: remap(remapped, scope.preceding)?,
+                        provider: remap(remapped, scope.provider)?,
+                        body: remap(remapped, scope.body)?,
+                    })),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::RegionAllocate(allocation) => builder.region_operation(
+                EffectOperation::RegionAllocate(super::region::RegionAllocateNode {
+                    api: allocation.api,
+                    context: remap(remapped, allocation.context)?,
+                    request: remap(remapped, allocation.request)?,
+                }),
+                ty.into_inner(),
+                effects,
+                origin,
+            ),
             EffectOperation::Cleanup(scope) => {
                 let callback = copy_binder_id(builder, scope.callback)?;
                 builder.cleanup_scope(
@@ -699,8 +760,32 @@ fn rebuild_nonfold_node<F: TransformFamily>(
         }
         PureExprKind::Value(PureValue::Intrinsic(node)) => {
             let ty = copy_type(builder, expression.ty())?;
+            let operation = match node.operation() {
+                super::packed::Intrinsic::RegionHostAllocate {
+                    owner,
+                    configuration,
+                } => super::packed::Intrinsic::RegionHostAllocate {
+                    owner: copy_variable_id(builder, owner)?,
+                    configuration,
+                },
+                super::packed::Intrinsic::RegionHostRelease {
+                    owner,
+                    configuration,
+                } => super::packed::Intrinsic::RegionHostRelease {
+                    owner: copy_variable_id(builder, owner)?,
+                    configuration,
+                },
+                super::packed::Intrinsic::RegionFromBacking {
+                    owner,
+                    address_module,
+                } => super::packed::Intrinsic::RegionFromBacking {
+                    owner: copy_variable_id(builder, owner)?,
+                    address_module,
+                },
+                operation => operation,
+            };
             builder
-                .intrinsic(node.operation(), node.module(), ty, origin)
+                .intrinsic(operation, node.module(), ty, origin)
                 .map_err(TransformError::from)
         }
         PureExprKind::Value(PureValue::Integer(node)) => {

@@ -25,9 +25,9 @@ No proposed changes are listed.
 
 [CP-0025: Lexical region construction and paired allocators](CP-0025-lexical-region-construction.md)
 is accepted for transition with a reviewed bounded preservation proof and an
-independently audited frozen gate. Milestone retention and retained verification
-remain pending; product R3 is held until the accepted contract and matching proof
-are retained and verified. It is not current Ash.
+independently audited frozen gate, retained through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`.
+Retained verification and R1/R2 acceptance are complete. R3 implementation is
+active and partial; no product criterion is complete. It is not current Ash.
 
 The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
 retains the completed transition, verified local Main integration and

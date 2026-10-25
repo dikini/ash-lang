@@ -5,6 +5,9 @@ use std::{error::Error, fmt, sync::Arc};
 #[path = "instantiation.rs"]
 mod instantiation;
 use instantiation::Instantiation;
+#[path = "region.rs"]
+mod region;
+use region::BackingRecord;
 
 #[cfg(test)]
 #[path = "machine_test_hooks.rs"]
@@ -551,6 +554,51 @@ impl Error for RuntimeFailure {}
 
 #[derive(Debug)]
 enum Frame {
+    RegionTuple {
+        node: NodeId,
+        environment: Environment,
+        context: Option<ActivationKey>,
+        next: usize,
+        fields: Vec<Value>,
+    },
+    RegionPreceding {
+        node: NodeId,
+        environment: Environment,
+    },
+    RegionProvider {
+        node: NodeId,
+        environment: Environment,
+        key: ActivationKey,
+        preceding: Value,
+    },
+    RegionBoundary {
+        node: NodeId,
+        key: ActivationKey,
+        allocate: Value,
+        release: Value,
+        preceding: Value,
+        records: Vec<BackingRecord>,
+    },
+    RegionCompletion {
+        node: NodeId,
+        key: ActivationKey,
+        allocate: Value,
+        preceding: Value,
+        saved: Value,
+        records: Vec<BackingRecord>,
+    },
+    RegionContext {
+        node: NodeId,
+        environment: Environment,
+    },
+    RegionRequest {
+        context: Value,
+    },
+    RegionAllocated {
+        segment: CapturedContinuation,
+        invocation: super::value::RegionInvocation,
+        registered: bool,
+    },
     CloseCompletion,
     CleanupBoundary {
         action: NodeId,
@@ -701,6 +749,11 @@ impl Drop for CapturedContinuation {
             RuntimeResource::CapturedDisposal,
         );
         while let Some(mut frame) = pending.pop() {
+            if let Frame::RegionAllocated { segment, .. } = &mut frame {
+                for child in segment.frames.drain(..) {
+                    pending.push(child);
+                }
+            }
             if let Frame::ClauseBoundary { continuation, .. } = &mut frame
                 && let Some(mut nested) = continuation.take()
             {
@@ -756,6 +809,7 @@ pub struct Machine<'runtime> {
     resource_limit: usize,
     live_resources: usize,
     next_activation: u32,
+    next_region_invocation: u64,
     registration_limit: usize,
     live_registrations: usize,
     next_registration: u32,
@@ -782,6 +836,7 @@ impl<'runtime> Machine<'runtime> {
             resource_limit: 0,
             live_resources: 0,
             next_activation: 0,
+            next_region_invocation: 0,
             registration_limit: 0,
             live_registrations: 0,
             next_registration: 0,
@@ -815,6 +870,7 @@ impl<'runtime> Machine<'runtime> {
             resource_limit: MAX_CAPTURED_FRAME_CELLS,
             live_resources: 0,
             next_activation: 0,
+            next_region_invocation: 0,
             registration_limit: MAX_CAPTURED_FRAME_CELLS,
             live_registrations: 0,
             next_registration: 0,
@@ -854,6 +910,9 @@ impl<'runtime> Machine<'runtime> {
                             expression.kind
                     {
                         self.acquire_cleanup(scope, environment)?;
+                        continue;
+                    }
+                    if self.enter_region(node, &environment)? {
                         continue;
                     }
                     if self.registration(node).is_some() {
@@ -896,6 +955,11 @@ impl<'runtime> Machine<'runtime> {
                     self.apply(transition);
                 }
                 Control::Return(value) => {
+                    if matches!(self.frames.last(), Some(Frame::RegionBoundary { .. })) {
+                        // Closing replaces one owner frame with completion and
+                        // release frames. Reserve before moving that owner.
+                        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, true)?;
+                    }
                     let Some(frame) = self.frames.pop() else {
                         if self.live_resources != 0
                             || self.live_cleanups != 0
@@ -955,6 +1019,126 @@ impl<'runtime> Machine<'runtime> {
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
         disposal::check()?;
         match frame {
+            Frame::RegionTuple {
+                node,
+                environment,
+                context,
+                next,
+                fields,
+            } => {
+                self.return_region_tuple(node, environment, context, next, fields, value)?;
+            }
+            Frame::RegionPreceding { node, environment } => {
+                self.prepare_region_provider(node, environment, value)?
+            }
+            Frame::RegionProvider {
+                node,
+                environment,
+                key,
+                preceding,
+            } => self.publish_region(node, environment, key, preceding, value)?,
+            Frame::RegionBoundary {
+                node,
+                key,
+                allocate,
+                release,
+                preceding,
+                records,
+            } => {
+                self.frames.push(Frame::RegionCompletion {
+                    node,
+                    key,
+                    allocate,
+                    preceding,
+                    saved: value,
+                    records,
+                });
+                self.frames.push(Frame::ApplyArgument { function: release });
+                self.drop_region_rust_fields_before_release()?;
+                self.control = Some(Control::Return(Value::Unit));
+            }
+            Frame::RegionCompletion {
+                node,
+                saved,
+                records,
+                ..
+            } => {
+                if !matches!(value, Value::Unit) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let entry = self
+                    .region_scope(node)
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .entry;
+                if !entry {
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        records.len(),
+                        RuntimePhase::Cleanup,
+                    )?;
+                    for record in records {
+                        if let Some(location) = record.location {
+                            let cell = self
+                                .heap
+                                .get_mut(location)
+                                .ok_or(RuntimeFailure::InvalidControlState)?;
+                            *cell = HeapCell::Uninitialized;
+                        }
+                    }
+                }
+                self.control = Some(Control::Return(saved));
+            }
+            Frame::RegionContext { node, environment } => {
+                let request = self
+                    .region_allocation(node)
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .request();
+                self.frames.push(Frame::RegionRequest { context: value });
+                self.control = Some(Control::Evaluate(request, environment));
+            }
+            Frame::RegionRequest { context } => self.invoke_region_allocate(context, value)?,
+            Frame::RegionAllocated {
+                mut segment,
+                invocation,
+                registered,
+            } => {
+                if !registered
+                    || !matches!(value, Value::RegionStorage(storage) if storage.invocation == invocation)
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let Value::RegionStorage(storage) = &value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                self.validate_region_storage(*storage)?;
+                self.captured_cells = self
+                    .captured_cells
+                    .checked_sub(segment.frames.len())
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                self.frames.append(&mut segment.frames);
+                self.control = Some(Control::Return(value));
+            }
+            Frame::ApplyArgument {
+                function: Value::RegionBackingFunction(owner),
+            } => {
+                let storage = self.register_region_backing(owner, value)?;
+                self.control = Some(Control::Return(storage));
+            }
+            Frame::ApplyArgument {
+                function: Value::RegionHostFunction { owner, release },
+            } => {
+                if release {
+                    if !matches!(value, Value::Unit)
+                        || !matches!(self.frames.last(), Some(Frame::RegionCompletion { key, .. }) if *key == owner)
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    self.control = Some(Control::Return(Value::Unit));
+                } else {
+                    let storage = self.allocate_host_region_storage(owner, value)?;
+                    self.control = Some(Control::Return(storage));
+                }
+            }
             Frame::CloseCompletion => {
                 if !matches!(value, Value::Unit) {
                     return Err(RuntimeFailure::InvalidControlState);
@@ -1766,7 +1950,7 @@ impl<'runtime> Machine<'runtime> {
                 };
                 let location =
                     resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
-                let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else {
+                let Some(fields) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
                     return Err(RuntimeFailure::ForeignBinding);
                 };
                 if fields.len() != shapes.len() {
@@ -1835,7 +2019,7 @@ impl<'runtime> Machine<'runtime> {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             let location = resolve_location(&self.heap, location)?;
-            let Some(HeapCell::Tuple(elements)) = self.heap.get(location) else {
+            let Some(elements) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             let [handle, Value::Integer(written)] = elements.as_ref() else {
@@ -1895,7 +2079,7 @@ impl<'runtime> Machine<'runtime> {
             };
             let location =
                 resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
-            let Some(HeapCell::Tuple(elements)) = self.heap.get(location) else {
+            let Some(elements) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             let [Value::ResourceHandle(handle), replacement] = elements.as_ref() else {
@@ -2191,8 +2375,19 @@ impl<'runtime> Machine<'runtime> {
             })?;
             for frame in &capture.frames {
                 match frame {
-                    Frame::CleanupCompletion { .. } | Frame::CloseCompletion => {
+                    Frame::CleanupCompletion { .. }
+                    | Frame::RegionCompletion { .. }
+                    | Frame::CloseCompletion => {
                         return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    Frame::RegionAllocated { segment, .. } => {
+                        reserve_control(
+                            &mut pending,
+                            1,
+                            RuntimeResource::CaptureInspection,
+                            false,
+                        )?;
+                        pending.push(segment);
                     }
                     Frame::ClauseBoundary {
                         handler: nested_handler,
@@ -2236,7 +2431,9 @@ impl<'runtime> Machine<'runtime> {
                         registrations.push(*key);
                         owners += 1;
                     }
-                    Frame::ResourceBoundary { .. } | Frame::CleanupBoundary { .. } => owners += 1,
+                    Frame::ResourceBoundary { .. }
+                    | Frame::RegionBoundary { .. }
+                    | Frame::CleanupBoundary { .. } => owners += 1,
                     Frame::HandlerBoundary { node, .. } => {
                         self.handler(*node)
                             .ok_or(RuntimeFailure::InvalidControlState)?;
@@ -2294,6 +2491,7 @@ impl<'runtime> Machine<'runtime> {
         while let Some(mut frame) = work.pop() {
             // Inspection and every fallible reservation precede ownership transfer.
             match &mut frame {
+                Frame::RegionAllocated { segment, .. } => work.append(&mut segment.frames),
                 Frame::ClauseBoundary {
                     continuation: Some(nested),
                     ..
@@ -2309,7 +2507,9 @@ impl<'runtime> Machine<'runtime> {
                     *pending_invocations = 0;
                     closing.push(frame);
                 }
-                Frame::ResourceBoundary { .. } => closing.push(frame),
+                Frame::ResourceBoundary { .. } | Frame::RegionBoundary { .. } => {
+                    closing.push(frame)
+                }
                 Frame::CleanupBoundary { .. } => closing.push(frame),
                 _ => {}
             }
@@ -2526,6 +2726,12 @@ fn dispatch_entry(
             EffectExprKind::Pure(kind) => (kind, &expression.origin),
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
+                    EffectOperation::Region(_)
+                    | EffectOperation::RegionAllocate(_)
+                    | EffectOperation::RegionTuple(_)
+                    | EffectOperation::RegionValueRequest(_) => {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
@@ -3023,7 +3229,11 @@ fn return_application_function(
 ) -> Result<Transition, RuntimeFailure> {
     if !matches!(
         function,
-        Value::Function(_) | Value::ConstructorFunction(_) | Value::Intrinsic(_)
+        Value::Function(_)
+            | Value::ConstructorFunction(_)
+            | Value::Intrinsic(_)
+            | Value::RegionHostFunction { .. }
+            | Value::RegionBackingFunction(_)
     ) {
         return Err(RuntimeFailure::UnexpectedFunctionValue);
     }
@@ -3117,6 +3327,16 @@ fn apply_intrinsic(
         return Err(RuntimeFailure::InvalidControlState);
     }
     let result = match (operation, argument) {
+        (Intrinsic::RegionRequestBytes, Value::RegionRequest(request))
+            if request.invocation.is_some() =>
+        {
+            Value::Integer(crate::integer::Integer::from_usize(request.usable_bytes))
+        }
+        (Intrinsic::RegionRequestAlignment, Value::RegionRequest(request))
+            if request.invocation.is_some() =>
+        {
+            Value::Integer(crate::integer::Integer::from_usize(request.alignment))
+        }
         (Intrinsic::BytesAt { found, invalid }, Value::Location(location)) => {
             return apply_byte_lookup(found, invalid, location, heap, work);
         }
@@ -3128,7 +3348,7 @@ fn apply_intrinsic(
         }
         (Intrinsic::AddressEqual, Value::Location(location)) => {
             let location = packed_tuple_location(heap, location, work)?;
-            let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             let [Value::Address(left), Value::Address(right)] = fields.as_ref() else {
@@ -3166,7 +3386,7 @@ fn apply_intrinsic(
             Value::Location(location),
         ) => {
             let location = packed_tuple_location(heap, location, work)?;
-            let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+            let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             if fields.len() != 2 {
@@ -3237,7 +3457,7 @@ fn apply_byte_lookup(
 ) -> Result<Value, RuntimeFailure> {
     let location = packed_tuple_location(heap, location, work)?;
     let index = {
-        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+        let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let [bytes, Value::Integer(index)] = fields.as_ref() else {
@@ -3267,7 +3487,7 @@ fn apply_byte_lookup(
         )
     })?;
     let payload = if let Some(index) = index {
-        let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+        let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let byte = fields[0]
@@ -3397,7 +3617,7 @@ fn matches_pattern_with_work(
                 } else {
                     resolve_location(heap, location)?
                 };
-                let Some(HeapCell::Tuple(elements)) = heap.get(location) else {
+                let Some(elements) = heap.get(location).and_then(HeapCell::tuple_fields) else {
                     return Ok(false);
                 };
                 if patterns.len() != elements.len() {

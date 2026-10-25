@@ -1,7 +1,7 @@
 # TASK-0055: Lexical regions
 
 - ID: `TASK-0055`
-- Status: active — R1/R2 candidate retention
+- Status: active — partial R3 implementation
 - Related: [CP-0025](../proposals/CP-0025-lexical-region-construction.md) (accepted for transition),
   [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md),
   [DN-0055](../design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md),
@@ -17,8 +17,8 @@ M1 is integrated into Main at `0d8df03d4db2e70294487fc2e61f3629ff33b246`
 through [PR #143](https://github.com/dikini/ash-lang/pull/143). Current
 [specification](../../spec/README.md) remains normative. DN-0054 records the
 user-approved intended direction. CP-0025 is accepted for transition with a
-matching reviewed bounded R1 proof and audited frozen gate; milestone retention
-and retained verification remain pending.
+matching reviewed bounded R1 proof and audited frozen gate, retained by
+[PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`. Retained verification and author acceptance closed R1/R2.
 
 ## Work
 
@@ -28,20 +28,20 @@ construction, explicit region selection, lexical ownership, bulk reclamation,
 region-stored closures and recursive immutable graphs. Usage/lifetime placement
 inference remains a later optimization.
 
-Hold product R3 until the accepted R2 contract and matched R1 proof delivery are
-retained on the milestone and verified. Preserve current Cell, request,
+The accepted contract and matched proof are retained and verified; R3 is active.
+Preserve current Cell, request,
 capture, cleanup, kind/row and resource-dependency invariants. Return semantic
 gaps to R2 rather than deciding them during implementation.
 
 ## Progress
 
-The first planning delivery consolidates approved allocator, placement, effect,
+The initial planning delivery consolidated approved allocator, placement, effect,
 storage/bootstrap and operational directions in DN-0054 and the execution plan.
-It reconciles informative DN-0055 and the trajectory with that scope. No region
-implementation, proof theorem or accepted semantic proposal is claimed.
+It reconciled informative DN-0055 and the trajectory with that scope; that
+planning checkpoint claimed no implementation or preservation result.
 
-The current Main one-shot registry has 763 modules; the existing frozen
-1,035-module integration parent does not match it. R1 therefore starts a small
+At R1 preparation, the Main one-shot registry had 763 modules; the existing
+frozen 1,035-module integration parent did not match it. R1 therefore used a small
 standalone proof root with the same pinned Lean toolchain and an explicitly
 empty registration seed. A narrow existing-runner directory option preserves
 its checks rather than rebuilding or changing unrelated proofs. This is gate
@@ -64,16 +64,42 @@ The [proof guide](../design/lexical-regions/README.md),
 [gate/transfer record](../design/lexical-regions/evidence.md) delimit that result.
 Exact source/registration transfer has passed. Independent actual-gate audit
 cleared the bounded evidence; root accepted CP-0025's matched semantic content.
-Current-head review, milestone retention, retained verification and R1/R2 issue
-acceptance remain pending. This delivers no product implementation.
+Exact-head review, GitHub milestone retention and retained verification completed
+through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`; R1 #65 and R2 #66 are closed after independent acceptance readback.
 
-R1/R2 closure and all R3–R5 acceptance remain pending. Existing issues
+The active [R3 draft PR #147](https://github.com/dikini/ash-lang/pull/147)
+connects source tuple construction to explicit context/operand bindings, a typed
+request, owner-targeted allocation and initialization into the same supplied host
+array. Ordinary owner close retires those arrays; outer selection survives an
+inner close. Whole-record residency is separate from projectable field facts.
+The private binding facade and pending adapter preserve owner/invocation/layout
+and replay guards. This is a partial host tuple result, not R3 acceptance.
+
+The custom tuple path uses one host-level adapter at the existing generated
+native boundary. It initializes and reads the supplied address, releases the
+Rust-owned fields in the current `Value` representation before calling the
+paired provider release, then retires logical records. The provider retains
+responsibility for freeing backing. This adds no Ash finalizer or object graph
+walk. These Rust representation details do not define Ash memory management or
+exempt buffers and captures from region-backed construction.
+
+Nominal records, owned buffers, closure capture storage and recursive slots
+remain pending. The host root retains its
+backing through the existing observed heap, but observation-before-root-release
+ordering remains pending. Target-specific discharge, full close/composition,
+connected R-core and all R3–R5 acceptance remain pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
 [#66](https://github.com/dikini/ash-lang/issues/66),
 [#67](https://github.com/dikini/ash-lang/issues/67),
 [#68](https://github.com/dikini/ash-lang/issues/68) and
 [#70](https://github.com/dikini/ash-lang/issues/70) retain their review,
 verification, integration and author-acceptance obligations.
+
+Keep implementation tight: reuse existing Ash mechanisms and libraries, prefer
+removing duplicate machinery, and seek constructive planner/reviewer scrutiny
+before adding a material mechanism. The tuple initializer now retains original
+field values in its existing frame before requesting storage; one saved-context
+binding replaces the field/storage binding scaffold. Full M2 scope remains required.
 
 ## Verification
 

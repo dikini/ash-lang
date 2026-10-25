@@ -531,6 +531,8 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "with" => Some(TokenKind::With),
         "resume" => Some(TokenKind::Resume),
         "resource" => Some(TokenKind::Resource),
+        "region" => Some(TokenKind::Region),
+        "using" => Some(TokenKind::Using),
         "hook" => Some(TokenKind::Hook),
         "register" => Some(TokenKind::Register),
         "cleanup" => Some(TokenKind::Cleanup),

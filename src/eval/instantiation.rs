@@ -144,6 +144,22 @@ impl Instantiation {
         )
     }
 
+    pub(super) fn owner(
+        &self,
+        identity: TypeVariableId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ActivationKey, RuntimeFailure> {
+        super::charge_effect_work(work, 1, RuntimePhase::Acquisition)?;
+        match self
+            .0
+            .as_ref()
+            .and_then(|bindings| bindings.types.get(&identity))
+        {
+            Some(Type::Inference(atom)) => Ok(ActivationKey(atom.value())),
+            _ => Err(RuntimeFailure::InvalidControlState),
+        }
+    }
+
     pub(super) fn activation(effect: &EffectInstance) -> Option<ActivationKey> {
         match effect.arguments() {
             [crate::types::KindedArgument::TypeArg(Type::Inference(identity))] => {

@@ -58,7 +58,7 @@ restores the clause context. Required completion precedes permitted bulk release
 Native backing remains an ordinary module contract assumption, not compiler
 quarantine, a native-correctness theorem or a new security protocol.
 
-## R1/R2 candidate checkpoint
+## Retained R1/R2 and active R3 checkpoint
 
 The [finite model guide](../../design/lexical-regions/README.md),
 [correspondence report](../../design/lexical-regions/correspondence.md) and
@@ -67,10 +67,18 @@ eight-module candidate. The frozen gate passed all 195 reports through eight
 independently validated cache reuses, with zero fresh module compilations;
 exact source/registration transfer passed. Independent actual-gate audit has
 cleared this bounded result and root accepted CP-0025's matched semantic content.
-Current-head review, milestone retention and author acceptance remain pending.
-Product R3 remains held until the accepted contract and matched proof are
-retained and verified. This checkpoint changes no
-original acceptance criterion or required product evidence.
+Exact-head review and retained verification completed through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`.
+R1 #65 and R2 #66 are closed after author/PM acceptance and independent readback.
+R3 is active in [draft PR #147](https://github.com/dikini/ash-lang/pull/147);
+no product criterion is complete. Its source tuple path now requests and
+initializes actual supplied host arrays and retires them on ordinary owner
+close. Outer-selected tuples survive an inner close. This extends the explicit
+owner/handler and default-entry control checkpoint. Custom tuples now use the
+supplied native address through one generated host adapter; Rust-owned fields
+in the current representation are released before the paired provider frees
+backing. Other required representations, target-specific discharge,
+observation-before-root-release ordering and full completion remain pending, followed by the connected R-core
+gate. This changes no original criterion or required product evidence.
 
 ## Ordered deliveries
 
@@ -177,7 +185,7 @@ d568a19d6836dfaa54e5c2e605b2b9b68da92d03a6f3e49b3019306a002ac299
 
 These identify planning inputs, not executable receipts or proof coverage.
 DN-0054 and this owned plan consolidate their decisions without retaining four
-duplicate design documents. Exact R2 source/Core semantics remain a proposal.
+duplicate design documents. CP-0025 supplies the accepted R2 transition semantics, distinct from current Ash.
 Only usage/lifetime-based automatic placement inference is deferred as an
 optimization of placement. Region collection/RC, moving objects, ownership
 transport, concurrency, a custom backend matrix, broader row inference and new

@@ -13,7 +13,7 @@
   [R4 #68](https://github.com/dikini/ash-lang/issues/68),
   [R5 #70](https://github.com/dikini/ash-lang/issues/70)
 
-> This accepted transition is not current Ash. The matched finite model and frozen proof gate have passed independent review. Product R3 remains held until this accepted contract and matching proof delivery are retained on the milestone and verified.
+> This accepted transition is not current Ash. The matched finite model, frozen gate and delivery passed independent review. [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924` retains the contract and proof; retained verification and R1/R2 acceptance are complete. R3 implementation is active and partial.
 
 ## Current behavior
 
@@ -259,7 +259,10 @@ lexical handler compatibility and physical provider validity/isolation are not
 proved by finite preservation. Acceptance does not claim a native allocator
 or compiler-correctness theorem.
 
-Exact proof-source/registration transfer is verified. Current-head delivery
-review, GitHub milestone retention, retained verification and R1/R2 issue
-acceptance remain pending. Product implementation and normative specification
-changes have not begun; R3 remains held until those retention obligations close.
+Exact proof-source/registration transfer and exact-head delivery review passed.
+[PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924` retains the reviewed tree; independent retained verification and
+author/PM readback completed R1/R2 acceptance. R3 implementation has begun with
+source/Core/runtime control plumbing and actual supplied host tuple backing.
+Native/custom backing, other required representations, root observation-before-release
+ordering and full construction/completion acceptance remain pending; normative specification
+changes have not begun.
