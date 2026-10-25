@@ -300,10 +300,10 @@ const INVALID_CASES: &[InvalidCase] = &[
     InvalidCase {
         id: "excluded-negative-literal",
         path: "tests/fixtures/first-stratum/parse/excluded-negative-literal.ash",
-        stage: Stage::Parser,
-        reason: ExpectedReason::Parser {
+        stage: Stage::Lexical,
+        reason: ExpectedReason::Lexical {
+            lexical: &[LexReason::UnknownCharacter],
             parser: &[ParseReason::UnexpectedToken],
-            lexical: &[],
         },
     },
     InvalidCase {
@@ -994,16 +994,13 @@ fn a_lexically_rejected_definition_tail_does_not_create_a_parser_diagnostic() {
 }
 
 #[test]
-fn ordinary_negative_literal_signs_fail_at_the_parser_boundary() {
-    for (text, expected) in [
+fn ordinary_negative_literal_signs_keep_exact_lexical_and_parser_diagnostics() {
+    for (text, expected_parser) in [
         (
             "identity : Int -> Int\nidentity value = value\n\n-1\n",
-            ParseReason::UnexpectedToken,
+            Some(ParseReason::UnexpectedToken),
         ),
-        (
-            "identity : Int -> Int\nidentity value = value -1\n",
-            ParseReason::ExpectedForm,
-        ),
+        ("identity : Int -> Int\nidentity value = value -1\n", None),
     ] {
         let source = TempSource::write(text);
         let failure =
@@ -1011,14 +1008,22 @@ fn ordinary_negative_literal_signs_fail_at_the_parser_boundary() {
         let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
             panic!("the negative literal should fail in the syntax pipeline");
         };
-        assert!(actual.lexical.is_empty());
-        assert_eq!(
-            actual
-                .parser
-                .iter()
-                .map(|item| item.reason)
-                .collect::<Vec<_>>(),
-            vec![expected]
-        );
+        assert_eq!(actual.lexical.len(), 1);
+        let diagnostic = &actual.lexical[0];
+        assert_eq!(diagnostic.reason, LexReason::UnknownCharacter);
+        assert_eq!(diagnostic.found.as_deref(), Some("-"));
+        let minus = u32::try_from(text.rfind('-').unwrap()).unwrap();
+        assert_eq!(diagnostic.primary.span().range().start(), minus);
+        assert_eq!(diagnostic.primary.span().range().end(), minus + 1);
+        match expected_parser {
+            Some(reason) => {
+                assert_eq!(actual.parser.len(), 1);
+                let diagnostic = &actual.parser[0];
+                assert_eq!(diagnostic.reason, reason);
+                assert_eq!(diagnostic.primary.span().range().start(), minus + 1);
+                assert_eq!(diagnostic.primary.span().range().end(), minus + 2);
+            }
+            None => assert!(actual.parser.is_empty()),
+        }
     }
 }
