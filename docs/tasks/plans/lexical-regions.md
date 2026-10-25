@@ -82,16 +82,31 @@ reviewed tree and 111 distinct focused cases. It uses the same slots/adapter for
 a private discriminant and payload, explicit caller-selected constructor
 functions and existing guarded recursive aliases.
 
-The current byte candidate reuses the owner service, records and retirement for
+[PR #149](https://github.com/dikini/ash-lang/pull/149), retained at
+`a02ae1bb4fa5e27d0bbd95da26eff6997af3348e`, reuses the owner service, records and retirement for
 actual Bytes/String backing. One closed Core operation retains explicit context,
 original operands and local prepare/request/init progress. The same native
 adapter adds byte copy/borrow; successful append/decode initializes payload before
 its nominal envelope, while invalid alternatives initialize only the envelope.
 This also covers the intrinsic replies from `BytesAt`, `StringFromUtf8` and
-`BytesAppendByte`. Independent review and retention are pending. Large-Int digits,
+`BytesAppendByte`. Independent review and retained verification cover 125 distinct
+focused cases by exact tree equality; no new build or full gate is claimed. Large-Int digits,
 closure storage, remaining recursive initialization/abandonment evidence,
 target-specific discharge, observation-before-root-release ordering and full
 completion remain required, followed by the connected R-core gate. This changes no original criterion or required product evidence.
+
+### Next: integer residency clarification, then digit storage
+
+First independently review [CP-0025 integer admission](../../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission):
+known immediate literals/bounded leaves remain independent, potentially large
+Add/Multiply retain selected-region residency, and unknown Int has no scalar
+exemption. This admits literal `42` across a region boundary but conservatively
+rejects local `20 + 22` escaping it. No range analysis or relocation is implied.
+Then implement actual digit bytes on the retained byte seam, preserving actual
+alias/projection/call/request summaries and replacing legacy Cell host-Integer
+clones. Required checks distinguish mathematical equality from lifetime
+admission, including explicit arithmetic escape changes. Review this contract
+checkpoint before product changes; no Rust/test/proof build belongs to it.
 
 ## Ordered deliveries
 

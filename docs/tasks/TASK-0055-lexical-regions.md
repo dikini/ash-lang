@@ -92,7 +92,8 @@ caller allocation effects, including aliases and higher-order calls. Existing
 guarded recursive slots and aliases remain; independent validation rejects
 unfinished payload transport and private runtime constructor forgery.
 
-The current byte-storage candidate adds actual supplied Bytes/String payloads,
+[PR #149](https://github.com/dikini/ash-lang/pull/149), retained at
+`a02ae1bb4fa5e27d0bbd95da26eff6997af3348e`, adds actual supplied Bytes/String payloads,
 with one borrowed reader and byte-copy/borrow leaves on the same host adapter.
 A closed Core operation carries explicit context and original operands; its
 existing evaluator control retains preparation, dynamic request and initialization
@@ -103,7 +104,18 @@ initializer. Constructive builtin wrappers expose DefaultAlloc; read-only host
 leaves keep their actual pure rows. Region-enabled EffectCore rejects raw
 constructive intrinsic and literal bypasses; pure/no-region Core remains supported.
 Source/native, allocation suspension/discard, independent Core and image checks
-are delivery evidence; independent review and retention remain pending.
+passed independent exact-head review and retained verification: 125 distinct
+focused cases transfer by exact tree equality. No new build or full gate is claimed.
+
+Next is the [CP-0025 integer admission clarification](../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission),
+reviewed before Int product changes. Known immediate literals/bounded leaves are
+independent; potentially large arithmetic retains selected-region residency;
+unknown Int is not scalar by type. The product slice must replace primitive
+Scalar/Free shortcuts and Int erasure in call/request summaries, preserve aliases
+and projections, and remove legacy Cell host-Integer cloning. Use supplied digit
+bytes and existing temporary arithmetic, without value/range analysis. Preserve
+arithmetic escape fixtures as explicit expected admission changes, not silent
+fixture adaptations. This clarification changes no code, tests or proof modules.
 
 Persistent large-Int digits, closure capture storage and remaining recursive
 initialization/capture/abandonment evidence are still required. No executable
@@ -113,7 +125,7 @@ reader. The native checks distinguish custom supplied-byte construction/read,
 a root-host Bytes argument kept live through a native call, and exact rejection
 of an explicit-region payload sent through an unprotected outward request. The
 last case preserves the existing lexical payload rule; this delivery adds no
-source native-interpretation syntax. This partial candidate does not complete
+source native-interpretation syntax. This retained partial delivery does not complete
 ordinary-construction acceptance.
 The host root retains backing through the existing observed heap, but
 observation-before-root-release ordering remains pending. Target-specific discharge, full close/composition,
