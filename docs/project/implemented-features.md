@@ -5,10 +5,9 @@ checkpoint. The [specification](../../spec/README.md) governs language semantics
 accepted [decisions](../decisions/README.md) govern non-language architecture.
 Test links identify regression obligations, not a new execution receipt.
 
-The [active transition](../tasks/TASK-0050-checked-ffi-regions-control-program.md)
-still owns implementation, final review, normal verification and Main integration.
-This inventory does not mark those gates complete. Historical experiments and
-receipts retain only their original input, scope and checkpoint claims.
+Main integration and final human acceptance remain separate gates; this inventory
+does not mark them complete. Historical experiments and receipts retain only
+their original input, scope and checkpoint claims.
 
 ## Specified language features
 

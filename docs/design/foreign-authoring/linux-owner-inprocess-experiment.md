@@ -12,7 +12,7 @@ architecture acceptance. The lead must separately assign each gate below.
 This is the owner/resource comparison under the existing
 [Linux experiment](linux-profile-experiment.md), governed by
 [DN-0057](../DN-0057-checked-ffi-module-boundaries.md),
-[TASK-0050](../../tasks/TASK-0050-checked-ffi-regions-control-program.md) and its
+[TASK-0050](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/TASK-0050-checked-ffi-regions-control-program.md) and its
 [F2 plan](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/plans/checked-ffi-regions-control.md#f2-validate-the-linux-execution-profile).
 The historically accepted
 [CP-0024](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md)

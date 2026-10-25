@@ -5,7 +5,7 @@
 > preparation, build, probe, installation or execution under the revised plan.
 
 This bounded experiment belongs to [DN-0057](../DN-0057-checked-ffi-module-boundaries.md)
-and [TASK-0050](../../tasks/TASK-0050-checked-ffi-regions-control-program.md),
+and [TASK-0050](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/TASK-0050-checked-ffi-regions-control-program.md),
 F2 in its [plan](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/plans/checked-ffi-regions-control.md#f2-validate-the-linux-execution-profile).
 The historical 2026-10-21 launch authorized local preparation and nonprivileged probes.
 It accepts no architecture or semantics and permits no product implementation.

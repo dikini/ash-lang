@@ -2,8 +2,8 @@
 
 This directory currently ships no source binding modules. The former Arena,
 native-buffer and SQLite libraries depended on the retired foreign policy API
-and have been removed during the accepted
-[slim FFI transition](../docs/proposals/CP-0024-checked-foreign-host-profile.md).
+and have been removed for the implemented
+[foreign-call boundary](../spec/static-semantics.md#source-foreign-declarations).
 
 The current [native declarations](../tests/fixtures/source-native/native.ash),
 [C fixture](../tests/fixtures/source-native/native_counter.c) and

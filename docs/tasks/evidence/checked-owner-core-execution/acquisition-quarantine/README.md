@@ -2,7 +2,7 @@
 
 This is the focused evidence for the common prerequisite in
 [TASK0054](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0054-checked-sqlite-source-policy.md), implementing the
-accepted [CP24](../../../../proposals/CP-0024-checked-foreign-host-profile.md)
+accepted [CP24](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md)
 violation boundary. It does not establish complete SQLite/arena policy, native
 execution, protected startup or whole-issue acceptance.
 

@@ -12,7 +12,7 @@ change during this evidence/prose assembly.
 
 This is the bounded [TASK0054](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0054-checked-sqlite-source-policy.md)
 source/static slice under accepted
-[CP0024](../../../proposals/CP-0024-checked-foreign-host-profile.md),
+[CP0024](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md),
 [AD0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md) and
 [AD0016](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md). It
 records implemented evidence, not additional language semantics or acceptance.

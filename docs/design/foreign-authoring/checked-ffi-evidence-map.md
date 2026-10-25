@@ -1,7 +1,7 @@
 # Checked FFI required evidence map
 
-This map belongs to [CP-0024](../../proposals/CP-0024-checked-foreign-host-profile.md)
-and [TASK-0050](../../tasks/TASK-0050-checked-ffi-regions-control-program.md).
+This map belongs to [CP-0024](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md)
+and [TASK-0050](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/TASK-0050-checked-ffi-regions-control-program.md).
 It translates every [canonical transition](minimal-ffi-transitions.md) into required
 future evidence. All rows are **pending**. No entry is an executed product result.
 
@@ -19,7 +19,7 @@ F3 owns summary/link/Core rejection and transformed-contract tests; F4 owns comm
 runtime/ownership/completion; F5 owns ordinary source-library realization; F6 owns
 build/image/receipt admission; F7 owns isolated transport/executor realization.
 F8 audits the complete map and F-core/F-final gates. These issue keys refer to the
-[task plan](../../tasks/plans/checked-ffi-regions-control.md), not launched product tasks.
+[task plan](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/plans/checked-ffi-regions-control.md), not launched product tasks.
 
 | Row | Required observation | Primary delivery |
 | --- | --- | --- |

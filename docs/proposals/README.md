@@ -19,15 +19,11 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-The revised work uses [S1 #131](https://github.com/dikini/ash-lang/issues/131), [S2 #132](https://github.com/dikini/ash-lang/issues/132),
-[S3 #133](https://github.com/dikini/ash-lang/issues/133) and [S4 #134](https://github.com/dikini/ash-lang/issues/134).
-
-- [CP-0024: Smaller foreign-library boundary](CP-0024-checked-foreign-host-profile.md)
-  records the agreed responsibilities; interface and memory mapping remain proposed.
+No proposed change is listed.
 
 ## Accepted changes
 
-No accepted technical transition currently authorizes new FFI implementation.
+No accepted proposal is listed.
 The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
 retains the completed transition, verified local Main integration and
 historical retrieval commands.

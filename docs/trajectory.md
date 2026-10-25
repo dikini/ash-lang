@@ -20,20 +20,19 @@ TASK-0041 for coordination; the [exact task history](https://github.com/dikini/a
 preserves its work and findings. Supersession does not satisfy the separate Main
 gate or the remaining original acceptance clauses.
 
-The current local Main pin `7949b6d9136b0152ee9104e67bd0451cb9db4727` contains
-bounded FFI and generic-cell foundations. The user's 2026-10-24 correction narrows the M1 FFI delivery in
-[TASK-0050](tasks/TASK-0050-checked-ffi-regions-control-program.md) to bytes and
-opaque raw C addresses, ordinary Ash binding checks/conversions, and existing
-abstract resource behavior. The [S1-S4 plan](tasks/plans/checked-ffi-regions-control.md)
-uses [S1 #131](https://github.com/dikini/ash-lang/issues/131), [S2 #132](https://github.com/dikini/ash-lang/issues/132),
-[S3 #133](https://github.com/dikini/ash-lang/issues/133) and [S4 #134](https://github.com/dikini/ash-lang/issues/134).
-The independently reviewed interface and memory mapping in
-[CP-0024](proposals/CP-0024-checked-foreign-host-profile.md) is accepted.
-Implementation and product cleanup are active under TASK-0050; final review,
-the normal workspace gate and Main integration remain pending. The previous F1-F8, checked-host,
-protected-launch, isolation and full SQLite assignments are superseded or
-deferred, not completed. This documentation revision changes no normative Main
-semantics or product source.
+The earlier local Main pin `7949b6d9136b0152ee9104e67bd0451cb9db4727` supplied
+bounded FFI and generic-cell foundations. The retained smaller M1 FFI checkpoint
+implements [passive pointer/void foreign calls](../spec/static-semantics.md#source-foreign-declarations),
+opaque raw Address values and readonly synchronous Bytes arguments, with ordinary
+Ash handlers and cleanup. [Native behavior and binding examples](../libraries/README.md)
+record the supported path and concrete gaps. The
+[accepted transition](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/proposals/CP-0024-checked-foreign-host-profile.md)
+and its [S1-S4 plan](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/tasks/plans/checked-ffi-regions-control.md)
+remain historical delivery records; the specification now describes this branch's
+implemented boundary. This product checkpoint does not complete the separate
+human Main integration and acceptance gate. The previous F1-F8, checked-host,
+protected-launch, isolation and full SQLite assignments remain superseded or
+deferred, not completed.
 
 Overall [program #51](https://github.com/dikini/ash-lang/issues/51) still tracks
 later [M2 #53](https://github.com/dikini/ash-lang/issues/53),

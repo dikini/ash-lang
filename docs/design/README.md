@@ -10,8 +10,8 @@ The checked FFI, region and local-control exploration is retained in
 [DN-0057](DN-0057-checked-ffi-module-boundaries.md),
 [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md) and
 [DN-0056](DN-0056-scoped-continuation-retention-and-library-scheduling.md).
-[TASK-0050](../tasks/TASK-0050-checked-ffi-regions-control-program.md) owns delivery
-coordination; these notes remain informative.
+The implemented [foreign-call boundary](../../spec/static-semantics.md#source-foreign-declarations)
+does not accept the wider region and control designs; these notes remain informative.
 
 ## Implementation and evidence boundaries
 
@@ -52,7 +52,7 @@ and exclusions remain at their linked owners.
 | DN-0033–0034: direct effects and verification | The [one-shot formalization](direct-effects/one-shot/README.md#current-proof-status) establishes stated annotated-model admission, preservation, progress, and bounded execution results. | It is not a complete Ash compiler-correctness proof. Core alignment evidence remains branch-local and incomplete. |
 | DN-0035: regions and verified providers | Current resource dependency rules and historical scalar Arena experiments supply distinct evidence. | Arena experiments establish no current storage API. General region interfaces, borrowing, ordinary storage policy, and provider verification remain open. |
 | DN-0036: foreign/provider experiments | The [earlier delivery record](provider-experiments/main-delivery-2026-10-08/README.md) preserves its pinned SQLite/scalar Arena observations. The experimental provider/owner execution routes are retired from the smaller foreign boundary. | Retention was not product adoption. Historical results supply no current lifecycle/storage API or wider borrowing/graph support. |
-| DN-0037: Ash-authored foreign interfaces | The smaller [foreign boundary](../../spec/static-semantics.md#source-foreign-declarations) uses passive symbols, opaque Address, readonly synchronous Bytes pointers and generated typed pointer/void bridges. [Binding examples](../../libraries/README.md) reuse ordinary handlers and cleanup. | The [active task](../tasks/TASK-0050-checked-ffi-regions-control-program.md) owns final delivery gates. Numeric/out-pointer slots, foreign text/memory interpretation and full SQLite remain gaps; no native lifecycle or compiler policy is inferred from this note. |
+| DN-0037: Ash-authored foreign interfaces | The smaller [foreign boundary](../../spec/static-semantics.md#source-foreign-declarations) uses passive symbols, opaque Address, readonly synchronous Bytes pointers and generated typed pointer/void bridges. [Binding examples](../../libraries/README.md) reuse ordinary handlers and cleanup. | Numeric/out-pointer slots, foreign text/memory interpretation and full SQLite remain gaps; no native lifecycle or compiler policy is inferred from this note. |
 | DN-0038: resource properties and mutation | Scoped cells already distinguish reusable access from scope-owned release. | General linear/unique usage, borrowing, disposal permissions, and mutable syntax remain candidates. |
 | DN-0039–0041: files, Float, serialization | Existing effects/interfaces and retained native experiments provide foundations and comparison cases. | Filesystem contracts, Float semantics, and serialization APIs are delivery sketches, not implemented capabilities. |
 | DN-0042–0043: native/data direction and shorter syntax | Synthesis and syntax comparisons reuse existing checked forms. | The summaries add no implementation; shorter forms need parsing, elaboration, and equivalence evidence. |

@@ -1,6 +1,6 @@
 # S2 ordinary row-work correction
 
-Working evidence for [TASK-0050](../TASK-0050-checked-ffi-regions-control-program.md); this is not language authority or final acceptance. Baseline is `2766e8260e2590d9ebdca7abd699115b3cd02a8a`.
+Working evidence for [TASK-0050](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/tasks/TASK-0050-checked-ffi-regions-control-program.md); this is not language authority or final acceptance. Baseline is `2766e8260e2590d9ebdca7abd699115b3cd02a8a`.
 
 The baseline `canonical_instances_with_budget` already returns an append-only input allocation before the canonical insertion reserve and its per-member charge. Its current body is unchanged. Sorted fixtures therefore bypass `CanonicalMembers`; the old fault test expected a reservation it never reached. The corrected fixture places the replacement before the source member in canonical order, retaining all six fault-site checks, exact hit counts (including the third canonical reservation), and storage-failure classification. No production row charge or reservation was added.
 
