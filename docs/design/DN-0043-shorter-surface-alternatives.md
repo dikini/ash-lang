@@ -37,7 +37,7 @@ Current authority remains the specification:
 - [Resource typing](../../spec/static-semantics.md#scoped-cells-and-resource-dependencies)
   separates scope-owned release from reusable non-owning access. Acquisition
   introduces a rigid identity, a handle, sealed evidence and an interpreter.
-- [Native-buffer acquisition](../../spec/static-semantics.md#scoped-native-buffers)
+- [Native-buffer acquisition](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/spec/static-semantics.md#scoped-native-buffers)
   returns `Outcome<body_result>`. Failure creates no body scope; nested outcomes
   remain nested.
 - [Surface syntax](../../spec/syntax.md#grammar) currently requires `perform`,

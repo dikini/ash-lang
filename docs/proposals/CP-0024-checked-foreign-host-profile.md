@@ -133,8 +133,8 @@ artifacts originating in FFI; origin adds no admission or validation protocol.
 ## Affected specification areas
 
 S2 updates [foreign declarations](../../spec/static-semantics.md#source-foreign-declarations),
-[source resources](../../spec/static-semantics.md#source-resource-declarations)
-and [native-owner execution](../../spec/dynamic-semantics.md#source-resource-execution-with-native-owners)
+[source resources](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/spec/static-semantics.md#source-resource-declarations)
+and [native-owner execution](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/spec/dynamic-semantics.md#source-resource-execution-with-native-owners)
 where obsolete policy is removed, plus Address value/effect rules. Preserve the
 ordinary language rules; no general resource-State extension is required.
 AD-0013's generated bridge/build decision remains; its foreign guard/contract

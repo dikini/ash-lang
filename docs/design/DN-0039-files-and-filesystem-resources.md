@@ -37,7 +37,7 @@ completion. Dependency checking prevents access escaping through values,
 closures and requests. Capture/resume moves owned control, and checked discard
 closes abandoned obligations in structural order.
 
-The [native-buffer contract](../../spec/dynamic-semantics.md#scoped-native-buffer-execution)
+The [native-buffer contract](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/spec/dynamic-semantics.md#scoped-native-buffer-execution)
 does not define filesystem policy or fallible file close. Current lexical
 lifetime checking does not establish foreign layout, pointer stability,
 exclusive mutation, or the validity of a view after its backing storage changes.

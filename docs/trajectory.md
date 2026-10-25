@@ -5,13 +5,13 @@ uses: `idea → speculative → outlined → designed → specified →
 implementation`. A completed row records `complete / implementation` to
 distinguish its result from its maturity.
 
-The bounded
+The earlier bounded
 [`ffi-ash`](design/DN-0037-ash-authored-foreign-library-interfaces.md#agreed-ffi-ash-milestone)
 delivery contains Ash-authored foreign contracts and library policy, generated
-Rust native-call bridges and runnable evaluator hosts. Its durable scope and sequence live in
+Rust native-call bridges and runnable evaluator hosts. Its earlier scope and sequence live in
 DN-0037; [DN-0042](design/DN-0042-native-interaction-and-efficient-data.md) supplies
 the broader context. [GitHub](https://github.com/dikini/ash-lang/milestone/1)
-owns live progress and PR status. The bounded transition's implementation,
+owns live progress and PR status. That earlier transition's implementation,
 specification, tests, reviews and verification are retained on
 `integration/ffi-ash`. [AD-0013](decisions/AD-0013-generated-native-bridges-and-program-builds.md)
 records the build boundary. The existing [closure handoff](https://github.com/dikini/ash-lang/issues/7#issuecomment-6234064548)
@@ -27,9 +27,10 @@ opaque raw C addresses, ordinary Ash binding checks/conversions, and existing
 abstract resource behavior. The [S1-S4 plan](tasks/plans/checked-ffi-regions-control.md)
 uses [S1 #131](https://github.com/dikini/ash-lang/issues/131), [S2 #132](https://github.com/dikini/ash-lang/issues/132),
 [S3 #133](https://github.com/dikini/ash-lang/issues/133) and [S4 #134](https://github.com/dikini/ash-lang/issues/134).
-Detailed interface and memory mapping in
-[CP-0024](proposals/CP-0024-checked-foreign-host-profile.md) remain proposed.
-Implementation and product cleanup are held. The previous F1-F8, checked-host,
+The independently reviewed interface and memory mapping in
+[CP-0024](proposals/CP-0024-checked-foreign-host-profile.md) is accepted.
+Implementation and product cleanup are active under TASK-0050; final review,
+the normal workspace gate and Main integration remain pending. The previous F1-F8, checked-host,
 protected-launch, isolation and full SQLite assignments are superseded or
 deferred, not completed. This documentation revision changes no normative Main
 semantics or product source.
@@ -126,8 +127,10 @@ Capture and checked discard are complete in the retained checkpoint; its
 [evidence](design/effect-ash/capture-discard-evidence.md) records the reviewed
 inference and runtime boundary, full verification and transition cleanup.
 Safe resource scope and synchronous hooks now have complete product checkpoints.
-Reliable cleanup and one narrow native-buffer provider are also implemented.
-General foreign acquisition and suspension remain future work.
+Reliable cleanup remains implemented. The earlier narrow native-buffer provider
+checkpoint is historical; its foreign policy execution route is retired by the
+smaller-boundary transition. General foreign acquisition and suspension remain
+future work.
 `effect-ash` has no total ordering with `proof-ash` or `pack-ash`;
 work may interleave only through
 explicitly named synchronization checkpoints.
@@ -183,8 +186,9 @@ module and local `newtype`, scoped exact evidence, and the implemented
 resume-required kernel.
 The completed capture/discard checkpoint extends that kernel. Safe resource
 scope and its fixed provider are verified and locally integrated; synchronous
-hooks, reliable cleanup and the narrow native-buffer provider are also verified
-and locally integrated. General foreign acquisition, files and suspension
+hooks and reliable cleanup are also verified and locally integrated. The earlier
+native-buffer provider checkpoint remains historical evidence rather than a
+current foreign lifecycle API. General foreign acquisition, files and suspension
 remain future work toward typed interaction
 with external systems. `effect-ash` remains unordered with respect to
 `pack-ash`, so exploration and later separately authorized increments may

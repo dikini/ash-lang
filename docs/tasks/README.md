@@ -16,8 +16,8 @@ The revised work uses [S1 #131](https://github.com/dikini/ash-lang/issues/131), 
   revises planning and issues. Its [S1-S4 plan](plans/checked-ffi-regions-control.md)
   keeps technical design review before implementation.
 
-[TASK-0053](TASK-0053-checked-owner-core-execution.md) and
-[TASK-0054](TASK-0054-checked-sqlite-source-policy.md) are superseded active
+[TASK-0053](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0053-checked-owner-core-execution.md) and
+[TASK-0054](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0054-checked-sqlite-source-policy.md) are superseded
 assignments, not completed delivery gates. Their history remains in Git.
 
 The generic cell product checkpoint is integrated into local `main`. Its
@@ -28,7 +28,7 @@ remains separate design work.
 
 ## Completed source/static work
 
-[TASK-0051: Checked FFI Contract Carriers](TASK-0051-checked-ffi-contract-carriers.md)
+[TASK-0051: Checked FFI Contract Carriers](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0051-checked-ffi-contract-carriers.md)
 records complete original F3 source/summary/Core/private-image work. The
 [obligation map](evidence/checked-ffi-original-acceptance/README.md) distinguishes
 its evidence from later runtime/native and milestone gates; issue closure follows

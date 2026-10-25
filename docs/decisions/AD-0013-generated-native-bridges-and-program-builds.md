@@ -11,68 +11,51 @@
 ## Decision
 
 Build whole Ash programs as native executables containing compiler-private
-checked-Core construction data/code, the existing evaluator and generated Rust
-bridges for the program's checked foreign declarations. Libraries remain passive
-Ash source dependencies. This records the converged build boundary. The retained
-CP-0022 transition supplied the semantic change; the
-[specification](../../spec/static-semantics.md#source-foreign-declarations) and
-[tool guide](../tools/ash.md) describe the implemented product profile. Main
-adoption remains subject to the separate integration gate.
+checked Core, the existing evaluator and generated typed Rust bridges for passive
+foreign declarations. The [specification](../../spec/static-semantics.md#source-foreign-declarations)
+defines the supported source boundary; the [tool guide](../tools/ash.md) defines
+build inputs and invocation.
 
-The initial target is `x86_64-unknown-linux-gnu`. Link static archives and ordinary
-shared dependencies through the native linker. Generate typed Rust call sites
-for exactly the supported profile. Do not introduce a descriptor-driven ABI call
-engine, native Ash backend, stable Core wire format, separate compiled Ash
-library format or runtime dynamic loader for this milestone.
-
-Ash source supplies signatures, representations, constants, foreign assumptions
-and all library-specific protocol/conversion/lifecycle policy. Generated bridges
-perform common native calls, marshaling and admitted guard/access transitions.
-They contain no dispatch on SQLite, arena or native-buffer names. Replace the
-handwritten manifests/adapters and runtime C shim on the product path as the
-three Ash libraries become sufficient.
+The target is `x86_64-unknown-linux-gnu`. Link static archives and ordinary shared
+dependencies through the native linker. Generate `extern "C"` pointer calls and
+actual void returns from the supported signatures. Do not introduce a generic
+ABI engine, native Ash backend, stable Core wire format, compiled Ash library
+format or runtime library resolver.
 
 ### Compiler, library and program responsibilities
 
-The front end checks a passive source graph and produces independently validated
-typed Core plus immutable canonical foreign contracts. Library exports preserve
-defining identities and body-free checked facts. A library import contributes
-required contracts/symbols without performing native initialization.
+The front end checks a passive source graph and independently validates typed
+Core with immutable defining symbol facts. Imports preserve exact declaration,
+operation and signature identities without performing native initialization.
+Bindings supply profile, signature and native link name. Ordinary Ash functions,
+handlers and cleanup supply protocol, null/length checks and lifetime policy.
+The compiler does not verify native behavior or manage foreign ownership.
 
-Program build takes that checked graph, the selected target and explicit native
-inputs. It resolves the target profile, emits Rust bridges and an evaluator host,
-then compiles/links an executable. The private Core representation follows the
-matching compiler/runtime version. No cross-version compatibility is promised.
-The host independently validates reconstructed Core before execution and checks
-bridge registration against the original contracts before associated acquisition.
+Program build takes the checked graph and explicit native inputs, emits typed
+Rust bridges and an evaluator host, then compiles and links an executable.
+Private images require the matching compiler/runtime version; no cross-version
+compatibility is promised. Startup independently reconstructs and validates Core
+and exact bridge registrations before evaluation. No live pointer is an image
+constant. Ordinary source handlers retain nearest-handler precedence.
 
-Execution runs that admitted program and creates fresh resource activations.
-Prepared declaration/template data can be shared; runtime owners and foreign
-calls cannot. Existing non-foreign `run_path` and `RunConfiguration` users remain
-supported. Add compile/build/execute API phases and an `ash build` tool path;
-define exact arguments and diagnostics with the authorized implementation task.
-Foreign execution requires the generated linked host, not runtime compilation
-hidden inside an ordinary call to `run_path`.
+Bytes exposes one readonly pointer with managed backing retained through the
+synchronous call. Address preserves a data pointer without integer conversion;
+Unit results use actual void. Retention of a Bytes pointer beyond a call requires
+the module to retain the original backing, and managed backing must not be
+mutated or freed. No hidden length, terminator or inferred ownership is supplied.
 
 ### One canonical contract and explicit phases
 
-Use phase-specific Rust types for unchecked declarations, checked foreign
-contracts, target-resolved bridge plans and linked executable bindings. A
-constructor for the next phase consumes or borrows the appropriate completed
-phase. Checked immutable contracts retain original authority; projections for
-module summaries, Core operands and bridges refer to them rather than preparing
-independent descriptions of the same occurrence repeatedly.
+Keep compile, prepare and build phases explicit. Immutable checked symbol facts
+remain shared authority for module summaries, Core operands and generated bridge
+plans. Binding tables authenticate the original symbol allocation and exact
+signature rather than selecting by native link name alone. Independent Core
+validation rejects stale or transformed correspondence.
 
-Cache/reuse keys include exact source/dependency identities, profile, compiler
-version and native build configuration. A changed input invalidates its derived
-plan. Phase branding prevents use of unfinished data; it is not evidence that
-source, Core or an external binary is valid. Independent Core reconstruction
-still checks authority and rejects stale transformed facts.
-
-Native ABI arrays remain Type-only, with an authenticated projection from the
-complete ordered Type/EffectRow source arguments. Bridge tables authenticate
-original library, operation and signature/assumption facts, rather than matching
-native symbol names alone. Required binding/conversion checks precede acquisition.
+Reuse keys include exact source/dependency identities, profile, compiler version
+and native build inputs. Phase completion or cache reuse does not establish
+external binary validity. Ordinary non-native execution remains available;
+foreign execution requires an explicitly generated and linked host.
 
 ### Native preparation and startup gas
 
@@ -201,72 +184,39 @@ meter still pays native-input checks, and all bootstrap, overflow, exhaustion,
 depth and separate phase limits remain unchanged. Normal depth-42/43 preparation
 and native startup verification remain required.
 
-### Optional C/header verification
-
-Provide a separate `ash check-ffi` authoring path which emits/compiles C checks
-against supplied headers for exact symbol types, representation facts and
-constant/sentinel values. Runtime program calls are generated Rust. C checks
-create no source contracts, executable constants or stronger ownership authority.
-No C header parser or C runtime shim is required to build an already authored
-binding. The native Rust toolchain/linker remains required and may use a platform
-linker driver; this does not promise a toolchain independent of all C tooling.
-
-Verification inputs associate exact declaration identities with C type, symbol
-and constant spellings from the supplied headers. The tool checks those mappings
-against the source profile/representation facts before using them in generated
-signature and value checks. These optional mappings carry no executable values
-or ownership authority; changing them cannot change a runtime bridge plan.
-
-The author supplies complete executable facts in Ash. Verification failures
-refer to those declarations and checked facts. A header mismatch, missing native
-symbol, incompatible target or unsupported ABI shape is diagnosed causally.
-Successful linking does not prove that headers match a binary or that the binary
-obeys declared retention, validity and consumption assumptions.
-
 ## Context
 
-DN-0036 established resource/Core/evaluator and native lifecycle evidence, but
-retained library-specific Rust manifests/adapters and a SQLite C sentinel shim.
-Moving manifest text into Ash alone would leave the authoring objective unmet.
-The selected generated-bridge route makes fixed signatures available to Rust
-without introducing another compiler or evaluator.
-
-The user selected Rust bridges, copying first, optional C verification, the
-bounded Linux target, source libraries and a runnable evaluator host. A generic
-ABI engine adds another calling-convention runtime without removing ownership
-or conversion obligations. A native Ash backend and compiled library ecosystem
-would broaden this milestone beyond its authoring objective.
+The earlier foreign experiments established useful bridge and evaluator evidence
+but coupled it to numeric, owner, output, status, window and host policy. The
+smaller boundary retains generated typed calls and existing compiler/evaluator
+machinery while placing binding policy in ordinary Ash. Experimental lifecycle
+or full SQLite results do not enlarge the supported ABI.
 
 ## Consequences
 
-- Adding a supported library changes Ash declarations and native inputs; adding
-  an ABI shape/target changes common compiler/runtime support under its own scope.
-- Binding authors can check headers separately from building clients; builds
-  cannot obtain missing executable facts from verification output.
-- A foreign program requires native host generation and linkage before execution.
-  Ordinary Ash functions continue to run in the existing evaluator.
-- Exact Core/contract identity and matching runtime versions are required; private
-  embedding is not a stable serialized Ash artifact.
-- Minimal arena uses common C allocation/release primitives, rather than requiring
-  a C ABI shim for the experiment's Rust Arena backing. Typed storage is deferred.
-- Native buffer requires explicit source caller migration. Cell stays unchanged.
-- Preparation sharing and phase types address duplicated work without weakening
-  independent validation or caching per-activation ownership.
-- Implementation follows the proposal/task workflow and AD-0011. The milestone
-  uses `integration/ffi-ash`; Main changes only at the final integration gate.
+- Adding a binding within the supported mapping changes Ash declarations and
+  native inputs. A new ABI shape or target requires separately authorized work.
+- Native validity, retention and release remain binding assumptions. Address is
+  neither a resource nor proof of allocation or lifetime.
+- Ordinary resources, cells, cleanup, handlers, work/depth limits and independent
+  source/Core/image validation retain their existing responsibilities.
+- There is no mandatory header-checking tool, FFI-specific artifact protocol,
+  protected approval or security receipt gate.
+- Numeric ABI, out-pointers, callbacks, structs and foreign text/memory
+  interpretation remain unsupported gaps.
 
 ## Verification
 
-Before Main adoption, review the specification's implemented semantic account
-and complete member/access forms against SQLite, native buffer and minimal
-arena. Require a generated executable for each library, static/shared link
-evidence, reproducible commands and actual native ownership/access observations.
-Existing realistic copying and persistence programs are comparison cases.
+Require real pointer/void/Bytes calls, ordinary source-handler overrides, missing
+binding refusal, null/equality, unsupported-signature rejection and ordinary
+cleanup on normal, error and checked-discard paths. Exercise static/shared native
+inputs, repeated source-independent embedded-image startup and malformed
+Core/image/registration rejection without weakening validation.
 
-Inspect generated Rust to establish exact signature/origin mapping and absence
-of library-specific policy or a C runtime shim. Reject malformed contracts, target
-shapes, bridge registrations and reconstructed/transformed Core independently.
-Run optional header verification separately, including a deliberate mismatch.
-Measure preparation reuse and added checking work without altering depth limits.
-Record exact source/configuration pins and run the full integrated gate before
-the final Main PR and milestone closure.
+The direct SQLite version/source-id getter canary is required. Non-null/equality
+observations do not read its text or establish full database coverage. Numeric
+and out-pointer requirements of open/prepare remain gaps. Inspect generated Rust
+for exact typed pointer/void signatures and absence of library-specific policy
+or a runtime C shim. Preserve normal depth-42/43 preparation and startup checks
+under the gas policy above. Final-head independent review and the normal full
+workspace gate remain required before integration and milestone closure.

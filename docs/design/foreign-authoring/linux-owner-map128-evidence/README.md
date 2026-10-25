@@ -5,7 +5,7 @@ Informative F2 evidence for issue #58. The
 is proposed, not a command assignment. It keeps logs/output at 16 MiB, final
 image at 128 MiB and complete-map/native correspondence gates unchanged. No
 monitor, collector, tuple, build, startup or ownerful architecture is activated.
-Accepted [AD-0015](../../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
+Accepted [AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
 stays owner-free; [CP-0024](../../../proposals/CP-0024-checked-foreign-host-profile.md)
 continues to govern checked semantics. Whole F2 remains open.
 

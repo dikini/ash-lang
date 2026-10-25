@@ -7,7 +7,7 @@ ownerful architecture, approve an image or start a native process.
 
 The [owner experiment](../linux-owner-inprocess-experiment.md),
 [successful static packaging](../linux-owner-static-packaging-evidence/README.md)
-and [AD-0015 scalar boundary](../../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
+and [AD-0015 scalar boundary](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
 remain distinct authorities/evidence. AD-0015 excludes native owners. The
 [assessment](assessment.md) identifies which scalar source conditionals transfer
 and which malloc/free, guard, allocator, error/shutdown/loading and host-loss

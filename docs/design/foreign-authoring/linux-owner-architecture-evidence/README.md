@@ -1,6 +1,6 @@
 # Owner in-process mechanism adoption record
 
-[AD-0016](../../../decisions/AD-0016-linux-owner-inprocess-whole-images.md) records
+[AD-0016](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md) records
 root's explicit owner adoption of the independently reviewed owner/resource
 GNU in-process whole-image mechanism. This evidence records that non-language
 choice, not an executable approval, configured store, product activation or

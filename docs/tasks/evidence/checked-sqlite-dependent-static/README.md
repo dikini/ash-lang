@@ -10,11 +10,11 @@ snapshots. Independent actual review is `5cfa056f`; author preservation is
 `3d6118d5`. No later code, library, fixture, manifest or watched build input may
 change during this evidence/prose assembly.
 
-This is the bounded [TASK0054](../../TASK-0054-checked-sqlite-source-policy.md)
+This is the bounded [TASK0054](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0054-checked-sqlite-source-policy.md)
 source/static slice under accepted
 [CP0024](../../../proposals/CP-0024-checked-foreign-host-profile.md),
-[AD0015](../../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md) and
-[AD0016](../../../decisions/AD-0016-linux-owner-inprocess-whole-images.md). It
+[AD0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md) and
+[AD0016](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0016-linux-owner-inprocess-whole-images.md). It
 records implemented evidence, not additional language semantics or acceptance.
 
 ## Current proof boundary

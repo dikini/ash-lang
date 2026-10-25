@@ -1,7 +1,7 @@
 # Checked acquisition rejection and shared-group quarantine
 
 This is the focused evidence for the common prerequisite in
-[TASK0054](../../../TASK-0054-checked-sqlite-source-policy.md), implementing the
+[TASK0054](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0054-checked-sqlite-source-policy.md), implementing the
 accepted [CP24](../../../../proposals/CP-0024-checked-foreign-host-profile.md)
 violation boundary. It does not establish complete SQLite/arena policy, native
 execution, protected startup or whole-issue acceptance.
@@ -45,7 +45,7 @@ These are ordinary Rust controls with private injected observations. They do
 not execute a selected native callback or a generated/protected application.
 The genuine library source-policy checkpoint `119ded00` remains separate and
 untested. L2 unpublished-guard disposal requires
-[TASK0053](../../../TASK-0053-checked-owner-core-execution.md)'s separate runtime
+[TASK0053](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0053-checked-owner-core-execution.md)'s separate runtime
 work; safe retention after Refused is not proof of disposal.
 
 ## Preserved contrary evidence

@@ -1,6 +1,6 @@
 # Capture-only nominal closure
 
-This test-first checkpoint belongs to [TASK-0051](../../TASK-0051-checked-ffi-contract-carriers.md)
+This test-first checkpoint belongs to [TASK-0051](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0051-checked-ffi-contract-carriers.md)
 and [PR #94](https://github.com/dikini/ash-lang/pull/94). It retains the test-first
 red and bounded intermediate attempts from retained
 `036c366834c839e4f0a503cf63e9db46448bb486`, followed by fresh delivery verification.

@@ -11,7 +11,7 @@ The historical 2026-10-21 launch authorized local preparation and nonprivileged 
 It accepts no architecture or semantics and permits no product implementation.
 
 The later independently reviewed scalar architecture choice is
-[AD-0015](../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md), with
+[AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md), with
 [conditional source/provenance evidence](linux-inprocess-probe/scalar-closure/README.md).
 This is partial F2 architecture acceptance only. These experiment records remain
 bounded evidence; strict per-image approval and production enforcement are

@@ -16,7 +16,7 @@ This is the owner/resource comparison under the existing
 [F2 plan](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/tasks/plans/checked-ffi-regions-control.md#f2-validate-the-linux-execution-profile).
 The historically accepted
 [CP-0024](https://github.com/dikini/ash-lang/blob/a54e9215860cd9693d1a2dc9ff79e8f0f4a57e23/docs/proposals/CP-0024-checked-foreign-host-profile.md)
-governed that earlier transition. [AD-0015](../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
+governed that earlier transition. [AD-0015](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/decisions/AD-0015-linux-scalar-inprocess-whole-images.md)
 accepts owner-free scalar images only; its scope and approvals remain unchanged.
 
 ## Question and comparison

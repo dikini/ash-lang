@@ -7,7 +7,7 @@
 
 > This task records the agreed work boundary and delivery plan. It does not
 > define Ash semantics. CP-0024 records the independently reviewed, accepted
-> S1 design. S1 and S2 are retained; S3 binding/canary work is active.
+> S1 design. S1–S3 are retained; S4 specification and checkpoint work is active.
 
 ## Dependencies
 
@@ -61,8 +61,8 @@ C-aligned representation gaps are future work to prioritize as needed.
 
 The obsolete artifact/launch retirement is delivered by PR138. S1 has reviewed
 and accepted the concrete Address/Bytes mapping in CP-0024. S2 implementation is
-retained; S3 binding/canary work is active. See the owned plan for the reuse and
-removal sequence and final verification owner.
+retained, as is S3. S4 specification and checkpoint work is active. See the owned
+plan for the reuse/removal sequence and final verification owner.
 
 ## Progress
 
@@ -106,8 +106,11 @@ build/execution. The coefficient gives about 28% reserve over that observation;
 all other ledgers, depth, overflow and exhaustion rules remain unchanged.
 Normal public depth-42/43 preparation passes separately.
 
-[S3 #133](https://github.com/dikini/ash-lang/issues/133) is active from retained
-S2. The additive fixture demonstrates ordinary null/length checks, cleanup on
+[S3 #133](https://github.com/dikini/ash-lang/issues/133) is retained through
+[PR141](https://github.com/dikini/ash-lang/pull/141), squash
+`859741fc11f417d994f6139748cc8e263176e7cd`, with reviewed tree and sole S2
+parent verified. Independent review and acceptance checked all five criteria.
+The additive fixture demonstrates ordinary null/length checks, cleanup on
 normal completion and Stop/discard, and managed Bytes kept alive across uses.
 The direct SQLite canary uses only libversion/sourceid pointer returns; C numeric
 results, output-pointer storage and foreign text readback remain explicit gaps.
@@ -120,9 +123,16 @@ FFI cases, including ordinary handler override, also pass. The focused receipt
 `a0522c6d0940e9bbd93a2afbe7739e3b5512f6182a489e668ec50590ac33778b`;
 it uses Rust 1.97.1, all features, locked dependencies, a cleared wrapper and
 one job with the existing shared/nested-host caches. Native harness runtime is
-9.37 seconds. S3 independent review and retention remain pending.
-S4 specification/documentation, including operational rules, and the connected
-normal workspace gate remain pending before M1 acceptance or Main integration.
+9.37 seconds.
+
+[S4 #134](https://github.com/dikini/ash-lang/issues/134) is active. The connected
+specification update covers Address null/equality and selected native
+invocation/return with unchanged continuation, synchronous Bytes keepalive,
+ordinary handler/cleanup behavior and explicit external-call assumptions.
+Current implementation inventories/tool contracts replace the retired policy
+promises. The whole AD-0013 gas section remains byte-identical. The fresh normal
+workspace gate, final review and retained-result verification remain pending
+before M1 acceptance. Main integration retains its separate human gate.
 
 ## Verification
 
