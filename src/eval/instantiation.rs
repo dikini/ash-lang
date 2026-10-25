@@ -270,30 +270,6 @@ impl Instantiation {
         Ok(Self(Some(Arc::new(bindings))))
     }
 
-    pub(super) fn argument(
-        &self,
-        argument: &crate::types::KindedArgument,
-        work: &mut TypeWorkBudget,
-    ) -> Result<crate::types::IterativeArgumentOwner, RuntimeFailure> {
-        work.charge(1).map_err(|()| {
-            metadata_failure(
-                Some(RuntimePhase::Access),
-                ResourceFailureCause::WorkBudgetExhausted,
-                Some(1),
-                Some(work.remaining()),
-            )
-        })?;
-        let argument = match argument {
-            crate::types::KindedArgument::TypeArg(ty) => {
-                crate::types::KindedArgument::TypeArg(self.ty(ty, work)?)
-            }
-            crate::types::KindedArgument::RowArg(row) => {
-                crate::types::KindedArgument::RowArg(self.row(row, work)?)
-            }
-        };
-        Ok(crate::types::IterativeArgumentOwner::new(argument))
-    }
-
     pub(super) fn ty(&self, ty: &Type, work: &mut TypeWorkBudget) -> Result<Type, RuntimeFailure> {
         self.ty_in_phase(ty, work, None)
     }
@@ -567,9 +543,11 @@ mod tests {
                 &mut TypeWorkBudget::unbounded(),
             )
             .unwrap();
+        // The replacement sorts before the source member, forcing the real
+        // canonicalization allocation rather than the append-only fast path.
         let source = IterativeTypeOwner::new(Type::function_computation(
             Type::Unit,
-            ComputationType::new(Type::Int, fault_row(parameter, 0)),
+            ComputationType::new(Type::Int, fault_row(parameter, 4)),
         ));
         let mut failures = Vec::new();
         for (site, skip) in [
@@ -588,7 +566,11 @@ mod tests {
             if !is_storage_failure(result) {
                 failures.push((site, skip));
             }
-            assert_eq!(row_reservation_fault::hits(), skip + 1);
+            assert_eq!(
+                row_reservation_fault::hits(),
+                skip + 1,
+                "{site:?} skip={skip}"
+            );
         }
         assert!(
             failures.is_empty(),

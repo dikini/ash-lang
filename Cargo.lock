@@ -6,7 +6,6 @@ version = 4
 name = "ash"
 version = "0.0.0"
 dependencies = [
- "ash-foreign-adapter",
  "fluent-bundle",
  "fluent-syntax",
  "num-bigint",
@@ -15,13 +14,6 @@ dependencies = [
  "sha2",
  "unic-langid",
  "unicode-width",
-]
-
-[[package]]
-name = "ash-foreign-adapter"
-version = "0.0.0"
-dependencies = [
- "ash",
 ]
 
 [[package]]

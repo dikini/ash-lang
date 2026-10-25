@@ -57,12 +57,17 @@ impl<'source> DeclarationCoordinateLoan<'source> {
         source: &SourceFile,
         work: &mut TypeWorkBudget,
     ) -> Result<Arc<DeclarationCoordinates>, ValidationError> {
-        self.get_with_factory(module, source, work, |work| DeclarationCoordinates::from_module_source(module, source, work))
+        self.get_with_factory(module, source, work, |work| {
+            DeclarationCoordinates::from_module_source(module, source, work)
+        })
     }
 
     /// The caller may factor a paid source check; only syntax is retained.
     pub(super) fn get_with_factory(
-        &self, module: ModuleId, source: &SourceFile, work: &mut TypeWorkBudget,
+        &self,
+        module: ModuleId,
+        source: &SourceFile,
+        work: &mut TypeWorkBudget,
         make: impl FnOnce(&mut TypeWorkBudget) -> Result<DeclarationCoordinates, ValidationError>,
     ) -> Result<Arc<DeclarationCoordinates>, ValidationError> {
         // Account for anchor lookup, source identity checks and cache lookup.

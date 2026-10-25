@@ -45,30 +45,27 @@ impl Drop for Fixture {
     }
 }
 
-const CONTRACT: &str = r#"import @builtin.foreign as Foreign
+const CONTRACT: &str = r#"import @builtin.foreign as F
+import @builtin.string as T
 pub foreign library C {
     profile "x86_64-unknown-linux-gnu"
-    repr CInt = signed(32)
-    symbol Abs<Before : EffectRow, T, After : EffectRow> : Int -> Foreign.Call<Int> {
-        name "abs"
-        abi (CInt) -> CInt
-        operand 0 from 0 scalar
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-    symbol Stop : Unit -> Foreign.Call<Unit> {
-        name "stop"
-        abi () -> void
-        outcome otherwise {}
-    }
+    symbol Make : Unit -> F.Address { name "fixture_make" }
+    symbol Echo : F.Address -> F.Address { name "fixture_echo" }
+    symbol Stop : Unit -> Unit { name "fixture_stop" }
+    symbol Release : F.Address -> Unit { name "fixture_release" }
+    symbol EchoBytes : Bytes -> F.Address { name "fixture_echo_bytes" }
+    symbol Pair : (F.Address, Bytes) -> F.Address { name "fixture_pair" }
+    symbol Consume : Bytes -> Unit { name "fixture_consume" }
 }
 "#;
 
 #[test]
-fn scalar_and_void_source_native_programs_compile_but_default_execution_requires_bindings() {
+fn address_and_void_programs_compile_but_default_execution_requires_bindings() {
     for body in [
-        "main : Unit -> Foreign.Call<Int> ! {Abs<{}, Int, {}>}\nmain () = perform Abs<{}, Int, {}>.call 1\n",
-        "main : Unit -> Foreign.Call<Unit> ! {Stop}\nmain () = perform Stop.call ()\n",
+        "main : Unit -> F.Address ! {Make}\nmain () = perform Make.call ()\n",
+        "main : Unit -> F.Address ! {Echo}\nmain () = perform Echo.call (F.null ())\n",
+        "main : Unit -> Unit ! {Stop}\nmain () = perform Stop.call ()\n",
+        "main : Unit -> Unit ! {Release}\nmain () = perform Release.call (F.null ())\n",
     ] {
         let fixture = Fixture::new(&format!("{CONTRACT}{body}"));
         let compiled = compile_path(fixture.configuration())
@@ -98,7 +95,7 @@ fn scalar_and_void_source_native_programs_compile_but_default_execution_requires
 #[test]
 fn native_compilation_discharges_no_ordinary_entry_requirement() {
     let fixture = Fixture::new(&format!(
-        "{CONTRACT}effect Ask {{\n    ask : Unit -> Unit\n}}\nmain : Unit -> Foreign.Call<Int> ! {{Abs<{{}}, Int, {{}}>, Ask}}\nmain () = {{\n    let ignored = perform Ask.ask ()\n    perform Abs<{{}}, Int, {{}}>.call 1\n}}\n"
+        "{CONTRACT}effect Ask {{\n    ask : Unit -> Unit\n}}\nmain : Unit -> F.Address ! {{Make, Ask}}\nmain () = {{\n    let ignored = perform Ask.ask ()\n    perform Make.call ()\n}}\n"
     ));
     for failure in [
         compile_path(fixture.configuration()).unwrap_err(),
@@ -123,17 +120,29 @@ fn passive_native_declarations_keep_default_execution_available() {
 
 #[test]
 fn native_preparation_preserves_core_row_metadata_depth() {
+    // The ordinary handler and its executed request carry the nested row into
+    // typed Core. Foreign symbols themselves have no type or row parameters.
+    let template = include_str!("fixtures/source-native/cases/deep-rows.ash");
+    assert_eq!(template.matches("DEEP_ROW").count(), 2);
     for nesting in [42, 43] {
         let mut row = "{}".to_owned();
         for _ in 0..nesting {
             row = format!("{{Nest<{row}>}}");
         }
-        let fixture = Fixture::new(&format!(
-            "{CONTRACT}effect Nest<Rows : EffectRow> {{\n    tick : Unit -> Unit\n}}\nmain : Unit -> Foreign.Call<Int> ! {{Abs<{row}, Int, {{}}>}}\nmain () = perform Abs<{row}, Int, {{}}>.call 42\n"
-        ));
-        let compiled = compile_path(fixture.configuration()).unwrap();
+        let source = template.replace("DEEP_ROW", &row);
+        let fixture = Fixture::new(&source);
+        fs::write(
+            fixture.0.join("native.ash"),
+            include_str!("fixtures/source-native/native.ash"),
+        )
+        .unwrap();
+        let compiled = compile_path(fixture.configuration()).unwrap_or_else(|failure| {
+            panic!("{nesting} ordinary nested rows must compile: {failure}")
+        });
         let compilation_work = *compiled.compilation_work();
         fs::remove_file(fixture.0.join("entry.ash")).unwrap();
+        fs::remove_file(fixture.0.join("native.ash")).unwrap();
+        // Both admitted depths remain positive normal-preparation regressions.
         let prepared = prepare_program(
             &compiled,
             BuildConfiguration::new(fixture.0.join("program")),
@@ -145,50 +154,22 @@ fn native_preparation_preserves_core_row_metadata_depth() {
 }
 
 #[test]
-fn full_unsigned_foreign_literal_has_a_matching_compiler_image() {
-    let fixture = Fixture::new(
-        r#"pub foreign library Limits {
-    profile "x86_64-unknown-linux-gnu"
-    repr U64 = unsigned(64)
-    const Maximum : U64 = 18446744073709551615
-}
-main : Unit -> Int
-main () = Maximum
-"#,
-    );
-    let compiled = compile_path(fixture.configuration()).unwrap();
-    prepare_program(
-        &compiled,
-        BuildConfiguration::new(fixture.0.join("program")),
-    )
-    .unwrap();
-}
-
-#[test]
-fn declared_noncallable_sentinel_operand_reaches_native_program_preparation() {
-    let fixture = Fixture::new(
-        r#"import @builtin.foreign as Foreign
-pub foreign library Sentinels {
-    profile "x86_64-unknown-linux-gnu"
-    repr I32 = signed(32)
-    repr Destructor = function_address
-    sentinel Transient : Destructor = all_bits_one
-    symbol Check<Before : EffectRow, T, After : EffectRow> : Unit -> Foreign.Call<Int> {
-        name "ash_check_noncallable_sentinel"
-        abi (Destructor) -> I32
-        operand 0 from constant Transient
-        output result as scalar
-        outcome otherwise { readable result }
+fn bytes_and_flat_pointer_arguments_reach_normal_native_preparation() {
+    for body in [
+        "main : Unit -> F.Address ! {EchoBytes}\nmain () = perform EchoBytes.call (T.to_utf8 \"abc\")\n",
+        "main : Unit -> F.Address ! {Pair}\nmain () = perform Pair.call (F.null (), T.to_utf8 \"abc\")\n",
+        "main : Unit -> Unit ! {Consume}\nmain () = perform Consume.call (T.to_utf8 \"abc\")\n",
+    ] {
+        let fixture = Fixture::new(&format!("{CONTRACT}{body}"));
+        let compiled = compile_path(fixture.configuration()).unwrap();
+        let compilation_work = *compiled.compilation_work();
+        fs::remove_file(fixture.0.join("entry.ash")).unwrap();
+        let prepared = prepare_program(
+            &compiled,
+            BuildConfiguration::new(fixture.0.join("program")),
+        )
+        .unwrap();
+        assert!(prepared.preparation_work() > 0);
+        assert_eq!(*compiled.compilation_work(), compilation_work);
     }
-}
-main : Unit -> Foreign.Call<Int> ! {Check<{}, Int, {}>}
-main () = perform Check<{}, Int, {}>.call ()
-"#,
-    );
-    let compiled = compile_path(fixture.configuration()).unwrap();
-    prepare_program(
-        &compiled,
-        BuildConfiguration::new(fixture.0.join("program")),
-    )
-    .unwrap();
 }

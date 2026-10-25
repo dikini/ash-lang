@@ -2,31 +2,27 @@
 
 use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc};
 
-use crate::{
-    core::{UnvalidatedProgram, ValidatedEffectProgram, ValidatedProgram, ValidationError},
-    diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
-    elaborate::{
-        EffectElaborator, Elaborator, ProviderCodeAvailability, TypeError,
-        check_module_with_budget_and_provider_codes_and_rewrite_work,
-        checked_program_contains_effect_syntax, link_modules_with_budget,
-    },
-    eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate, evaluate_effect},
-    evidence_validation::{
-        EvidenceValidationFailure, ValidatedInterfaceProgram,
-        validate_interface_evidence_with_budget,
-    },
-    interface::InterfaceConstraintBudget,
-    kind::KindFailure,
-    lexer::LexReason,
-    module::{
-        GraphDiagnostic, LoadGraphError, ModuleGraph, ModuleId, ModuleRoots, load_module_graph,
-    },
-    parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
-    pattern::UsefulnessBudget,
-    resolve::{DependencyExports, ResolveError, ResolveModuleError},
-    resolved::ResolvedModuleProgram,
-    source::{SourceError, SourceFile, SourceId, Span},
-    types::{IterativeTypeOwner, Type, TypeWorkBudget},
+use {
+    crate::core::UnvalidatedProgram, crate::core::ValidatedEffectProgram,
+    crate::core::ValidatedProgram, crate::core::ValidationError, crate::diagnostic::Diagnostic,
+    crate::diagnostic::SourceLabel, crate::diagnostic::compare_source_spans,
+    crate::elaborate::EffectElaborator, crate::elaborate::Elaborator, crate::elaborate::TypeError,
+    crate::elaborate::check_module_with_budget_and_rewrite_work,
+    crate::elaborate::checked_program_contains_effect_syntax,
+    crate::elaborate::link_modules_with_budget, crate::eval::Evaluation, crate::eval::ObservedHeap,
+    crate::eval::RuntimeFailure, crate::eval::Value, crate::eval::evaluate,
+    crate::eval::evaluate_effect, crate::evidence_validation::EvidenceValidationFailure,
+    crate::evidence_validation::ValidatedInterfaceProgram,
+    crate::evidence_validation::validate_interface_evidence_with_budget,
+    crate::interface::InterfaceConstraintBudget, crate::kind::KindFailure, crate::lexer::LexReason,
+    crate::module::GraphDiagnostic, crate::module::LoadGraphError, crate::module::ModuleGraph,
+    crate::module::ModuleId, crate::module::ModuleRoots, crate::module::load_module_graph,
+    crate::parser::ParseDiagnostic, crate::parser::ProjectionError, crate::parser::ResourceFailure,
+    crate::pattern::UsefulnessBudget, crate::resolve::DependencyExports,
+    crate::resolve::ResolveError, crate::resolve::ResolveModuleError,
+    crate::resolved::ResolvedModuleProgram, crate::source::SourceError, crate::source::SourceFile,
+    crate::source::SourceId, crate::source::Span, crate::types::IterativeTypeOwner,
+    crate::types::Type, crate::types::TypeWorkBudget,
 };
 
 #[cfg(test)]
@@ -790,7 +786,7 @@ impl Error for FileFailure {}
 pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFailure> {
     let pipeline_phase = crate::calibration::Phase::start("pipeline");
     let compiled = compile_path_for_execution(configuration)?;
-    let observation = execute_owned_with_consumer(compiled, evaluate, None)?;
+    let observation = execute_owned_with_consumer(compiled, evaluate)?;
     pipeline_phase.finish(None, 0, 0);
     Ok(observation)
 }
@@ -818,35 +814,6 @@ pub fn compile_path(configuration: RunConfiguration) -> Result<CompiledProgram, 
     )
 }
 
-/// Authoring-only catalogue. No partial compilation or executable binding is
-/// exposed; the retained Arcs are the originals used by ordinary admission.
-pub(crate) fn compile_path_for_ffi(
-    configuration: RunConfiguration,
-) -> Result<(CompiledProgram, Vec<crate::check_ffi::CheckedForeignModule>), FileFailure> {
-    let graph = load_module_graph(&configuration.entry, &configuration.roots)
-        .map_err(FileFailure::Graph)?;
-    let mut catalogue = Vec::new();
-    let mut work = crate::compiler_work::CompilationWork::default();
-    let result = compile_graph_with_report(
-        &graph,
-        &mut InterfaceConstraintBudget::default(),
-        validate_interface_evidence_with_budget,
-        validate_modular_core,
-        true,
-        ProvenanceRetention::Retain,
-        &mut work,
-        Some(&mut catalogue),
-    );
-    match result {
-        Ok(program) => Ok((program, catalogue)),
-        Err(FileFailure::Pipeline(mut context)) => {
-            context.sources = graph.into_sources();
-            Err(FileFailure::Pipeline(context).with_compilation_work(work))
-        }
-        Err(failure) => Err(failure.with_compilation_work(work)),
-    }
-}
-
 fn compile_path_for_execution(
     configuration: RunConfiguration,
 ) -> Result<CompiledProgram, FileFailure> {
@@ -871,31 +838,12 @@ fn compile_path_for_execution(
 /// Returns a structured preparation or evaluation failure without compile-time
 /// source context. Preparation refusal executes no Ash code or native call.
 pub fn execute(program: &CompiledProgram) -> Result<Observation, FileFailure> {
-    execute_with_consumer(program, evaluate, None)
-}
-
-/// Evaluates checked Core using authenticated executable foreign bindings.
-///
-/// The borrowed runtime authenticates original operation contracts before native
-/// use and keeps retained owners quarantined until host teardown. It does not
-/// compile source or generate bindings. This supports the existing experimental
-/// host-registration path; it does not claim generated native-program support.
-/// Observation metadata preparation precedes all native execution.
-///
-/// # Errors
-/// Returns structured runtime, foreign-binding or conversion failures with the
-/// unchanged compilation ledger and no compile-time source context.
-pub fn execute_with_foreign_runtime(
-    program: &CompiledProgram,
-    runtime: &mut crate::foreign::runtime::ForeignRuntime,
-) -> Result<Observation, FileFailure> {
-    execute_with_consumer(program, evaluate, Some(runtime))
+    execute_with_consumer(program, evaluate)
 }
 
 fn execute_with_consumer<E>(
     program: &CompiledProgram,
     evaluator: E,
-    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure>
 where
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
@@ -904,13 +852,7 @@ where
         FileFailure::from(PipelineFailure::Runtime(failure))
             .with_compilation_work(program.compilation_work)
     })?;
-    execute_prepared(
-        &program.core,
-        metadata,
-        program.compilation_work,
-        evaluator,
-        runtime,
-    )
+    execute_prepared(&program.core, metadata, program.compilation_work, evaluator)
 }
 
 fn prepare_observation_metadata(
@@ -955,7 +897,6 @@ fn observation_metadata_failure(cause: crate::eval::ResourceFailureCause) -> Run
 fn execute_owned_with_consumer<E>(
     program: CompiledProgram,
     evaluator: E,
-    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure>
 where
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
@@ -973,7 +914,6 @@ where
         ObservationMetadata { ty, type_display },
         compilation_work,
         evaluator,
-        runtime,
     )
 }
 
@@ -982,7 +922,6 @@ fn execute_prepared<E>(
     metadata: ObservationMetadata,
     compilation_work: crate::compiler_work::CompilationWork,
     evaluator: E,
-    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure>
 where
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
@@ -993,10 +932,7 @@ where
     let evaluation_phase = crate::calibration::Phase::start("evaluation");
     let evaluation = match core {
         CompiledCore::Pure(core) => evaluator(core),
-        CompiledCore::Effect(core) => match runtime {
-            Some(runtime) => crate::eval::evaluate_effect_with_foreign_runtime(core, runtime),
-            None => evaluate_effect(core),
-        },
+        CompiledCore::Effect(core) => evaluate_effect(core),
     }
     .map_err(|failure| {
         FileFailure::from(PipelineFailure::Runtime(failure)).with_compilation_work(compilation_work)
@@ -1010,26 +946,6 @@ where
         _heap: heap,
         compilation_work,
     })
-}
-
-/// Executes a modular Ash graph with authenticated executable foreign bindings.
-///
-/// The configuration retains its source registrations. The runtime must bind
-/// those original entries; equal names do not authorize native dispatch. It is
-/// borrowed so retained native owners remain quarantined until host teardown.
-///
-/// # Errors
-/// Returns the same input, compiler and runtime failures as [`run_path`], plus
-/// foreign binding or conversion failures before the associated native use.
-pub fn run_path_with_foreign_runtime(
-    configuration: RunConfiguration,
-    runtime: &mut crate::foreign::runtime::ForeignRuntime,
-) -> Result<Observation, FileFailure> {
-    let pipeline_phase = crate::calibration::Phase::start("pipeline");
-    let compiled = compile_path_for_execution(configuration)?;
-    let observation = execute_owned_with_consumer(compiled, evaluate, Some(runtime))?;
-    pipeline_phase.finish(None, 0, 0);
-    Ok(observation)
 }
 
 #[cfg(test)]
@@ -1063,7 +979,6 @@ where
         },
         evaluator,
         false,
-        None,
     )
 }
 
@@ -1099,7 +1014,6 @@ where
         },
         evaluator,
         false,
-        None,
     )
 }
 
@@ -1111,7 +1025,6 @@ fn run_path_with_consumers_internal<I, V, E>(
     validator: V,
     evaluator: E,
     select_effect_core: bool,
-    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure>
 where
     I: FnOnce(
@@ -1131,7 +1044,7 @@ where
         select_effect_core,
         ProvenanceRetention::Discard,
     )?;
-    let observation = execute_owned_with_consumer(compiled, evaluator, runtime)?;
+    let observation = execute_owned_with_consumer(compiled, evaluator)?;
     pipeline_phase.finish(None, 0, 0);
     Ok(observation)
 }
@@ -1210,15 +1123,10 @@ where
         select_effect_core,
         retention,
         &mut compilation_work,
-        None,
     )
     .map_err(|failure| failure.with_compilation_work(compilation_work))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the optional authoring consumer shares the complete compiler pipeline without changing ordinary paths"
-)]
 fn compile_graph_with_report<I, V>(
     graph: &ModuleGraph,
     constraint_work: &mut InterfaceConstraintBudget,
@@ -1227,7 +1135,6 @@ fn compile_graph_with_report<I, V>(
     select_effect_core: bool,
     retention: ProvenanceRetention,
     compilation_work: &mut crate::compiler_work::CompilationWork,
-    mut foreign_catalogue: Option<&mut Vec<crate::check_ffi::CheckedForeignModule>>,
 ) -> Result<CompiledProgram, FileFailure>
 where
     I: FnOnce(
@@ -1266,7 +1173,6 @@ where
             crate::elaborate::ElaborationFailure::TypeResourceExhausted,
         )))
     })?;
-    let mut provider_codes = ProviderCodeAvailability::default();
     let mut coverage_work = UsefulnessBudget::default();
     for module in graph.modules() {
         let dependencies = module
@@ -1288,13 +1194,11 @@ where
             .collect::<Result<Vec<_>, _>>()
             .map_err(FileFailure::from)?;
         let resolution_phase = crate::calibration::Phase::start("resolution");
-        let mut libraries = Vec::new();
-        let resolved = crate::resolve::resolve_module_with_foreign_catalog(
+        let resolved = crate::resolve::resolve_module_with_budget(
             module,
             &dependencies,
             &mut resolution_type_work,
             constraint_work,
-            foreign_catalogue.as_ref().map(|_| &mut libraries),
         )
         .map_err(|error| match error {
             ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
@@ -1302,19 +1206,6 @@ where
             ResolveModuleError::Representation(error) => PipelineFailure::Typing(error),
         })
         .map_err(FileFailure::from)?;
-        if let Some(catalogue) = foreign_catalogue.as_deref_mut() {
-            crate::check_ffi::retain_module(
-                catalogue,
-                module,
-                libraries,
-                &mut resolution_type_work,
-            )
-            .map_err(|()| {
-                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
-                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
-                )))
-            })?;
-        }
         resolution_phase.finish(
             Some(resolution_type_work.used()),
             crate::types::TYPE_WORK_LIMIT,
@@ -1322,9 +1213,8 @@ where
         );
         drop(dependencies);
         let source_phase = crate::calibration::Phase::start("source-checking");
-        let checked_module = check_module_with_budget_and_provider_codes_and_rewrite_work(
+        let checked_module = check_module_with_budget_and_rewrite_work(
             resolved,
-            &provider_codes,
             &mut checking_type_work,
             &mut coverage_work,
             constraint_work,
@@ -1337,34 +1227,6 @@ where
                     .incomplete(),
             )
         })?;
-        if let Some(code) = checked_module.provider_code() {
-            provider_codes
-                .retain(module.id(), code, &mut checking_type_work)
-                .map_err(|failure| {
-                    FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
-                        crate::compiler_work::CompilationPhase::SourceChecking
-                            .assess_with_allowance(
-                                checking_type_work.used(),
-                                checking_type_work.limit(),
-                            )
-                            .incomplete(),
-                    )
-                })?;
-        }
-        if let Some(code) = checked_module.source_resource_code() {
-            provider_codes
-                .retain_source(module.id(), code, &mut checking_type_work)
-                .map_err(|failure| {
-                    FileFailure::from(PipelineFailure::Typing(failure)).with_phase_work(
-                        crate::compiler_work::CompilationPhase::SourceChecking
-                            .assess_with_allowance(
-                                checking_type_work.used(),
-                                checking_type_work.limit(),
-                            )
-                            .incomplete(),
-                    )
-                })?;
-        }
         checked_by_module.insert(module.id(), checked.len());
         checked.push(checked_module);
         source_phase.finish(
@@ -1407,22 +1269,7 @@ where
         Type::EffectfulFunction(domain, computation) if matches!(domain.as_ref(), Type::Unit) => {
             (computation.value(), !computation.effects().is_empty())
         }
-        Type::Function(_, _)
-        | Type::EffectfulFunction(_, _)
-        | Type::Bytes
-        | Type::String
-        | Type::Int
-        | Type::Bool
-        | Type::Unit
-        | Type::Tuple(_)
-        | Type::ResourceApply(_, _)
-        | Type::ForeignOwnerApply(_, _)
-        | Type::Nominal(_)
-        | Type::Application(_, _)
-        | Type::Variable(_)
-        | Type::Inference(_) => {
-            return Err(entry_failure(EntryReason::MainDomain, main_span));
-        }
+        _ => return Err(entry_failure(EntryReason::MainDomain, main_span)),
     };
     if main_has_effects {
         let Type::EffectfulFunction(_, computation) = &main.scheme.value_type else {
@@ -1952,7 +1799,7 @@ where
         validator,
         compilation_work,
     )?;
-    execute_owned_with_consumer(compiled, evaluator, None)
+    execute_owned_with_consumer(compiled, evaluator)
 }
 
 fn entry_failure(reason: EntryReason, primary: Span) -> FileFailure {
@@ -2015,8 +1862,8 @@ fn refuse_unbound_source_native_entry(core: &CompiledCore) -> Result<(), Runtime
 /// this function neither registers callbacks nor selects them by source name.
 ///
 /// # Errors
-/// Refuses missing or changed bindings before Ash execution and retains runtime
-/// failures without retrying a returned external call.
+/// Refuses changed supplied bindings before Ash execution. A missing selected
+/// binding fails at invocation. Runtime failures never retry a returned external call.
 pub fn execute_with_source_native_bindings(
     program: &CompiledProgram,
     bindings: &mut crate::foreign::source_runtime::SourceNativeBindings,
@@ -2408,14 +2255,10 @@ mod tests {
                         compiled.type_display = "x".repeat(crate::types::TYPE_WORK_LIMIT);
                     }
                     let evaluated = Cell::new(false);
-                    let failure = execute_with_consumer(
-                        &compiled,
-                        |_| {
-                            evaluated.set(true);
-                            Err(RuntimeFailure::InvalidControlState)
-                        },
-                        None,
-                    )
+                    let failure = execute_with_consumer(&compiled, |_| {
+                        evaluated.set(true);
+                        Err(RuntimeFailure::InvalidControlState)
+                    })
                     .expect_err("result metadata preparation exceeds bounded work");
                     assert!(
                         !evaluated.get(),
@@ -2516,7 +2359,6 @@ mod tests {
             |unchecked, sources, _| validate_modular_core(unchecked, sources, &[]),
             |_| panic!("evaluation must not run after independent Core rejection"),
             false,
-            None,
         )
         .expect_err("missing canonical module identities fail validation after paid source sizing");
         assert!(matches!(
@@ -2874,10 +2716,14 @@ mod tests {
         // four import routes removes three duplicate retention cells.
         // Final method admission removes four duplicate binder-map slots and
         // one repeated Function-result kind queue; full child checks remain.
+        // Completed global/implementation publications and constructor originals
+        // authenticate ordinary meanings at each summary/import boundary. The
+        // earlier receipt predated those guards: base publication adds 218,
+        // each route 224, imported checking 60. Link/evidence stay 149/1769.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 1_138, 1_721, 2_335, 2_918, 3_532, 4_107, 4_726, 5_756, 6_208, 6_357, 8_126,
+            0, 1, 1_356, 2_163, 3_061, 3_868, 4_766, 5_565, 6_468, 7_946, 8_458, 8_607, 10_376,
         ];
-        const EXACT_CONSTRAINT_WORK: usize = 8_126;
+        const EXACT_CONSTRAINT_WORK: usize = 10_376;
         let source = relational_interface_graph_source();
         let directory = source
             .0

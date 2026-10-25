@@ -82,6 +82,80 @@ superseded. Items #57-64 and the premature #130 are deprecated as active work.
 Previously completed results retain their historical completion and recorded
 scope; unfinished old criteria are not claimed satisfied.
 
+S2 is in progress. The connected image restoration tests pass four cases, and
+the generated pointer/Bytes/void fixture passes static and shared linking,
+repeated execution after source removal, exact native call order and loader
+refusal before calls. The full normal workspace gate and final review remain
+pending; these focused results do not complete S2 or M1 acceptance.
+
+The preparation calibration retained the actual executed ordinary handled-row
+fixture at depths 42 and 43. A bounded diagnostic carried the normal source
+census through complete image encoding and Rust emission: 2,181,566 units for
+P = 3,494 at depth 42 and 2,330,800 for P = 3,510 at depth 43, about 28 ms for
+the latter. Native-input path checks and host building/execution were outside
+that diagnostic. Independent review accepted the preparation-only `850P`
+coefficient in [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
+with about 28% reserve over the depth-43 observation. Normal public preparation
+regressions, exhausted-budget checks and native execution remain separate gates.
+
+The current WIP checkpoint also passes the five public native-preparation cases
+(including the normal depth-42/43 workload), seven slim FFI cases and eight
+syntax plus eight admission cases. A broader library run exposed ordinary
+regressions and a small-stack overflow before completion. Restoring the ordinary
+polymorphic recursive-initializer validation branch makes the two generic Cell
+acquisition cases pass; summary authentication and remaining failures are still
+under repair. This checkpoint is a draft, not an accepted delivery or Main gate.
+
+Ordinary row-work failures were traced to baseline append-only canonicalization
+that reuses its allocation. The corrected fault fixture reaches the actual
+canonical reserve; exact work, one-short and retry checks pass without adding
+phantom charges or changing production row behavior. The [focused record](evidence/slim-ffi-s2-row-work.md)
+pins baseline function/test excerpts and the observed result.
+
+The next draft repairs the ordinary capture/constructor summary closure and
+serializes residual Cell scope identities through the existing canonical image
+parameter inventory. Four Cell image tests pass, including missing, duplicate,
+wrong-owner/kind and unsealed scope-fact refusal independently of expected bytes.
+The restored capture scan, seven diamond/provenance cases, small-stack deep
+constructor comparison and exact combined-registry checks also pass. Seven
+retained integration suites passed 164 cases; their one obsolete counterfeit
+family diagnostic expectation was corrected to `ResourceBuiltinRequired` and
+passed separately. No ordinary escape or original-fact guard was relaxed.
+
+The no-symbol foreign binding path now skips constructing a checker registry,
+restoring the baseline paid classification and all-empty-effects return. This
+fixes two opaque-import budget controls and preserves the depth-32,768,
+256 KiB-stack admission test within its unchanged default limit. Actual foreign
+binding work/storage refusal retains the resource diagnostic; all short source
+resolution cutoffs and fresh exact retries pass for a passive void symbol.
+
+The relational driver receipt was stale before this transition: its October 4
+vector preceded the ordinary immutable global/implementation/constructor
+original checks retained on October 21. The five fixture files and seven
+ordinary comparison bodies match baseline `2766e826`; link work remains 149 and
+linked-evidence work 1,769. The refreshed cumulative boundary is 10,376, with
+exact success, one-short refusal before Core, retry and result `42` passing.
+This changes test accounting, not a production limit. The broader library and
+workspace gate, remaining retirement, S3 example/canary and final review remain
+pending; the checkpoint stays a draft.
+
+The next working checkpoint passes all 1,549 library tests and all 47
+architecture checks. The four remaining summary-fixture failures were repaired
+with coherent defining originals and independently derived exact budgets; their
+negative newtype, alias, effect and retry cases pass. Dependency-closed removal
+also retires 152 obsolete policy fixtures and the native calibration branches,
+while preserving ordinary generators and their reference-corpus inputs. The
+ordinary Cell export-shape guard's lost invocation has been identified for
+restoration. Warning cleanup, fresh generated-native/image execution, S3/S4 and
+the full normal workspace gate remain pending; this is still a draft checkpoint.
+
+The removal preserves ordinary Cell execution and body-free generic resource
+metadata used by kind and import checking. Nonbuiltin provider execution used
+the retired foreign policy engine and now receives the existing unsupported
+resource diagnostic. [DN-0036](../design/DN-0036-foreign-library-and-memory-provider-experiments.md)
+retained experimental evidence without adopting that execution model as product
+semantics; this transition does not add a general resource-State capability.
+
 ## Verification
 
 For S1, independently review the proposed mapping, removal boundary and SQLite
@@ -90,6 +164,17 @@ retirement workspace check and focused ordinary regressions. S1 runs no compiler
 or native program.
 The developer owns the full normal gate at the integrated slim path plus example
 checkpoint before M1 acceptance and Main integration.
+
+The final S2 cleanup restores the builtin Cell export-shape authentication call,
+retires only caller-proven provider staging and unused projection factories, and
+recovers two ordinary constructor-original tests with an ordinary source fixture.
+Independent bounded reviews cleared those changes. Workspace formatting and the
+exact all-target, all-feature strict Clippy command pass on Rust 1.97.1 with one
+job and the existing shared target (`/tmp/slim-clippy8.log`, SHA256
+`91891357356a542d4d7fe7e7ab3d627c65f293a97e0c48f344b4be6e530868df`).
+Fresh library, architecture, embedded-image and static/shared native checks on
+this final candidate remain pending, together with frozen-head review. S3 and
+the connected normal workspace checkpoint remain separate milestone obligations.
 
 ## Discoveries
 

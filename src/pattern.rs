@@ -152,15 +152,6 @@ impl Default for UsefulnessBudget {
 
 impl UsefulnessBudget {
     #[cfg(test)]
-    pub(crate) const fn remaining_for_test(&self) -> usize {
-        self.remaining
-    }
-
-    #[cfg(test)]
-    pub(crate) fn charge_for_test(&mut self, amount: usize) -> Result<(), UsefulnessError> {
-        self.charge(amount)
-    }
-    #[cfg(test)]
     pub(crate) const fn with_limit(limit: usize) -> Self {
         Self { remaining: limit }
     }
@@ -643,7 +634,7 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
             Task::Type(ty) => {
                 budget.charge(1)?;
                 match ty {
-                    Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+                    Type::ResourceApply(_, arguments) => {
                         work.extend(arguments.iter().map(Task::Argument))
                     }
                     Type::Tuple(elements) => work.push(Task::Slice(elements.iter())),
@@ -745,8 +736,7 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         | Type::Variable(_)
         | Type::Inference(_)
         | Type::Forall(_, _)
-        | Type::ResourceApply(_, _)
-        | Type::ForeignOwnerApply(_, _) => None,
+        | Type::ResourceApply(_, _) => None,
     }
 }
 

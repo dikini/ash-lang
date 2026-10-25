@@ -1,33 +1,23 @@
-//! Borrowed declaration views keep native symbols in the ordinary effect path.
-
-use std::{collections::HashMap, ops::Range, sync::Arc};
-
+//! Native symbols use the ordinary source effect operation path.
 use super::{
     DependencyExports, ResolveError, ResolveReason, ResolvedDeclarations, Resolver, error,
-    retain_declaration_order,
-};
-use crate::foreign::{
-    checked_source::{
-        ForeignBindingContext, ForeignCallCodecIds, NativeLibraryId, bind_foreign_symbol,
-    },
-    source_contract::{PreparedForeignLibrary, prepare_foreign_library_with_budget},
 };
 use crate::{
-    diagnostic::{Diagnostic, SourceLabel},
-    resolved::ResolvedBuildFailure,
+    foreign::{
+        checked_source::{ForeignBindingContext, NativeLibraryId, bind_foreign_symbol},
+        source_contract::{PreparedForeignLibrary, prepare_foreign_library_with_budget},
+    },
     source::Span,
     surface::{
-        SurfaceDeclarationIndex, SurfaceEffectDeclaration, SurfaceForeignMember,
-        SurfaceForeignSymbol, SurfaceModule, SurfaceName, SurfaceType, SurfaceTypeParameter,
+        SurfaceEffectDeclaration, SurfaceForeignMember, SurfaceForeignSymbol, SurfaceModule,
+        SurfaceName, SurfaceType, SurfaceTypeParameter,
     },
-    types::{ConstructorId, NominalTypeId, TypeWorkBudget},
 };
-
+use std::{collections::HashMap, ops::Range, sync::Arc};
 pub(super) struct PreparedLibrarySource {
     pub(super) prepared: Arc<PreparedForeignLibrary>,
     effects: Range<usize>,
 }
-
 #[derive(Clone, Copy)]
 pub(super) enum EffectSource<'a> {
     Ordinary(&'a SurfaceEffectDeclaration),
@@ -56,7 +46,7 @@ impl EffectSource<'_> {
     pub(super) fn parameters(&self) -> &[SurfaceTypeParameter] {
         match self {
             Self::Ordinary(source) => &source.parameters,
-            Self::Foreign { symbol, .. } => &symbol.parameters,
+            Self::Foreign { .. } => &[],
         }
     }
 
@@ -113,389 +103,97 @@ impl EffectSource<'_> {
 }
 
 impl Resolver {
-    pub(super) fn bind_scalar_preflights(
-        &mut self,
-        loaded: &crate::module::LoadedModule,
-        declarations: &mut ResolvedDeclarations,
-    ) -> Result<(), ResolveError> {
-        if !self.module.is_builtin_foreign() {
-            return Ok(());
-        }
-        use crate::foreign::{
-            checked_source::CheckedForeignCallCodec,
-            scalar_preflight::{CheckedForeignScalarPreflight, ForeignScalarPreflightRole},
-        };
-        use crate::resolved::{BinderId, ResolvedDefinitionKind};
-        let source = loaded.source();
-        let range = u32::try_from(source.text().len())
-            .ok()
-            .and_then(|len| crate::source::ByteRange::new(0, len).ok())
-            .ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    loaded.surface().span,
-                    "builtin foreign source range is invalid",
-                )
-            })?;
-        let span = source.span(range).map_err(|_| {
-            error(
-                ResolveReason::InternalState,
-                loaded.surface().span,
-                "builtin foreign source provenance is invalid",
-            )
-        })?;
-        let registry = Arc::get_mut(&mut declarations.registry).ok_or_else(|| {
-            error(
-                ResolveReason::InternalState,
-                span,
-                "scalar preflight publication requires its original unique registry",
-            )
-        })?;
-        let call = NominalTypeId::new(self.module, 1);
-        let codec = CheckedForeignCallCodec::authenticate(
-            self.module,
-            span,
-            ForeignCallCodecIds {
-                call,
-                returned: ConstructorId::new(call, 0),
-                conversion_failed: ConstructorId::new(call, 1),
-                conversion_error: NominalTypeId::new(self.module, 0),
-            },
-            registry,
-            &mut self.type_work,
-        )
-        .map_err(source_admission_failure)?;
-        self.type_work.charge(3).map_err(|_| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                span,
-                "scalar preflight facts exceeded their work budget",
-            )
-        })?;
-        let codec = Arc::new(codec);
-        // Mint one immutable original per exact canonical codec family. Every
-        // callable in that family forwards this same reference through exports.
-        let checked_call = NominalTypeId::new(self.module, 12);
-        let checked_codec = CheckedForeignCallCodec::authenticate(
-            self.module,
-            span,
-            ForeignCallCodecIds {
-                call: checked_call,
-                returned: ConstructorId::new(checked_call, 0),
-                conversion_failed: ConstructorId::new(checked_call, 1),
-                conversion_error: NominalTypeId::new(self.module, 0),
-            },
-            registry,
-            &mut self.type_work,
-        )
-        .map_err(source_admission_failure)?;
-        self.type_work.charge(1).map_err(|_| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                span,
-                "checked primitive codec storage exceeded work",
-            )
-        })?;
-        let checked_codec = Arc::new(checked_codec);
-        let metadata = declarations.definitions.get(10).and_then(|definition| {
-            if let ResolvedDefinitionKind::Equational(global) = &definition.kind {
-                Some(global)
-            } else {
-                None
-            }
-        });
-        if declarations.definitions.len() != 17
-            || loaded.surface().definitions.get(10).is_none_or(|definition| definition.public)
-            || metadata.is_none_or(|metadata| metadata.interface.name.id != BinderId::resolved(self.module, 10)
-                || !metadata.interface.type_parameters.is_empty()
-                || !metadata.interface.requirements.is_empty()
-                || !matches!(&metadata.interface.annotation.ty,
-                    crate::types::Type::Function(input, output)
-                    if matches!(input.as_ref(), crate::types::Type::Unit) && matches!(output.as_ref(), crate::types::Type::String)))
-        {
-            return Err(error(
-                ResolveReason::InternalState,
-                span,
-                "builtin scalar preflight declaration inventory is invalid",
-            ));
-        }
-        for role in [
-            ForeignScalarPreflightRole::I64,
-            ForeignScalarPreflightRole::SizeT,
-            ForeignScalarPreflightRole::ByteRead,
-            ForeignScalarPreflightRole::ByteWrite,
-            ForeignScalarPreflightRole::Nul,
-            ForeignScalarPreflightRole::DataOf,
-            ForeignScalarPreflightRole::ReplaceData,
-            ForeignScalarPreflightRole::CopyBytes,
-            ForeignScalarPreflightRole::CopyNul,
-            ForeignScalarPreflightRole::ExtentValue,
-            ForeignScalarPreflightRole::CheckedByteRead,
-            ForeignScalarPreflightRole::CheckedByteWrite,
-            ForeignScalarPreflightRole::CheckedCopyBytes,
-            ForeignScalarPreflightRole::CheckedCopyNul,
-            ForeignScalarPreflightRole::CheckedQuarantine,
-            ForeignScalarPreflightRole::CheckedRejectAcquisition,
-        ] {
-            let definition = &declarations.definitions[role.local() as usize];
-            let ResolvedDefinitionKind::Equational(global) = &definition.kind else {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    span,
-                    "builtin scalar preflight header is invalid",
-                ));
-            };
-            if global.interface.name.id != BinderId::resolved(self.module, role.local())
-                || {
-                    let parameters = &global.interface.type_parameters;
-                    self.type_work.charge(parameters.len()).map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "builtin primitive formal verification exceeded work",
-                        )
-                    })?;
-                    let host = role.host_parameter(self.module);
-                    let borrowed = role.borrowed_parameter(self.module);
-                    let data = role.data_parameter(self.module);
-                    let count = usize::from(host.is_some())
-                        + usize::from(borrowed.is_some())
-                        + usize::from(data.is_some());
-                    parameters.len() != count || parameters.iter().enumerate().any(|(index, parameter)| {
-                        let expected = if host.is_some() {
-                            if index == 0 { host } else { borrowed }
-                        } else if index == 0 { borrowed } else { data };
-                        Some(parameter.id) != expected || parameter.kind != crate::types::Kind::Type
-                            || !matches!(&parameter.origin, crate::source::Origin::Source(origin)
-                                if crate::module::foreign_type_formal_local(span, *origin)
-                                    .is_some_and(|local| parameter.id == crate::types::TypeVariableId::resolved(self.module, local)))
-                    })
-                }
-                || !global.interface.requirements.is_empty()
-            {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    span,
-                    "builtin scalar preflight binder inventory is invalid",
-                ));
-            }
-            self.type_work.charge(1).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "primitive codec retention exceeded work",
-                )
-            })?;
-            let selected_codec = Arc::clone(if role.host_parameter(self.module).is_some() {
-                &checked_codec
-            } else {
-                &codec
-            });
-            let fact = CheckedForeignScalarPreflight::from_original(
-                role,
-                span,
-                &global.interface.name.origin,
-                &global.interface.annotation,
-                selected_codec,
-                &mut self.type_work,
-            )
-            .map_err(source_admission_failure)?;
-            registry
-                .retain_scalar_preflight(Arc::new(fact), &mut self.type_work)
-                .map_err(|failure| source_build_failure(failure, span))?;
-        }
-        Ok(())
-    }
-
     pub(super) fn validate_source_foreign_members(
         &mut self,
         surface: &SurfaceModule,
     ) -> Result<(), ResolveError> {
         let mut names = HashMap::new();
         for library in &surface.foreign_libraries {
-            self.type_work.charge(library.members.len()).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    library.span,
-                    "foreign member collision checking exceeded its work budget",
-                )
-            })?;
-            names.try_reserve(library.members.len()).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    library.span,
-                    "foreign member collision storage could not be reserved",
-                )
-            })?;
             for member in &library.members {
-                let name = match member {
-                    SurfaceForeignMember::Profile(_) | SurfaceForeignMember::Assumption(_) => {
-                        continue;
+                if let SurfaceForeignMember::Symbol(symbol) = member {
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            symbol.span,
+                            "foreign member work exhausted",
+                        )
+                    })?;
+                    if names
+                        .insert(symbol.name.text.as_str(), symbol.span)
+                        .is_some()
+                        || surface
+                            .effects
+                            .iter()
+                            .any(|effect| effect.name.text == symbol.name.text)
+                    {
+                        return Err(error(
+                            ResolveReason::DuplicateEffect,
+                            symbol.span,
+                            "duplicate foreign operation name",
+                        ));
                     }
-                    SurfaceForeignMember::Representation(member) => &member.name,
-                    SurfaceForeignMember::Constant(member) => &member.name,
-                    SurfaceForeignMember::Sentinel(member) => &member.name,
-                    SurfaceForeignMember::Owner(member) => &member.name,
-                    SurfaceForeignMember::Access(member) => &member.name,
-                    SurfaceForeignMember::Symbol(member) => &member.name,
-                };
-                self.type_work.charge(name.text.len()).map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        name.span,
-                        "foreign member spelling comparison exceeded its work budget",
-                    )
-                })?;
-                if let Some(first) = names.insert(name.text.as_str(), name.span) {
-                    let mut diagnostic = Diagnostic::new(
-                        ResolveReason::ForeignContract,
-                        SourceLabel::new(
-                            name.span,
-                            "foreign libraries in one module require disjoint member spellings",
-                        ),
-                    );
-                    diagnostic
-                        .related
-                        .push(SourceLabel::new(first, "the first foreign member is here"));
-                    return Err(diagnostic.into());
                 }
             }
         }
         Ok(())
     }
-
     pub(super) fn prepare_source_foreign(
         &mut self,
         surface: &SurfaceModule,
     ) -> Result<Vec<PreparedLibrarySource>, ResolveError> {
-        let mut prepared = Vec::new();
-        self.type_work
-            .charge(surface.foreign_libraries.len())
-            .map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    surface.span,
-                    "foreign library preparation exceeded its work budget",
-                )
-            })?;
-        prepared
+        let mut result = Vec::new();
+        result
             .try_reserve_exact(surface.foreign_libraries.len())
             .map_err(|_| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     surface.span,
-                    "foreign library preparation storage could not be reserved",
+                    "foreign declaration storage exhausted",
                 )
             })?;
-        // Ordinary effects and whole library symbol groups share one source-order
-        // identity inventory. This additional walk applies only to foreign graphs.
-        if !surface.foreign_libraries.is_empty() {
-            self.type_work.charge(surface.effects.len()).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    surface.span,
-                    "foreign effect ordering exceeded its work budget",
-                )
-            })?;
-        }
-        let mut ordinary = surface.effects.iter().peekable();
-        let mut next_effect = 0_usize;
         for library in &surface.foreign_libraries {
-            self.type_work.charge(library.members.len()).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    library.span,
-                    "foreign publication classification exceeded its work budget",
-                )
-            })?;
-            self.type_work.charge(library.members.len()).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    library.span,
-                    "foreign owner classification exceeded its work budget",
-                )
-            })?;
-            let has_owner = library
-                .members
-                .iter()
-                .any(|member| matches!(member, SurfaceForeignMember::Owner(_)));
-            // Scalar literals share ordinary Int publication. Native operands
-            // keep their original checked representation and member coordinate.
-            if let Some((span, message)) = library.members.iter().find_map(|member| match member {
-                SurfaceForeignMember::Representation(representation)
-                    if !has_owner
-                        && matches!(
-                            representation.representation,
-                            crate::surface::SurfaceForeignRepresentation::Opaque(_)
-                                | crate::surface::SurfaceForeignRepresentation::Bytes(_)
-                        ) =>
-                {
-                    Some((
-                        representation.span,
-                        "source foreign addresses require canonical owner admission",
-                    ))
-                }
-                _ => None,
-            }) {
-                return Err(error(ResolveReason::ForeignContract, span, message));
-            }
-            let facts = if self.checked_foreign_profile && library.checked.is_some() {
-                crate::foreign::source_contract::prepare_checked_foreign_library_with_budget(
-                    self.module,
-                    library,
-                    &mut self.type_work,
-                )
-            } else {
+            let prepared =
                 prepare_foreign_library_with_budget(self.module, library, &mut self.type_work)
-            }
-            .map_err(|failure| {
+                    .map_err(|failure| {
+                        error(
+                            if failure.is_resource_exhaustion() {
+                                ResolveReason::TypeResourceExhausted
+                            } else {
+                                ResolveReason::ForeignContract
+                            },
+                            failure.span(),
+                            &failure.to_string(),
+                        )
+                    })?;
+            let start = surface
+                .effects
+                .iter()
+                .filter(|effect| effect.span.range().start() < library.span.range().start())
+                .count()
+                + result
+                    .iter()
+                    .map(|p: &PreparedLibrarySource| p.prepared.symbols().len())
+                    .sum::<usize>();
+            let end = start.checked_add(prepared.symbols().len()).ok_or_else(|| {
                 error(
-                    if failure.is_resource_exhaustion() {
-                        ResolveReason::TypeResourceExhausted
-                    } else {
-                        ResolveReason::ForeignContract
-                    },
-                    failure.span(),
-                    &failure.to_string(),
+                    ResolveReason::TypeResourceExhausted,
+                    library.span,
+                    "foreign operation count overflow",
                 )
             })?;
-            while ordinary
-                .peek()
-                .is_some_and(|effect| effect.span.range().start() < library.span.range().start())
-            {
-                ordinary.next();
-                next_effect = next_effect.checked_add(1).ok_or_else(|| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        library.span,
-                        "foreign effect inventory exceeded its bound",
-                    )
-                })?;
-            }
-            let end = next_effect
-                .checked_add(facts.symbols().len())
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        library.span,
-                        "foreign effect inventory exceeded its bound",
-                    )
-                })?;
-            prepared.push(PreparedLibrarySource {
-                prepared: Arc::new(facts),
-                effects: next_effect..end,
+            result.push(PreparedLibrarySource {
+                prepared: Arc::new(prepared),
+                effects: start..end,
             });
-            next_effect = end;
         }
-        Ok(prepared)
+        Ok(result)
     }
-
     pub(super) fn bind_source_foreign(
         &mut self,
         surface: &SurfaceModule,
         prepared: &[PreparedLibrarySource],
         declarations: &mut ResolvedDeclarations,
-        dependencies: &[DependencyExports<'_>],
+        _dependencies: &[DependencyExports<'_>],
     ) -> Result<(), ResolveError> {
         self.type_work.charge(prepared.len()).map_err(|()| {
             error(
@@ -507,536 +205,104 @@ impl Resolver {
         if prepared.iter().all(|library| library.effects.is_empty()) {
             return Ok(());
         }
-        let mut common = None;
-        for dependency in dependencies {
-            self.type_work
-                .charge(dependency.summary.defining_sources().len())
-                .map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        surface.span,
-                        "foreign common provenance lookup exceeded its work budget",
-                    )
-                })?;
-            for (module, source) in dependency.summary.defining_sources() {
-                if module.is_builtin_foreign() {
-                    let len = u32::try_from(source.text().len()).map_err(|_| {
-                        error(
-                            ResolveReason::InternalState,
-                            surface.span,
-                            "foreign common source exceeds its admitted bound",
-                        )
-                    })?;
-                    let span = source
-                        .span(crate::source::ByteRange::new(0, len).map_err(|_| {
-                            error(
-                                ResolveReason::InternalState,
-                                surface.span,
-                                "foreign common source range is invalid",
-                            )
-                        })?)
-                        .map_err(|_| {
-                            error(
-                                ResolveReason::InternalState,
-                                surface.span,
-                                "foreign common source provenance is invalid",
-                            )
-                        })?;
-                    if common.is_some_and(|previous| previous != (*module, span)) {
-                        return Err(error(
-                            ResolveReason::ForeignContract,
-                            surface.span,
-                            "foreign common types have inconsistent defining authority",
-                        ));
-                    }
-                    common = Some((*module, span));
-                }
-            }
-        }
-        let (common_module, common_span) = common.ok_or_else(|| {
-            error(
-                ResolveReason::ForeignContract,
-                surface.span,
-                "foreign symbols require the canonical @builtin.foreign result types",
-            )
-        })?;
-        let registry = declarations
+        let checking_registry = declarations
             .registry
             .checker_view(&self.imported, &mut self.type_work)
-            .map_err(|failure| source_build_failure(failure, surface.span))?;
-        let call = NominalTypeId::new(
-            common_module,
-            if self.checked_foreign_profile { 12 } else { 1 },
-        );
-        // This static checkpoint does not mix a legacy assumption closure into
-        // a checked host. Unsupported mixed graphs fail before publication.
-        if self.checked_foreign_profile {
-            self.type_work.charge(prepared.len()).map_err(|()| {
+            .map_err(|failure| {
+                let reason = match failure {
+                    crate::resolved::ResolvedBuildFailure::TypeResource => {
+                        ResolveReason::TypeResourceExhausted
+                    }
+                    crate::resolved::ResolvedBuildFailure::ConstraintResource => {
+                        ResolveReason::ConstraintResourceExhausted
+                    }
+                    _ => ResolveReason::InternalState,
+                };
                 error(
-                    ResolveReason::TypeResourceExhausted,
+                    reason,
                     surface.span,
-                    "checked foreign closure traversal exceeded its work budget",
+                    "foreign checking registry could not be prepared",
                 )
             })?;
-        }
-        if self.checked_foreign_profile
-            && prepared
-                .iter()
-                .any(|library| library.prepared.checked_contract().is_none())
-        {
-            return Err(error(
-                ResolveReason::ForeignContract,
-                surface.span,
-                "checked static source requires checked contracts throughout its foreign closure",
-            ));
-        }
-        let ids = ForeignCallCodecIds {
-            call,
-            returned: ConstructorId::new(call, 0),
-            conversion_failed: ConstructorId::new(call, 1),
-            conversion_error: NominalTypeId::new(common_module, 0),
-        };
-        let mut owners = Vec::new();
-        for (ordinal, library) in prepared.iter().enumerate() {
-            let ordinal = u32::try_from(ordinal).map_err(|_| {
-                error(
-                    ResolveReason::InternalState,
-                    surface.span,
-                    "foreign library identity exhausted",
-                )
-            })?;
-            self.type_work
-                .charge(library.prepared.owners().len())
-                .map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        surface.span,
-                        "foreign owner binding exceeded its work budget",
-                    )
-                })?;
-            owners
-                .try_reserve(library.prepared.owners().len())
-                .map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        surface.span,
-                        "foreign owner binding storage could not be reserved",
-                    )
-                })?;
-            for index in 0..library.prepared.owners().len() {
-                self.type_work
-                    .charge(registry.source_owner_candidate_count())
-                    .map_err(|()| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            surface.span,
-                            "foreign owner candidate lookup exceeded its work budget",
-                        )
-                    })?;
-                let (nominal, parameters) = registry
-                    .source_owner_candidate(&library.prepared, index)
-                    .ok_or_else(|| {
-                        error(
-                            ResolveReason::ForeignContract,
-                            surface.span,
-                            "foreign owner has no original canonical nominal",
-                        )
-                    })?;
-                owners.push(Arc::new(
-                    (if self.checked_foreign_profile {
-                        crate::foreign::source_owner::bind_checked_foreign_owner
-                    } else {
-                        crate::foreign::source_owner::bind_foreign_owner
-                    })(
-                        NativeLibraryId::new(self.module, ordinal),
-                        Arc::clone(&library.prepared),
-                        index,
-                        nominal,
-                        parameters,
-                        &registry,
-                        &mut self.type_work,
-                    )
-                    .map_err(source_admission_failure)?,
-                ));
-            }
-        }
-        let mut accesses = Vec::new();
-        for (ordinal, library) in prepared.iter().enumerate() {
-            self.type_work
-                .charge(library.prepared.accesses().len())
-                .map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        surface.span,
-                        "source access binding exceeded work",
-                    )
-                })?;
-            accesses
-                .try_reserve(library.prepared.accesses().len())
-                .map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        surface.span,
-                        "source access binding storage refused",
-                    )
-                })?;
-            let ordinal = u32::try_from(ordinal).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    surface.span,
-                    "source library identity exceeded bound",
-                )
-            })?;
-            for index in 0..library.prepared.accesses().len() {
-                self.type_work
-                    .charge(registry.source_foreign_nominal_count())
-                    .map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            surface.span,
-                            "source access lookup exceeded work",
-                        )
-                    })?;
-                let (nominal, parameters) = registry
-                    .source_access_candidate(&library.prepared, index)
-                    .ok_or_else(|| {
-                        error(
-                            ResolveReason::ForeignContract,
-                            surface.span,
-                            "source access has no original nominal",
-                        )
-                    })?;
-                accesses.push(Arc::new(
-                    crate::foreign::source_access::bind_foreign_access(
-                        NativeLibraryId::new(self.module, ordinal),
-                        Arc::clone(&library.prepared),
-                        index,
-                        nominal,
-                        parameters,
-                        &registry,
-                        &mut self.type_work,
-                    )
-                    .map_err(source_admission_failure)?,
-                ));
-            }
-        }
-        let context = ForeignBindingContext::new(
-            &registry,
-            common_module,
-            common_span,
-            ids,
-            &mut self.type_work,
-        )
-        .map_err(source_admission_failure)?
-        .with_owners(&owners, &mut self.type_work)
-        .map_err(source_admission_failure)?;
         let mut symbols = Vec::new();
         for (ordinal, library) in prepared.iter().enumerate() {
             let ordinal = u32::try_from(ordinal).map_err(|_| {
                 error(
-                    ResolveReason::InternalState,
-                    surface.span,
-                    "foreign library identity exhausted",
-                )
-            })?;
-            self.type_work.charge(library.effects.len()).map_err(|()| {
-                error(
                     ResolveReason::TypeResourceExhausted,
                     surface.span,
-                    "foreign symbol retention exceeded its work budget",
-                )
-            })?;
-            symbols.try_reserve(library.effects.len()).map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    surface.span,
-                    "foreign symbol retention storage could not be reserved",
+                    "foreign library count overflow",
                 )
             })?;
             for (index, effect_index) in library.effects.clone().enumerate() {
-                let effect_id = declarations
-                    .effects
-                    .get(effect_index)
-                    .ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            surface.span,
-                            "foreign effect inventory lost its declaration",
-                        )
-                    })?
-                    .id;
-                let original = registry.effect(effect_id).ok_or_else(|| {
+                let effect = declarations.effects.get(effect_index).ok_or_else(|| {
                     error(
                         ResolveReason::InternalState,
                         surface.span,
-                        "foreign effect inventory lost its registry original",
+                        "missing foreign effect",
                     )
                 })?;
-                symbols.push((
-                    effect_index,
-                    Arc::new(
-                        (if self.checked_foreign_profile {
-                            crate::foreign::checked_source::bind_checked_foreign_symbol
-                        } else {
-                            bind_foreign_symbol
-                        })(
-                            NativeLibraryId::new(self.module, ordinal),
-                            Arc::clone(&library.prepared),
-                            index,
-                            original,
-                            &context,
-                            &mut self.type_work,
+                let symbol = bind_foreign_symbol(
+                    NativeLibraryId::new(self.module, ordinal),
+                    Arc::clone(&library.prepared),
+                    index,
+                    effect,
+                    &ForeignBindingContext::new(&checking_registry),
+                    &mut self.type_work,
+                )
+                .map_err(|failure| {
+                    if matches!(failure.reason(),
+                        crate::foreign::checked_source::ForeignAdmissionReason::WorkExhausted
+                        | crate::foreign::checked_source::ForeignAdmissionReason::StorageRefused)
+                    {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            failure.span(),
+                            "foreign symbol binding exceeded its work budget",
                         )
-                        .map_err(source_admission_failure)?,
-                    ),
-                ));
+                    } else {
+                        error(
+                            ResolveReason::ForeignContract,
+                            failure.span(),
+                            &failure.to_string(),
+                        )
+                    }
+                })?;
+                symbols.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "foreign symbol storage exhausted",
+                    )
+                })?;
+                symbols.push((effect_index, Arc::new(symbol)));
             }
         }
-        drop(context);
-        drop(registry);
         let registry = Arc::get_mut(&mut declarations.registry).ok_or_else(|| {
             error(
                 ResolveReason::InternalState,
                 surface.span,
-                "source foreign publication requires its unique defining registry",
+                "foreign registry is shared before publication",
             )
         })?;
-        registry
-            .retain_source_accesses(&accesses, &mut self.type_work)
-            .map_err(|failure| source_build_failure(failure, surface.span))?;
-        for (effect_index, symbol) in symbols {
-            declarations.effects[effect_index].native_contract = Some(Arc::clone(&symbol));
+        for (index, symbol) in symbols {
+            declarations.effects[index].native_contract = Some(Arc::clone(&symbol));
             registry
                 .retain_native_symbol(symbol, &mut self.type_work)
-                .map_err(|failure| source_build_failure(failure, surface.span))?;
+                .map_err(|failure| {
+                    let reason = match failure {
+                        crate::resolved::ResolvedBuildFailure::TypeResource => {
+                            ResolveReason::TypeResourceExhausted
+                        }
+                        crate::resolved::ResolvedBuildFailure::ConstraintResource => {
+                            ResolveReason::ConstraintResourceExhausted
+                        }
+                        _ => ResolveReason::InternalState,
+                    };
+                    error(reason, surface.span, "could not retain foreign operation")
+                })?;
         }
         Ok(())
     }
-
-    pub(super) fn append_source_constant_definitions(
-        &mut self,
-        surface: &SurfaceModule,
-        binders: Vec<crate::resolved::Binder>,
-        definitions: &mut super::ResolvedDefinitionBuffer,
-    ) -> Result<(), ResolveError> {
-        use crate::resolved::{
-            ResolvedDefinition, ResolvedDefinitionKind, ResolvedEquation, ResolvedEquationHead,
-            ResolvedEquationalGlobal, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
-            ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
-        };
-        self.type_work
-            .charge(binders.len().saturating_mul(5))
-            .map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    surface.span,
-                    "foreign constant lowering exceeded its budget",
-                )
-            })?;
-        definitions
-            .0
-            .try_reserve_exact(binders.len())
-            .map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    surface.span,
-                    "foreign constant definition storage could not be reserved",
-                )
-            })?;
-        let mut binders = binders.into_iter();
-        for library in &self.source_foreign_libraries {
-            for constant in library.constants() {
-                let binder = binders.next().ok_or_else(|| {
-                    error(
-                        ResolveReason::InternalState,
-                        surface.span,
-                        "foreign constant binder is missing",
-                    )
-                })?;
-                let span = constant.origin().primary_span();
-                let scalar = constant.value();
-                let value = scalar.checked_integer().ok_or_else(|| {
-                    error(
-                        ResolveReason::ForeignContract,
-                        span,
-                        "checked foreign constant value is invalid",
-                    )
-                })?;
-                self.type_work.charge(constant.name().len()).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "foreign constant spelling copy exceeded its budget",
-                    )
-                })?;
-                let mut spelling = String::new();
-                spelling
-                    .try_reserve_exact(constant.name().len())
-                    .map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            span,
-                            "foreign constant spelling storage could not be reserved",
-                        )
-                    })?;
-                spelling.push_str(constant.name());
-                let mut provenance = Vec::new();
-                provenance.try_reserve_exact(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "foreign constant provenance storage could not be reserved",
-                    )
-                })?;
-                provenance.push(ResolvedTypeProvenanceNode::Fact(span));
-                let mut equations = Vec::new();
-                equations.try_reserve_exact(1).map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "foreign constant equation storage could not be reserved",
-                    )
-                })?;
-                equations.push(ResolvedEquation {
-                    name: ResolvedEquationHead {
-                        binder: binder.id,
-                        spelling,
-                        origin: binder.origin.clone(),
-                    },
-                    patterns: Vec::new(),
-                    body: ResolvedExpr {
-                        kind: ResolvedExprKind::Integer(value),
-                        span,
-                    },
-                    span,
-                });
-                definitions.0.push(ResolvedDefinition {
-                    kind: ResolvedDefinitionKind::ForeignConstant(ResolvedEquationalGlobal {
-                        interface: ResolvedExternalInterface {
-                            name: binder,
-                            annotation: ResolvedType {
-                                ty: crate::types::Type::Int,
-                                provenance: ResolvedTypeProvenance::new(provenance, 0),
-                                origin: constant.origin().clone(),
-                                span,
-                            },
-                            requirements: Box::new([]),
-                            type_parameters: Box::new([]),
-                            span,
-                        },
-                        equations,
-                    }),
-                    span,
-                });
-            }
-        }
-        if binders.next().is_some() {
-            return Err(error(
-                ResolveReason::InternalState,
-                surface.span,
-                "foreign constant binders disagree",
-            ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn order_source_constant_definitions(
-        &mut self,
-        surface: &SurfaceModule,
-        definitions: &mut super::ResolvedDefinitionBuffer,
-    ) -> Result<(), ResolveError> {
-        if definitions.0.len() == surface.definitions.len() {
-            return Ok(());
-        }
-        let count = definitions.0.len();
-        self.type_work
-            .charge(
-                count
-                    .checked_mul(4)
-                    .and_then(|n| n.checked_add(surface.declaration_order.len()))
-                    .ok_or_else(|| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            surface.span,
-                            "foreign constant ordering exceeded its bound",
-                        )
-                    })?,
-            )
-            .map_err(|_| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    surface.span,
-                    "foreign constant ordering exceeded its budget",
-                )
-            })?;
-        let mut destinations = Vec::new();
-        destinations.try_reserve_exact(count).map_err(|_| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                surface.span,
-                "foreign constant ordering storage could not be reserved",
-            )
-        })?;
-        destinations.resize(count, usize::MAX);
-        let mut next = 0;
-        let mut constant = surface.definitions.len();
-        for declaration in &surface.declaration_order {
-            let mut place = |original: usize| -> Result<(), ResolveError> {
-                let slot = destinations.get_mut(original).ok_or_else(|| {
-                    error(
-                        ResolveReason::InternalState,
-                        surface.span,
-                        "foreign constant declaration index is invalid",
-                    )
-                })?;
-                if *slot != usize::MAX {
-                    return Err(error(
-                        ResolveReason::InternalState,
-                        surface.span,
-                        "foreign constant declaration index repeats",
-                    ));
-                }
-                *slot = next;
-                next += 1;
-                Ok(())
-            };
-            match *declaration {
-                SurfaceDeclarationIndex::Global(index) => place(index)?,
-                SurfaceDeclarationIndex::ForeignLibrary(index) => {
-                    let library = self.source_foreign_libraries.get(index).ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            surface.span,
-                            "foreign constant library index is invalid",
-                        )
-                    })?;
-                    for _ in library.constants() {
-                        place(constant)?;
-                        constant += 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if next != count || destinations.iter().any(|position| *position >= count) {
-            return Err(error(
-                ResolveReason::InternalState,
-                surface.span,
-                "foreign constant declaration order is incomplete",
-            ));
-        }
-        // Each swap settles at least one destination; at most count swaps.
-        // This moves existing owners without recursive copies or disposal.
-        for original in 0..count {
-            while destinations[original] != original {
-                let target = destinations[original];
-                definitions.0.swap(original, target);
-                destinations.swap(original, target);
-            }
-        }
-        Ok(())
-    }
-
     pub(super) fn effect_sources<'a>(
         &mut self,
         surface: &'a SurfaceModule,
@@ -1113,53 +379,29 @@ impl Resolver {
     }
 }
 
-fn source_build_failure(failure: ResolvedBuildFailure, span: Span) -> ResolveError {
-    error(
-        if failure == ResolvedBuildFailure::TypeResource {
-            ResolveReason::TypeResourceExhausted
-        } else {
-            ResolveReason::InternalState
-        },
-        span,
-        "source foreign facts could not be retained",
-    )
-}
-
-fn source_admission_failure(
-    failure: crate::foreign::checked_source::ForeignAdmissionError,
-) -> ResolveError {
-    error(
-        if failure.is_resource_exhaustion() {
-            ResolveReason::TypeResourceExhausted
-        } else {
-            ResolveReason::ForeignContract
-        },
-        failure.span(),
-        &format!("foreign source admission rejected {:?}", failure.reason()),
-    )
-}
-
+/// Expands passive libraries into their ordinary effect declarations while
+/// retaining all ordinary declaration indices and source ordering.
 pub(super) fn retain_module_declaration_order(
     surface: &SurfaceModule,
     prepared: &[PreparedLibrarySource],
-    work: &mut TypeWorkBudget,
+    work: &mut crate::types::TypeWorkBudget,
 ) -> Result<Vec<crate::resolved::ResolvedDeclarationIndex>, ResolveError> {
+    use crate::resolved::ResolvedDeclarationIndex;
+    use crate::surface::SurfaceDeclarationIndex;
     if prepared.is_empty() {
-        return retain_declaration_order(&surface.declaration_order, surface.span, work);
+        return super::retain_declaration_order(&surface.declaration_order, surface.span, work);
     }
     let mut result = Vec::new();
     let mut next_library = 0;
     let mut next_ordinary = 0;
     let mut next_effect = 0;
-    let mut next_owner = surface.type_declarations.len();
-    let mut next_global = 0;
     for declaration in &surface.declaration_order {
         if let SurfaceDeclarationIndex::ForeignLibrary(index) = *declaration {
             work.charge(1).map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     surface.span,
-                    "foreign declaration-order traversal exceeded its work budget",
+                    "foreign declaration-order work exhausted",
                 )
             })?;
             if index != next_library {
@@ -1180,109 +422,37 @@ pub(super) fn retain_module_declaration_order(
                 return Err(error(
                     ResolveReason::InternalState,
                     surface.span,
-                    "foreign effect range disagrees with source declaration order",
+                    "foreign effect range disagrees with declaration order",
                 ));
             }
             work.charge(library.effects.len()).map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     surface.span,
-                    "foreign declaration order exceeded its work budget",
+                    "foreign declaration-order work exhausted",
                 )
             })?;
-            let added = library
-                .effects
-                .len()
-                .checked_add(library.prepared.owners().len())
-                .and_then(|n| n.checked_add(library.prepared.accesses().len()))
-                .and_then(|n| n.checked_add(library.prepared.constants().len()))
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        surface.span,
-                        "foreign declaration order exceeded its bound",
-                    )
-                })?;
-            result.try_reserve(added).map_err(|_| {
+            result.try_reserve(library.effects.len()).map_err(|_| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     surface.span,
-                    "foreign declaration order storage could not be reserved",
+                    "foreign declaration-order storage exhausted",
                 )
             })?;
-            let written = &surface.foreign_libraries[index];
-            work.charge(written.members.len()).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    written.span,
-                    "foreign member order exceeded its work budget",
-                )
-            })?;
-            let mut effect = library.effects.start;
-            let mut owners = 0;
-            for member in &written.members {
-                match member {
-                    SurfaceForeignMember::Owner(_) | SurfaceForeignMember::Access(_) => {
-                        result.push(crate::resolved::ResolvedDeclarationIndex::Type(next_owner));
-                        next_owner = next_owner.checked_add(1).ok_or_else(|| {
-                            error(
-                                ResolveReason::TypeResourceExhausted,
-                                written.span,
-                                "foreign owner order exceeded its bound",
-                            )
-                        })?;
-                        owners += 1;
-                    }
-                    SurfaceForeignMember::Constant(_) => {
-                        result.push(crate::resolved::ResolvedDeclarationIndex::Global(
-                            next_global,
-                        ));
-                        next_global = next_global.checked_add(1).ok_or_else(|| {
-                            error(
-                                ResolveReason::TypeResourceExhausted,
-                                written.span,
-                                "foreign constant order exceeded its bound",
-                            )
-                        })?;
-                    }
-                    SurfaceForeignMember::Symbol(_) => {
-                        result.push(crate::resolved::ResolvedDeclarationIndex::Effect(effect));
-                        effect += 1;
-                    }
-                    _ => {}
-                }
-            }
-            if effect != library.effects.end
-                || owners
-                    != library
-                        .prepared
-                        .owners()
-                        .len()
-                        .saturating_add(library.prepared.accesses().len())
-            {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    written.span,
-                    "foreign member order disagrees with canonical preparation",
-                ));
-            }
+            result.extend(
+                library
+                    .effects
+                    .clone()
+                    .map(ResolvedDeclarationIndex::Effect),
+            );
             next_effect = library.effects.end;
             next_library += 1;
         } else {
-            // Reuse the charged ordinary retention walk before inspecting and
-            // remapping its source-vector index into the combined inventory.
-            let mut ordinary =
-                retain_declaration_order(std::slice::from_ref(declaration), surface.span, work)?;
-            if let SurfaceDeclarationIndex::Global(_) = *declaration {
-                ordinary[0] = crate::resolved::ResolvedDeclarationIndex::Global(next_global);
-                next_global = next_global.checked_add(1).ok_or_else(|| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        surface.span,
-                        "foreign constant order exceeded its bound",
-                    )
-                })?;
-            }
+            let mut ordinary = super::retain_declaration_order(
+                std::slice::from_ref(declaration),
+                surface.span,
+                work,
+            )?;
             if let SurfaceDeclarationIndex::Effect(index) = *declaration {
                 if index != next_ordinary || index >= surface.effects.len() {
                     return Err(error(
@@ -1291,7 +461,7 @@ pub(super) fn retain_module_declaration_order(
                         "ordinary effect order repeats, skips or reorders a declaration",
                     ));
                 }
-                ordinary[0] = crate::resolved::ResolvedDeclarationIndex::Effect(next_effect);
+                ordinary[0] = ResolvedDeclarationIndex::Effect(next_effect);
                 next_ordinary += 1;
                 next_effect += 1;
             }
@@ -1299,70 +469,18 @@ pub(super) fn retain_module_declaration_order(
                 error(
                     ResolveReason::TypeResourceExhausted,
                     surface.span,
-                    "declaration order storage could not be reserved",
+                    "declaration-order storage exhausted",
                 )
             })?;
             result.extend(ordinary);
         }
     }
-    if next_ordinary != surface.effects.len() {
+    if next_ordinary != surface.effects.len() || next_library != prepared.len() {
         return Err(error(
             ResolveReason::InternalState,
             surface.span,
-            "foreign declaration order omits an ordinary effect",
-        ));
-    }
-    if next_library != prepared.len() {
-        return Err(error(
-            ResolveReason::InternalState,
-            surface.span,
-            "foreign declaration order omits a library",
+            "declaration order omits an effect or library",
         ));
     }
     Ok(result)
-}
-
-#[cfg(test)]
-mod checked_metadata_tests {
-    use super::*;
-    use crate::{
-        lexer::lex,
-        module::ModuleId,
-        parser::{parse, project_module},
-        source::SourceFile,
-    };
-
-    #[test]
-    fn checked_assumptions_do_not_publish_or_reserve_module_member_names() {
-        let text = r#"foreign checked library First {
-    assumption Behavior "First original."
-}
-foreign checked library Second {
-    assumption Behavior "Distinct second original."
-}
-foreign checked library Third {
-    symbol Behavior<H> : Unit -> Unit {
-        name "noop"
-        abi () -> void
-        host H
-        assumes {}
-    }
-}
-"#;
-        let source = SourceFile::new("checked-name-collisions.ash", text).unwrap();
-        let tree = parse(lex(&source).unwrap());
-        assert!(tree.parse_diagnostics().is_empty());
-        let surface = project_module(&source, &tree).unwrap();
-        let mut resolver = Resolver::new(ModuleId::from(source.id()));
-        resolver.validate_source_foreign_members(&surface).unwrap();
-        // Only published members still collide across libraries.
-        let mut duplicate = surface.clone();
-        let symbol = duplicate.foreign_libraries[2].members[0].clone();
-        duplicate.foreign_libraries[0].members.push(symbol);
-        assert!(
-            Resolver::new(ModuleId::from(source.id()))
-                .validate_source_foreign_members(&duplicate)
-                .is_err()
-        );
-    }
 }

@@ -25,56 +25,12 @@ impl StringNode {
 /// Closed set of compiler-owned pure operations admitted by this experiment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Intrinsic {
-    /// Checks the GNU64 signed range without invoking a native symbol.
-    ForeignCheckedI64 {
-        /// Claim of the original compiler-owned function identity.
-        function: crate::resolved::BinderId,
-    },
-    /// Checks the GNU64 size_t range without invoking a native symbol.
-    ForeignCheckedSizeT {
-        /// Claim of the original compiler-owned function identity.
-        function: crate::resolved::BinderId,
-    },
-    /// Checks that an ordinary string contains no NUL, without native authority.
-    ForeignCheckedNul {
-        /// Original compiler-owned pure preflight declaration.
-        function: crate::resolved::BinderId,
-    },
-    /// Reads the selected source descriptor's ordinary private payload.
-    ForeignDataOf {
-        /// Original sealed state/data declaration.
-        function: crate::resolved::BinderId,
-    },
-    /// Replaces that payload after complete fallible admission.
-    ForeignReplaceData {
-        /// Original sealed state/data declaration.
-        function: crate::resolved::BinderId,
-    },
-    /// Reads through an independently admitted initialized live State.
-    ForeignByteRead {
-        /// Original sealed canonical byte declaration.
-        function: crate::resolved::BinderId,
-    },
-    /// Writes through that State only after complete reply admission.
-    ForeignByteWrite {
-        /// Original sealed canonical byte declaration.
-        function: crate::resolved::BinderId,
-    },
-    /// Copies a checked live view with its opaque exact-view extent.
-    ForeignCopyBytes { function: crate::resolved::BinderId },
-    /// Copies a checked live NUL view under its bounded scan contract.
-    ForeignCopyNul { function: crate::resolved::BinderId },
-    /// Exposes a copied length without adding access permission.
-    ForeignExtentValue { function: crate::resolved::BinderId },
-    /// Conservatively denies the exact authenticated Current/Enclosing group.
-    ForeignQuarantine { function: crate::resolved::BinderId },
-    /// Denies the exact pending unpublished acquisition group, including null.
-    ForeignRejectAcquisition { function: crate::resolved::BinderId },
-    /// Produces an opaque witness from one independently authenticated dictionary.
-    ForeignLayoutWitness {
-        /// Copied header; canonical dictionary validation is mandatory.
-        producer: crate::foreign::ForeignLayoutProducer,
-    },
+    /// Constructs the null C data pointer, without a memory access.
+    AddressNull,
+    /// Tests a C data pointer for null.
+    AddressIsNull,
+    /// Compares raw data-pointer values, without interpreting their lifetime.
+    AddressEqual,
     /// Constructs empty bytes.
     BytesEmpty,
     /// Appends a checked byte and returns an ordinary constructor result.
@@ -127,183 +83,23 @@ impl IntrinsicNode {
     /// Returns the fixed ordinary signature, including nominal result identity.
     #[must_use]
     pub fn expected_type(self) -> Type {
-        if matches!(self.operation, Intrinsic::ForeignQuarantine { .. }
-            | Intrinsic::ForeignRejectAcquisition { .. }) {
-            use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
-            use crate::types::{ComputationType, EffectId, EffectInstance, EffectRow, NominalTypeId};
-            let role = if matches!(self.operation, Intrinsic::ForeignQuarantine { .. }) {
-                Role::CheckedQuarantine
-            } else { Role::CheckedRejectAcquisition };
-            let host = role.host_parameter(self.module).expect("checked denial host");
-            let cause = Type::Nominal(NominalTypeId::new(self.module,
-                crate::module::ForeignCheckedNominalRole::ViolationCause.local()));
-            let input = if let Some(state) = role.state_parameter(self.module) {
-                Type::Tuple(Box::new([Type::Variable(state), cause]))
-            } else { cause };
-            let output = Type::Application(
-                Box::new(Type::Nominal(NominalTypeId::new(self.module, 12))),
-                Box::new(Type::Unit),
-            );
-            return Type::EffectfulFunction(Box::new(input), Box::new(ComputationType::new(
-                output, EffectRow::singleton(EffectInstance::new(
-                    EffectId::new(self.module, crate::module::FOREIGN_NATIVE_HOST_LOCAL),
-                    Box::new([Type::Variable(host)]),
-                )),
-            )));
-        }
-        // The operation tags share the existing callable carrier, while distinct
-        // defining function IDs select the checked codec and latent Host row.
-        let function = match self.operation {
-            Intrinsic::ForeignByteRead { function }
-            | Intrinsic::ForeignByteWrite { function }
-            | Intrinsic::ForeignCopyBytes { function }
-            | Intrinsic::ForeignCopyNul { function } => Some(function),
-            _ => None,
-        };
-        if let Some(role) = function.and_then(|function| {
-            crate::foreign::scalar_preflight::ForeignScalarPreflightRole::checked_memory_local(
-                function.local(),
-            )
-        }) {
-            use crate::foreign::scalar_preflight::ForeignScalarPreflightRole as Role;
-            use crate::types::{
-                ComputationType, EffectId, EffectInstance, EffectRow, NominalTypeId,
-            };
-            let host = role.host_parameter(self.module).expect("checked role H");
-            let borrowed = role
-                .borrowed_parameter(self.module)
-                .expect("checked role State/view");
-            let mut fields = vec![Type::Variable(borrowed)];
-            fields.push(if role == Role::CheckedCopyBytes {
-                Type::Application(
-                    Box::new(Type::Nominal(NominalTypeId::new(self.module, 5))),
-                    Box::new(Type::Variable(borrowed)),
-                )
-            } else {
-                Type::Int
-            });
-            if role == Role::CheckedByteWrite {
-                fields.push(Type::Int);
-            }
-            let output = Type::Application(
-                Box::new(Type::Nominal(NominalTypeId::new(self.module, 12))),
-                Box::new(match role {
-                    Role::CheckedByteRead => Type::Int,
-                    Role::CheckedByteWrite => Type::Unit,
-                    _ => Type::Bytes,
-                }),
-            );
-            return Type::EffectfulFunction(
-                Box::new(Type::Tuple(fields.into_boxed_slice())),
-                Box::new(ComputationType::new(
-                    output,
-                    EffectRow::singleton(EffectInstance::new(
-                        EffectId::new(self.module, crate::module::FOREIGN_NATIVE_HOST_LOCAL),
-                        Box::new([Type::Variable(host)]),
-                    )),
-                )),
-            );
-        }
         let (input, output) = match self.operation {
-            Intrinsic::ForeignQuarantine { .. } | Intrinsic::ForeignRejectAcquisition { .. } =>
-                unreachable!("checked denial signature handled above"),
-            Intrinsic::ForeignCheckedI64 { .. } | Intrinsic::ForeignCheckedSizeT { .. } => (
-                Type::Int,
-                Type::Application(
-                    Box::new(Type::Nominal(crate::types::NominalTypeId::new(
-                        self.module,
-                        1,
-                    ))),
-                    Box::new(Type::Int),
-                ),
+            Intrinsic::AddressNull => (
+                Type::Unit,
+                Type::Nominal(crate::types::NominalTypeId::new(self.module, 0)),
             ),
-            Intrinsic::ForeignCheckedNul { .. } => (
-                Type::String,
-                Type::Application(
-                    Box::new(Type::Nominal(crate::types::NominalTypeId::new(
-                        self.module,
-                        1,
-                    ))),
-                    Box::new(Type::Unit),
-                ),
+            Intrinsic::AddressIsNull => (
+                Type::Nominal(crate::types::NominalTypeId::new(self.module, 0)),
+                Type::Bool,
             ),
-            Intrinsic::ForeignDataOf { .. } | Intrinsic::ForeignReplaceData { .. } => {
-                let replace = matches!(self.operation, Intrinsic::ForeignReplaceData { .. });
-                let state = crate::types::TypeVariableId::resolved(
-                    self.module,
-                    if replace { 9 } else { 7 },
-                );
-                let data = crate::types::TypeVariableId::resolved(
-                    self.module,
-                    if replace { 10 } else { 8 },
-                );
-                if replace {
-                    (
-                        Type::Tuple(Box::new([Type::Variable(state), Type::Variable(data)])),
-                        Type::Unit,
-                    )
-                } else {
-                    (Type::Variable(state), Type::Variable(data))
-                }
-            }
-            Intrinsic::ForeignCopyBytes { .. }
-            | Intrinsic::ForeignCopyNul { .. }
-            | Intrinsic::ForeignExtentValue { .. } => {
-                let local = match self.operation {
-                    Intrinsic::ForeignCopyBytes { .. } => 11,
-                    Intrinsic::ForeignCopyNul { .. } => 12,
-                    _ => 13,
-                };
-                let view = crate::types::TypeVariableId::resolved(self.module, local);
-                let extent = || {
-                    Type::Application(
-                        Box::new(Type::Nominal(crate::types::NominalTypeId::new(
-                            self.module,
-                            5,
-                        ))),
-                        Box::new(Type::Variable(view)),
-                    )
-                };
-                if matches!(self.operation, Intrinsic::ForeignExtentValue { .. }) {
-                    (extent(), Type::Int)
-                } else {
-                    let second = if matches!(self.operation, Intrinsic::ForeignCopyBytes { .. }) {
-                        extent()
-                    } else {
-                        Type::Int
-                    };
-                    (
-                        Type::Tuple(Box::new([Type::Variable(view), second])),
-                        Type::Application(
-                            Box::new(Type::Nominal(crate::types::NominalTypeId::new(
-                                self.module,
-                                1,
-                            ))),
-                            Box::new(Type::Bytes),
-                        ),
-                    )
-                }
-            }
-            Intrinsic::ForeignLayoutWitness { producer } => return producer.producer_type(),
-            Intrinsic::ForeignByteRead { .. } | Intrinsic::ForeignByteWrite { .. } => {
-                let write = matches!(self.operation, Intrinsic::ForeignByteWrite { .. });
-                let parameter =
-                    crate::types::TypeVariableId::resolved(self.module, if write { 6 } else { 5 });
-                let mut fields = vec![Type::Variable(parameter), Type::Int];
-                if write {
-                    fields.push(Type::Int);
-                }
+            Intrinsic::AddressEqual => {
+                let address = Type::Nominal(crate::types::NominalTypeId::new(self.module, 0));
                 (
-                    Type::Tuple(fields.into_boxed_slice()),
-                    Type::Application(
-                        Box::new(Type::Nominal(crate::types::NominalTypeId::new(
-                            self.module,
-                            1,
-                        ))),
-                        Box::new(if write { Type::Unit } else { Type::Int }),
-                    ),
+                    Type::Tuple(Box::new([address.clone(), address])),
+                    Type::Bool,
                 )
             }
+
             Intrinsic::BytesEmpty => (Type::Unit, Type::Bytes),
             Intrinsic::BytesAppendByte { appended, .. } => (
                 Type::Tuple(Box::new([Type::Bytes, Type::Int])),
@@ -332,19 +128,10 @@ impl IntrinsicNode {
     }
     pub(crate) fn authentic_module(self) -> bool {
         match self.operation {
-            Intrinsic::ForeignCheckedI64 { .. }
-            | Intrinsic::ForeignCheckedSizeT { .. }
-            | Intrinsic::ForeignCheckedNul { .. }
-            | Intrinsic::ForeignDataOf { .. }
-            | Intrinsic::ForeignReplaceData { .. }
-            | Intrinsic::ForeignByteRead { .. }
-            | Intrinsic::ForeignByteWrite { .. }
-            | Intrinsic::ForeignCopyBytes { .. }
-            | Intrinsic::ForeignCopyNul { .. }
-            | Intrinsic::ForeignExtentValue { .. }
-            | Intrinsic::ForeignQuarantine { .. }
-            | Intrinsic::ForeignRejectAcquisition { .. } => self.module.is_builtin_foreign(),
-            Intrinsic::ForeignLayoutWitness { .. } => false,
+            Intrinsic::AddressNull | Intrinsic::AddressIsNull | Intrinsic::AddressEqual => {
+                self.module.is_builtin_foreign()
+            }
+
             Intrinsic::BytesEmpty
             | Intrinsic::BytesAppendByte { .. }
             | Intrinsic::BytesAt { .. }

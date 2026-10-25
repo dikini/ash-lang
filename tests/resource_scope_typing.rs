@@ -1482,8 +1482,8 @@ fn cell_n09_generic_calls_need_exact_evidence_and_counterfeit_family_cannot_acqu
         error.contains("Unsatisfied") || error.contains("NoImplementation"),
         "{error}"
     );
-    let error = tree.check_public_ordinary("pub opaque type Cell<R,T> = Hidden\nmain : Unit -> Int\nmain () = resource Cell<R, Int> c = 41 {\n42\n}\n", "resolve.unknown-type", "resolve");
-    assert!(error.contains("UnknownType"), "{error}");
+    let error = tree.check_public_ordinary("pub opaque type Cell<R,T> = Hidden\nmain : Unit -> Int\nmain () = resource Cell<R, Int> c = 41 {\n42\n}\n", "resolve.resource-builtin-required", "resolve");
+    assert!(error.contains("ResourceBuiltinRequired"), "{error}");
 }
 
 #[test]
@@ -1532,30 +1532,8 @@ fn generic_helpers_and_facade_acquisition_publish_conditional_dependency_graphs(
 }
 
 #[test]
-fn cell_n11_native_state_and_continuation_payloads_keep_ordinary_restrictions() {
+fn cell_n11_continuation_payload_keeps_the_ordinary_capture_refusal() {
     let tree = Tree::new();
-    fs::write(
-        tree.0.join("owner.ash"),
-        include_str!("fixtures/source-owner/owner.ash"),
-    )
-    .unwrap();
-    for payload in [
-        "Owner.State<Int>",
-        "(Int, Owner.State<Int>)",
-        "Wrapped<Owner.State<Int>>",
-    ] {
-        let source = format!(
-            "import @builtin.generic_cell as Cell\nimport owner as Owner\ntype Wrapped<T> = Wrap(T)\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, {payload}> c = 41 {{\n42\n}}\n"
-        );
-        let error = tree.check_public_ordinary(&source, "type.argument", "typing");
-        assert!(
-            error.contains("Argument")
-                && error.contains(
-                    "controlled native state is unavailable in ordinary callable types or captures"
-                ),
-            "{error}"
-        );
-    }
     let source = "import @builtin.generic_cell as Cell\neffect Ask {\nask : Unit -> Int\n}\nmain : Unit -> Int\nmain () = handle (perform Ask.ask ()) with Ask {\nask ignored => resource Cell.Cell<R, (Unit -> Int)> c = (fn(ignored) {\nresume 42\n}) {\n42\n}\n}\n";
     let error = tree.check_public_ordinary(source, "effect.resume-capture", "typing");
     assert!(
@@ -1609,25 +1587,6 @@ fn cell_p11_mixed_api_typing_preserves_both_families() {
 fn generic_cell_indexed_callable_metadata_keeps_conditional_dependencies() {
     let tree = Tree::new();
     assert_check(tree.check("import @builtin.generic_cell (Ops)\npub relay<R,T> : (Unit -> T ! {Ops<R,T>}) -> (Unit -> T ! {Ops<R,T>})\nrelay callback = callback\n"), None);
-}
-
-#[test]
-fn generic_cell_known_ops_inside_resource_row_arguments_pass_metadata_admission() {
-    let tree = Tree::new();
-    fs::write(
-        tree.0.join("owner.ash"),
-        include_str!("fixtures/source-owner/owner.ash"),
-    )
-    .unwrap();
-    // Keep this helper private: the public fixture reaches a separate export
-    // summary failure. Both variants still cross checked
-    // module admission with a genuine computational ResourceApply RowArg.
-    for (row, expected) in [("Ops<Int, Bool>", None), ("Tick", None)] {
-        let source = format!(
-            "import @builtin.generic_cell (Ops)\nimport owner as Owner\neffect Tick {{\ntick : Unit -> Unit\n}}\nrelay<R> : Owner.Probe<{{{row}}}, R, {{}}> -> Owner.Probe<{{{row}}}, R, {{}}>\nrelay value = value\n"
-        );
-        assert_check(tree.check(&source), expected);
-    }
 }
 
 #[test]
@@ -2292,28 +2251,6 @@ fn cell_n02_access_wrappers_and_live_reader_results_cannot_leave_their_owner() {
 }
 
 #[test]
-fn generic_cell_payload_can_retain_an_enclosing_source_access() {
-    let tree = Tree::new();
-    fs::write(
-        tree.0.join("owner.ash"),
-        include_str!("fixtures/source-owner/owner.ash"),
-    )
-    .unwrap();
-    let source = "import @builtin.generic_cell as Cell\nimport owner as Owner\nmain : Unit -> Owner.Scope<Unit,Unit,Int>\nmain () = resource Owner.Probe<{},O,{}> outer = 42 {\nresource Cell.Cell<R,Owner.Probe<{},O,{}>> c = outer {\nlet selected = Cell.read c\nOwner.read selected\n}\n}\n";
-    // The raw checker receives declaration summaries, but no original source
-    // provider code. Its refusal must publish no checked entry module.
-    let missing_code = tree.check(source).unwrap_err();
-    assert!(missing_code.contains("InvalidState"), "{missing_code}");
-    // The public driver retains the defining provider code during source
-    // checking, then independently reconstructs linked Core dependencies.
-    ash::driver::compile_path(ash::driver::RunConfiguration {
-        entry: tree.0.join("entry.ash"),
-        roots: ModuleRoots::empty(),
-    })
-    .expect("enclosing ordinary source access remains a valid generic payload");
-}
-
-#[test]
 fn generic_cell_completion_keeps_structural_discard_obligations() {
     let tree = Tree::new();
     let admitted = "import @builtin.generic_cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = handle (resource Cell.Cell<R,Int> c = 41 {\nperform Stop.stop ()\n}) with Stop {\nstop ignored => discard\n}\n";
@@ -2352,24 +2289,16 @@ fn cell_exact_function_handler_does_not_intercept_distinct_outer_read() {
 }
 
 #[test]
-fn cell_scope_report_escape_points_to_the_actual_body_value() {
+fn cell_scope_escape_points_to_the_actual_body_value() {
     let tree = Tree::new();
-    fs::write(
-        tree.0.join("owner.ash"),
-        include_str!("fixtures/source-owner/owner.ash"),
-    )
-    .unwrap();
     let source = r#"import @builtin.generic_cell as Cell
-import owner as Owner
-main : Unit -> Owner.Scope<Unit,Unit,(Unit -> Int)>
+main : Unit -> (Unit -> Int)
 main () = resource Cell.Cell<R,Int> c = 41 {
-    resource Owner.Probe<{},O,{}> outer = 42 {
-        let bad : Unit -> Int = fn(ignored) {
-            let held = c
-            7
-        }
-        bad
+    let bad : Unit -> Int = fn(ignored) {
+        let held = c
+        7
     }
+    bad
 }
 "#;
     fs::write(
@@ -2381,13 +2310,13 @@ main () = resource Cell.Cell<R,Int> c = 41 {
         entry: tree.0.join("entry.ash"),
         roots: ModuleRoots::empty(),
     })
-    .expect("independent function report remains admissible");
+    .expect("independent function result remains admissible");
     fs::write(tree.0.join("entry.ash"), source).unwrap();
     let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
         entry: tree.0.join("entry.ash"),
         roots: ModuleRoots::empty(),
     })
-    .expect_err("captured cell must not escape inside the completed report");
+    .expect_err("captured cell must not escape as the completed body value");
     assert_eq!(failure.reason_code(), "type.resource-escape", "{failure:?}");
     let ash::driver::FileFailure::Pipeline(context) = &failure else {
         panic!("source phase");
@@ -2425,30 +2354,6 @@ main () = resource Cell.Cell<R,Int> c = 41 {
 #[test]
 fn cell_exact_handler_with_constant_owner_metadata_remains_admissible() {
     assert_check(Tree::new().check_dependencies("import @builtin.generic_cell as Cell\npub read : Cell.Cell<Int,Int> -> Int\nread c = handle (perform Cell.Ops<Int,Int>.read c) with Cell.Ops<Int,Int> {\nread ignored => resume 7\nwrite ignored => resume ()\n}\nmain : Unit -> Int\nmain () = 42\n"), None);
-}
-
-#[test]
-fn cell_unused_scope_in_source_provider_preparation_retains_phase_restriction() {
-    let tree = Tree::new();
-    let owner = format!(
-        "import @builtin.generic_cell as Cell\n{}",
-        include_str!("fixtures/source-owner/owner.ash").replace(
-            "read access => resume data",
-            "read access => resume (resource Cell.Cell<X,Int> unused = 0 {\ndata\n})"
-        )
-    );
-    fs::write(tree.0.join("owner.ash"), owner).unwrap();
-    fs::write(tree.0.join("entry.ash"), "import owner as Owner\nmain : Unit -> Owner.Scope<Unit,Unit,Int>\nmain () = resource Owner.Probe<{},R,{}> c = 42 {\nOwner.read c\n}\n").unwrap();
-    let failure = ash::driver::compile_path(ash::driver::RunConfiguration {
-        entry: tree.0.join("entry.ash"),
-        roots: ModuleRoots::empty(),
-    })
-    .expect_err("the existing native phase profile excludes nested resources");
-    assert_eq!(failure.reason_code(), "type.argument", "{failure:?}");
-    assert!(
-        format!("{failure:?}")
-            .contains("resource phases cannot introduce lexical evidence or nested resources")
-    );
 }
 
 #[test]

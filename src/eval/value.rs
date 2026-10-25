@@ -136,15 +136,12 @@ impl ObservedValue {
                 }
                 Task::Value(value) => match value {
                     Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
-                    Value::NativeStateView(_) => output.push_str("<native-state-view>"),
-                    Value::NativeWindowView(_) => output.push_str("<native-window-view>"),
-                    Value::NativeWindowExtent(_) => output.push_str("<native-window-extent>"),
-                    Value::LayoutWitness(_) => output.push_str("<layout-witness>"),
-                    Value::Reference { .. } => output.push_str("<arena-reference>"),
+
+                    Value::Intrinsic(_) => output.push_str("<function>"),
+                    Value::Address(_) => output.push_str("<address>"),
                     Value::Bytes(value) => output.push_str(&format!("{value:?}")),
-                    Value::BytePrefix(value) => output.push_str(&format!("{value:?}")),
                     Value::String(value) => output.push_str(&format!("{value:?}")),
-                    Value::Intrinsic(_) | Value::ByteCallable(_) => output.push_str("<function>"),
+
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
@@ -275,27 +272,28 @@ impl fmt::Debug for Closure {
     }
 }
 
-/// Independent copied bytes backed by a preallocated bounded buffer. The
-/// logical prefix may shrink after a NUL scan without allocating after reads.
-/// Unused backing bytes are never observable through Ash Bytes operations.
+/// An inert foreign address. This value owns no memory behind its pointer.
+///
+/// Relaxed loads preserve the pointer for ordinary value transport; they do not
+/// synchronize foreign memory or establish its validity or lifetime.
 #[doc(hidden)]
-#[derive(Clone)]
-pub struct BytePrefix {
-    storage: Arc<[u8]>,
-    length: usize,
-}
-impl BytePrefix {
-    pub(crate) fn new(storage: Arc<[u8]>, length: usize) -> Self {
-        assert!(length <= storage.len());
-        Self { storage, length }
+pub struct Address(std::sync::atomic::AtomicPtr<core::ffi::c_void>);
+impl Address {
+    pub(crate) fn new(pointer: *mut core::ffi::c_void) -> Self {
+        Self(std::sync::atomic::AtomicPtr::new(pointer))
     }
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        &self.storage[..self.length]
+    pub(crate) fn as_ptr(&self) -> *mut core::ffi::c_void {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
-impl fmt::Debug for BytePrefix {
+impl Clone for Address {
+    fn clone(&self) -> Self {
+        Self::new(self.as_ptr())
+    }
+}
+impl fmt::Debug for Address {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.as_bytes().fmt(formatter)
+        formatter.write_str("<address>")
     }
 }
 
@@ -305,31 +303,18 @@ impl fmt::Debug for BytePrefix {
 /// have no equality operation or observable identity.
 #[derive(Clone, Debug)]
 pub enum Value {
+    /// Opaque C data pointer. Copying this value neither owns nor retains its target.
+    Address(Address),
     /// Immutable finite bytes in ordinary shared storage.
     Bytes(Arc<[u8]>),
-    /// Independent logical byte prefix; contains no foreign address or authority.
-    BytePrefix(BytePrefix),
     /// Immutable UTF-8 text, including embedded NUL.
     String(Arc<str>),
     /// An authenticated compiler-owned first-order pure callable.
     Intrinsic(crate::core::packed::IntrinsicNode),
-    /// A sealed byte callable retaining its selected original instantiation.
-    ByteCallable(super::machine::SourceByteCallable),
+
     /// An opaque, non-owning access key for a live resource activation.
     ResourceHandle(ActivationKey),
-    /// An opaque borrowed native state view with no native ownership edge.
-    NativeStateView(ActivationKey),
-    /// Nonowning exact lexical-window view; contains no native address.
-    NativeWindowView(super::machine::source_window_phases::WindowViewKey),
-    /// Opaque extent tied to one exact lexical-window view.
-    NativeWindowExtent(super::machine::source_window_phases::WindowExtentKey),
-    /// Complete authenticated layout metadata, with no native ownership edge.
-    LayoutWitness(crate::foreign::runtime::ForeignLayoutWitness),
-    /// Nonowning access bound to the original live activation.
-    Reference {
-        activation: ActivationKey,
-        reference: crate::foreign::runtime::ForeignReference,
-    },
+
     /// An arbitrary-precision mathematical integer.
     Integer(Integer),
     /// A Boolean value.
@@ -357,7 +342,6 @@ impl Value {
     pub(crate) fn bytes(&self) -> Option<&[u8]> {
         match self {
             Self::Bytes(bytes) => Some(bytes),
-            Self::BytePrefix(bytes) => Some(bytes.as_bytes()),
             _ => None,
         }
     }
@@ -367,15 +351,12 @@ impl fmt::Display for Value {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
-            Self::NativeStateView(_) => formatter.write_str("<native-state-view>"),
-            Self::NativeWindowView(_) => formatter.write_str("<native-window-view>"),
-            Self::NativeWindowExtent(_) => formatter.write_str("<native-window-extent>"),
-            Self::LayoutWitness(_) => formatter.write_str("<layout-witness>"),
-            Self::Reference { .. } => formatter.write_str("<arena-reference>"),
+
+            Self::Intrinsic(_) => formatter.write_str("<function>"),
+            Self::Address(_) => formatter.write_str("<address>"),
             Self::Bytes(value) => write!(formatter, "{value:?}"),
-            Self::BytePrefix(value) => write!(formatter, "{value:?}"),
             Self::String(value) => write!(formatter, "{value:?}"),
-            Self::Intrinsic(_) | Self::ByteCallable(_) => formatter.write_str("<function>"),
+
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),

@@ -1,4 +1,4 @@
-//! Public C observations through authenticated generated scalar-native hosts.
+//! Public pointer, void and Bytes observations through generated native hosts.
 
 use std::{
     fs,
@@ -16,8 +16,7 @@ use ash::{
 };
 
 const NATIVE: &str = include_str!("fixtures/source-native/native.ash");
-const FACADE: &str = include_str!("fixtures/source-native/facade.ash");
-const HELPER: &str = include_str!("fixtures/source-native/helper.ash");
+const POINTERS: &str = include_str!("fixtures/source-native/cases/pointers.ash");
 const C: &str = include_str!("fixtures/source-native/native_counter.c");
 
 struct Fixture(PathBuf);
@@ -110,7 +109,7 @@ fn verify_build_refusals(
     assert!(!directory.join(".ash-build").exists());
     assert!(!output.exists());
 
-    // The valid checked program requires unique ash_counter_* symbols, but no
+    // The valid checked program requires unique fixture_* symbols, but no
     // linker input supplies them. Linking must refuse and retain its evidence;
     // it cannot replace an existing executable destination or invoke native code.
     let previous = b"preserved destination\n";
@@ -122,7 +121,7 @@ fn verify_build_refusals(
     assert_eq!(failure.reason(), "build.native-tool");
     let log = failure.build_log().expect("link refusal retains its log");
     let diagnostic = fs::read_to_string(log).unwrap();
-    assert!(diagnostic.contains("ash_counter_echo_i8"), "{diagnostic}");
+    assert!(diagnostic.contains("fixture_make"), "{diagnostic}");
     assert!(
         diagnostic.contains("undefined symbol") || diagnostic.contains("undefined reference"),
         "missing native symbol must be the linker failure: {diagnostic}"
@@ -133,15 +132,16 @@ fn verify_build_refusals(
 
 // The test uses the public build phase, with no private image/descriptor edits or
 // hand-installed callbacks. Sources disappear before host preparation/linkage.
-fn build_case(fixture: &Fixture, name: &str, source: &str, native: NativeLinkInput) -> PathBuf {
+fn build_case(
+    fixture: &Fixture,
+    name: &str,
+    source: &str,
+    modules: &[(&str, &str)],
+    native: NativeLinkInput,
+) -> PathBuf {
     let directory = fixture.0.join(name);
     fs::create_dir(&directory).unwrap();
-    for (file, text) in [
-        ("entry.ash", source),
-        ("native.ash", NATIVE),
-        ("facade.ash", FACADE),
-        ("helper.ash", HELPER),
-    ] {
+    for (file, text) in std::iter::once(("entry.ash", source)).chain(modules.iter().copied()) {
         fs::write(directory.join(file), text).unwrap();
     }
     let compiled = compile_path(RunConfiguration {
@@ -150,7 +150,7 @@ fn build_case(fixture: &Fixture, name: &str, source: &str, native: NativeLinkInp
     })
     .unwrap();
     let compilation_work = *compiled.compilation_work();
-    for file in ["entry.ash", "native.ash", "facade.ash", "helper.ash"] {
+    for file in std::iter::once("entry.ash").chain(modules.iter().map(|(file, _)| *file)) {
         fs::remove_file(directory.join(file)).unwrap();
     }
     let mut configuration = BuildConfiguration::new(directory.join("program"));
@@ -159,10 +159,7 @@ fn build_case(fixture: &Fixture, name: &str, source: &str, native: NativeLinkInp
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
     configuration.cargo_target_directory = Some(cache.join("ffi-native-hosts"));
-    if matches!(
-        configuration.native_inputs.as_slice(),
-        [NativeLinkInput::StaticArchive(_)]
-    ) {
+    if name == "static-pointers" {
         verify_build_refusals(
             &compiled,
             &directory,
@@ -244,31 +241,18 @@ fn run_host(executable: &Path, fixture: &Fixture, supply_loader_path: bool) -> (
 }
 
 #[test]
-fn generated_scalar_hosts_preserve_real_native_counts_and_exact_results_with_both_linkages() {
+fn generated_pointer_hosts_preserve_native_calls_and_bytes_with_both_linkages() {
     let fixture = Fixture::new();
     let inputs = fixture.native_inputs();
-    let mut row = "{}".to_owned();
-    for _ in 0..43 {
-        row = format!("{{Nest<{row}>}}");
-    }
-    // Exercise independent startup reconstruction past the former row-wire
-    // depth cutoff using the existing two hosts and their real native calls.
-    let template = include_str!("fixtures/source-native/cases/combined.ash");
-    assert_eq!(template.matches("Echo<{}, Int, {}>").count(), 3);
-    assert_eq!(template.matches("effect Left<T>").count(), 1);
-    let source = template
-        .replace("Echo<{}, Int, {}>", &format!("Echo<{row}, Int, {{}}>"))
-        .replace(
-            "effect Left<T>",
-            "effect Nest<Rows : EffectRow> {\n    tick : Unit -> Unit\n}\n\neffect Left<T>",
-        );
-    // Keep the whole build matrix sequential: a single root Cargo window owns
-    // connected verification. These are real C calls, not corrupted callbacks.
+    let source = POINTERS;
     for (linkage, input) in ["static", "shared"].into_iter().zip(inputs) {
-        let name = "combined";
-        let result = "(127, 900, 18446744073709551615, (), 83)\n";
-        let trace = b"iuvii";
-        let executable = build_case(&fixture, &format!("{linkage}-{name}"), &source, input);
+        let executable = build_case(
+            &fixture,
+            &format!("{linkage}-pointers"),
+            source,
+            &[("native.ash", NATIVE)],
+            input,
+        );
         if linkage == "shared" {
             let (output, calls) = run_host(&executable, &fixture, false);
             assert!(
@@ -293,144 +277,13 @@ fn generated_scalar_hosts_preserve_real_native_counts_and_exact_results_with_bot
         // Repeat an independently restored host activation after source loss.
         for _ in 0..2 {
             let (output, calls) = run_host(&executable, &fixture, true);
-            assert!(output.status.success(), "{linkage}/{name}: {output:?}");
-            assert_eq!(output.stdout, result.as_bytes(), "{linkage}/{name}");
-            assert!(output.stderr.is_empty(), "{linkage}/{name}: {output:?}");
-            assert_eq!(calls, trace, "{linkage}/{name}: native call count/order");
+            assert!(output.status.success(), "{linkage}: {output:?}");
+            assert_eq!(
+                output.stdout,
+                b"(true, true, true, true, true, true, true, (), true)\n"
+            );
+            assert!(output.stderr.is_empty(), "{linkage}: {output:?}");
+            assert_eq!(calls, b"mepbbrf", "{linkage}: native call count/order");
         }
-    }
-}
-
-#[test]
-fn generated_native_constant_operands_keep_declared_signed_values() {
-    let fixture = Fixture::new();
-    let inputs = fixture.native_inputs();
-    let contract = r#"import @builtin.foreign as Foreign
-pub foreign library Counter {
-    profile "x86_64-unknown-linux-gnu"
-    repr I8 = signed(8)
-    repr U64 = unsigned(64)
-    const Negative : I8 = -7
-    const Maximum : U64 = 18446744073709551615
-    symbol Wide : Unit -> Foreign.Call<Int> {
-        name "ash_counter_echo_u64"
-        abi (U64) -> U64
-        operand 0 from constant Maximum
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-    symbol Fixed : Unit -> Foreign.Call<Int> {
-        name "ash_counter_echo_i8"
-        abi (I8) -> I8
-        operand 0 from constant Negative
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-}
-"#;
-    for (index, native) in inputs.into_iter().enumerate() {
-        let directory = fixture.0.join(format!("constant-{index}"));
-        fs::create_dir(&directory).unwrap();
-        fs::write(directory.join("native.ash"), contract).unwrap();
-        fs::write(directory.join("entry.ash"), "import @builtin.foreign as Foreign\nimport native as Native\nmain : Unit -> (Int, Int, Foreign.Call<Int>, Foreign.Call<Int>) ! {Native.Fixed, Native.Wide}\nmain () = (Native.Negative, Native.Maximum, perform Native.Fixed.call (), perform Native.Wide.call ())\n").unwrap();
-        let compiled = compile_path(RunConfiguration {
-            entry: directory.join("entry.ash"),
-            roots: ModuleRoots::empty(),
-        })
-        .unwrap();
-        fs::remove_file(directory.join("entry.ash")).unwrap();
-        fs::remove_file(directory.join("native.ash")).unwrap();
-        let mut configuration = BuildConfiguration::new(directory.join("program"));
-        configuration.native_inputs = vec![native];
-        configuration.cargo_target_directory = Some(
-            std::env::var_os("CARGO_TARGET_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
-                .join("ffi-native-hosts"),
-        );
-        let prepared = prepare_program(&compiled, configuration).unwrap();
-        drop(compiled);
-        let built = build_prepared(prepared).unwrap();
-        let generated = built.generated_source();
-        fs::remove_file(generated.parent().unwrap().join("program-image.bin")).unwrap();
-        fs::remove_file(generated.parent().unwrap().join("expected-facts.bin")).unwrap();
-        let (output, calls) = run_host(built.executable(), &fixture, true);
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(
-            output.stdout,
-            b"(-7, 18446744073709551615, Returned(-7), Returned(18446744073709551615))\n"
-        );
-        assert_eq!(calls, b"iw");
-    }
-}
-
-#[test]
-fn generated_noncallable_sentinel_preserves_exact_bits_with_both_linkages() {
-    let fixture = Fixture::new();
-    let contract = r#"import @builtin.foreign as Foreign
-pub foreign library Sentinels {
-    profile "x86_64-unknown-linux-gnu"
-    repr I32 = signed(32)
-    repr Destructor = function_address
-    sentinel Transient : Destructor = all_bits_one
-    symbol Check<Before : EffectRow, T, After : EffectRow> : Unit -> Foreign.Call<Int> {
-        name "ash_counter_noncallable_sentinel"
-        abi (Destructor) -> I32
-        operand 0 from constant Transient
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-}
-"#;
-    for (index, native) in fixture.native_inputs().into_iter().enumerate() {
-        let directory = fixture.0.join(format!("sentinel-{index}"));
-        fs::create_dir(&directory).unwrap();
-        fs::write(directory.join("native.ash"), contract).unwrap();
-        fs::write(directory.join("entry.ash"), "import @builtin.foreign as Foreign\nimport native (Check as Inspect)\ninvoke<T> : T -> Foreign.Call<Int> ! {Inspect<{}, T, {}>}\ninvoke value = perform Inspect<{}, T, {}>.call ()\nmain : Unit -> (Foreign.Call<Int>, Foreign.Call<Int>) ! {Inspect<{}, Int, {}>, Inspect<{}, Unit, {}>}\nmain () = (invoke 1, invoke ())\n").unwrap();
-        let compiled = compile_path(RunConfiguration {
-            entry: directory.join("entry.ash"),
-            roots: ModuleRoots::empty(),
-        })
-        .unwrap();
-        fs::remove_file(directory.join("entry.ash")).unwrap();
-        fs::remove_file(directory.join("native.ash")).unwrap();
-        let mut configuration = BuildConfiguration::new(directory.join("program"));
-        configuration.native_inputs = vec![native];
-        configuration.cargo_target_directory = Some(
-            std::env::var_os("CARGO_TARGET_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
-                .join("ffi-native-hosts"),
-        );
-        let prepared = prepare_program(&compiled, configuration).unwrap();
-        assert!(
-            prepared
-                .generated_rust()
-                .contains("usize::MAX as *mut core::ffi::c_void")
-        );
-        assert!(!prepared.generated_rust().contains("transmute"));
-        drop(compiled);
-        let built = build_prepared(prepared).unwrap_or_else(|error| {
-            let log = error
-                .build_log()
-                .and_then(|path| fs::read_to_string(path).ok())
-                .unwrap_or_default();
-            panic!("{error}\n{log}");
-        });
-        let generated = built.generated_source();
-        fs::remove_file(generated.parent().unwrap().join("program-image.bin")).unwrap();
-        fs::remove_file(generated.parent().unwrap().join("expected-facts.bin")).unwrap();
-        let (output, calls) = run_host(built.executable(), &fixture, true);
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(output.stdout, b"(Returned(7), Returned(7))\n");
-        assert_eq!(calls, b"ss");
     }
 }

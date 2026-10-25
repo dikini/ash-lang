@@ -6,12 +6,11 @@ use std::{
     process::ExitCode,
 };
 
-use ash::{
-    build::{BuildConfiguration, NativeLinkInput, build_path},
-    check_ffi::{CheckConfiguration, check_path},
-    driver::{FileFailure, Observation, PipelineFailure, RunConfiguration, run_path},
-    module::{LoadGraphError, ModuleRoots},
-    render,
+use {
+    ash::build::BuildConfiguration, ash::build::NativeLinkInput, ash::build::build_path,
+    ash::driver::FileFailure, ash::driver::Observation, ash::driver::PipelineFailure,
+    ash::driver::RunConfiguration, ash::driver::run_path, ash::module::LoadGraphError,
+    ash::module::ModuleRoots, ash::render,
 };
 
 fn main() -> ExitCode {
@@ -101,16 +100,6 @@ where
                 catalogue.as_ref(),
             );
         }
-        Invocation::CheckFfi(source, configuration) => {
-            return execute_check_ffi(
-                source,
-                configuration,
-                stdout,
-                stderr,
-                format,
-                catalogue.as_ref(),
-            );
-        }
     };
     let runtime_messages = catalogue
         .as_ref()
@@ -148,46 +137,6 @@ where
             } else {
                 2
             }
-        }
-    }
-}
-
-fn execute_check_ffi(
-    source: RunConfiguration,
-    configuration: CheckConfiguration,
-    stdout: &mut impl Write,
-    stderr: &mut impl Write,
-    format: ash::diagnostic_options::MessageFormat,
-    catalogue: Option<&ash::message::Catalogue>,
-) -> u8 {
-    match check_path(source, configuration) {
-        Ok(checked) => {
-            if writeln!(stdout, "{}", checked.generated_source().display())
-                .and_then(|()| stdout.flush())
-                .is_ok()
-            {
-                0
-            } else {
-                2
-            }
-        }
-        Err(failure) => {
-            if let Some(source) = failure.source_failure() {
-                let status = if source.is_source_rejection() { 1 } else { 2 };
-                return if report_selected_failure(stderr, source, format, catalogue, None).is_ok() {
-                    status
-                } else {
-                    2
-                };
-            }
-            let detail = failure.to_string();
-            let _ = ash::presentation::write_compile_diagnostic(
-                stderr,
-                &ash::presentation::compile_check_ffi_diagnostic(&failure, &detail),
-                format,
-                catalogue,
-            );
-            2
         }
     }
 }
@@ -286,16 +235,9 @@ enum ConfigurationFailure {
 enum Invocation {
     Run(RunConfiguration),
     Build(RunConfiguration, BuildConfiguration),
-    CheckFfi(RunConfiguration, CheckConfiguration),
 }
 
 fn invocation(arguments: Vec<OsString>) -> Result<Invocation, ConfigurationFailure> {
-    if arguments
-        .first()
-        .is_some_and(|argument| argument == "check-ffi")
-    {
-        return check_ffi_invocation(arguments);
-    }
     if arguments.first().is_none_or(|argument| argument != "build") {
         return configuration(arguments).map(Invocation::Run);
     }
@@ -361,75 +303,6 @@ fn invocation(arguments: Vec<OsString>) -> Result<Invocation, ConfigurationFailu
     build.cargo_target_directory = cache;
     build.native_inputs = native_inputs;
     Ok(Invocation::Build(source, build))
-}
-
-fn check_ffi_invocation(arguments: Vec<OsString>) -> Result<Invocation, ConfigurationFailure> {
-    let mut arguments = arguments.into_iter().skip(1);
-    let mut source_arguments = Vec::new();
-    let mut headers = Vec::new();
-    let mut mapping = None;
-    let mut compiler = None;
-    let mut output = None;
-    let mut target = None;
-    let mut entry_seen = false;
-    while let Some(argument) = arguments.next() {
-        if entry_seen {
-            return Err(ConfigurationFailure::Usage);
-        }
-        match argument.to_str() {
-            Some("--header") => headers.push(PathBuf::from(
-                arguments.next().ok_or(ConfigurationFailure::Usage)?,
-            )),
-            Some("--mapping" | "--compiler" | "--output") => {
-                let value = PathBuf::from(arguments.next().ok_or(ConfigurationFailure::Usage)?);
-                let slot = match argument.to_str() {
-                    Some("--mapping") => &mut mapping,
-                    Some("--compiler") => &mut compiler,
-                    _ => &mut output,
-                };
-                if slot.replace(value).is_some() {
-                    return Err(ConfigurationFailure::Usage);
-                }
-            }
-            Some("--target") => {
-                let value = arguments
-                    .next()
-                    .ok_or(ConfigurationFailure::Usage)?
-                    .into_string()
-                    .map_err(|_| ConfigurationFailure::Usage)?;
-                if target.replace(value).is_some() {
-                    return Err(ConfigurationFailure::Usage);
-                }
-            }
-            Some("--root") => {
-                source_arguments.push(argument);
-                source_arguments.push(arguments.next().ok_or(ConfigurationFailure::Usage)?);
-            }
-            _ if argument.as_encoded_bytes().starts_with(b"--") => {
-                return Err(ConfigurationFailure::Usage);
-            }
-            _ => {
-                source_arguments.push(argument);
-                entry_seen = true;
-            }
-        }
-    }
-    if headers.is_empty() {
-        return Err(ConfigurationFailure::Usage);
-    }
-    let mut check = CheckConfiguration::new(
-        mapping.ok_or(ConfigurationFailure::Usage)?,
-        compiler.ok_or(ConfigurationFailure::Usage)?,
-        output.ok_or(ConfigurationFailure::Usage)?,
-    );
-    check.headers = headers;
-    if let Some(target) = target {
-        check.target = target;
-    }
-    Ok(Invocation::CheckFfi(
-        configuration(source_arguments)?,
-        check,
-    ))
 }
 
 fn configuration<I>(arguments: I) -> Result<RunConfiguration, ConfigurationFailure>

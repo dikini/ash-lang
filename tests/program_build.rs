@@ -102,54 +102,31 @@ fn generated_executable_runs_imported_core_after_the_original_source_graph_disap
 }
 
 #[test]
-fn pure_generated_host_restores_reexported_scalar_checks_without_native_links() {
+fn pure_generated_host_restores_reexported_string_intrinsics_without_native_links() {
     let fixture = Fixture::new(
-        r"import @builtin.foreign as Foreign
-import facade as Checks
+        r#"import facade as Text
 
-main : Unit -> Bool
-main () = match (
-    Checks.signed 0,
-    Checks.signed 9223372036854775807,
-    Checks.signed (9223372036854775807 + 1),
-    Checks.size 0,
-    Checks.size ((9223372036854775807 * 2) + 1),
-    Checks.size ((9223372036854775807 + 1) * 2)
-) {
-    (
-        Foreign.Returned(signed_zero),
-        Foreign.Returned(signed_high),
-        Foreign.ConversionFailed(_),
-        Foreign.Returned(size_zero),
-        Foreign.Returned(size_high),
-        Foreign.ConversionFailed(_)
-    ) => match (
-        signed_zero == 0,
-        signed_high == 9223372036854775807,
-        size_zero == 0,
-        size_high == ((9223372036854775807 * 2) + 1)
-    ) {
-        (true, true, true, true) => true
-        _ => false
-    }
-    _ => false
+main : Unit -> (Int, Bool)
+main () = match Text.decode (Text.encode "é") {
+    Text.Decoded(copied) => (Text.byte_length copied, Text.equal (copied, "é"))
+    Text.InvalidUtf8 => (999, false)
 }
-",
+"#,
     );
     fs::write(
         fixture.0.join("facade.ash"),
-        "pub import @builtin.foreign (checked_i64 as signed, checked_size_t as size)\n",
+        "pub import @builtin.string (to_utf8 as encode, from_utf8 as decode, byte_length, equal, Decoded, InvalidUtf8)\n",
     )
     .unwrap();
-    let checked = compile_path(fixture.source()).expect("pure scalar check facade admission");
+    let checked = compile_path(fixture.source()).expect("pure string intrinsic facade admission");
     fs::remove_file(fixture.0.join("entry.ash")).unwrap();
     fs::remove_file(fixture.0.join("facade.ash")).unwrap();
-    let mut configuration = BuildConfiguration::new(fixture.0.join("scalar-checks"));
+    let mut configuration = BuildConfiguration::new(fixture.0.join("string-intrinsics"));
     let cache = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
     configuration.cargo_target_directory = Some(cache.join("ffi-native-hosts"));
-    let prepared = prepare_program(&checked, configuration).expect("pure scalar image preparation");
+    let prepared = prepare_program(&checked, configuration).expect("pure string image preparation");
     assert!(
         prepared
             .generated_rust()
@@ -165,6 +142,15 @@ main () = match (
             .unwrap_or_default();
         panic!("{error}\n{log}");
     });
+    // A linked host needs neither source nor generated construction inputs.
+    let generated = built.generated_source();
+    for name in ["program-image.bin", "expected-facts.bin"] {
+        let path = generated.parent().unwrap().join(name);
+        if path.exists() {
+            fs::remove_file(path).unwrap();
+        }
+    }
+    fs::remove_file(generated).unwrap();
     let output = Command::new(built.executable())
         .current_dir(&fixture.0)
         .output()
@@ -174,7 +160,7 @@ main () = match (
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(output.stdout, b"true\n");
+    assert_eq!(output.stdout, b"(2, true)\n");
     assert!(output.stderr.is_empty());
 }
 

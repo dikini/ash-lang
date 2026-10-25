@@ -1349,7 +1349,6 @@ pub(crate) struct KindEnvironments<'a> {
     xi: HashMap<NominalTypeId, NominalKindFact>,
     row_resource_families: HashMap<NominalTypeId, (crate::types::ResourceDefinitionId, Span)>,
     row_resource_owners: HashMap<crate::types::ResourceDefinitionId, ResourceKindFact<'a>>,
-    row_foreign_owners: HashMap<NominalTypeId, &'a [crate::resolved::ResolvedTypeVariable]>,
     owner_registry: Option<&'a ResolvedRegistry>,
     // Source modules retain local canonical records separately from imports.
     // The borrowed body-free inventory supplies original imported owner formals.
@@ -1367,7 +1366,6 @@ impl<'a> KindEnvironments<'a> {
             xi: HashMap::new(),
             row_resource_families: HashMap::new(),
             row_resource_owners: HashMap::new(),
-            row_foreign_owners: HashMap::new(),
             owner_registry: None,
             imported_resource_owners: None,
             written_effect_arities: &[],
@@ -2535,185 +2533,12 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         budget.charge(parameters.len()).map_err(|_| {
-            KindFailure::resource(origin, "owner kind selection exceeded its work budget")
+            KindFailure::resource(
+                origin,
+                "nominal parameter selection exceeded its work budget",
+            )
         })?;
-        if parameters
-            .iter()
-            .any(|parameter| parameter.kind == Kind::EffectRow)
-        {
-            let original = if let Some(registry) = self.owner_registry {
-                budget
-                    .charge(registry.source_foreign_nominal_count())
-                    .map_err(|_| {
-                        KindFailure::resource(
-                            origin,
-                            "owner kind selection exceeded its work budget",
-                        )
-                    })?;
-                if registry
-                    .source_foreign_nominal_candidates()
-                    .any(|(_, _, nominal, _)| nominal == identity)
-                {
-                    Some(
-                        crate::foreign::source_owner::row_foreign_parameters(
-                            identity, registry, origin, budget,
-                        )
-                        .map_err(|error| {
-                            if error.is_resource_exhaustion() {
-                                KindFailure::resource(
-                                    origin,
-                                    "owner kind authentication exceeded its work budget",
-                                )
-                            } else {
-                                KindFailure::internal_cause(
-                                    origin,
-                                    KindInternalCause::LinkedValueType,
-                                )
-                            }
-                        })?,
-                    )
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let original = original.or_else(|| {
-                self.imported_resource_owners
-                    .and_then(|imported| imported.source_owner(identity))
-                    .map(|owner| owner.parameters().as_ref())
-                    .or_else(|| {
-                        self.imported_resource_owners
-                            .and_then(|imported| imported.source_access(identity))
-                            .filter(|access| access.prepared().checked_contract().is_some())
-                            .map(|access| access.parameters().as_ref())
-                    })
-            });
-            if let Some(original) = original {
-                if original.len() != parameters.len() {
-                    return Err(KindFailure::internal_cause(
-                        origin,
-                        KindInternalCause::LinkedValueType,
-                    ));
-                }
-                for (left, right) in original.iter().zip(parameters) {
-                    if !crate::resolved::same_checker_type_variable_with_budget(left, right, budget)
-                        .map_err(|_| {
-                            KindFailure::resource(
-                                origin,
-                                "owner kind correspondence exceeded its work budget",
-                            )
-                        })?
-                    {
-                        return Err(KindFailure::internal_cause(
-                            origin,
-                            KindInternalCause::LinkedValueType,
-                        ));
-                    }
-                }
-                budget.charge(1).map_err(|_| {
-                    KindFailure::resource(origin, "owner kind retention exceeded its work budget")
-                })?;
-                self.row_foreign_owners.try_reserve(1).map_err(|_| {
-                    KindFailure::resource(origin, "owner kind storage could not be reserved")
-                })?;
-                self.row_foreign_owners.insert(identity, original);
-            }
-        }
         self.xi.insert(identity, NominalKindFact { kind, origin });
-        Ok(())
-    }
-
-    /// Retains a sealed Source owner in a body-free summary environment.
-    /// The summary authenticates the original owner before installing its
-    /// nominal mirror; ordinary nominal kinds supply no Owner authority.
-    pub(crate) fn insert_source_owner_nominal(
-        &mut self,
-        owner: &'a crate::foreign::source_owner::CheckedForeignOwner,
-        parameters: &'a [crate::resolved::ResolvedTypeVariable],
-        origin: Span,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), KindFailure> {
-        self.insert_source_foreign_nominal(
-            owner.nominal(),
-            owner.parameters().as_ref(),
-            parameters,
-            origin,
-            budget,
-        )
-    }
-
-    /// The summary has authenticated this checked Access and its original kind
-    /// vector. Retaining its row kind does not grant native Owner authority.
-    pub(crate) fn insert_source_access_nominal(
-        &mut self,
-        access: &'a crate::foreign::source_access::CheckedForeignAccess,
-        parameters: &'a [crate::resolved::ResolvedTypeVariable],
-        origin: Span,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), KindFailure> {
-        if access.prepared().checked_contract().is_none() {
-            return Err(KindFailure::internal_cause(
-                origin,
-                KindInternalCause::LinkedValueType,
-            ));
-        }
-        self.insert_source_foreign_nominal(
-            access.nominal(),
-            access.parameters().as_ref(),
-            parameters,
-            origin,
-            budget,
-        )
-    }
-
-    fn insert_source_foreign_nominal(
-        &mut self,
-        nominal: NominalTypeId,
-        original: &'a [crate::resolved::ResolvedTypeVariable],
-        parameters: &'a [crate::resolved::ResolvedTypeVariable],
-        origin: Span,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), KindFailure> {
-        budget.charge(original.len()).map_err(|_| {
-            KindFailure::resource(origin, "owner kind selection exceeded its work budget")
-        })?;
-        if original.len() != parameters.len() {
-            return Err(KindFailure::internal_cause(
-                origin,
-                KindInternalCause::LinkedValueType,
-            ));
-        }
-        for (left, right) in original.iter().zip(parameters) {
-            if !crate::resolved::same_checker_type_variable_with_budget(left, right, budget)
-                .map_err(|_| {
-                    KindFailure::resource(
-                        origin,
-                        "owner kind correspondence exceeded its work budget",
-                    )
-                })?
-            {
-                return Err(KindFailure::internal_cause(
-                    origin,
-                    KindInternalCause::LinkedValueType,
-                ));
-            }
-        }
-        self.insert_nominal(nominal, parameters, origin, budget)?;
-        if original
-            .iter()
-            .any(|parameter| parameter.kind == Kind::EffectRow)
-        {
-            budget.charge(1).map_err(|_| {
-                KindFailure::resource(origin, "owner kind retention exceeded its work budget")
-            })?;
-            if !self.row_foreign_owners.contains_key(&nominal) {
-                self.row_foreign_owners.try_reserve(1).map_err(|_| {
-                    KindFailure::resource(origin, "owner kind storage could not be reserved")
-                })?;
-                self.row_foreign_owners.insert(nominal, original);
-            }
-        }
         Ok(())
     }
 
@@ -2750,58 +2575,13 @@ impl<'a> KindEnvironments<'a> {
         self.row_resource_owners.try_reserve(1).map_err(|_| {
             KindFailure::resource(origin, "resource kind authority could not reserve storage")
         })?;
-        // Product source resources retain an explicit owned position. The
-        // experimental resource contract continues to reserve its first slot.
-        // Read the selection from original defining authority, never actuals.
         budget.charge(1).map_err(|()| {
             KindFailure::resource(
                 origin,
                 "resource owner selection exceeded its type-work budget",
             )
         })?;
-        let source = self
-            .owner_registry
-            .and_then(|registry| registry.source_resource_fact(resource))
-            .or_else(|| {
-                self.imported_resource_owners
-                    .and_then(|imported| imported.source_resource_fact(resource))
-            });
-        let owned_position = if let Some(source) = source {
-            if source.id != resource
-                || source.family != family
-                || source.parameters.len() != parameters.len()
-            {
-                return Err(KindFailure::internal_cause(
-                    origin,
-                    KindInternalCause::LinkedValueType,
-                ));
-            }
-            for (original, retained) in source.parameters.iter().zip(parameters) {
-                budget.charge(1).map_err(|()| {
-                    KindFailure::resource(
-                        origin,
-                        "resource owner selection exceeded its type-work budget",
-                    )
-                })?;
-                if original.id != retained.id
-                    || !same_kind_with_charge(&original.kind, &retained.kind, || budget.charge(1))
-                        .map_err(|()| {
-                        KindFailure::resource(
-                            origin,
-                            "resource owner selection exceeded its type-work budget",
-                        )
-                    })?
-                {
-                    return Err(KindFailure::internal_cause(
-                        origin,
-                        KindInternalCause::LinkedValueType,
-                    ));
-                }
-            }
-            source.owned_position
-        } else {
-            0
-        };
+        let owned_position = 0;
         self.row_resource_owners.insert(
             resource,
             ResourceKindFact {
@@ -3879,32 +3659,6 @@ impl<'a> KindEnvironments<'a> {
                         &mut pending,
                     )?;
                 }
-                Type::ForeignOwnerApply(resource, arguments) => {
-                    let roots = match node {
-                        Some(ResolvedTypeProvenanceNode::ForeignOwner {
-                            nominal: source,
-                            arguments: roots,
-                            ..
-                        }) if source == resource && roots.len() == arguments.len() => {
-                            Some(roots.as_ref())
-                        }
-                        None => None,
-                        _ => {
-                            return Err(KindFailure::internal_cause(
-                                span,
-                                KindInternalCause::EffectTypeProvenanceShape,
-                            ));
-                        }
-                    };
-                    self.owner_argument_source_roots(
-                        arguments.iter(),
-                        roots,
-                        provenance,
-                        span,
-                        budget,
-                        &mut pending,
-                    )?;
-                }
                 Type::Tuple(elements) => {
                     let roots = match node {
                         Some(ResolvedTypeProvenanceNode::Tuple {
@@ -4621,32 +4375,6 @@ impl<'a> KindEnvironments<'a> {
                     Some(definition.owned_position),
                 )
             }
-            Type::ForeignOwnerApply(nominal, arguments) => {
-                let source_roots = match node {
-                    Some(ResolvedTypeProvenanceNode::ForeignOwner {
-                        nominal: source,
-                        arguments: roots,
-                        ..
-                    }) if source == nominal && roots.len() == arguments.len() => {
-                        Some(roots.as_ref())
-                    }
-                    None => None,
-                    _ => {
-                        return Err(KindFailure::internal_cause(
-                            span,
-                            KindInternalCause::LinkedValueType,
-                        ));
-                    }
-                };
-                let parameters =
-                    self.row_foreign_owners
-                        .get(nominal)
-                        .copied()
-                        .ok_or_else(|| {
-                            KindFailure::internal_cause(span, KindInternalCause::LinkedValueType)
-                        })?;
-                (arguments, source_roots, parameters, None::<usize>)
-            }
             _ => unreachable!("owner argument synthesis requires a tagged owner application"),
         };
         if let Some(mirror) = type_mirror {
@@ -5033,7 +4761,7 @@ impl<'a> KindEnvironments<'a> {
                                 occurrence: span,
                             })
                         }
-                        Type::ResourceApply(_, _) | Type::ForeignOwnerApply(_, _) => {
+                        Type::ResourceApply(_, _) => {
                             let tagged_inputs = self.resource_argument_inputs(
                                 ty,
                                 node,
@@ -5896,34 +5624,6 @@ pub(crate) fn canonical_body_free_environments<'a>(
                     retention_budget,
                 )?;
             }
-            Type::ForeignOwnerApply(nominal, arguments) => {
-                let parameters = crate::foreign::source_owner::row_foreign_parameters(
-                    *nominal,
-                    registry,
-                    _span,
-                    retention_budget,
-                )
-                .map_err(|error| {
-                    if error.is_resource_exhaustion() {
-                        CanonicalEnvironmentFailure::TypeResource
-                    } else {
-                        CanonicalEnvironmentFailure::InvalidState
-                    }
-                })?;
-                if !environments.contains_nominal(*nominal) {
-                    environments
-                        .insert_nominal(*nominal, parameters, _span, retention_budget)
-                        .map_err(map_canonical_environment_retention_failure)?;
-                }
-                discover_owner_argument_types(
-                    registry,
-                    arguments.iter(),
-                    &mut pending,
-                    &mut environments,
-                    discovery_budget,
-                    retention_budget,
-                )?;
-            }
             Type::Tuple(elements) => {
                 discovery_budget
                     .charge(elements.len())
@@ -6086,29 +5786,6 @@ pub(crate) fn prepare_module_representation_kinds<'a>(
             budget,
         )?;
     }
-    for resource in &module.source_resources {
-        authenticate_owner_parameters(&module.registry, &resource.parameters, budget)?;
-        if resource
-            .parameters
-            .iter()
-            .any(|parameter| parameter.kind == Kind::EffectRow)
-        {
-            environments.insert_row_resource_family(
-                resource.family,
-                resource.id,
-                &resource.parameters,
-                resource.span,
-                budget,
-            )?;
-        } else {
-            environments.insert_nominal(
-                resource.family,
-                &resource.parameters,
-                resource.span,
-                budget,
-            )?;
-        }
-    }
     for resource in &module.resources {
         authenticate_owner_parameters(&module.registry, &resource.parameters, budget)?;
         if let Some(family) = &resource.family_template {
@@ -6215,50 +5892,6 @@ pub(crate) fn check_remaining_module_kinds<'a>(
 
     for declaration in &module.declaration_order {
         let outcome = match *declaration {
-            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => {
-                let resource = &module.source_resources[index];
-                environments.install_complete_owner_parameters(&resource.parameters, budget)?;
-                for ty in [
-                    &resource.input,
-                    &resource.state,
-                    &resource.data,
-                    &resource.acquisition,
-                    &resource.completion,
-                ] {
-                    environments.expect_value_type(ty, budget)?;
-                }
-                environments
-                    .extend_owner_parameters(std::slice::from_ref(&resource.answer), budget)?;
-                let result = environments.expect_value_type(&resource.result, budget);
-                environments
-                    .remove_owner_parameter_extension(std::slice::from_ref(&resource.answer));
-                result?;
-                for effect in std::iter::once(&resource.provided).chain(resource.interpreted.iter())
-                {
-                    check_hook_target_kind(effect, &environments, budget)?;
-                }
-                check_expression_annotations(
-                    &resource.acquire,
-                    &module.registry,
-                    &mut environments,
-                    budget,
-                )?;
-                check_expression_annotations(
-                    &resource.finish,
-                    &module.registry,
-                    &mut environments,
-                    budget,
-                )?;
-                for clause in &resource.handlers {
-                    check_expression_annotations(
-                        &clause.body,
-                        &module.registry,
-                        &mut environments,
-                        budget,
-                    )?;
-                }
-                DeclarationKindOutcome::Checked
-            }
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 let resource = &module.resources[index];
                 environments.install_complete_owner_parameters(&resource.parameters, budget)?;
@@ -6382,12 +6015,11 @@ fn check_module_nominal_representation<'a>(
     budget.charge(1).map_err(|_| {
         KindFailure::resource(
             nominal.origin.primary_span(),
-            "foreign owner classification exceeded its work budget",
+            "nominal parameter classification exceeded its work budget",
         )
     })?;
-    let row_owner = environments.row_foreign_owners.contains_key(&nominal.id);
     for parameter in parameters {
-        if parameter.kind == Kind::EffectRow && !row_owner {
+        if parameter.kind == Kind::EffectRow {
             return Err(KindFailure::Source(Box::new(structured_error(
                 KindReason::ExpectedType,
                 parameter.origin.primary_span(),
@@ -6399,11 +6031,7 @@ fn check_module_nominal_representation<'a>(
             )?)));
         }
     }
-    if row_owner {
-        environments.install_complete_owner_parameters(parameters, budget)?;
-    } else {
-        environments.install_owner_parameters(parameters, budget)?;
-    }
+    environments.install_owner_parameters(parameters, budget)?;
     let payload_provenance = required_lookup(
         constructor_payload_provenance.get(index),
         nominal.origin.primary_span(),
@@ -6602,7 +6230,6 @@ fn authenticate_declaration_order(
         .len()
         .checked_add(module.interfaces.len())
         .and_then(|count| count.checked_add(module.resources.len()))
-        .and_then(|count| count.checked_add(module.source_resources.len()))
         .ok_or_else(|| {
             KindFailure::resource(module.span, "owner coverage storage is not representable")
         })?;
@@ -6622,14 +6249,9 @@ fn authenticate_declaration_order(
     let mut owner_coverage = module.registry.owner_signature_shape_matches(
         module.effects.len(),
         module.interfaces.len(),
-        module
-            .resources
-            .len()
-            .saturating_add(module.source_resources.len()),
+        module.resources.len(),
     );
     let mut next_resource = 0;
-    let mut next_source_resource = 0;
-    let mut next_source_owner = 0;
     let mut next_type = 0;
     let mut next_interface = 0;
     let mut next_effect = 0;
@@ -6643,37 +6265,15 @@ fn authenticate_declaration_order(
             )
         })?;
         let ordered = match *declaration {
-            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => {
-                let ordered =
-                    index == next_source_resource && index < module.source_resources.len();
-                next_source_resource = next_source_resource.saturating_add(1);
-                ordered
-            }
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 let ordered = index == next_resource && index < module.resources.len();
                 next_resource = next_resource.saturating_add(1);
                 ordered
             }
             crate::resolved::ResolvedDeclarationIndex::Type(index) => {
-                if module
-                    .registry
-                    .nominals()
-                    .get(index)
-                    .is_some_and(|nominal| module.registry.source_foreign_nominal(nominal.id))
-                {
-                    let ordinary_count = module
-                        .registry
-                        .nominals()
-                        .len()
-                        .saturating_sub(module.registry.source_foreign_nominal_count());
-                    let ordered = index == ordinary_count.saturating_add(next_source_owner);
-                    next_source_owner = next_source_owner.saturating_add(1);
-                    ordered
-                } else {
-                    let ordered = index == next_type && index < module.registry.nominals().len();
-                    next_type = next_type.saturating_add(1);
-                    ordered
-                }
+                let ordered = index == next_type && index < module.registry.nominals().len();
+                next_type = next_type.saturating_add(1);
+                ordered
             }
             crate::resolved::ResolvedDeclarationIndex::Interface(index) => {
                 let ordered = index == next_interface && index < module.interfaces.len();
@@ -6703,9 +6303,6 @@ fn authenticate_declaration_order(
             ));
         }
         let owner = match *declaration {
-            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => Some(
-                crate::resolved::OwnerId::Resource(module.source_resources[index].id),
-            ),
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => Some(
                 crate::resolved::OwnerId::Resource(module.resources[index].id),
             ),
@@ -6739,9 +6336,7 @@ fn authenticate_declaration_order(
         )
     })?;
     if next_resource != module.resources.len()
-        || next_source_resource != module.source_resources.len()
-        || next_source_owner != module.registry.source_foreign_nominal_count()
-        || next_type.saturating_add(next_source_owner) != module.registry.nominals().len()
+        || next_type != module.registry.nominals().len()
         || next_interface != module.interfaces.len()
         || next_effect != module.effects.len()
         || next_global != module.definitions.len()
@@ -6780,33 +6375,6 @@ fn authenticate_imported_environments<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
     let imported = &module.imported;
-    for resource in imported.source_resource_facts() {
-        authenticate_unique_parameter_ids(
-            &resource.parameters,
-            resource.origin.primary_span(),
-            budget,
-        )?;
-        if resource
-            .parameters
-            .iter()
-            .any(|parameter| parameter.kind == Kind::EffectRow)
-        {
-            environments.insert_row_resource_family(
-                resource.family,
-                resource.id,
-                &resource.parameters,
-                resource.origin.primary_span(),
-                budget,
-            )?;
-        } else {
-            environments.insert_nominal(
-                resource.family,
-                &resource.parameters,
-                resource.origin.primary_span(),
-                budget,
-            )?;
-        }
-    }
     for (_, resource) in imported.resource_facts() {
         authenticate_unique_parameter_ids(
             &resource.parameters,
@@ -7221,7 +6789,6 @@ fn preflight_interface_application_kinds<'a>(
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, KindFailure> {
     if module.resources.is_empty()
-        && module.source_resources.is_empty()
         && module.definitions.is_empty()
         && module.implementations.is_empty()
     {
@@ -7271,11 +6838,6 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
             )
         })?;
         match *declaration {
-            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => {
-                let resource = &module.source_resources[index];
-                environments.install_complete_owner_parameters(&resource.parameters, budget)?;
-                check(&resource.provider, environments, budget)?;
-            }
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 let resource = &module.resources[index];
                 environments.install_complete_owner_parameters(&resource.parameters, budget)?;
@@ -7374,11 +6936,6 @@ fn visit_interface_applications(
             )
         })?;
         match *declaration {
-            crate::resolved::ResolvedDeclarationIndex::SourceResource(index) => {
-                if !visit(&module.source_resources[index].provider, budget)? {
-                    return Ok(false);
-                }
-            }
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 if !visit(&module.resources[index].provider, budget)? {
                     return Ok(false);
@@ -7563,7 +7120,7 @@ fn collect_type_variables(
                     output.push(*identity);
                 }
             }
-            Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments) => {
+            Type::ResourceApply(_, arguments) => {
                 push_determination_owner_arguments(
                     arguments.iter(),
                     &mut work,
@@ -8018,121 +7575,10 @@ fn check_expression_annotations<'a>(
     check_expression_work(work, registry, environments, budget)
 }
 
-/// Instance actuals are checked before its fresh identity enters delta. This
-/// borrows the defining owner record and reuses the tagged argument judgment.
-#[inline(never)]
-fn authenticate_provider_instance_arguments<'a>(
-    resource: &'a crate::resolved::ResolvedProviderResourceExpr,
-    registry: &'a ResolvedRegistry,
-    environments: &KindEnvironments<'a>,
-    span: Span,
-    budget: &mut TypeWorkBudget,
-) -> Result<(), KindFailure> {
-    let owner = crate::resolved::OwnerId::Resource(resource.definition);
-    // Defining signatures in this registry are local. Imported family kinds
-    // were independently admitted from the original body-free fact inventory
-    // before source bodies; use those same immutable formals, not actuals.
-    let parameters = if let Some(family) = registry.resource_signature_family(resource.definition) {
-        if family != resource.family {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::MissingOwnerBinder,
-            ));
-        }
-        let parameters = registry.defining_owner_parameters(owner).ok_or_else(|| {
-            KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
-        })?;
-        registry
-            .authenticate_owner_signature(owner, Some(resource.family), parameters, budget)
-            .map_err(|failure| {
-                if failure.is_resource_exhaustion() {
-                    KindFailure::resource(
-                        span,
-                        "resource owner authentication exceeded its type-work budget",
-                    )
-                } else {
-                    KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
-                }
-            })?;
-        parameters
-    } else if let Some(original) = environments
-        .imported_resource_owners
-        .and_then(|imported| imported.source_resource_fact(resource.definition))
-    {
-        if original.family != resource.family {
-            return Err(KindFailure::internal_cause(
-                span,
-                KindInternalCause::MissingOwnerBinder,
-            ));
-        }
-        original.parameters.as_ref()
-    } else {
-        let original = environments
-            .imported_resource_owners
-            .and_then(|imported| imported.resource_fact(resource.family))
-            .filter(|original| {
-                original.id == resource.definition && original.family == resource.family
-            })
-            .ok_or_else(|| {
-                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
-            })?;
-        original.parameters.as_ref()
-    };
-    let Some(arguments) = resource.arguments.as_ref() else {
-        if environments
-            .row_resource_families
-            .contains_key(&resource.family)
-        {
-            return Err(KindFailure::Internal(KindStageFailure {
-                span,
-                message: "a row-bearing resource instance omitted its complete owner arguments"
-                    .to_owned(),
-                cause: None,
-            }));
-        }
-        // Row-free omitted arguments are inferred later from the once-checked
-        // initializer. The family and original defining slots are retained.
-        return Ok(());
-    };
-    if parameters.len().checked_sub(1) != Some(arguments.len()) {
-        return Err(KindFailure::Internal(KindStageFailure {
-            span,
-            message: "explicit resource instance arguments do not saturate the defining owner"
-                .to_owned(),
-            cause: None,
-        }));
-    }
-    let owned_position = registry
-        .source_resource_fact(resource.definition)
-        .or_else(|| {
-            environments
-                .imported_resource_owners
-                .and_then(|imported| imported.source_resource_fact(resource.definition))
-        })
-        .map_or(0, |fact| fact.owned_position);
-    for (argument, (_, parameter)) in arguments.iter().zip(
-        parameters
-            .iter()
-            .enumerate()
-            .filter(|(position, _)| *position != owned_position),
-    ) {
-        environments.expect_interface_argument(
-            argument,
-            &parameter.kind,
-            parameter.origin.primary_span(),
-            budget,
-        )?;
-    }
-    Ok(())
-}
-
 #[derive(Clone, Copy)]
 enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
     ResourceBody(&'a crate::resolved::ResolvedResourceExpr),
-    CopyWindowBody(&'a crate::resolved::ResolvedCopyWindowExpr),
-    ForeignHostBody(&'a crate::resolved::ResolvedForeignHostExpr),
-    ProviderResourceBody(&'a crate::resolved::ResolvedProviderResourceExpr),
     ResourceExit(&'a crate::resolved::ResolvedTypeVariable),
     Declaration(&'a ResolvedLocalDeclaration),
     LexicalNewtype(&'a crate::resolved::ResolvedNominalType),
@@ -8220,150 +7666,6 @@ fn check_expression_work<'a>(
                     budget,
                 )?;
             }
-            BodyWork::ProviderResourceBody(resource) => {
-                authenticate_provider_instance_arguments(
-                    resource,
-                    registry,
-                    environments,
-                    span,
-                    budget,
-                )?;
-                let parameters = std::slice::from_ref(&resource.identity);
-                authenticate_owner_parameters(registry, parameters, budget)?;
-                if resource.identity.kind != Kind::Type {
-                    return Err(KindFailure::internal_cause(
-                        span,
-                        KindInternalCause::ResourceIdentityKind,
-                    ));
-                }
-                environments.extend_owner_parameters(parameters, budget)?;
-                push_body_work(
-                    &mut work,
-                    BodyWork::ResourceExit(&resource.identity),
-                    span,
-                    budget,
-                )?;
-                push_body_work(
-                    &mut work,
-                    BodyWork::Expression(&resource.body),
-                    span,
-                    budget,
-                )?;
-            }
-            BodyWork::ForeignHostBody(host) => {
-                let parameters = std::slice::from_ref(&host.identity);
-                authenticate_owner_parameters(registry, parameters, budget)?;
-                let effect = registry
-                    .effect(host.effect)
-                    .or_else(|| {
-                        environments
-                            .imported_resource_owners
-                            .and_then(|imported| imported.effect(host.effect))
-                    })
-                    .ok_or_else(|| {
-                        KindFailure::internal_cause(span, KindInternalCause::ResourceIdentityKind)
-                    })?;
-                // Source admission authenticates retained defining bytes and
-                // body-free originals. Full codec reconstruction follows in the
-                // checker registry and independently in final Core.
-                let canonical =
-                    crate::foreign::checked_builtins::is_canonical_native_host_declaration(
-                        effect,
-                        effect.span,
-                        budget,
-                    )
-                    .map_err(|failure| {
-                        if failure.is_resource_exhaustion() {
-                            KindFailure::resource(
-                                span,
-                                "foreign host authentication exhausted work",
-                            )
-                        } else {
-                            KindFailure::internal_cause(
-                                span,
-                                KindInternalCause::ResourceIdentityKind,
-                            )
-                        }
-                    })?;
-                if host.identity.kind != Kind::Type || !canonical {
-                    return Err(KindFailure::internal_cause(
-                        span,
-                        KindInternalCause::ResourceIdentityKind,
-                    ));
-                }
-                environments.extend_owner_parameters(parameters, budget)?;
-                push_body_work(
-                    &mut work,
-                    BodyWork::ResourceExit(&host.identity),
-                    span,
-                    budget,
-                )?;
-                push_body_work(&mut work, BodyWork::Expression(&host.body), span, budget)?;
-            }
-            BodyWork::CopyWindowBody(window) => {
-                let parameters = std::slice::from_ref(&window.identity);
-                authenticate_owner_parameters(registry, parameters, budget)?;
-                if window.identity.kind != Kind::Type {
-                    return Err(KindFailure::internal_cause(
-                        span,
-                        KindInternalCause::ResourceIdentityKind,
-                    ));
-                }
-                budget
-                    .charge(registry.source_foreign_nominal_count())
-                    .map_err(|()| {
-                        KindFailure::resource(span, "copy window family lookup exceeded its budget")
-                    })?;
-                let access = registry
-                    .source_accesses()
-                    .find(|access| access.nominal() == window.family)
-                    .ok_or_else(|| {
-                        KindFailure::internal_cause(span, KindInternalCause::MissingNominalKind)
-                    })?;
-                let position = access.declaration().window_parameter();
-                if window.arguments.len() != access.parameters().len()
-                    || !matches!(window.arguments.get(position).map(|argument| &argument.ty), Some(KindedArgument::TypeArg(Type::Variable(id))) if *id == window.identity.id)
-                {
-                    return Err(KindFailure::internal_cause(
-                        span,
-                        KindInternalCause::ResourceIdentityKind,
-                    ));
-                }
-                // Reconstruct the exact original family/owner projection, not
-                // just an arrow kind with a compatible number of arguments.
-                let (_, state) = crate::foreign::source_access::window_state_type(
-                    access,
-                    window.arguments.iter().map(|argument| &argument.ty),
-                    window.identity.id,
-                    registry,
-                    budget,
-                )
-                .map_err(|failure| {
-                    if failure.is_resource_exhaustion() {
-                        KindFailure::resource(span, "copy window projection exceeded its budget")
-                    } else {
-                        KindFailure::internal_cause(span, KindInternalCause::ResourceIdentityKind)
-                    }
-                })?;
-                drop(state);
-                environments.extend_owner_parameters(parameters, budget)?;
-                for (argument, parameter) in window.arguments.iter().zip(access.parameters().iter())
-                {
-                    environments.expect_interface_argument(
-                        argument,
-                        &parameter.kind,
-                        argument.span,
-                        budget,
-                    )?;
-                }
-                push_body_work(
-                    &mut work,
-                    BodyWork::ResourceExit(&window.identity),
-                    span,
-                    budget,
-                )?;
-                push_body_work(&mut work, BodyWork::Expression(&window.body), span, budget)?;
-            }
             BodyWork::ResourceBody(resource) => {
                 let parameters = std::slice::from_ref(&resource.identity);
                 authenticate_owner_parameters(registry, parameters, budget)?;
@@ -8402,42 +7704,6 @@ fn check_expression_work<'a>(
                         &mut work,
                         BodyWork::Expression(&cleanup.body),
                         cleanup.body.span,
-                        budget,
-                    )?;
-                }
-                ResolvedExprKind::ForeignHost(host) => {
-                    push_body_work(
-                        &mut work,
-                        BodyWork::ForeignHostBody(host),
-                        expression.span,
-                        budget,
-                    )?;
-                }
-                ResolvedExprKind::CopyWindow(window) => {
-                    push_body_work(
-                        &mut work,
-                        BodyWork::CopyWindowBody(window),
-                        expression.span,
-                        budget,
-                    )?;
-                    push_body_work(
-                        &mut work,
-                        BodyWork::Expression(&window.state),
-                        window.state.span,
-                        budget,
-                    )?;
-                }
-                ResolvedExprKind::ProviderResource(resource) => {
-                    push_body_work(
-                        &mut work,
-                        BodyWork::ProviderResourceBody(resource),
-                        expression.span,
-                        budget,
-                    )?;
-                    push_body_work(
-                        &mut work,
-                        BodyWork::Expression(&resource.initializer),
-                        resource.initializer.span,
                         budget,
                     )?;
                 }
@@ -8710,10 +7976,7 @@ fn local_declaration_span(declaration: &ResolvedLocalDeclaration) -> Span {
 fn body_work_span(item: BodyWork<'_>) -> Span {
     match item {
         BodyWork::Expression(expression) => expression.span,
-        BodyWork::ProviderResourceBody(resource) => resource.body.span,
         BodyWork::ResourceBody(resource) => resource.acquisition.span,
-        BodyWork::CopyWindowBody(window) => window.body.span,
-        BodyWork::ForeignHostBody(host) => host.body.span,
         BodyWork::ResourceExit(identity) => identity.origin.primary_span(),
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),
         BodyWork::LexicalNewtype(nominal) => nominal.origin.primary_span(),
@@ -8995,7 +8258,6 @@ fn provenance_node_span(node: &ResolvedTypeProvenanceNode) -> Span {
         | ResolvedTypeProvenanceNode::Function { span, .. }
         | ResolvedTypeProvenanceNode::Application { span, .. }
         | ResolvedTypeProvenanceNode::Resource { span, .. }
-        | ResolvedTypeProvenanceNode::ForeignOwner { span, .. }
         | ResolvedTypeProvenanceNode::Row { span, .. } => *span,
     }
 }
@@ -10314,7 +9576,6 @@ mod tests {
 
     fn empty_module_parts(span: Span) -> ResolvedModuleParts {
         ResolvedModuleParts {
-            source_resources: Vec::new(),
             resources: Vec::new(),
             module: ModuleId::new(0),
             registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),

@@ -1,5 +1,8 @@
 //! Portable order keys for unordered row partitions, before structural interning.
-use super::*;
+use super::{
+    Encoder, ImageFailure, StructuralInput, Type, TypeVariableIdentity, TypeWorkBudget,
+    Unsupported, charge, index, push,
+};
 use crate::types::{EffectInstance, EffectRow, EffectRowVariable, Kind, KindedArgument};
 use std::cmp::Ordering;
 
@@ -230,20 +233,7 @@ impl Encoder<'_> {
                                             );
                                         }
                                     }
-                                    Type::ForeignOwnerApply(id, arguments) => {
-                                        scalar!(12u32);
-                                        let id = self.nominal(*id)?;
-                                        scalar!(id.module);
-                                        scalar!(id.local);
-                                        for argument in arguments {
-                                            child!(
-                                                Input::Structural(StructuralInput::Argument(
-                                                    argument
-                                                )),
-                                                depth + 1
-                                            );
-                                        }
-                                    }
+
                                     Type::Inference(_)
                                     | Type::Function(_, _)
                                     | Type::EffectfulFunction(_, _) => {
@@ -286,12 +276,7 @@ impl Encoder<'_> {
                                         scalar!(1u32);
                                         child!(Input::Variable(id), depth);
                                     }
-                                    EffectRowVariable::Inference(id)
-                                        if self.source_pending_rows.contains(&id) =>
-                                    {
-                                        scalar!(2u32);
-                                        scalar!(id.value());
-                                    }
+
                                     _ => return Err(ImageFailure::Unsupported(Unsupported::Type)),
                                 },
                             }

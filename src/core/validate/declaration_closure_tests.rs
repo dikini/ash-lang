@@ -1,11 +1,74 @@
+//! Independent ordinary declaration metadata checks after source admission.
+
+fn ordinary_original(
+    text: &str,
+) -> (
+    crate::core::UnvalidatedEffectProgram,
+    crate::module::ModuleGraph,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "ash-core-declaration-closure-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let entry = directory.join("entry.ash");
+    std::fs::write(&entry, text).unwrap();
+    let graph =
+        crate::module::load_module_graph(&entry, &crate::module::ModuleRoots::empty()).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+    let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+    for loaded in graph.modules() {
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                crate::resolve::DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let resolved = crate::resolve::resolve_module(loaded, &dependencies).unwrap();
+        checked.push(crate::elaborate::check_module(resolved).unwrap());
+    }
+    let linked = crate::elaborate::link_modules(checked, graph.entry()).unwrap();
+    let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+    let mut elaborator = crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+    let typed = elaborator
+        .synthesize_effect_module_program(&linked)
+        .unwrap();
+    (elaborator.finish(typed.node).unwrap(), graph)
+}
+
 #[test]
 fn checked_declaration_closure_core_independently_rejects_missing_held_metadata() {
-    let source = format!(
-        "{}\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = {{\n    let call = select 7\n    call ()\n}}\n",
-        include_str!("../../../tests/fixtures/checked-declaration-closure/global.ash")
-            .replace("type Spare = Spare(Int)\n", "")
-    );
-    let (program, graph) = super::foreign_host_tests::original(&source);
+    let source = r"type Held = Held(Int)
+closed<T> : (T, Int) -> Int
+closed (unused, value) = value
+pub select : Int -> (Unit -> Int)
+select value = {
+    let held = Held value
+    fn(ignored) {
+        match held {
+            Held(captured) => closed (held, captured)
+        }
+    }
+}
+main : Unit -> Int
+main () = {
+    let call = select 7
+    call ()
+}
+";
+    let (program, graph) = ordinary_original(source);
     let sources = graph
         .modules()
         .iter()
@@ -38,12 +101,23 @@ fn constructor_payload_original() -> (
 ) {
     // Ordinary nominal declarations are file-wide. Put Leaf last so removing
     // it cannot fail just because a later retained ordinal leaves a gap.
-    let source = format!(
-        "{}\ntype Leaf = Leaf(Int)\nmain : Unit -> Foreign.CheckedCall<Int>\nmain () = inspect (make 7)\n",
-        include_str!("../../../tests/fixtures/checked-constructor-closure/producer.ash")
-            .replace("type Leaf = Leaf(Int)\n", "")
-    );
-    super::foreign_host_tests::original(&source)
+    let source = r"type Donor = Donor(Int)
+type Spare = Spare(Int)
+pub type Envelope = Envelope(Leaf)
+pub type Witness = Witness(Donor)
+closed : Int -> Int
+closed value = value
+pub make : Int -> Envelope
+make value = Envelope (Leaf value)
+pub inspect : Envelope -> Int
+inspect envelope = match envelope {
+    Envelope(Leaf(value)) => closed value
+}
+type Leaf = Leaf(Int)
+main : Unit -> Int
+main () = inspect (make 7)
+";
+    ordinary_original(source)
 }
 
 #[test]

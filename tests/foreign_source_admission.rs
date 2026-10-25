@@ -5,7 +5,6 @@ use std::{
 };
 
 use ash::driver::{PipelineFailure, RunConfiguration, run_path};
-use ash::kind::KindFailure;
 use ash::module::ModuleRoots;
 use ash::resolve::ResolveReason;
 
@@ -41,84 +40,32 @@ impl Drop for Fixture {
     }
 }
 
-const CONTRACT: &str = r#"import @builtin.foreign as Foreign
+const CONTRACT: &str = r#"import @builtin.foreign as F
 pub foreign library C {
     profile "x86_64-unknown-linux-gnu"
-    repr CInt = signed(32)
-    symbol Abs<Before : EffectRow, T, After : EffectRow> : Int -> Foreign.Call<Int> {
-        name "abs"
-        abi (CInt) -> CInt
-        operand 0 from 0 scalar
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-    symbol Stop : Unit -> Foreign.Call<Unit> {
-        name "stop"
-        abi () -> void
-        outcome otherwise {}
-    }
+    symbol Echo : F.Address -> F.Address { name "absent_echo" }
+    symbol Stop : Unit -> Unit { name "absent_stop" }
+    symbol Inspect : Bytes -> F.Address { name "absent_inspect" }
 }
 "#;
 
 #[test]
-fn checked_foreign_literal_constants_publish_through_imported_aliases() {
-    let contract = r#"pub foreign library Status {
-    profile "x86_64-unknown-linux-gnu"
-    repr CInt = signed(32)
-    const Held : CInt = 7
-}
-"#;
-    for (entry, facade) in [
-        (
-            "import native as Native\nmain : Unit -> Int\nmain () = Native.Held\n",
-            None,
-        ),
-        (
-            "import native (Held as Answer)\nmain : Unit -> Int\nmain () = Answer\n",
-            None,
-        ),
-        (
-            "import facade as Facade\nmain : Unit -> Int\nmain () = Facade.Answer\n",
-            Some("pub import native (Held as Answer)\n"),
-        ),
-    ] {
-        let fixture = Fixture::new(entry);
-        fs::write(fixture.0.join("native.ash"), contract).unwrap();
-        if let Some(facade) = facade {
-            fs::write(fixture.0.join("facade.ash"), facade).unwrap();
+fn source_native_declarations_and_imports_are_passive() {
+    for imported in [false, true] {
+        let entry = if imported {
+            "import native as Native\nmain : Unit -> Int\nmain () = 42\n".to_owned()
+        } else {
+            format!("{CONTRACT}main : Unit -> Int\nmain () = 42\n")
+        };
+        let fixture = Fixture::new(&entry);
+        if imported {
+            fs::write(fixture.0.join("native.ash"), CONTRACT).unwrap();
         }
-        let observation = run_path(fixture.configuration()).unwrap();
-        assert_eq!(observation.value_display(), "7");
+        assert_eq!(
+            run_path(fixture.configuration()).unwrap().value_display(),
+            "42"
+        );
     }
-}
-
-#[test]
-fn source_native_declarations_are_passive_and_check_complete_parameter_vectors() {
-    let fixture = Fixture::new(&format!("{CONTRACT}main : Unit -> Int\nmain () = 42\n"));
-    let observation = run_path(fixture.configuration()).unwrap();
-    assert_eq!(observation.value_display(), "42");
-}
-
-#[test]
-fn published_native_effects_keep_their_complete_kinds_through_imports() {
-    let fixture = Fixture::new("import native as Native\nmain : Unit -> Int\nmain () = 42\n");
-    fs::write(fixture.0.join("native.ash"), CONTRACT).unwrap();
-    assert_eq!(
-        run_path(fixture.configuration()).unwrap().value_display(),
-        "42"
-    );
-    fs::write(fixture.0.join("entry.ash"), "import native as Native\nprobe : Unit -> Int ! {Native.Abs<Int, Int, Int>}\nprobe () = 42\nmain : Unit -> Int\nmain () = 42\n").unwrap();
-    assert!(
-        run_path(fixture.configuration()).is_err(),
-        "Type arguments must not stand in for row arguments"
-    );
-    fs::write(fixture.0.join("entry.ash"), "import native as Native\nprobe<Before : EffectRow, T, After : EffectRow> : Unit -> Int ! {Native.Abs<Before, T, After>}\nprobe () = 42\nmain : Unit -> Int\nmain () = 42\n").unwrap();
-    let failure = run_path(fixture.configuration()).unwrap_err();
-    assert!(
-        matches!(failure.pipeline_failure(), Some(PipelineFailure::Kind(KindFailure::Source(error)))
-            if error.to_string().contains("this row slot requires a written effect-row argument")),
-        "a TypeArg with row kind must still require the written row form: {failure:?}"
-    );
 }
 
 #[test]
@@ -154,8 +101,8 @@ fn native_descriptors_follow_selected_and_reexported_effect_facts() {
         ),
         (
             CONTRACT.to_owned(),
-            "import facade as Facade\nimport native as Native\nprobe : Unit -> Unit ! {Facade.Absolute<{}, Int, {}>}\nprobe () = ()\nmain : Unit -> Int\nmain () = 42\n",
-            Some("pub import native (Abs as Absolute)\n"),
+            "import facade as Facade\nimport native as Native\nprobe : Unit -> Unit ! {Facade.Halt}\nprobe () = ()\nmain : Unit -> Int\nmain () = 42\n",
+            Some("pub import native (Stop as Halt)\n"),
         ),
     ] {
         let fixture = Fixture::new(entry);
@@ -175,6 +122,33 @@ fn native_descriptors_follow_selected_and_reexported_effect_facts() {
 }
 
 #[test]
+fn selected_and_reexported_operations_keep_the_defining_handler_identity() {
+    for through_facade in [false, true] {
+        let selected = if through_facade { "facade" } else { "native" };
+        let fixture = Fixture::new(&format!(
+            r"import @builtin.foreign as F
+import native as Native
+import {selected} (Echo as Forward)
+main : Unit -> Bool
+main () = F.is_null (handle (perform Forward.call (F.null ())) with Native.Echo {{
+    call address => resume address
+}})
+"
+        ));
+        fs::write(fixture.0.join("native.ash"), CONTRACT).unwrap();
+        if through_facade {
+            fs::write(fixture.0.join("facade.ash"), "pub import native (Echo)\n").unwrap();
+        }
+        assert_eq!(
+            run_path(fixture.configuration())
+                .expect("the defining effect handles the renamed operation")
+                .value_display(),
+            "true"
+        );
+    }
+}
+
+#[test]
 fn a_public_signature_does_not_publish_private_native_member_names() {
     for entry in [
         "import native (Stop)\nmain : Unit -> Int\nmain () = 42\n",
@@ -189,56 +163,62 @@ fn a_public_signature_does_not_publish_private_native_member_names() {
             ),
         )
         .unwrap();
-        assert!(matches!(
-            run_path(fixture.configuration())
-                .unwrap_err()
-                .pipeline_failure(),
-            Some(PipelineFailure::Resolution(_))
-        ));
-    }
-}
-
-#[test]
-fn same_named_result_types_and_incorrect_codomains_grant_no_native_authority() {
-    for text in [
-        CONTRACT.replace("Foreign.Call<Int>", "Int"),
-        CONTRACT.replace(
-            "import @builtin.foreign as Foreign",
-            "import donor as Foreign",
-        ),
-        CONTRACT.replace("Foreign.Call<Unit>", "Foreign.Call<Int>"),
-    ] {
-        let fixture = Fixture::new(&format!("{text}main : Unit -> Int\nmain () = 42\n"));
-        fs::write(fixture.0.join("donor.ash"), "pub opaque type ConversionError = Hidden\npub type Call<T> = Returned(T)\n    | ConversionFailed(ConversionError)\n").unwrap();
         let failure = run_path(fixture.configuration()).unwrap_err();
         assert!(
-            matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::ForeignContract),
+            matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::UnavailableExport),
             "{failure:?}"
         );
     }
 }
 
 #[test]
+fn same_named_address_type_has_no_builtin_pointer_mapping() {
+    let fixture = Fixture::new(&format!(
+        "{}main : Unit -> Int\nmain () = 42\n",
+        CONTRACT.replace("import @builtin.foreign as F", "import donor as F")
+    ));
+    fs::write(
+        fixture.0.join("donor.ash"),
+        "pub opaque type Address = Hidden\n",
+    )
+    .unwrap();
+    let failure = run_path(fixture.configuration()).unwrap_err();
+    let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+        panic!("foreign signature admission must reject the ordinary nominal: {failure:?}")
+    };
+    assert_eq!(error.reason, ResolveReason::ForeignContract);
+    assert_eq!(
+        error.diagnostic().primary.message(),
+        "unsupported or inconsistent foreign signature: InvalidSignature"
+    );
+}
+
+#[test]
 fn foreign_and_ordinary_effect_names_share_the_collision_boundary() {
     let fixture = Fixture::new(&format!(
-        "{CONTRACT}effect Abs {{\ncall : Int -> Int\n}}\nmain : Unit -> Int\nmain () = 42\n"
+        "{CONTRACT}effect Echo {{\n    call : Unit -> Unit\n}}\nmain : Unit -> Int\nmain () = 42\n"
     ));
     let failure = run_path(fixture.configuration()).unwrap_err();
     assert!(
-        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::DuplicateType),
+        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::DuplicateEffect),
         "{failure:?}"
     );
 }
 
 #[test]
-fn libraries_require_disjoint_member_spellings_including_abi_only_members() {
+fn foreign_libraries_require_disjoint_symbol_spellings() {
     let fixture = Fixture::new(&format!(
-        "{CONTRACT}foreign library Other {{\n    profile \"x86_64-unknown-linux-gnu\"\n    repr CInt = signed(32)\n}}\nmain : Unit -> Int\nmain () = 42\n"
+        r#"{CONTRACT}foreign library Other {{
+    profile "x86_64-unknown-linux-gnu"
+    symbol Stop : Unit -> Unit {{ name "absent_other_stop" }}
+}}
+main : Unit -> Int
+main () = 42
+"#
     ));
     let failure = run_path(fixture.configuration()).unwrap_err();
     assert!(
-        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error))
-        if error.reason == ResolveReason::ForeignContract && error.related.len() == 1),
+        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::DuplicateEffect),
         "{failure:?}"
     );
 }
@@ -246,38 +226,26 @@ fn libraries_require_disjoint_member_spellings_including_abi_only_members() {
 #[test]
 fn interleaved_foreign_libraries_and_ordinary_effects_preserve_source_declaration_order() {
     let fixture = Fixture::new(
-        r#"import @builtin.foreign as Foreign
+        r#"import @builtin.foreign as F
 pub effect Before<T> {
     request : T -> T
 }
 pub foreign library First {
     profile "x86_64-unknown-linux-gnu"
-    symbol FirstStop<Delta : EffectRow, T> : Unit -> Foreign.Call<Unit> {
-        name "first_stop"
-        abi () -> void
-        outcome otherwise {}
-    }
-    symbol NextStop : Unit -> Foreign.Call<Unit> {
-        name "next_stop"
-        abi () -> void
-        outcome otherwise {}
-    }
+    symbol FirstStop : Unit -> Unit { name "absent_first_stop" }
+    symbol NextStop : F.Address -> Unit { name "absent_next_stop" }
 }
 pub effect Between<T> {
     request : T -> T
 }
 pub foreign library Second {
     profile "x86_64-unknown-linux-gnu"
-    symbol LastStop : Unit -> Foreign.Call<Unit> {
-        name "last_stop"
-        abi () -> void
-        outcome otherwise {}
-    }
+    symbol LastStop : Bytes -> F.Address { name "absent_last_stop" }
 }
 pub effect After {
     request : Unit -> Unit
 }
-probe : Unit -> Unit ! {Before<Int>, FirstStop<{}, Int>, NextStop, Between<Bool>, LastStop, After}
+probe : Unit -> Unit ! {Before<Int>, FirstStop, NextStop, Between<Bool>, LastStop, After}
 probe () = ()
 main : Unit -> Int
 main () = 42
@@ -286,179 +254,6 @@ main () = 42
     assert_eq!(
         run_path(fixture.configuration()).unwrap().value_display(),
         "42",
-        "passive declarations must survive independent linked validation in source order"
-    );
-}
-
-fn marker_contract(marker: &str, source_position: usize) -> String {
-    format!(
-        r#"pub foreign library C {{
-    profile "x86_64-unknown-linux-gnu"
-    repr CInt = signed(32)
-    symbol Pick : (Int, {marker}) -> Foreign.Call<Int> {{
-        name "abs"
-        abi (CInt) -> CInt
-        operand 0 from {source_position} scalar
-        output result as scalar
-        outcome otherwise {{ readable result }}
-    }}
-}}
-"#
-    )
-}
-
-#[test]
-fn opaque_non_abi_domain_leaves_keep_their_canonical_kinds_through_imports() {
-    const MARKER: &str = "pub opaque type Marker = Hidden\n";
-    const MAIN: &str = "main : Unit -> Int\nmain () = 42\n";
-    for (declarations, marker, dependency, facade) in [
-        (MARKER, "Marker", None, None),
-        (
-            "import marker as Markers\n",
-            "Markers.Marker",
-            Some(MARKER),
-            None,
-        ),
-        (
-            "import facade (Token)\n",
-            "Token",
-            Some(MARKER),
-            Some("pub import marker (Marker as Token)\n"),
-        ),
-        ("", "Foreign.ConversionError", None, None),
-    ] {
-        let fixture = Fixture::new(&format!(
-            "import @builtin.foreign as Foreign\n{declarations}{}{MAIN}",
-            marker_contract(marker, 0)
-        ));
-        if let Some(dependency) = dependency {
-            fs::write(fixture.0.join("marker.ash"), dependency).unwrap();
-        }
-        if let Some(facade) = facade {
-            fs::write(fixture.0.join("facade.ash"), facade).unwrap();
-        }
-        assert_eq!(
-            run_path(fixture.configuration()).unwrap().value_display(),
-            "42",
-            "{marker} is a value-kinded ordinary domain leaf, not an ABI operand"
-        );
-    }
-
-    // Opaque value-kind admission grants no scalar ABI representation. A bare
-    // generic nominal also remains unsaturated, even outside the ABI projection.
-    for (dependency, source_position) in [(MARKER, 1), ("pub opaque type Marker<T> = Hidden\n", 0)]
-    {
-        let fixture = Fixture::new(&format!(
-            "import @builtin.foreign as Foreign\nimport marker as Markers\n{}{MAIN}",
-            marker_contract("Markers.Marker", source_position)
-        ));
-        fs::write(fixture.0.join("marker.ash"), dependency).unwrap();
-        let failure = run_path(fixture.configuration()).unwrap_err();
-        assert!(
-            matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error))
-                if error.reason == ResolveReason::ForeignContract),
-            "an actual opaque ABI leaf or unsaturated domain must still reject: {failure:?}"
-        );
-    }
-}
-
-#[test]
-fn declared_literal_constant_ranges_and_term_visibility_remain_exact() {
-    for (repr, value, expected) in [
-        ("signed(8)", "-128", "-128"),
-        ("signed(8)", "127", "127"),
-        ("signed(64)", "-9223372036854775808", "-9223372036854775808"),
-        (
-            "unsigned(64)",
-            "18446744073709551615",
-            "18446744073709551615",
-        ),
-        ("unsigned(8)", "-0", "0"),
-    ] {
-        let fixture = Fixture::new(&format!(
-            "foreign library Limits {{\n    profile \"x86_64-unknown-linux-gnu\"\n    repr Scalar = {repr}\n    const Value : Scalar = {value}\n}}\nmain : Unit -> Int\nmain () = Value\n"
-        ));
-        assert_eq!(
-            run_path(fixture.configuration()).unwrap().value_display(),
-            expected
-        );
-    }
-    for (repr, value) in [
-        ("signed(8)", "128"),
-        ("signed(8)", "-129"),
-        ("unsigned(8)", "-1"),
-        ("unsigned(64)", "18446744073709551616"),
-        ("signed(64)", "-9223372036854775809"),
-    ] {
-        let fixture = Fixture::new(&format!(
-            "foreign library Limits {{\n    profile \"x86_64-unknown-linux-gnu\"\n    repr Scalar = {repr}\n    const Value : Scalar = {value}\n}}\nmain : Unit -> Int\nmain () = Value\n"
-        ));
-        assert!(
-            matches!(run_path(fixture.configuration()).unwrap_err().pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::ForeignContract)
-        );
-    }
-    for entry in [
-        "import native (Hidden)\nmain : Unit -> Int\nmain () = Hidden\n",
-        "import native as Native\nmain : Unit -> Int\nmain () = Native.Hidden\n",
-    ] {
-        let fixture = Fixture::new(entry);
-        fs::write(fixture.0.join("native.ash"), "foreign library Limits {\n    profile \"x86_64-unknown-linux-gnu\"\n    repr I8 = signed(8)\n    const Hidden : I8 = 7\n}\n").unwrap();
-        assert!(run_path(fixture.configuration()).is_err());
-    }
-    let fixture = Fixture::new(
-        "foreign library Limits {\n    profile \"x86_64-unknown-linux-gnu\"\n    repr I8 = signed(8)\n    const Present : I8 = 7\n}\ntype Tag = Present\nmain : Unit -> Int\nmain () = 0\n",
-    );
-    assert!(
-        run_path(fixture.configuration()).is_err(),
-        "a literal and constructor cannot share a term name"
-    );
-}
-
-#[test]
-fn noncallable_sentinels_never_publish_ordinary_values_or_callable_symbols() {
-    let contract = r#"pub foreign library Sentinels {
-    profile "x86_64-unknown-linux-gnu"
-    repr I32 = signed(32)
-    repr Destructor = function_address
-    repr OtherDestructor = function_address
-    sentinel Transient : Destructor = all_bits_one
-    sentinel SameBits : Destructor = all_bits_one
-    sentinel OtherRole : OtherDestructor = all_bits_one
-    symbol Check<Before : EffectRow, T, After : EffectRow> : Unit -> Foreign.Call<Int> {
-        name "ash_counter_noncallable_sentinel"
-        abi (Destructor) -> I32
-        operand 0 from constant Transient
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-}
-"#;
-    for entry in [
-        "import native as Native\nmain : Unit -> Int\nmain () = Native.Transient\n",
-        "import native (Transient as Value)\nmain : Unit -> Int\nmain () = Value\n",
-        "import native as Native\nmain : Unit -> Unit ! {Native.Transient}\nmain () = perform Native.Transient.call ()\n",
-    ] {
-        let fixture = Fixture::new(entry);
-        fs::write(
-            fixture.0.join("native.ash"),
-            format!("import @builtin.foreign as Foreign\n{contract}"),
-        )
-        .unwrap();
-        assert!(run_path(fixture.configuration()).is_err(), "{entry}");
-    }
-}
-
-#[test]
-fn checked_library_is_rejected_before_legacy_module_admission() {
-    let source = format!(
-        "{}\nmain : Unit -> Int\nmain () = 42\n",
-        CONTRACT.replace("pub foreign library", "pub foreign checked library")
-    );
-    let fixture = Fixture::new(&source);
-    let failure = run_path(fixture.configuration())
-        .expect_err("unchecked legacy module facts cannot implement a checked declaration");
-    assert!(
-        matches!(failure.pipeline_failure(), Some(PipelineFailure::Resolution(error)) if error.reason == ResolveReason::ForeignContract),
-        "{failure:?}"
+        "passive declarations survive independent linked validation in source order"
     );
 }

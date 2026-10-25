@@ -60,32 +60,28 @@ fn cli_links_distinct_static_shared_dependencies_and_preserves_output_on_link_re
         r#"import @builtin.foreign as Foreign
 foreign library Native {
     profile "x86_64-unknown-linux-gnu"
-    repr CInt = signed(32)
-    symbol Entry : Int -> Foreign.Call<Int> {
-        name "ash_cli_entry"
-        abi (CInt) -> CInt
-        operand 0 from 0 scalar
-        output result as scalar
-        outcome otherwise { readable result }
-    }
+    symbol Entry : Foreign.Address -> Foreign.Address { name "ash_cli_entry" }
 }
 main : Unit -> Int ! {Entry}
-main () = match perform Entry.call 40 {
-    Foreign.Returned(value) => value
-    Foreign.ConversionFailed(_) => 0
+main () = match Foreign.is_null (perform Entry.call (Foreign.null ())) {
+    true => 0
+    false => 42
 }
 "#,
     );
     for (name, code) in [
         (
             "first",
-            "extern int ash_cli_middle(int); int ash_cli_entry(int value) { return ash_cli_middle(value) + 1; }\n",
+            "extern void *ash_cli_middle(void *); void *ash_cli_entry(void *value) { return ash_cli_middle(value); }\n",
         ),
         (
             "middle",
-            "extern int ash_cli_last(int); int ash_cli_middle(int value) { return ash_cli_last(value) + 1; }\n",
+            "extern void *ash_cli_last(void *); void *ash_cli_middle(void *value) { return ash_cli_last(value); }\n",
         ),
-        ("last", "int ash_cli_last(int value) { return value; }\n"),
+        (
+            "last",
+            "#include <stddef.h>\nvoid *ash_cli_last(void *value) { static unsigned char marker; return value == NULL ? &marker : value; }\n",
+        ),
     ] {
         let source = fixture.0.join(format!("{name}.c"));
         fs::write(&source, code).unwrap();
@@ -276,8 +272,6 @@ fn build_invocation_requires_one_output_and_options_before_the_entry() {
         ],
         vec!["--native-static", "lib.a", "entry.ash"],
         vec!["--native-shared", "lib.so", "entry.ash"],
-        vec!["check-ffi", "--native-static", "lib.a", "entry.ash"],
-        vec!["check-ffi", "--native-shared", "lib.so", "entry.ash"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_ash"))
             .args(["--message-format", "json"])

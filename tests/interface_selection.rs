@@ -273,20 +273,9 @@ fn occurrences_in_expressions(
                 expressions.extend(matched.arms.iter().map(|arm| &arm.body));
             }
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
-            ResolvedExprKind::ProviderResource(resource) => {
-                expressions.push(&resource.initializer);
-                expressions.push(&resource.body);
-            }
             ResolvedExprKind::Resource(resource) => {
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
-            }
-            ResolvedExprKind::ForeignHost(host) => {
-                expressions.push(&host.body);
-            }
-            ResolvedExprKind::CopyWindow(window) => {
-                expressions.push(&window.state);
-                expressions.push(&window.body);
             }
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
