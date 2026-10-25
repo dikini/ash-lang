@@ -1,0 +1,19 @@
+test_actual_one_mib_admission (__main__.Association.test_actual_one_mib_admission) ... ok
+test_changed_bytes_before_finalization (__main__.Association.test_changed_bytes_before_finalization) ... ok
+test_complete_matching_observation (__main__.Association.test_complete_matching_observation) ... ok
+test_duplicate_observation (__main__.Association.test_duplicate_observation) ... ok
+test_each_size_mismatch (__main__.Association.test_each_size_mismatch) ... ok
+test_missing_observation (__main__.Association.test_missing_observation) ... ok
+test_other_file_object_refuses (__main__.Association.test_other_file_object_refuses) ... ok
+test_prefix_refuses (__main__.Association.test_prefix_refuses) ... ok
+test_wrong_class_or_cap (__main__.Association.test_wrong_class_or_cap) ... ok
+test_wrong_hash (__main__.Association.test_wrong_hash) ... ok
+test_wrong_path (__main__.Association.test_wrong_path) ... ok
+test_duplicate_dependency_refuses (__main__.FrozenSet.test_duplicate_dependency_refuses) ... ok
+test_exact_set_order_independent (__main__.FrozenSet.test_exact_set_order_independent) ... ok
+test_missing_or_extra_dependency_refuses (__main__.FrozenSet.test_missing_or_extra_dependency_refuses) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.014s
+
+OK

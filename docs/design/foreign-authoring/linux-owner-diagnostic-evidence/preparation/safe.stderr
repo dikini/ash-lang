@@ -1,0 +1,19 @@
+test_approval_64k_and_changed_premise_refuse (owner_diagnostic_tests.DiagnosticTests.test_approval_64k_and_changed_premise_refuse) ... ok
+test_bounded_input_and_duplicate_json (owner_diagnostic_tests.DiagnosticTests.test_bounded_input_and_duplicate_json) ... ok
+test_child_descriptor_and_exec_contract_is_mocked (owner_diagnostic_tests.DiagnosticTests.test_child_descriptor_and_exec_contract_is_mocked) ... ok
+test_combined_output_overflow_never_stores_more_than_limit (owner_diagnostic_tests.DiagnosticTests.test_combined_output_overflow_never_stores_more_than_limit) ... ok
+test_copy_tamper_refuses_without_image (owner_diagnostic_tests.DiagnosticTests.test_copy_tamper_refuses_without_image) ... ok
+test_deadline_requests_kill_and_reaps_with_interrupted_wait (owner_diagnostic_tests.DiagnosticTests.test_deadline_requests_kill_and_reaps_with_interrupted_wait) ... ok
+test_exec_refusal_status_is_reaped_without_kill (owner_diagnostic_tests.DiagnosticTests.test_exec_refusal_status_is_reaped_without_kill) ... ok
+test_fifo_refuses_without_fork_or_blocking_open (owner_diagnostic_tests.DiagnosticTests.test_fifo_refuses_without_fork_or_blocking_open) ... ok
+test_output_after_reap_is_drained_to_eof (owner_diagnostic_tests.DiagnosticTests.test_output_after_reap_is_drained_to_eof) ... ok
+test_output_after_reap_overflow_still_refuses (owner_diagnostic_tests.DiagnosticTests.test_output_after_reap_overflow_still_refuses) ... ok
+test_postfork_parent_setup_failure_is_killed_and_reaped (owner_diagnostic_tests.DiagnosticTests.test_postfork_parent_setup_failure_is_killed_and_reaped) ... ok
+test_pure_approval_bindings_and_refusals_never_fork (owner_diagnostic_tests.DiagnosticTests.test_pure_approval_bindings_and_refusals_never_fork) ... ok
+test_selector_failure_precedes_fork (owner_diagnostic_tests.DiagnosticTests.test_selector_failure_precedes_fork) ... ok
+test_synthetic_elf_pin_seals_and_final_hash_without_execution (owner_diagnostic_tests.DiagnosticTests.test_synthetic_elf_pin_seals_and_final_hash_without_execution) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.022s
+
+OK

@@ -1,0 +1,103 @@
+{
+  "scope": "One explicit-user/root-approved trusted existing-profile owner host diagnostic",
+  "execution_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-execution-manifest.json",
+    "size": 7036,
+    "sha256": "c327f6cd2e07bf1d3bd2107e143c557e80e9f31bcc9e386a4f37f208547a0ba1"
+  },
+  "execution": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-execution.json",
+    "size": 6843,
+    "sha256": "b0c599cf5225facd1b208aac70051e360f877320ed3caf0237d12f81e35433d5"
+  },
+  "stdout": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stdout.json",
+    "size": 3153,
+    "sha256": "a777be64e6fd858c9e81ec5a0afca2e457beef720b57c767166f080c1888cf1f"
+  },
+  "stderr": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stderr.log",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "case_result": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-w3hn5tw1/result.json",
+    "size": 3019,
+    "sha256": "c67d22519f79513080ebb67b9ced9669515fb0bbce27d5e8c08a570fd672b666"
+  },
+  "lifecycle": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-w3hn5tw1/lifecycle.json",
+    "size": 222,
+    "sha256": "9208ce70aa5066a1d3c3ea300e3d9c9d22a6f69073c1144f0e013a8161b8adc3"
+  },
+  "harness_exit": 0,
+  "child": {
+    "child_created": true,
+    "elapsed_seconds": 0.07195,
+    "exit_code": 0,
+    "failure": null,
+    "output_bytes": 21,
+    "output_utf8": "Completed(8, Closed)\n",
+    "pid": 730792,
+    "reaped": true,
+    "stage": "child-reaped"
+  },
+  "diagnostic_success": true,
+  "nullable_refusal_observed": false,
+  "sealed_object": {
+    "create_flags": 19,
+    "mode_octal": "0o500",
+    "seals": 15,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65",
+    "size_bytes": 71022184
+  },
+  "negatives": {
+    "changed_image": {
+      "child_created": false,
+      "reason": "final sealed image mismatch"
+    },
+    "changed_receipt": {
+      "child_created": false,
+      "reason": "receipt digest mismatch"
+    },
+    "image_sha256": {
+      "child_created": false,
+      "reason": "diagnostic approval mismatch"
+    },
+    "missing_approval": {
+      "child_created": false,
+      "reason": "exact diagnostic approval absent"
+    },
+    "receipt_sha256": {
+      "child_created": false,
+      "reason": "diagnostic approval mismatch"
+    },
+    "unsupported_receipt": {
+      "child_created": false,
+      "reason": "receipt digest mismatch"
+    }
+  },
+  "sealed_mutation_refusals": {
+    "grow": {
+      "errno": 1,
+      "refused": true
+    },
+    "shrink": {
+      "errno": 1,
+      "refused": true
+    },
+    "write": {
+      "errno": 1,
+      "refused": true
+    }
+  },
+  "pins_before_after_equal": true,
+  "all_sandbox_records_unchanged": true,
+  "prior_tool_rejection_and_setup_failure_unchanged": true,
+  "temporary_candidate_removed": true,
+  "remaining_host_case_files": [
+    "lifecycle.json",
+    "result.json"
+  ],
+  "source_result_meaning": "Expected acquired legacy Completed(8, Closed) report under explicit trusted native/runtime/loading/host-loss assumptions. Read was stored source data, not native memory. Not independent proof of native free, strict loading exclusion, checked O/K/group/runtime or ownerful architecture/full F2."
+}

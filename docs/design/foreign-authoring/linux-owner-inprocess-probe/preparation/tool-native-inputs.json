@@ -1,0 +1,169 @@
+{
+  "status": "read/hash correspondence only, no tooling executed here",
+  "prior_version_queries": {
+    "cc": "Ubuntu 15.2.0-16ubuntu1",
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+    "readelf": "GNU Binutils for Ubuntu 2.46",
+    "system_python": "3.14.4",
+    "libc6/libc6-dev": "2.43-2ubuntu2.4",
+    "gcc-15": "15.2.0-16ubuntu1",
+    "binutils": "2.46-3ubuntu2"
+  },
+  "files": [
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "size": 6238972,
+      "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/crt1.o",
+      "resolved": "/usr/lib/x86_64-linux-gnu/crt1.o",
+      "size": 1792,
+      "sha256": "7b5004088b875754a5cd83f92fa7149c95f807c6d4663330828970c4c84e660e"
+    },
+    {
+      "path": "/usr/include/stdlib.h",
+      "resolved": "/usr/include/stdlib.h",
+      "size": 42963,
+      "sha256": "936ffcdf6161aa702d9fe433879e59b039731effebea7a9c02506da183a99d02"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "size": 4286,
+      "sha256": "9ec1af1a58b5d6431708a7ca71ef65944622921ca6fce878ae2ab486f3145296"
+    },
+    {
+      "path": "/usr/bin/x86_64-linux-gnu-gcc-15",
+      "resolved": "/usr/bin/x86_64-linux-gnu-gcc-15",
+      "size": 1305304,
+      "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88"
+    },
+    {
+      "path": "/usr/bin/readelf",
+      "resolved": "/usr/bin/x86_64-linux-gnu-readelf",
+      "size": 818312,
+      "sha256": "c857339616bbbfa5eba32733e22365048903fbaf6ed2126b897dd138bcb741fc"
+    },
+    {
+      "path": "/usr/bin/nm",
+      "resolved": "/usr/bin/x86_64-linux-gnu-nm",
+      "size": 48712,
+      "sha256": "f04262bf48192a7cbb78a17ca49ae03f8930b0372bd0115576f957b2e2a57a01"
+    },
+    {
+      "path": "/usr/bin/objdump",
+      "resolved": "/usr/bin/x86_64-linux-gnu-objdump",
+      "size": 415760,
+      "sha256": "44f07f8da860b15bd4dec909f229dec536595fb170a616fe3ab29c7b21c9736f"
+    },
+    {
+      "path": "/usr/bin/ar",
+      "resolved": "/usr/bin/x86_64-linux-gnu-ar",
+      "size": 55944,
+      "sha256": "531473816bf553e863df5aab14c8177c72b732cf80c51dcf0fa990a50125041c"
+    },
+    {
+      "path": "/usr/bin/ld",
+      "resolved": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+      "size": 1890472,
+      "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+    },
+    {
+      "path": "/usr/bin/timeout",
+      "resolved": "/usr/lib/cargo/bin/coreutils/timeout",
+      "size": 11807104,
+      "sha256": "f84e76ea4da1e0c4e92254bd0d7dccdabe2c8b3098e734f27997dae3ee5d8e02"
+    },
+    {
+      "path": "/usr/bin/python3",
+      "resolved": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc.a",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc.a",
+      "size": 3237076,
+      "sha256": "d9c2e7a0c0f3dbfc0ff2dec153b0d044cf49d66d64d736b5d1db8ae25ca9c75e"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc_eh.a",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc_eh.a",
+      "size": 71426,
+      "sha256": "050160c9613ecf99b449bb34743fb8b2f4aafb3ae03a38a63e69a6926f956140"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/crti.o",
+      "resolved": "/usr/lib/x86_64-linux-gnu/crti.o",
+      "size": 1192,
+      "sha256": "077ccb6c68db1794da3ee262c4a16a3c6f8e902845dd0829110ad4b7065e5aa3"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/crtn.o",
+      "resolved": "/usr/lib/x86_64-linux-gnu/crtn.o",
+      "size": 760,
+      "sha256": "a2266079f95b84ccc2162ebbf279bcd78858a748aa1882e0bdb912316c76a58f"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/crtbeginT.o",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/crtbeginT.o",
+      "size": 2944,
+      "sha256": "089358d91a597f00c262502678b0c15fcd0784880f9c90f1c5a06086ea9ce1ac"
+    },
+    {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-c64e6e11aa24fc43.rlib",
+      "resolved": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-c64e6e11aa24fc43.rlib",
+      "size": 11667026,
+      "sha256": "96c3ac946bdb5c09c8eb7036e495e89d2d773b30b2606b6c0323944cd9e858fe"
+    },
+    {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_unwind-e8f3c569ec017ae8.rlib",
+      "resolved": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_unwind-e8f3c569ec017ae8.rlib",
+      "size": 35758,
+      "sha256": "cc89591bdd7f70faa334894e4831762269ec499668e2f11f7d78774f431e6840"
+    },
+    {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+      "resolved": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+      "size": 42839824,
+      "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953"
+    },
+    {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+      "resolved": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+      "size": 645000,
+      "sha256": "d3a664c970a9fd8361b64194861bebc1ae37b9054e5ee3400dc1c9e691797eea"
+    },
+    {
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustdoc",
+      "resolved": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustdoc",
+      "size": 13680928,
+      "sha256": "3b0c7aef20e0dfdfe2dd19ddb0b40d3b744f76318a44031813f501e1912934df"
+    },
+    {
+      "path": "/home/dikini/.cargo/config.toml",
+      "resolved": "/home/dikini/.cargo/config.toml",
+      "size": 63,
+      "sha256": "13ed130670278614272c1fca1af627d4e427b8d306cd530a96f0d7555dbcd6a5"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/.cargo/config.toml",
+      "resolved": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/.cargo/config.toml",
+      "size": 82,
+      "sha256": "2eb887744ac35113f513a449e09d637cf4ae0e08e8361bd7b3401e41e37051f9"
+    },
+    {
+      "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+      "resolved": "/tmp/ash-owner-build-monitor/build_monitor.py",
+      "size": 18877,
+      "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60"
+    }
+  ],
+  "shared_cache": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+  "cache_not_duplicated": true,
+  "cached_compiler_size_observed_before": 589362808,
+  "cached_compiler_reuse_approved": false,
+  "native_archive_identity_is_not_new_owner_runtime_closure_proof": true
+}

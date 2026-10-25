@@ -1,0 +1,148 @@
+{
+  "base": "0c220ea2a0b16afa21977380173d9fc39b4ee1ba",
+  "scope": "Passive canonical checked declaration metadata only; source/module/Core/native admission remains unavailable.",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "source_configuration_before_after_equal": true,
+  "source_configuration_file_count": 511,
+  "source_configuration_tree_sha256": "f053c83817bc4c54c4ee77cbe0da68b55bdf2725eb01a04f02e893f368ad9dc0",
+  "changed_source_and_configuration_sha256": {
+    "src/foreign/checked_profile.rs": "104f927a2b1ed210debcf6269ae4ae8a862dad15037260f63beea4d5f54421bb",
+    "src/foreign/checked_source.rs": "5eb5ee325dda1db963822aa1a495a565ccaa8a386eca2ad5cbd59647a57bfdfd",
+    "src/foreign/source_contract.rs": "2485221db4d829b60c050c8ffc2cd8b8350c6810d5c2e9c999fa5ad235e1b5e2",
+    "src/foreign/source_owner.rs": "c3784f1aaa3e238323fde94b2a607a0d0f408914d08141e07978a71451348ef5",
+    "src/parser/foreign_grammar.rs": "002cdf66eac2fafaea739d1cfb66f93783a4bce02b3c556e3ef858add68a3e47",
+    "src/parser/foreign_project.rs": "62424d6d39baeaba7446f4ed6e4e7aa4401907a4aa3c60fda388c53def7a6834",
+    "src/resolve/foreign.rs": "173f4ac6a3b6a056c8b5ae27dfbc152dba01543301b10615c1a42dc052d03a12",
+    "src/surface.rs": "9daec398ed47c7b9de133b1d7cecb1b1f156d68b4c514e337fae9014dcf5a2cb",
+    "src/surface/foreign.rs": "1eaa3390065fda984b4f93a9de742c1bb574646c50bb7a7923600c42d9fd03ee",
+    "tests/checked_foreign_contracts.rs": "bd4f54278d3c32f4287617c075da2c0fb1f6635b2596206fd4692fdd0f10e431",
+    "Cargo.toml": "2d1a3d056418f5feb2e36d3ff99924e30f6a9136900b7aa2bb73ead902a1395c",
+    "Cargo.lock": "26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08",
+    "rust-toolchain.toml": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+    ".cargo/config.toml": "2eb887744ac35113f513a449e09d637cf4ae0e08e8361bd7b3401e41e37051f9",
+    "build.rs": "a9de5bfe4be2618454e1e7999c65feb0d4aefb2ec7efd696c4b747fbd6f49e79"
+  },
+  "checks": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "checked_profile",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 49.835,
+      "log": "docs/tasks/evidence/checked-ffi-contracts/unit-profile.log",
+      "sha256": "a09af4f9b7391492b032f379fcd1537711ae6d27ec73f57dcdd4c4b544698b2b"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "checked_assumptions_do_not_publish_or_reserve_module_member_names"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.177,
+      "log": "docs/tasks/evidence/checked-ffi-contracts/unit-collisions.log",
+      "sha256": "d80e29505892cef7915d6674387b04eb7e6c790f8a709cf238e31bdc2b57a050"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--test",
+        "checked_foreign_contracts",
+        "--test",
+        "foreign_source_syntax",
+        "--test",
+        "foreign_source_contracts",
+        "--test",
+        "foreign_source_admission"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 13.648,
+      "log": "docs/tasks/evidence/checked-ffi-contracts/focused-tests.log",
+      "sha256": "0cfb6dfe938e5cea07743b012d7813fe5524aeb318daa8b3803fd20c2f14bd71"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "--test",
+        "checked_foreign_contracts",
+        "--test",
+        "foreign_source_syntax",
+        "--test",
+        "foreign_source_contracts",
+        "--test",
+        "foreign_source_admission",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 49.86,
+      "log": "docs/tasks/evidence/checked-ffi-contracts/focused-clippy.log",
+      "sha256": "d138ad2e20f4558eef96b6b557169b630091bf55b07c308efb414e88c1d05c27"
+    }
+  ],
+  "not_claimed": [
+    "Whole F3 acceptance",
+    "full workspace gate",
+    "native execution",
+    "Linux containment or F2 acceptance"
+  ],
+  "specification_sha256": {
+    "spec/syntax.md": "cac0b83579873abe6e36dda563fabf249ab27ff926e67cda569ba213b839daa9",
+    "spec/static-semantics.md": "985a988e2a9ff271e998fca01da049d57cbe7ebe84a32231290440268811d802"
+  },
+  "observed_results": {
+    "unit_profile": 6,
+    "unit_module_collision": 1,
+    "integration_and_regression": 44,
+    "failures": 0,
+    "targeted_clippy_exit": 0
+  },
+  "other_checks": {
+    "format": "cargo fmt --all -- --check",
+    "markdown": "markdownlint-cli2 --config /tmp/checked-ffi.markdownlint-cli2.jsonc (MD013 false), three changed Markdown files, exit 0",
+    "local_links_and_anchors": 26,
+    "whitespace": "Source/spec/task/JSON changes pass git diff --check; captured raw Cargo logs retain their exact final blank lines and are excluded from whitespace claims."
+  },
+  "review_repairs": [
+    "Automatic initialized-output interval and aliasing premises",
+    "Independent native-copy premise distinct from call-borrow",
+    "Assumption reference cardinality charged before reservation",
+    "Assumption originals excluded from module publication collisions",
+    "Independent checked-owner legacy binding refusal with legacy-positive control",
+    "Legacy private reconstruction fixture uses genuine legacy donor",
+    "ExecutorIntegrity scoped to trusted roles for eventual mode, excluding faulty isolated worker/monitor"
+  ],
+  "source_configuration_tree_algorithm": {
+    "files": "All regular files recursively under src/ and tests/, plus Cargo.toml, Cargo.lock, rust-toolchain.toml, .cargo/config.toml and build.rs. No symlinks are present in these inputs.",
+    "manifest": "Map each repository-relative POSIX path to lowercase SHA-256 hex of its exact file bytes.",
+    "aggregate": "SHA-256 of UTF-8 json.dumps(manifest, sort_keys=True, separators=(comma, colon)), with no newline; comma and colon are literal single-character separators.",
+    "before_after": "The operator materialized and compared both full manifest dictionaries before/after all four commands; equality was asserted. The aggregate is reproducible from the committed source/configuration tree."
+  }
+}

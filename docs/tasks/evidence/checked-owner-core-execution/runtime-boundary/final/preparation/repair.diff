@@ -1,0 +1,125 @@
+diff --git a/src/eval/source_owner_phases.rs b/src/eval/source_owner_phases.rs
+index 84accdd9..f971ddaf 100644
+--- a/src/eval/source_owner_phases.rs
++++ b/src/eval/source_owner_phases.rs
+@@ -538,10 +538,10 @@ impl OwnerAcquireRecorded<'_> {
+     ) -> Result<OwnerAcquireReported, OwnerPhaseFailure> {
+         let checked = self.slots.checked.take();
+         let mut result = self.report_inner(heap);
+-        if result.is_err() {
+-            if let Some(checked) = &checked {
+-                checked.output_failed();
+-            }
++        if result.is_err()
++            && let Some(checked) = &checked
++        {
++            checked.output_failed();
+         }
+         if let Ok(reported) = &mut result {
+             reported.checked = checked;
+@@ -812,10 +812,10 @@ impl OwnerTeardownRecorded<'_> {
+     ) -> Result<OwnerTeardownReported, OwnerPhaseFailure> {
+         let checked = self.slots.checked.take();
+         let result = self.report_inner(heap);
+-        if result.is_err() {
+-            if let Some(checked) = checked {
+-                checked.output_failed();
+-            }
++        if result.is_err()
++            && let Some(checked) = checked
++        {
++            checked.output_failed();
+         }
+         result
+     }
+diff --git a/src/eval/source_resource_phases.rs b/src/eval/source_resource_phases.rs
+index db6a079d..ac3a579c 100644
+--- a/src/eval/source_resource_phases.rs
++++ b/src/eval/source_resource_phases.rs
+@@ -359,10 +359,10 @@ impl Machine<'_> {
+             .as_ref()
+             .map(|control| control.prepaid_scope_observer());
+         let result = self.return_source_resource_inner(boundary, value);
+-        if result.is_err() {
+-            if let Some(control) = checked {
+-                control.output_failed();
+-            }
++        if result.is_err()
++            && let Some(control) = checked
++        {
++            control.output_failed();
+         }
+         result
+     }
+diff --git a/src/foreign/source_owner_boundary_tests.rs b/src/foreign/source_owner_boundary_tests.rs
+index d48ce688..96e67e3d 100644
+--- a/src/foreign/source_owner_boundary_tests.rs
++++ b/src/foreign/source_owner_boundary_tests.rs
+@@ -501,13 +501,15 @@ fn eight_byte_copy_request(
+     panic!("genuine checked-copy original in its exact source window");
+ }
+ 
+-fn eight_byte_fixture() -> (
++type EightByteFixture = (
+     crate::core::ValidatedEffectProgram,
+     FixtureRequest,
+     SourceOwnerScopeRequest,
+     Vec<(SourceOwnerScopeRequest, Arc<CheckedForeignSymbol>)>,
+     SourceOwnerCopyRequest,
+-) {
++);
++
++fn eight_byte_fixture() -> EightByteFixture {
+     let program = eight_byte_program();
+     let executable = crate::eval::ExecutableProgram::Effect(program.shared());
+     let ids = nodes(&program);
+@@ -577,15 +579,15 @@ fn eight_byte_fixture() -> (
+                 }
+             }
+         }
+-        if let (Some(acquire), Some(finish)) = (acquire, finish) {
+-            if queries.len() == 2 {
+-                selected = Some((
+-                    FixtureRequest::new(acquire, scope, &mut work),
+-                    finish,
+-                    queries,
+-                ));
+-                break;
+-            }
++        if let (Some(acquire), Some(finish)) = (acquire, finish)
++            && queries.len() == 2
++        {
++            selected = Some((
++                FixtureRequest::new(acquire, scope, &mut work),
++                finish,
++                queries,
++            ));
++            break;
+         }
+     }
+     let (acquire, finish, mut queries) =
+diff --git a/src/foreign/source_runtime.rs b/src/foreign/source_runtime.rs
+index e98b236e..2b8d0cca 100644
+--- a/src/foreign/source_runtime.rs
++++ b/src/foreign/source_runtime.rs
+@@ -329,6 +329,11 @@ pub(crate) fn widen_gnu_reply(
+ pub(crate) use super::source_bindings::admit_source_native_program;
+ pub use super::source_bindings::{AdmittedSourceNativeProgram, SourceNativeBindings};
+ 
++pub(crate) use super::checked_control::BoundaryLimits as CheckedOwnerLimits;
++
++#[cfg(test)]
++pub(crate) use super::checked_control::Continuation as CheckedOwnerContinuation;
++
+ #[cfg(test)]
+ mod declared_constant_tests {
+     use super::*;
+@@ -443,8 +448,3 @@ mod declared_constant_tests {
+         );
+     }
+ }
+-
+-pub(crate) use super::checked_control::BoundaryLimits as CheckedOwnerLimits;
+-
+-#[cfg(test)]
+-pub(crate) use super::checked_control::Continuation as CheckedOwnerContinuation;

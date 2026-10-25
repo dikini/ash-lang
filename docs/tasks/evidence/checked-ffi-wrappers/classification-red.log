@@ -1,0 +1,28 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 32s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 9 tests
+test resolved::checked_wrapper_tests::checked_wrapper_publication_comparison_has_a_prefixed_exact_work_boundary ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_import_requires_the_same_original_allocation ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_capture_closure_has_exact_prefixed_and_memoized_work ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_summary_keeps_original_contract_and_charges_the_profile_scan ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_aliases_share_one_original_and_reject_replacement ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_shared_origin_teardown_is_iterative_on_success_and_refusal ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_publication_rejects_donor_and_stale_originals ... ok
+test resolved::checked_wrapper_tests::checked_wrapper_branch_and_callable_paths_preserve_original_contract_union ... ok
+
+thread 'resolved::checked_wrapper_tests::checked_wrapper_summary_rejects_erased_native_and_capture_requirements' (680) panicked at src/resolved/checked_wrapper_tests.rs:161:9:
+erasure 4 was accepted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test resolved::checked_wrapper_tests::checked_wrapper_summary_rejects_erased_native_and_capture_requirements ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_wrapper_tests::checked_wrapper_summary_rejects_erased_native_and_capture_requirements
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 1966 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p ash --lib`

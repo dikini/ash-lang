@@ -1,0 +1,21 @@
+{
+  "pid": 2,
+  "pgid": 1,
+  "namespace": "pid:[4026534491]",
+  "script": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-test-lint-preparation/legacy-run.py",
+    "bytes": 10411,
+    "sha256": "e8a4fcb01334246a36d1014290c9451e9858beb6de38d75bdbcd68a2e0dd9ad7"
+  },
+  "proposal": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-test-lint-preparation/legacy.proposal.json",
+    "bytes": 2757,
+    "sha256": "c3a258ef6835908fdb75937de1740893bb881e46d255e87f4f8b3482f83ef4f7"
+  },
+  "manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-test-lint-preparation/manifest.json",
+    "bytes": 4859,
+    "sha256": "40162b1b11f1ca44251fee6f485c9d95923c00d1adcdbaf84e3ccea587d09a1e"
+  },
+  "resource_scope": "namespace-local sampled process RSS sums; not unique physical memory, hard quota or complete peak proof"
+}

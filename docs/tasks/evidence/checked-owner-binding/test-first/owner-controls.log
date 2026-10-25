@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/checked_foreign_owners.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_owners-0ae7b1c4bdbbd419)
+
+running 3 tests
+test checked_foreign_passive_owner_is_refused_by_legacy_abi_preparation ... ok
+test checked_foreign_owner_preparation_retains_distinct_host_owned_slots_and_assumptions ... ok
+test checked_foreign_passive_owner_is_refused_by_default_resolution ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.02s
+

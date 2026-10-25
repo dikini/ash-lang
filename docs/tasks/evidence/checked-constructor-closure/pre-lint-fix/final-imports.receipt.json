@@ -1,0 +1,27 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "imported_",
+    "--",
+    "--nocapture"
+  ],
+  "exit_code": 0,
+  "seconds": 2.238,
+  "inputs_equal": true,
+  "count": 562,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "6194ac5c23d7326e3281730c15973548b98c86319d0e1d9188637f9c6b748ea0",
+  "log_sha256": "47557d9e2272141c64f21bb5d3d90a0da6063ecd4d04bdf3b90594e2c351b408",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

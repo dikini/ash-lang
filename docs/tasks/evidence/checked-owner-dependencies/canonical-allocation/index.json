@@ -1,0 +1,853 @@
+{
+  "base": "b2ccdd6f4950299499c60527709d3a6f547edbcd",
+  "retained_base": "577b0c87305b7bea5f905c6e8833ff49d26dd39e",
+  "records": [
+    {
+      "path": "canonical-after-comparator-01/access-image/freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/freeze.json",
+      "sha256": "9156cdf08abd80f20adaaee852849e9c1f56f842744ee0a9b957f8a09b8d158d",
+      "size": 1096913,
+      "encoding": "json-map-template",
+      "blob": "blobs/e1c759882af3279f06ead8e7e7d64f2dcf71bb592fc5edcf50efb2d6ac513ea4.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/group-after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/group-after.json",
+      "sha256": "5db88d66c6970b5d8cb646185c01032b7f0b5ecbe45dbcebcf901f155ddd64f6",
+      "size": 95,
+      "encoding": "json-map-template",
+      "blob": "blobs/5db88d66c6970b5d8cb646185c01032b7f0b5ecbe45dbcebcf901f155ddd64f6.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/inputs.json",
+      "sha256": "c658626323a00b05d4b1e0772a5a68b19c4f1506188c7d6362a3d95f18e233af",
+      "size": 2185938,
+      "encoding": "json-map-template",
+      "blob": "blobs/7444fe03657462db4e0d1ad40d790cc9bf61e5ff6c5c3d0a8aa13ad98bb1a88b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/pins.json",
+      "sha256": "c7a4b84a8cdd14fe634895d64c3f60599941b25af293af01d6b4d65d97da11b0",
+      "size": 1080530,
+      "encoding": "json-map-template",
+      "blob": "blobs/12a5cac5ef3e52b75eae65e229decaafbdac0842da9cada530f16a3145f27d74.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/process.json",
+      "sha256": "2ef96da0869ddbf8b28830dd3a919e3bb165c146bd93181a5bcd63929b0036b9",
+      "size": 376,
+      "encoding": "json-map-template",
+      "blob": "blobs/2ef96da0869ddbf8b28830dd3a919e3bb165c146bd93181a5bcd63929b0036b9.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/raw.log",
+      "sha256": "f535c11bc9fd905a37edfbc6c67f40c18d035090c54c80d41b5929269581e08d",
+      "size": 2194,
+      "encoding": "gzip",
+      "blob": "blobs/f535c11bc9fd905a37edfbc6c67f40c18d035090c54c80d41b5929269581e08d.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/receipt.json",
+      "sha256": "d1ea89cf7fbb12c53063a8e00f0c9f0792fba4e98e09150ad5e68df3f7b1c2cf",
+      "size": 2648,
+      "encoding": "json-map-template",
+      "blob": "blobs/d1ea89cf7fbb12c53063a8e00f0c9f0792fba4e98e09150ad5e68df3f7b1c2cf.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/resources.json",
+      "sha256": "510b5e266c80caad64f254923ec83d7f533b14fd7a759ba38283aba8a729ae15",
+      "size": 124,
+      "encoding": "json-map-template",
+      "blob": "blobs/510b5e266c80caad64f254923ec83d7f533b14fd7a759ba38283aba8a729ae15.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/run.py",
+      "sha256": "1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652",
+      "size": 5921,
+      "encoding": "gzip",
+      "blob": "blobs/1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/access-image/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/access-image/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/freeze.json",
+      "sha256": "4cea1a48716038ec432837f46c024c8efc69bb68f818bf265a488c6e6c802f4b",
+      "size": 1096779,
+      "encoding": "json-map-template",
+      "blob": "blobs/359d0aaa73b46ab679a0b2ffa86b90df8ef902f4725c4f6a23314e883b77d2b2.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/group-after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/group-after.json",
+      "sha256": "93af6c8e3cd68d7c7714cc56e528ccc21bd10b24f0b6554c7ad529fe94e6fd1a",
+      "size": 95,
+      "encoding": "json-map-template",
+      "blob": "blobs/93af6c8e3cd68d7c7714cc56e528ccc21bd10b24f0b6554c7ad529fe94e6fd1a.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/inputs.json",
+      "sha256": "c658626323a00b05d4b1e0772a5a68b19c4f1506188c7d6362a3d95f18e233af",
+      "size": 2185938,
+      "encoding": "json-map-template",
+      "blob": "blobs/7444fe03657462db4e0d1ad40d790cc9bf61e5ff6c5c3d0a8aa13ad98bb1a88b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/pins.json",
+      "sha256": "8e0da29bbb3c5e449488b0dbe09466660ae79a63a3a3af10a33fcee76c31d198",
+      "size": 1080402,
+      "encoding": "json-map-template",
+      "blob": "blobs/185610ae8a143f25c4ea047bd186e6dc035b8e2871a39d80992ffdbaecb06076.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/process.json",
+      "sha256": "b8c820126edcd3452dc57a7455eb06f2c8d733a5d703c465ca13ed1b10c0e0a4",
+      "size": 245,
+      "encoding": "json-map-template",
+      "blob": "blobs/b8c820126edcd3452dc57a7455eb06f2c8d733a5d703c465ca13ed1b10c0e0a4.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/raw.log",
+      "sha256": "815a596c893bb55b731e2f05af55412f3e7b960476b0fc0aba749750783b88fc",
+      "size": 1801,
+      "encoding": "gzip",
+      "blob": "blobs/815a596c893bb55b731e2f05af55412f3e7b960476b0fc0aba749750783b88fc.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/receipt.json",
+      "sha256": "b72258c9a0e1da5ec68d4c6716c4bf22d03610b9e3936c4f50f9ed1e6cf5ecc0",
+      "size": 2517,
+      "encoding": "json-map-template",
+      "blob": "blobs/b72258c9a0e1da5ec68d4c6716c4bf22d03610b9e3936c4f50f9ed1e6cf5ecc0.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/resources.json",
+      "sha256": "05d71665c6f2dda53a148ee0b7a5ad95c2759717330db6ed6db4ec63ce5d8d61",
+      "size": 5341,
+      "encoding": "json-map-template",
+      "blob": "blobs/05d71665c6f2dda53a148ee0b7a5ad95c2759717330db6ed6db4ec63ce5d8d61.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/run.py",
+      "sha256": "1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652",
+      "size": 5921,
+      "encoding": "gzip",
+      "blob": "blobs/1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/canonical/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/canonical/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/freeze.json",
+      "sha256": "265f87b69c52929e54a050353671e0052b654f814f48f2ae9ba25de3f0bbd86e",
+      "size": 1096780,
+      "encoding": "json-map-template",
+      "blob": "blobs/d2b77213593449676a86e05ef98eb4401d697272e317451d0a7739513ab09a19.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/group-after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/group-after.json",
+      "sha256": "a33c909fb04846084b260c16aee951daa5975e0fb9ca7ae302b5c9c66280e830",
+      "size": 96,
+      "encoding": "json-map-template",
+      "blob": "blobs/a33c909fb04846084b260c16aee951daa5975e0fb9ca7ae302b5c9c66280e830.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/inputs.json",
+      "sha256": "c658626323a00b05d4b1e0772a5a68b19c4f1506188c7d6362a3d95f18e233af",
+      "size": 2185938,
+      "encoding": "json-map-template",
+      "blob": "blobs/7444fe03657462db4e0d1ad40d790cc9bf61e5ff6c5c3d0a8aa13ad98bb1a88b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/pins.json",
+      "sha256": "a7843c448d4f43b4fd085d1cfb672b65384dc1f69e62898a301bc33559867450",
+      "size": 1080401,
+      "encoding": "json-map-template",
+      "blob": "blobs/7ba9101faf2c57227396369bff8e1fd6190bd668e10345ef90527b2554211687.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/process.json",
+      "sha256": "975a51a90ffa499d10e306f152a38ed8cead9df1732d771e7642c79c86530d82",
+      "size": 247,
+      "encoding": "json-map-template",
+      "blob": "blobs/975a51a90ffa499d10e306f152a38ed8cead9df1732d771e7642c79c86530d82.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/raw.log",
+      "sha256": "45eef12baa247bf446581a5901a231a2df55dd0a20dd11da203aa561da640b2a",
+      "size": 1713,
+      "encoding": "gzip",
+      "blob": "blobs/45eef12baa247bf446581a5901a231a2df55dd0a20dd11da203aa561da640b2a.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/receipt.json",
+      "sha256": "39b3a2d55a8a2b836726d703a91844dd64af4fc02e9adc33bbdca42f1b87e841",
+      "size": 2516,
+      "encoding": "json-map-template",
+      "blob": "blobs/39b3a2d55a8a2b836726d703a91844dd64af4fc02e9adc33bbdca42f1b87e841.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/resources.json",
+      "sha256": "4b559f4a6b4b365b9836a316232c5e2734eda71da40b4873bbbfb6e50bcce8f3",
+      "size": 125,
+      "encoding": "json-map-template",
+      "blob": "blobs/4b559f4a6b4b365b9836a316232c5e2734eda71da40b4873bbbfb6e50bcce8f3.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/run.py",
+      "sha256": "1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652",
+      "size": 5921,
+      "encoding": "gzip",
+      "blob": "blobs/1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/comparator/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/comparator/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/freeze.json",
+      "sha256": "2d532fb5b067a701c02040e940d1ed5381c87348b9213c650d2ab8dcc99b5d0f",
+      "size": 1096778,
+      "encoding": "json-map-template",
+      "blob": "blobs/7e07c3713629648f77db75cd3f8e150381c228ffc98acdbd015a59b67005f36f.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/group-after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/group-after.json",
+      "sha256": "00ec7e8817fd0c4cf921ad4142d9fde0fc58862209f071b8765d126c052d54b3",
+      "size": 96,
+      "encoding": "json-map-template",
+      "blob": "blobs/00ec7e8817fd0c4cf921ad4142d9fde0fc58862209f071b8765d126c052d54b3.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/inputs.json",
+      "sha256": "c658626323a00b05d4b1e0772a5a68b19c4f1506188c7d6362a3d95f18e233af",
+      "size": 2185938,
+      "encoding": "json-map-template",
+      "blob": "blobs/7444fe03657462db4e0d1ad40d790cc9bf61e5ff6c5c3d0a8aa13ad98bb1a88b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/pins.json",
+      "sha256": "78afd4b7d4bb13fd62a03c712353dbac7102e634771a764667443531c6c5a7dc",
+      "size": 1080405,
+      "encoding": "json-map-template",
+      "blob": "blobs/7fb284f77c7190e211bd04b3b2e7d18aa36300e0969dd1c2781ce39d48ede2d8.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/process.json",
+      "sha256": "dd2d80f674a0e3e29dc5b39419151dd24e7f2c70ed97cf941bcfbf0199b8106f",
+      "size": 250,
+      "encoding": "json-map-template",
+      "blob": "blobs/dd2d80f674a0e3e29dc5b39419151dd24e7f2c70ed97cf941bcfbf0199b8106f.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/raw.log",
+      "sha256": "25f8285999bbf4d80cfc95ce45fd418754f2b0dee7d6556cb314ce2f4123bdf9",
+      "size": 1600,
+      "encoding": "gzip",
+      "blob": "blobs/25f8285999bbf4d80cfc95ce45fd418754f2b0dee7d6556cb314ce2f4123bdf9.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/receipt.json",
+      "sha256": "dc482694550df2e266a473919ab5430317b1479f37f7d048bb625364083fa20c",
+      "size": 2517,
+      "encoding": "json-map-template",
+      "blob": "blobs/dc482694550df2e266a473919ab5430317b1479f37f7d048bb625364083fa20c.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/resources.json",
+      "sha256": "7af110f4f386a7b90f87bc1d4be28826c2b09ecbb8efa8e0665b386792615a07",
+      "size": 125,
+      "encoding": "json-map-template",
+      "blob": "blobs/7af110f4f386a7b90f87bc1d4be28826c2b09ecbb8efa8e0665b386792615a07.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/run.py",
+      "sha256": "1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652",
+      "size": 5921,
+      "encoding": "gzip",
+      "blob": "blobs/1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/decoded/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/decoded/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/freeze.json",
+      "sha256": "9a6acde4ad6d8fed583fa2a6c412eaa40c076f327c6c00ad1f4966eeb15b32e4",
+      "size": 1096781,
+      "encoding": "json-map-template",
+      "blob": "blobs/0fe0d9a9992499ff1f96f1b59a93dadeff8daca35967acc965fdb3575eaf94f9.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/group-after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/group-after.json",
+      "sha256": "b0b5cab931f08035cfd8bf891778d7bfe36f1fb11ed584f1cea980e4e5821300",
+      "size": 96,
+      "encoding": "json-map-template",
+      "blob": "blobs/b0b5cab931f08035cfd8bf891778d7bfe36f1fb11ed584f1cea980e4e5821300.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/inputs.json",
+      "sha256": "c658626323a00b05d4b1e0772a5a68b19c4f1506188c7d6362a3d95f18e233af",
+      "size": 2185938,
+      "encoding": "json-map-template",
+      "blob": "blobs/7444fe03657462db4e0d1ad40d790cc9bf61e5ff6c5c3d0a8aa13ad98bb1a88b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/pins.json",
+      "sha256": "f8905ee551deba8e3cde2839a97eaba2d7debbd68fe4878bc3f95d7d30eadf16",
+      "size": 1080412,
+      "encoding": "json-map-template",
+      "blob": "blobs/603ca4a86731af3d3ee95eb2359e788b2fac344f475ddef4667cba9d140ecdff.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/process.json",
+      "sha256": "cca9a03b598ee3787a6351f6bf5a84aff10588c1027431ea57859db7367e3ba0",
+      "size": 258,
+      "encoding": "json-map-template",
+      "blob": "blobs/cca9a03b598ee3787a6351f6bf5a84aff10588c1027431ea57859db7367e3ba0.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/raw.log",
+      "sha256": "c6a4b6a934835fadbed95cd53edb5b7c509acf5e4d6f64e9816b636244bb449b",
+      "size": 1520,
+      "encoding": "gzip",
+      "blob": "blobs/c6a4b6a934835fadbed95cd53edb5b7c509acf5e4d6f64e9816b636244bb449b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/receipt.json",
+      "sha256": "2f96798a033c5f47dd7435009a5f082ec4dd3c2d66638b438a7baf2b80f1d0dc",
+      "size": 2522,
+      "encoding": "json-map-template",
+      "blob": "blobs/2f96798a033c5f47dd7435009a5f082ec4dd3c2d66638b438a7baf2b80f1d0dc.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/resources.json",
+      "sha256": "76721906f5b5cdf067119bea469a4f8eae0ae9ba74e570f7a0fb2ffc58aa34ba",
+      "size": 124,
+      "encoding": "json-map-template",
+      "blob": "blobs/76721906f5b5cdf067119bea469a4f8eae0ae9ba74e570f7a0fb2ffc58aa34ba.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/run.py",
+      "sha256": "1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652",
+      "size": 5921,
+      "encoding": "gzip",
+      "blob": "blobs/1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/owned/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/owned/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/freeze.json",
+      "sha256": "38f1185ead2c96765bba17545fbdbbf1756cc7c9e3f9e6621d2eff0e64bb6cb0",
+      "size": 1096860,
+      "encoding": "json-map-template",
+      "blob": "blobs/ac93c5f64a0d1e16050d817e1e48562428b48402f819063f6bafc3f74cb96de6.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/group-after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/group-after.json",
+      "sha256": "61841fab276c7dfe42a8dc475e99448bf11aeb7becb0c5e0a5976d7dfac578c6",
+      "size": 96,
+      "encoding": "json-map-template",
+      "blob": "blobs/61841fab276c7dfe42a8dc475e99448bf11aeb7becb0c5e0a5976d7dfac578c6.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/inputs.json",
+      "sha256": "c658626323a00b05d4b1e0772a5a68b19c4f1506188c7d6362a3d95f18e233af",
+      "size": 2185938,
+      "encoding": "json-map-template",
+      "blob": "blobs/7444fe03657462db4e0d1ad40d790cc9bf61e5ff6c5c3d0a8aa13ad98bb1a88b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/pins.json",
+      "sha256": "28e23078f86b3debc6147afa63143102d585728cbb2a2fd59bf975c7d6744800",
+      "size": 1080487,
+      "encoding": "json-map-template",
+      "blob": "blobs/7e1725594668586e1922ee58f8a92c1de29f2bfa3cdb8fe172bc20d3d118da39.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/process.json",
+      "sha256": "f1e7f93c3719398fef3c96ecca97ed586df5268be334ec4ac834c178b950490c",
+      "size": 333,
+      "encoding": "json-map-template",
+      "blob": "blobs/f1e7f93c3719398fef3c96ecca97ed586df5268be334ec4ac834c178b950490c.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/raw.log",
+      "sha256": "124aadb7f0a231fc532a59bc4af23f71c0cac50588395e4d0f2ac61669d20c38",
+      "size": 1396,
+      "encoding": "gzip",
+      "blob": "blobs/124aadb7f0a231fc532a59bc4af23f71c0cac50588395e4d0f2ac61669d20c38.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/receipt.json",
+      "sha256": "47210e7756f07331c9cc9df39da53f6728d51cc2217ae49213e7ddfbf64c0f96",
+      "size": 2599,
+      "encoding": "json-map-template",
+      "blob": "blobs/47210e7756f07331c9cc9df39da53f6728d51cc2217ae49213e7ddfbf64c0f96.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/resources.json",
+      "sha256": "2468daf418c11d3c5e6260fba37a4c5fffff0bb94e3454d0843a2b07f65cc0fa",
+      "size": 125,
+      "encoding": "json-map-template",
+      "blob": "blobs/2468daf418c11d3c5e6260fba37a4c5fffff0bb94e3454d0843a2b07f65cc0fa.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/run.py",
+      "sha256": "1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652",
+      "size": 5921,
+      "encoding": "gzip",
+      "blob": "blobs/1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pending/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pending/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/pins.json",
+      "sha256": "823f3c7962be693fa962522b0c9086170fde5d873aa07259e34c50489ef7315a",
+      "size": 1082016,
+      "encoding": "json-map-template",
+      "blob": "blobs/af8950bfa7d439ab25d675297663536793c8e3140ceea3cca5b3392ac345d181.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/proposal.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/proposal.json",
+      "sha256": "a3bd662af091dd71da8daba25862f986cee485b8cf054b4075b87609d8932c6c",
+      "size": 2850,
+      "encoding": "json-map-template",
+      "blob": "blobs/a3bd662af091dd71da8daba25862f986cee485b8cf054b4075b87609d8932c6c.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/freeze.json",
+      "sha256": "ce9cb79ed97514fdf5e20f10f5315f52de0eead68fdc136cf98a8bae987e5d09",
+      "size": 1096904,
+      "encoding": "json-map-template",
+      "blob": "blobs/5c2cd51b93aea6e002a781ff2385889c190244052b2c19c6f5a67360147fc409.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/group-after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/group-after.json",
+      "sha256": "ce1e1a850a2c68c1e73a7331c126495b53f03c113f4a8aaf9079b30fd59bff59",
+      "size": 96,
+      "encoding": "json-map-template",
+      "blob": "blobs/ce1e1a850a2c68c1e73a7331c126495b53f03c113f4a8aaf9079b30fd59bff59.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/inputs.json",
+      "sha256": "c658626323a00b05d4b1e0772a5a68b19c4f1506188c7d6362a3d95f18e233af",
+      "size": 2185938,
+      "encoding": "json-map-template",
+      "blob": "blobs/7444fe03657462db4e0d1ad40d790cc9bf61e5ff6c5c3d0a8aa13ad98bb1a88b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/pins.json",
+      "sha256": "2d42e8545a909c20dbefb3c4ca0ebc46aa51199be9a1c7fae50e10f209289389",
+      "size": 1080527,
+      "encoding": "json-map-template",
+      "blob": "blobs/ddd90ece195aba75a854b1181270d8e962b9ab6cad24800c556cf532c81db564.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/process.json",
+      "sha256": "b570c6193bb3cea8a9ba8e1aa470d05c00ca91dd4b40c52aff49812280132cdf",
+      "size": 372,
+      "encoding": "json-map-template",
+      "blob": "blobs/b570c6193bb3cea8a9ba8e1aa470d05c00ca91dd4b40c52aff49812280132cdf.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/raw.log",
+      "sha256": "966c82a31755c3e59faa011d0f911ce45a4bb6b89eaa29d4f9c63bf010cecede",
+      "size": 2236,
+      "encoding": "gzip",
+      "blob": "blobs/966c82a31755c3e59faa011d0f911ce45a4bb6b89eaa29d4f9c63bf010cecede.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/receipt.json",
+      "sha256": "b8f88424eb06481dd56329a88cd9c3141b82364375885907fa6692cd204b6b11",
+      "size": 2643,
+      "encoding": "json-map-template",
+      "blob": "blobs/b8f88424eb06481dd56329a88cd9c3141b82364375885907fa6692cd204b6b11.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/resources.json",
+      "sha256": "280fbde33091fa55dc4bef48c3709d26bb6a1d6b0d5741afe0e36fe2736208ce",
+      "size": 125,
+      "encoding": "json-map-template",
+      "blob": "blobs/280fbde33091fa55dc4bef48c3709d26bb6a1d6b0d5741afe0e36fe2736208ce.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/run.py",
+      "sha256": "1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652",
+      "size": 5921,
+      "encoding": "gzip",
+      "blob": "blobs/1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/row-image/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/row-image/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/run-batch.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/run-batch.py",
+      "sha256": "a3e916675f28f524463fe23abd599cad7fc6faf8d249c33b970a1c69865ec299",
+      "size": 836,
+      "encoding": "gzip",
+      "blob": "blobs/a3e916675f28f524463fe23abd599cad7fc6faf8d249c33b970a1c69865ec299.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/freeze.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/freeze.json",
+      "sha256": "05eabae9ef469710cb80049c0b27f26738950b11b0dadef59964f737951dc153",
+      "size": 1096796,
+      "encoding": "json-map-template",
+      "blob": "blobs/13bfdc5ee1b5240862747b6c7e8858bd71fa8f21c8a8e6ef7db55c297a623564.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/group-after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/group-after.json",
+      "sha256": "1ff9677eb173179aa5c87080122ea2d04e95377c8e643b01119f114e77ece65b",
+      "size": 96,
+      "encoding": "json-map-template",
+      "blob": "blobs/1ff9677eb173179aa5c87080122ea2d04e95377c8e643b01119f114e77ece65b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/inputs.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/inputs.json",
+      "sha256": "c658626323a00b05d4b1e0772a5a68b19c4f1506188c7d6362a3d95f18e233af",
+      "size": 2185938,
+      "encoding": "json-map-template",
+      "blob": "blobs/7444fe03657462db4e0d1ad40d790cc9bf61e5ff6c5c3d0a8aa13ad98bb1a88b.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/pins.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/pins.json",
+      "sha256": "90371783b08f0c4b8433f524b3597f619c8025f9f551a796e93d863de558b2fb",
+      "size": 1080419,
+      "encoding": "json-map-template",
+      "blob": "blobs/f9ac85a9f58ff9c136a6f83a567dcfc2c70f3a0ad33e32cdc64f942acb354a38.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/process.json",
+      "sha256": "563eb90efb3a66184a77f7bd409a7d675fd43406196fa90687afe1c9eeac9177",
+      "size": 265,
+      "encoding": "json-map-template",
+      "blob": "blobs/563eb90efb3a66184a77f7bd409a7d675fd43406196fa90687afe1c9eeac9177.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/raw.log",
+      "sha256": "9ee4359f95146f6b4b58aeed6aa6d5f7161bef276fb2d9abebd509eac77cb8d9",
+      "size": 1541,
+      "encoding": "gzip",
+      "blob": "blobs/9ee4359f95146f6b4b58aeed6aa6d5f7161bef276fb2d9abebd509eac77cb8d9.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/receipt.json",
+      "sha256": "35854aadb86050987683ad4cadec1eda7b61f16bf71224b2c2ac7b1a00b27f3c",
+      "size": 2533,
+      "encoding": "json-map-template",
+      "blob": "blobs/35854aadb86050987683ad4cadec1eda7b61f16bf71224b2c2ac7b1a00b27f3c.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/resources.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/resources.json",
+      "sha256": "67af1af5f76d7a02f2d67f18c9cd63fc1866eb3b9debdc5e041052ecb573b7ba",
+      "size": 124,
+      "encoding": "json-map-template",
+      "blob": "blobs/67af1af5f76d7a02f2d67f18c9cd63fc1866eb3b9debdc5e041052ecb573b7ba.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/run.py",
+      "sha256": "1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652",
+      "size": 5921,
+      "encoding": "gzip",
+      "blob": "blobs/1659cd24380c6618d7aa8e1f44c40ed3f0df517d264a20466b58829e34da7652.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/signature/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/signature/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/source.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/source.patch",
+      "sha256": "715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097",
+      "size": 14485,
+      "encoding": "gzip",
+      "blob": "blobs/715b0b49565199fd935dead3ffaad34a70f4ecb731467c2e832aada97da44097.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/warning-fix.patch",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/warning-fix.patch",
+      "sha256": "346248eb074de2aa2b5a83ad5260a446e7b02591df18011bdfe7530af69938a4",
+      "size": 471,
+      "encoding": "gzip",
+      "blob": "blobs/346248eb074de2aa2b5a83ad5260a446e7b02591df18011bdfe7530af69938a4.gz"
+    },
+    {
+      "path": "canonical-after-comparator-01/warning-fixed-test.rs",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-after-comparator-01/warning-fixed-test.rs",
+      "sha256": "7ea8eab40e1faa27036d1e2db63f50dec6f35758fdd36b52f127bfd96d6c92e4",
+      "size": 8783,
+      "encoding": "gzip",
+      "blob": "blobs/7ea8eab40e1faa27036d1e2db63f50dec6f35758fdd36b52f127bfd96d6c92e4.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/access-host/after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/access-host/after.json",
+      "sha256": "1deacef6d46074974818618ee31ee1692bdc75e9c69a7dc753f4a3f68392e9de",
+      "size": 1095168,
+      "encoding": "json-map-template",
+      "blob": "blobs/a3efa34a7fa3db0fac85cca4b8426cac0b7704c9a22914e88b3e00c4e163802f.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/access-host/before.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/access-host/before.json",
+      "sha256": "dd08e2db15ba665f2b93a5d3d6797fedea909f8cbf6a5d81ff096d58fbc11bc5",
+      "size": 1098724,
+      "encoding": "json-map-template",
+      "blob": "blobs/7297b58e0678972b3f40e22fe95b4aeeabfc4d3d017acfd2803d49aa70be1996.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/access-host/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/access-host/process.json",
+      "sha256": "7e4cc83cab46271b03c4902af4bd1f668d07cb44d9b8536775c3d11e616a592b",
+      "size": 894,
+      "encoding": "json-map-template",
+      "blob": "blobs/7e4cc83cab46271b03c4902af4bd1f668d07cb44d9b8536775c3d11e616a592b.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/access-host/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/access-host/raw.log",
+      "sha256": "de5454bc8d8373766414acb75897d50799a92b5b2a54e5206e6ae24add930a14",
+      "size": 8284,
+      "encoding": "gzip",
+      "blob": "blobs/de5454bc8d8373766414acb75897d50799a92b5b2a54e5206e6ae24add930a14.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/access-host/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/access-host/receipt.json",
+      "sha256": "8a294d50c9a714724f7aca1943c1a53ae355f6c45692236d05d455a1d93ddf47",
+      "size": 1435,
+      "encoding": "json-map-template",
+      "blob": "blobs/8a294d50c9a714724f7aca1943c1a53ae355f6c45692236d05d455a1d93ddf47.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/access-host/rows.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/access-host/rows.json",
+      "sha256": "192bb0697493faaab3e26c1aaae9e400c07ef19a2ea0454b151309986af02e28",
+      "size": 8659,
+      "encoding": "json-map-template",
+      "blob": "blobs/192bb0697493faaab3e26c1aaae9e400c07ef19a2ea0454b151309986af02e28.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/manifest.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/manifest.json",
+      "sha256": "88f74718a193a30091297160da16c36f03bd9334c5ab2d4247a85dcb61e60c4e",
+      "size": 1359,
+      "encoding": "json-map-template",
+      "blob": "blobs/88f74718a193a30091297160da16c36f03bd9334c5ab2d4247a85dcb61e60c4e.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/probe.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/probe.py",
+      "sha256": "cb83852f273bcde18fa28afd808138a004e8b94b05f4f80cdd2337fff418c37a",
+      "size": 6760,
+      "encoding": "gzip",
+      "blob": "blobs/cb83852f273bcde18fa28afd808138a004e8b94b05f4f80cdd2337fff418c37a.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/proposal.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/proposal.json",
+      "sha256": "cdadb12e8facc7465bbf91a19abf3de15ee72f2e662928d935a9d7e37cd8693d",
+      "size": 1101580,
+      "encoding": "json-map-template",
+      "blob": "blobs/5a768d5507143470701a5ba1e37754c787d83d85f2a11e9bae7b4a45fdf3b1b8.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/row-host/after.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/row-host/after.json",
+      "sha256": "e340031515640db96d3b4f6952117e7e9bab29804094d2727b85e94e87cae10f",
+      "size": 1095168,
+      "encoding": "json-map-template",
+      "blob": "blobs/b443d4aed862d45fafedb5d7cf39fb0632316a9820025c1722e8d9bfb00b07fd.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/row-host/before.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/row-host/before.json",
+      "sha256": "a356111d2f8c809e22cec67cd86fd5c2ca5479d9be044dec1b6cf5141292c5d5",
+      "size": 1098715,
+      "encoding": "json-map-template",
+      "blob": "blobs/618ec6fdaea8fe48e4f7bbc2eec32e83b5fa10fc26ab7e8f8eeaa63e7a609b9c.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/row-host/process.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/row-host/process.json",
+      "sha256": "f185e5c5f658d9b28692b9eaa62882fa0c912098b858658b8471a0c0963979dc",
+      "size": 892,
+      "encoding": "json-map-template",
+      "blob": "blobs/f185e5c5f658d9b28692b9eaa62882fa0c912098b858658b8471a0c0963979dc.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/row-host/raw.log",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/row-host/raw.log",
+      "sha256": "4cb60c953fff56a512caa0cff59a2acd75aa6df964e7bff457eec7a470929380",
+      "size": 8745,
+      "encoding": "gzip",
+      "blob": "blobs/4cb60c953fff56a512caa0cff59a2acd75aa6df964e7bff457eec7a470929380.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/row-host/receipt.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/row-host/receipt.json",
+      "sha256": "3afe61fc88b837ee8a6573260c4a3bf17e67e3c14a5f7bb3ff8ac286d288030f",
+      "size": 1426,
+      "encoding": "json-map-template",
+      "blob": "blobs/3afe61fc88b837ee8a6573260c4a3bf17e67e3c14a5f7bb3ff8ac286d288030f.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/row-host/rows.json",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/row-host/rows.json",
+      "sha256": "bb26ebf6a111000062a69a8ce4822e4c73de4d95ea84226a8d9720b82c550d25",
+      "size": 9215,
+      "encoding": "json-map-template",
+      "blob": "blobs/bb26ebf6a111000062a69a8ce4822e4c73de4d95ea84226a8d9720b82c550d25.gz"
+    },
+    {
+      "path": "canonical-allocation-failure-probe/run.py",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/canonical-allocation-failure-probe/run.py",
+      "sha256": "1f146bf11c04c4748d0e265a2dbfb05d2f59e10a91c39756712ea9ecb0476d41",
+      "size": 4783,
+      "encoding": "gzip",
+      "blob": "blobs/1f146bf11c04c4748d0e265a2dbfb05d2f59e10a91c39756712ea9ecb0476d41.gz"
+    },
+    {
+      "path": "tested-TASK-0051-checked-ffi-contract-carriers.md",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/tasks/TASK-0051-checked-ffi-contract-carriers.md",
+      "sha256": "976eb0fee44c4dc0519f3b5ce1dfaa86c30c2f6ce12879610b19fb1905aff947",
+      "size": 37794,
+      "encoding": "gzip",
+      "blob": "blobs/976eb0fee44c4dc0519f3b5ce1dfaa86c30c2f6ce12879610b19fb1905aff947.gz"
+    },
+    {
+      "path": "tested-checked-ffi-contract-carriers.md",
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi/docs/tasks/plans/checked-ffi-contract-carriers.md",
+      "sha256": "75646d0d6a1cba399095618af991c437fce1517fb286e6e040cee6a5c27620ab",
+      "size": 64286,
+      "encoding": "gzip",
+      "blob": "blobs/75646d0d6a1cba399095618af991c437fce1517fb286e6e040cee6a5c27620ab.gz"
+    }
+  ],
+  "maps": {
+    "1a0ec1540958db443d88912e3dbe7f1aac6ddc83fae2ef0d7b53788431df566c": {
+      "sha256": "1a0ec1540958db443d88912e3dbe7f1aac6ddc83fae2ef0d7b53788431df566c",
+      "entries": 5936,
+      "size": 996619,
+      "blob": "blobs/1a0ec1540958db443d88912e3dbe7f1aac6ddc83fae2ef0d7b53788431df566c.gz"
+    },
+    "50c3c56de6b602f4a3f3c59aae21c10b2691fe86a85e189e2f0f5325e02e0a1c": {
+      "sha256": "50c3c56de6b602f4a3f3c59aae21c10b2691fe86a85e189e2f0f5325e02e0a1c",
+      "entries": 615,
+      "size": 70090,
+      "blob": "blobs/50c3c56de6b602f4a3f3c59aae21c10b2691fe86a85e189e2f0f5325e02e0a1c.gz"
+    }
+  },
+  "scope": "79769:15 focusedPASS/two independent required imagesFAIL.38034/67911: two valid read-only natural-failure observations on same exact old577b WIP/artifact. No defaultfit, totaldeficit, cross-meter identity or newer9e572 verification inferred. Warning fix retained outside source, not applied."
+}

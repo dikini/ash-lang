@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 4 tests
+test resolved::constructor_original_route_tests::constructor_original_routes_share_defining_arc_and_check_cross_route_consumer ... ok
+test resolved::constructor_original_route_tests::constructor_original_routes_reject_missing_facade_original ... ok
+test resolved::constructor_original_route_tests::constructor_original_routes_reject_reminted_facade_original ... ok
+test resolved::constructor_original::tests::constructor_original_last_owner_refusal_and_replacement_drop_iteratively ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2021 filtered out; finished in 0.09s
+

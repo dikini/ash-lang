@@ -1,0 +1,61 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/checked_foreign_host.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_host-411266a04b37db48)
+
+running 13 tests
+test checked_foreign_host_syntax_preserves_nested_lexical_boundaries ... ok
+test checked_foreign_core_rejects_replayed_reserved_module_with_rewritten_bytes ... ok
+test checked_foreign_host_builtin_legacy_resolved_formals_do_not_shift ... ok
+test checked_foreign_host_does_not_discharge_a_same_kind_unrelated_actual ... ok
+test checked_foreign_host_identity_cannot_escape_as_a_latent_call ... ok
+test checked_foreign_default_resolution_refuses_required_host_closure ... ok
+test checked_foreign_closed_scalar_host_checks_through_explicit_static_api ... ok
+test checked_foreign_empty_host_core_is_static_and_refuses_runtime ... ok
+test checked_foreign_host_identity_is_unavailable_outside_or_in_a_sibling_scope ... ok
+test checked_foreign_nested_hosts_select_only_their_exact_fresh_identity ... ok
+test checked_foreign_host_preserves_an_unrelated_effect_for_its_ordinary_handler ... ok
+test checked_foreign_scalar_host_core_reconstructs_and_survives_transforms ... ok
+test checked_foreign_unexecuted_branch_still_refuses_default_resolution_and_runtime ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/checked_foreign_owners.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_owners-0ae7b1c4bdbbd419)
+
+running 10 tests
+test checked_foreign_owner_preparation_retains_distinct_host_owned_slots_and_assumptions ... ok
+test checked_foreign_passive_owner_is_refused_by_legacy_abi_preparation ... ok
+test checked_foreign_owner_preparation_rejects_owned_or_same_kind_wrong_host ... ok
+test checked_foreign_passive_owner_is_refused_by_default_resolution ... ok
+test checked_foreign_passive_opaque_dependency_remains_unsupported_after_preparation ... ok
+direct checked owner request refusal: TypeDiagnostic { diagnostic: Diagnostic { reason: Argument, primary: SourceLabel { span: Span { source: SourceId(2), range: ByteRange { start: 1135, end: 1143 } }, message: "source owner operation requires its exact checked lifecycle phase" }, related: [], expected: None, found: None, help: None }, context: Plain }
+test checked_foreign_host_does_not_authorize_direct_owner_acquisition ... ok
+test checked_foreign_public_passive_owner_import_preserves_original_metadata_without_calls ... ok
+test checked_foreign_passive_owner_declarations_resolve_and_check_explicitly ... ok
+test checked_foreign_passive_owner_preserves_complete_row_and_type_formals ... ok
+test checked_foreign_passive_void_teardown_preserves_consumed_and_retained_outcomes ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/foreign_source_owner_admission.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/foreign_source_owner_admission-4467bd99a765bead)
+
+running 8 tests
+test passive_owner_preparation_does_not_allow_ordinary_acquisition_calls ... ok
+test type_only_source_owner_admission_keeps_mixed_symbol_vectors_and_nonfirst_owned_slot ... ok
+test row_bearing_owner_families_keep_inherited_rows_with_type_owned_identity ... ok
+test source_owner_destruction_capture_maps_original_abi_order_and_cleanup_only_inputs ... ok
+test source_byte_owner_admission_checks_initialized_extent_against_source_signature ... ok
+test source_owner_result_shape_and_current_state_are_reconstructed_from_original_roles ... ok
+test row_bearing_owner_import_keeps_full_phantom_rows_under_alias ... ok
+test source_owner_destruction_capture_requires_exact_original_scalar_targets_and_input_leaves ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/foreign_source_owner_contracts.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/foreign_source_owner_contracts-c520b6bec74e8b0c)
+
+running 4 tests
+test byte_owner_preparation_retains_tagged_arguments_and_original_member_coordinates ... ok
+test opaque_owner_preparation_requires_no_byte_extent_while_byte_owners_do ... ok
+test malformed_owner_applications_teardowns_and_outcomes_publish_no_preparation ... ok
+test public_source_resolution_preserves_owner_rows_and_refuses_invalid_ordinary_types ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

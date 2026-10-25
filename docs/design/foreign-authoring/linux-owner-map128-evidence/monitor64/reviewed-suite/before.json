@@ -1,0 +1,22 @@
+[
+  {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+  },
+  {
+    "path": "/tmp/ash-owner-map-class-monitor/test_monitor.py",
+    "size": 17592,
+    "sha256": "2516606e251c73640c96895ef063933566aa68dbde3ea8f1426e8fffb0e1e4b0"
+  },
+  {
+    "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "size": 18877,
+    "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60"
+  },
+  {
+    "path": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  }
+]

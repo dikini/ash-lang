@@ -1,0 +1,48 @@
+{
+  "argv": [
+    "/usr/bin/x86_64-linux-gnu-readelf",
+    "-W",
+    "-h",
+    "-l",
+    "-d",
+    "/tmp/ash-owner-static-stage3-map64/static-host"
+  ],
+  "executable_pin": {
+    "size": 818312,
+    "sha256": "c857339616bbbfa5eba32733e22365048903fbaf6ed2126b897dd138bcb741fc"
+  },
+  "cwd": "/tmp/ash-owner-static-stage3-map64",
+  "output_parent": "/tmp/ash-owner-static-stage3-map64",
+  "watch_root": "/tmp/ash-owner-static-stage3-map64",
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "input_files": [
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/verify_inputs.py",
+      "size": 4399,
+      "sha256": "693c4f2707baa5c4d7a6f7a8ebf2f9b84fce27f2a5ec52e42c8f2f58a2846b36"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/prepare_candidate.py",
+      "size": 5781,
+      "sha256": "bb7fc46163204bfe6072b1cb37852a2621825de8bd187bd270a3984d5f01d394"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/finalize_static.py",
+      "size": 7918,
+      "sha256": "58eb632eabf1d2c3691547adb5b5c5cbdb16b424ad7662873f5a8714af2912e0"
+    },
+    {
+      "path": "/tmp/ash-owner-static-stage3-map64/experiment-contract.md",
+      "size": 18813,
+      "sha256": "7e81587b5598f1d7184ce268725e2a1296341c8e84415a44de7cc180d65527ef"
+    }
+  ],
+  "artifact_files": [
+    "/tmp/ash-owner-static-stage3-map64/static-host"
+  ],
+  "map_relative_path": "whole-static.map"
+}

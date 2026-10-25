@@ -1,0 +1,137 @@
+{
+  "scope": "Actual single approved trusted owner host diagnostic plus unchanged sandbox/rejection/setup history",
+  "files": [
+    {
+      "relative_path": "actual-handoff.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/actual-handoff.json",
+      "size": 3376,
+      "sha256": "1114d83eabdc2ed5bcaf517d56a9e738ab5f354293f794a11864c2d9c9646844"
+    },
+    {
+      "relative_path": "case-p__lm011/lifecycle.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011/lifecycle.json",
+      "size": 241,
+      "sha256": "6dd7793e8430f7564acde8112c50d7a22b44377aaa5517953c703d4d747c6423"
+    },
+    {
+      "relative_path": "case-p__lm011/result.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-p__lm011/result.json",
+      "size": 3039,
+      "sha256": "82108e918d6dd7745818c0d49406bb056ab39a829c2b029a04454193a18b4089"
+    },
+    {
+      "relative_path": "case-w3hn5tw1/lifecycle.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-w3hn5tw1/lifecycle.json",
+      "size": 222,
+      "sha256": "9208ce70aa5066a1d3c3ea300e3d9c9d22a6f69073c1144f0e013a8161b8adc3"
+    },
+    {
+      "relative_path": "case-w3hn5tw1/result.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/case-w3hn5tw1/result.json",
+      "size": 3019,
+      "sha256": "c67d22519f79513080ebb67b9ced9669515fb0bbce27d5e8c08a570fd672b666"
+    },
+    {
+      "relative_path": "diagnostic.py",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/diagnostic.py",
+      "size": 22555,
+      "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+    },
+    {
+      "relative_path": "execution-manifest.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/execution-manifest.json",
+      "size": 2852,
+      "sha256": "b257a33b93b9b89e5a4d820ef68cec0fdb9e0daf4cb5cb435f07e0540cb002b0"
+    },
+    {
+      "relative_path": "host-approval-request-manifest.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-approval-request-manifest.json",
+      "size": 891,
+      "sha256": "161f750ef3992b19c527ac45638309b2ea3db749ea172ce1d1a656d1f5edce30"
+    },
+    {
+      "relative_path": "host-execution.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-execution.json",
+      "size": 6843,
+      "sha256": "b0c599cf5225facd1b208aac70051e360f877320ed3caf0237d12f81e35433d5"
+    },
+    {
+      "relative_path": "host-launch-proposal.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launch-proposal.json",
+      "size": 5607,
+      "sha256": "57fff96d43acbefdbe95c4a6fe27a0478e9d944e62d274f1f8f441599146e449"
+    },
+    {
+      "relative_path": "host-launcher-setup-failure.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launcher-setup-failure.json",
+      "size": 1712,
+      "sha256": "f902c585c3ac57349b3e80e4afc4a5cb1989e9da0d1d168cdae3757c80a89114"
+    },
+    {
+      "relative_path": "host-launcher-setup-failure.stderr",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launcher-setup-failure.stderr",
+      "size": 360,
+      "sha256": "144a437303c58f9cdeb8c97829f99329ae358d4b4a4d1797a67a618e9b5191fb"
+    },
+    {
+      "relative_path": "host-preparation-readback.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-preparation-readback.json",
+      "size": 696,
+      "sha256": "baa9dc9e1a16016d333c8fa9b3eebf41d4bf08b7bf48ca260a52684d28145086"
+    },
+    {
+      "relative_path": "host-stderr.log",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stderr.log",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "host-stdout.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stdout.json",
+      "size": 3153,
+      "sha256": "a777be64e6fd858c9e81ec5a0afca2e457beef720b57c767166f080c1888cf1f"
+    },
+    {
+      "relative_path": "host-tool-approval-rejection.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-tool-approval-rejection.json",
+      "size": 1949,
+      "sha256": "3b6dac7764dfa20585767d1690c9195a3e8fb48aca8e87c2bb9a93c9425b2ba3"
+    },
+    {
+      "relative_path": "launch-proposal.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/launch-proposal.json",
+      "size": 3776,
+      "sha256": "a165be2f6fc49885753fe8f7c5c95d2561bf37d690eacc8014ffb01227303eea"
+    },
+    {
+      "relative_path": "policy.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/policy.json",
+      "size": 3172,
+      "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+    },
+    {
+      "relative_path": "root-approval.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json",
+      "size": 1495,
+      "sha256": "24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd"
+    },
+    {
+      "relative_path": "sandbox-execution.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-execution.json",
+      "size": 6194,
+      "sha256": "65f7df12ce654684ad8d705b36b02213c0ff816120b7e6723a29fbff2248f507"
+    },
+    {
+      "relative_path": "sandbox-stderr.log",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stderr.log",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "sandbox-stdout.json",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/sandbox-stdout.json",
+      "size": 3173,
+      "sha256": "271ae62e980700879479f10e4f2ff00288278dabc8b71f40fd73753c6fefb2d3"
+    }
+  ]
+}

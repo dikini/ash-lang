@@ -1,0 +1,21 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.54s
+     Running tests/checked_foreign_wrappers.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_wrappers-d19b8ff85fbff406)
+
+running 3 tests
+
+thread 'checked_closed_wrapper_requires_opt_in_for_a_body_free_consumer' (84) panicked at tests/checked_foreign_wrappers.rs:161:21:
+a closed outward row cannot erase the checked profile requirement
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test checked_closed_wrapper_requires_opt_in_for_a_body_free_consumer ... FAILED
+test checked_closed_wrapper_keeps_internal_host_bound_across_two_instantiations ... ok
+test checked_imported_generic_wrapper_preserves_complete_actuals_through_core ... ok
+
+failures:
+
+failures:
+    checked_closed_wrapper_requires_opt_in_for_a_body_free_consumer
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p ash --test checked_foreign_wrappers`

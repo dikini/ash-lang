@@ -1,0 +1,106 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "1689cb5d3081f0689a1ed0207dc4af2333ff8b94acbf75dcf870d76ffe1777d3",
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size_before": 20745,
+    "size_after": 20745,
+    "hashed_bytes": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 55540
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-hptlp7x5/build-run-w0k0c4ut",
+  "output_path": "/tmp/ash-build-monitor-test-hptlp7x5/build-run-w0k0c4ut/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "from pathlib import Path; p=Path(\"maps/whole-static.map\"); p.parent.mkdir(); p.write_bytes(b\"m\"*2048)"
+  ],
+  "child_pid": 26,
+  "child_exit": 0,
+  "reason": "exit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 0,
+  "retained_output_bytes": 0,
+  "output_truncated": false,
+  "watched_files": [
+    {
+      "relative_path": "maps/whole-static.map",
+      "observed_peak_bytes": 2048,
+      "file_class": "link_map",
+      "limit_bytes": 4096,
+      "path": "/tmp/ash-build-monitor-test-hptlp7x5/maps/whole-static.map",
+      "size_before": 2048,
+      "size_after": 2048,
+      "hashed_bytes": 2048,
+      "sha256": "eb713cc9f22b9109e0cac0bed025d0a6ba2d2d342a436fbac8c9a5937967c73d",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 57102,
+      "retained_path": "/tmp/ash-build-monitor-test-hptlp7x5/build-run-w0k0c4ut/watched-0.log"
+    }
+  ],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 26,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "map_relative_path": "maps/whole-static.map",
+  "limits": {
+    "deadline_seconds": 2,
+    "output_bytes": 1024,
+    "sidefile_bytes": 1024,
+    "map_bytes": 4096
+  },
+  "environment_keys": [],
+  "executable": {
+    "path": "/usr/bin/python3.14",
+    "size_before": 7477160,
+    "size_after": 7477160,
+    "hashed_bytes": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347805
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 26,
+  "child_session": 26,
+  "final_limit_failures": [],
+  "elapsed_seconds": 0.03742777200022829,
+  "observed_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-hptlp7x5/build-run-w0k0c4ut/output.log",
+    "size_before": 0,
+    "size_after": 0,
+    "hashed_bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 57099
+  }
+}

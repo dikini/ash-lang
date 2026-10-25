@@ -1,0 +1,1088 @@
+{
+  "status": "COMPACT_HISTORICAL_EVIDENCE_NOT_COMMAND_AUTHORITY",
+  "publication_base": "c8a1fee506a00f68065cb08c6e2e9911d44a58aa",
+  "records": [
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/README.md",
+      "size": 5826,
+      "sha256": "4fd9cedb92eeb59b7a77fa1d62348af4e0a0459ec9c31c469361705594312d5f",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/README.txt",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/compiler-build.monitor.json",
+      "size": 3230,
+      "sha256": "d011fc6be127e51d05937a6bd7e560f22c4a818878fdb4ec587d930a2103883e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/compiler-build.monitor.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/compiler-correspondence/bin-ash.json",
+      "size": 976,
+      "sha256": "f9157fcc09996367a8fabb96d966d2fbfd700ab9feefed6ad634c1dac8c94f95",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/compiler-correspondence/bin-ash.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/compiler-correspondence/build-script-output.txt",
+      "size": 19859,
+      "sha256": "8da716e1fbcf93746574d3a4c4dbc04799fd1febdf16c378ba232ef1cdbe3e4f",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/compiler-correspondence/build-script-output.txt",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/compiler-correspondence/cargo-selected-records.json",
+      "size": 2734,
+      "sha256": "740ab45f33a38c5df77cfd136f4ac8a08adf2b4ea4824aff1666651fbdcb6cbb",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/compiler-correspondence/cargo-selected-records.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/compiler-correspondence/compiler.d",
+      "size": 15172,
+      "sha256": "32bd6c14419ad6e4fc427247ff210fc6bb612be87910b3468e05fe3f3a31830b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/compiler-correspondence/compiler.d",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/compiler-correspondence/lib-ash.json",
+      "size": 923,
+      "sha256": "2d8c8481e668b0e44931c07953be3f9eac9c06d9bb074a98cf0efefbdfaa9478",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/compiler-correspondence/lib-ash.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/default-linker-inputs.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/execution-readback.json",
+      "size": 4699,
+      "sha256": "d6c71a4485bf4be6e68c6c7d9c2f8fa27b6ce8936f3dc219bf611d56b7f0d0f3",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/execution-readback.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "size": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/experiment-contract.txt",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/README.md",
+      "size": 3340,
+      "sha256": "594b99d1aff4595e189b13b5b04afaa85c9649e102fcdda6432c6514848a89dd",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/compiler-build.monitor.json",
+      "size": 2980,
+      "sha256": "ed312f0d1c63e35f6d2583093284dac59627b654457895957017dd9753a71622",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/experiment-contract.md",
+      "size": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/manifest.json",
+      "size": 1292,
+      "sha256": "2f2f3c71b9cd58af96ca841fdeb2b5af2ab60c441d9f27c5496b693e90bc0189",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/observe_compiler.py",
+      "size": 1211,
+      "sha256": "67c8f5731fd4d32ec700a4ef784ba2a02777724a504b802216f9943d4f40a685",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/preflight-inputs.json",
+      "size": 3838,
+      "sha256": "6886c0a22012dfe4aec8cc742b510ec02aa1dc3eaabfc1412e50a60a5ad4ef87",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/tuple.json",
+      "size": 3601,
+      "sha256": "85aba3834abf3a8d883dd00041e848f71e4d24869ba681f4c2fc10094f3bcb55",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/historical-first-tuple/verify_inputs.py",
+      "size": 2976,
+      "sha256": "cd5e835e1fa80554e15a6dfa99f0ffa93d43c4796e7b1a45fe7338a0ecfaa23d",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/manifest.json",
+      "size": 3018,
+      "sha256": "b5d50b34c2a42ceb1be5fe9ab0cfe4a97e37128b74dbe0337941162018a05558",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/manifest.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/monitor-response.json",
+      "size": 107,
+      "sha256": "44c8cd5ec49d74b49fca604ae2ad29b2c9dde11b9d0ec81d28eaccce94cd91ce",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/monitor-response.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/monitor-stderr.log",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/monitor-stderr.log",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/observe_compiler.py",
+      "size": 6039,
+      "sha256": "6474128d18e3fcac780bf73d777859ba102028fe5fbadf87563bd85ade3a34db",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/observe_compiler.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "size": 3442,
+      "sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/observed-compiler.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/observed-compiler.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/preflight-inputs.json",
+      "size": 4270,
+      "sha256": "b24d78fb1ceea0013217fd4b6f99ed5896343330b5b8555c7bcfb7453d1436a6",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/preflight-inputs.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/preparation-readback.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/preparation-readback.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/run-output/build-run-u53y25_2/output.log",
+      "size": 80344,
+      "sha256": "a7940756a6be220fb0a0e3d9eba670f96059ad84929709b78e0861f492e211ec",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/run-output/build-run-u53y25_2/output.log",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/run-output/build-run-u53y25_2/receipt.json",
+      "size": 6505,
+      "sha256": "7a966dc83527d35c64dc296d05fa059a513d21bea5d66c5480f16172169e9215",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/run-output/build-run-u53y25_2/receipt.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/snapshot-after.json",
+      "size": 294,
+      "sha256": "b58a1ff4d07ca852cd383253e248080cc81e424918d4fa901da766174132c1ae",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/snapshot-after.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/snapshot-after.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/snapshot-after.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/snapshot-before.json",
+      "size": 295,
+      "sha256": "f04feff45d692c26f6575ab2131cbe4e233073392ceef5195410520ee0b0917e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/snapshot-before.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/snapshot-before.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/snapshot-before.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/tuple.json",
+      "size": 6261,
+      "sha256": "fdf23c99b4ba27290ce35b2afd8e49cd0f7b99feb8181f671a6f3191af61e287",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/tuple.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/verify_inputs.py",
+      "size": 3667,
+      "sha256": "125630d0b56bf1faf455619056ea2c93648109aaf20b236212bff5731aab8dff",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/verify_inputs.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage1",
+      "original_path": "/tmp/ash-owner-compiler-stage1/execution-manifest.json",
+      "size": 6253,
+      "sha256": "f3a36463e39f84d85a56be4ea6538ab9148de718462dfe069e15d6851637bae4",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage1/execution-manifest.json",
+      "qualification": "Exact original inventory; not every referenced external artifact is copied."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/README.md",
+      "size": 6515,
+      "sha256": "b170551e616103c9fcbb9a6410f963ed08d2b8e4e07b69aaff9adc808159b496",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/README.txt",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/collect_generated.py",
+      "size": 7285,
+      "sha256": "bccd35f02fc6e06091449365479eb413d664438acf2e587fa5e4af9805f80ff3",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/collect_generated.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/default-linker-inputs.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/execution-readback.json",
+      "size": 5065,
+      "sha256": "208c19467f27291bf5f71cf42c863ad771535bf0c45f90350805cf9804b497de",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/execution-readback.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.lock",
+      "size": 10121,
+      "sha256": "c1eb4441f3a039e3757d67e9f05012c4b1f199d3c90ea1f7694e6f0086a9590e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generated/Cargo.lock",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+      "size": 246,
+      "sha256": "686ad5d17be305bcc228093d089868de78e43a468a985129c92b5e04a14a2902",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generated/Cargo.toml",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/native-build.log",
+      "size": 1156,
+      "sha256": "232dc2ed1ea1a11723b1e25df8eb6604184abe35e0a957ef125be539455c30c8",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generated/native-build.log",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/rust-toolchain.toml",
+      "size": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generated/rust-toolchain.toml",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generated/src/main.rs",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/program-image.bin",
+      "size": 17310,
+      "sha256": "4fff8df2dfb0ac63ec78179b74bba872f3e1b317a2c86dc46659e5bd6485df26",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7/output.log",
+      "size": 58,
+      "sha256": "db0522a155fa97092d59b8a3f539ffdefe441a0265561174e63e1f623722725a",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/experiment/build-run-ptuhtbd7/output.log",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7/receipt.json",
+      "size": 10082,
+      "sha256": "0ae04f338662d973fd0461cd16e8c591b2cd55347746d757f28ad4328a00de1d",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/experiment/build-run-ptuhtbd7/receipt.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7/watched-0.log",
+      "size": 1156,
+      "sha256": "232dc2ed1ea1a11723b1e25df8eb6604184abe35e0a957ef125be539455c30c8",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/experiment/build-run-ptuhtbd7/watched-0.log",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/entry.ash",
+      "size": 148,
+      "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/experiment/entry.ash",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/ordinary-host",
+      "size": 475650552,
+      "sha256": "d5799c76fbf3be8b06a473906b4e73ce82b1fdf90db4a1b1923d958816fe0a61",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/experiment/owner.ash",
+      "size": 2671,
+      "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/experiment/owner.ash",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generated-manifest.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generation-receipt.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/generation-receipt.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generation-receipt.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/generation.monitor.json",
+      "size": 5041,
+      "sha256": "0cfbb235c796ce7f517e884da9e3732686f1ec5f757851edbc398a2ddf77eb8a",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generation.monitor.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/generation.prospective.json",
+      "size": 4667,
+      "sha256": "3153c0d7dc0d81e59127e34acc789571e79bb95c50cbf545b9c80bd61720e82f",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/generation.prospective.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/historical-prospective/README.md",
+      "size": 5343,
+      "sha256": "0b3d37b6a6ee084b6b9b915e4626f39902ce06a9bd61a3924411e531869752ba",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/historical-prospective/generation.prospective.json",
+      "size": 4667,
+      "sha256": "3153c0d7dc0d81e59127e34acc789571e79bb95c50cbf545b9c80bd61720e82f",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/historical-prospective/manifest.json",
+      "size": 854,
+      "sha256": "2bb19b582eea9f80ba40baff9790aa8c9f4f5dc3f739fd9e03197d807dc1b181",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/historical-prospective/receipt-requirements.json",
+      "size": 3818,
+      "sha256": "70ab64f278ffe565e02f88cb833023ac8d8ca7bf9ae4a023274f96106a9796b7",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/manifest.json",
+      "size": 3105,
+      "sha256": "b217c2773092cc6cf87b6a608e1909eff62683e0ed833088c4bbd676e7daab53",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/manifest.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/monitor-response.json",
+      "size": 109,
+      "sha256": "95a30e133f30cae2644086fc56300e1f284ac5a60b738532cb183e5fea699ee2",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/monitor-response.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/monitor-response.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/monitor-response.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/preflight-inputs.json",
+      "size": 7417,
+      "sha256": "d40b7c59a705733807e5254629262fbf928e21391316dd826040ddbe4e5e8bab",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/preflight-inputs.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/preparation-readback.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/preparation-readback.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/receipt-requirements.exact.json",
+      "size": 4128,
+      "sha256": "50a2e6ba16e3e0f417043e6b4b501be951c1755392a31e0ae84bd28a4c249a82",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/receipt-requirements.exact.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/receipt-requirements.json",
+      "size": 3818,
+      "sha256": "70ab64f278ffe565e02f88cb833023ac8d8ca7bf9ae4a023274f96106a9796b7",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/receipt-requirements.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/selected-Cargo.lock.seed",
+      "size": 10251,
+      "sha256": "26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/selected-Cargo.lock.seed",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/snapshot-after.json",
+      "size": 296,
+      "sha256": "d3099a53df6e808527e8d5d0b117ac9d41307d185868b23a46c5e07924f33199",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/snapshot-after.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/snapshot-after.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/snapshot-after.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/snapshot-before.json",
+      "size": 297,
+      "sha256": "fb87fc5276acc0d99e9a436a1c443f8de3d6382435fa4ad8c3a3a8445ffdc41a",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/snapshot-before.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/snapshot-before.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/snapshot-before.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/tuple.json",
+      "size": 6421,
+      "sha256": "ce4a317bc78cdc6d4397f2e771b446d237e9e4d427ad4b60a0230dc7459568fb",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/tuple.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/verify_inputs.py",
+      "size": 4311,
+      "sha256": "a78992538278b49679161bc1a3eef35f6590db3eb98b74fe1d16e7d90c6971ec",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/verify_inputs.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage2",
+      "original_path": "/tmp/ash-owner-generation-stage2/execution-manifest.json",
+      "size": 7118,
+      "sha256": "1684bf380ea50a3e651aa82479b6b5d29a1d929d37298bd8dcbe7145f2b4a437",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage2/execution-manifest.json",
+      "qualification": "Exact original inventory; not every referenced external artifact is copied."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/README.md",
+      "size": 5842,
+      "sha256": "646d8cc492dfcc8d1a0231c7b1787d8e4849c718203c46ee882afcec0b65d431",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/README.txt",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/output.log",
+      "size": 59000,
+      "sha256": "c501414eabc1b9d65a39bc73297e19e5dceb497896510374e94c9f8c195095a8",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/build-run-mwoqlg55/output.log",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+      "size": 9633,
+      "sha256": "3ee3aa6574144d1aabbfe21314a58bd680de8478b35a27b8727b2a184a2a3566",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/build-run-mwoqlg55/receipt.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+      "size": 16777216,
+      "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/maps/stage3-default.prefix",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/default-linker-inputs.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/execution-readback.json",
+      "size": 3159,
+      "sha256": "5bcc9c16131102b628bcf41ab8dff4acbafdac8ba565c672b62081d77a6b17ef",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/execution-readback.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/finalize_static.py",
+      "size": 6628,
+      "sha256": "9b18c5e65126cebb3a47cca6ecc7177f3ef3fb835c204caea00a33d749d1389c",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/finalize_static.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/README.md",
+      "size": 5206,
+      "sha256": "d602cd42bb14120a53cde0fefa234863875385b693d8c1fc8a407e8ab90d232b",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/finalize_static.py",
+      "size": 5549,
+      "sha256": "3fd2827c122744a962ac9a97ac007d9fadc5a75ef0f21e876941b6bcec1b7e7a",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/inspection.monitor.json",
+      "size": 1212,
+      "sha256": "f7401498df79d326e31e0a17671b096ce830b58dd734879738fbc276980d9858",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/manifest.json",
+      "size": 1782,
+      "sha256": "1e154b7ae46f034432f9df63e926205ec9791d6e2ba2123d8c996aa07a07fd48",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/preflight-inputs.json",
+      "size": 13218,
+      "sha256": "3beeedbd311f20ab429797761a445826bc70eb120d885b8ba8e8e4644643ed61",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/prepare_candidate.py",
+      "size": 5531,
+      "sha256": "1ccf56f3c771dda6cdf59d41350bc59f417e60f2d6318d1458c556f2e20c58d7",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/relink.monitor.json",
+      "size": 4866,
+      "sha256": "e2afc93569b76542331a77923724c3002bc5bb5cb489351edb3d8f3277aa6a2c",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/tuple.json",
+      "size": 8611,
+      "sha256": "998ceb523530094f2060102478e496897fe333ed996215202ceec19304abfb37",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/historical-before-map/verify_inputs.py",
+      "size": 3991,
+      "sha256": "cf3611d7238b81e2c77cc3dbe9faffdd319f15fac66ddd5ae5b2f6e13dd3058f",
+      "retained_path": null,
+      "qualification": "Omitted external binary/intermediate or superseded preparation; hash association only."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/inspection.monitor.json",
+      "size": 1212,
+      "sha256": "71ed1d742b6532c8b927b3bf9241e462a5ba0df47890509f160e24ae42e3003e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/inspection.monitor.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/manifest.json",
+      "size": 4042,
+      "sha256": "09972994752b36ebc51a154ddb638937e039c2980b65d94921e5bfcb55fa88c7",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/manifest.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/map-parser-controls.json",
+      "size": 1716,
+      "sha256": "8159bbb013117a22d14cf2c06c727c4ad2be7cbe2cbb4d738e228fcc3725729b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/map-parser-controls.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/preflight-inputs.json",
+      "size": 13218,
+      "sha256": "64999ca545da6932896108bec0efdb07c5c77e58decdb23ce993a3a82a8cede3",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/preflight-inputs.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/preparation-readback.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/preparation-readback.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/prepare_candidate.py",
+      "size": 5531,
+      "sha256": "1ccf56f3c771dda6cdf59d41350bc59f417e60f2d6318d1458c556f2e20c58d7",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/prepare_candidate.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/relink-response.json",
+      "size": 108,
+      "sha256": "403ad53abec3f10aeac550857fa301ee2740b1421881563a6626d2854f6bc06b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/relink-response.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/relink-response.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/relink-response.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/relink.monitor.json",
+      "size": 4866,
+      "sha256": "bc9320329a83fde0da2d3f97541abfe90f21d743de297ded6768ee9bc0f5fa52",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/relink.monitor.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/snapshot-before.json",
+      "size": 293,
+      "sha256": "db6bf928a8e543ae537319ae1a949011699df836c41d108ea7fe613da8a14e52",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/snapshot-before.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/snapshot-before.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/snapshot-before.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/tuple.json",
+      "size": 8611,
+      "sha256": "a1611fc626d191fd2da6ddd017064e35d85a5cb824b130ead659b3d98814cde0",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/tuple.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/verify_inputs.py",
+      "size": 3991,
+      "sha256": "cf3611d7238b81e2c77cc3dbe9faffdd319f15fac66ddd5ae5b2f6e13dd3058f",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/verify_inputs.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-default",
+      "original_path": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+      "size": 6078,
+      "sha256": "dd6798e80d0d19c3fabeefdd29c4f348fba5ceed25b76b909ecf0373f3ab5857",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-default/execution-manifest.json",
+      "qualification": "Exact original inventory; not every referenced external artifact is copied."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/README.md",
+      "size": 3999,
+      "sha256": "a7db4108003863889099f1298c32403a9ab0018df757eca1c781340a91abb253",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/README.txt",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/output.log",
+      "size": 59052,
+      "sha256": "1b561a2707889ff31924d7d077944c1c43d6bbb2d0f3db2bab05773e97f9ff0d",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/build-run-gbjzjclf/output.log",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/receipt.json",
+      "size": 11748,
+      "sha256": "0281568d84d0da673d94b42fea3694d300ee630ca1f797f25217b946826321d6",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/build-run-gbjzjclf/receipt.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/watched-0.log",
+      "size": 16777216,
+      "sha256": "cb91bca15d2f3469175d7c1a2e9a6f67530a1ac7fb4028b68316823bc10453c9",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/maps/stage3-no-discarded.prefix",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/default-linker-inputs.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/execution-readback.json",
+      "size": 3313,
+      "sha256": "3521592052c0e3636d21e7d1dfaeb952f8dccf8550ff6109e3b9b349e6bc6d6b",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/execution-readback.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/finalize_static.py",
+      "size": 6628,
+      "sha256": "9b18c5e65126cebb3a47cca6ecc7177f3ef3fb835c204caea00a33d749d1389c",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/finalize_static.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/inspection.monitor.json",
+      "size": 1300,
+      "sha256": "944d20b600ff34f16004e4ea19ac7590bc27257167849eb7a9b5f630a0ae88e0",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/inspection.monitor.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/manifest.json",
+      "size": 1932,
+      "sha256": "02da20a7046cf33d074de5cafaa1fed662635f799baf640fe751fabfb5cae2b8",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/manifest.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/map-detail-evidence.json",
+      "size": 2815,
+      "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/map-detail-evidence.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/preflight-inputs.json",
+      "size": 14964,
+      "sha256": "989b2b859e3ab0425089ddeff8324a8c713eb12d8c7f9c9b7aeb1ce9786ab029",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/preflight-inputs.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/preparation-readback.json",
+      "size": 300,
+      "sha256": "854b674c8c43adae3af12fba5f9565861fad426b089db8bf30f06f97e19e562e",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/preparation-readback.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/preparation-readback.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/prepare_candidate.py",
+      "size": 5531,
+      "sha256": "1ccf56f3c771dda6cdf59d41350bc59f417e60f2d6318d1458c556f2e20c58d7",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/prepare_candidate.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/relink-response.json",
+      "size": 119,
+      "sha256": "aab93b992b0f893dec857375cccda1c1aa7ebd8b35a45d3f619424199251240a",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/relink-response.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/relink-response.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/relink-response.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/relink.monitor.json",
+      "size": 6127,
+      "sha256": "796008d9bdc926568b94376cfefadaebd4bf55f576ea3c96a00244d2c466cf28",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/relink.monitor.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/snapshot-before.json",
+      "size": 293,
+      "sha256": "db6bf928a8e543ae537319ae1a949011699df836c41d108ea7fe613da8a14e52",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/snapshot-before.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/snapshot-before.json.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/snapshot-before.json.stderr",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/tuple.json",
+      "size": 10250,
+      "sha256": "eff444df3e93604a5c66afa10c8bdbd90a619fe79415dee5bd92fb53e0886d85",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/tuple.json",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/verify_inputs.py",
+      "size": 3991,
+      "sha256": "cf3611d7238b81e2c77cc3dbe9faffdd319f15fac66ddd5ae5b2f6e13dd3058f",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/verify_inputs.py",
+      "qualification": "Exact original bytes; original paths and status are historical."
+    },
+    {
+      "stage": "stage3-no-discarded",
+      "original_path": "/tmp/ash-owner-static-stage3-map-detail/execution-manifest.json",
+      "size": 4185,
+      "sha256": "34ae188c6e255524b16458a181610cd1a9b9b64a0bddd592aa93188a330b8b68",
+      "retained_path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/stage3-no-discarded/execution-manifest.json",
+      "qualification": "Exact original inventory; not every referenced external artifact is copied."
+    }
+  ],
+  "source_snapshot": "../linux-owner-inprocess-probe/preparation/selected-archive-manifest.json",
+  "omissions": "No compiler/host/private binary bytes, source archive, cache, system headers, full oversized maps or obsolete proposal generations. Absolute paths in originals may be unavailable or contain later build outputs; only exact copied records and their observed historical associations are asserted."
+}

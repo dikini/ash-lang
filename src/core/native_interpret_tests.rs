@@ -8,43 +8,35 @@ use std::{
     },
 };
 
-use super::{
-    check_ordinary_effect_modules_with_budget_for_test, validate_effect_modules_with_work,
-};
+use super::check_ordinary_effect_modules_with_budget_for_test;
+use super::validate::validate_effect_modules_with_work;
 use crate::{
     core::{
         EffectCoreBuilder, EffectExprKind, EffectOperation, NativeInterpretation,
         UnvalidatedEffectProgram, ValidatedEffectProgram, transform,
     },
     foreign::checked_source::{CheckedForeignSymbol, ForeignBindingContext, bind_foreign_symbol},
-    integer::Integer,
     interface::InterfaceConstraintBudget,
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{CheckedModule, ResolvedRegistry},
     source::Origin,
-    types::{EffectId, EffectInstance, EffectRow, KindedArgument, Type, TypeWorkBudget},
+    types::{
+        EffectId, EffectInstance, EffectRow, KindedArgument, Type, TypeVariableId, TypeWorkBudget,
+    },
 };
 
 const SOURCE: &str = r#"import @builtin.foreign as Foreign
+import @builtin.bytes as B
 pub foreign library C {
     profile "x86_64-unknown-linux-gnu"
-    repr CInt = signed(32)
-    symbol Abs<Before : EffectRow, T, After : EffectRow> : Int -> Foreign.Call<Int> {
-        name "abs"
-        abi (CInt) -> CInt
-        operand 0 from 0 scalar
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-    symbol Stop : Unit -> Foreign.Call<Unit> {
-        name "stop"
-        abi () -> void
-        outcome otherwise {}
-    }
+    symbol Make : Unit -> Foreign.Address { name "fixture_make" }
+    symbol Stop : Unit -> Unit { name "fixture_stop" }
+    symbol Echo : Foreign.Address -> Foreign.Address { name "fixture_echo" }
+    symbol EchoBytes : Bytes -> Foreign.Address { name "fixture_echo_bytes" }
 }
-pub effect Ordinary {
-    call : Int -> Int
+pub effect Ordinary<Rows : EffectRow, T> {
+    call : T -> T
 }
 "#;
 
@@ -58,8 +50,10 @@ impl Drop for Directory {
 struct Fixture {
     graph: ModuleGraph,
     registry: Arc<ResolvedRegistry>,
-    scalar: Arc<CheckedForeignSymbol>,
+    make: Arc<CheckedForeignSymbol>,
     stop: Arc<CheckedForeignSymbol>,
+    echo: Arc<CheckedForeignSymbol>,
+    bytes: Arc<CheckedForeignSymbol>,
     ordinary: EffectId,
 }
 impl Fixture {
@@ -103,9 +97,9 @@ impl Fixture {
             .find(|module| module.module() == graph.entry())
             .unwrap()
             .exports();
-        let scalar = Arc::clone(
+        let make = Arc::clone(
             exports
-                .effect("Abs")
+                .effect("Make")
                 .unwrap()
                 .native_contract
                 .as_ref()
@@ -114,6 +108,22 @@ impl Fixture {
         let stop = Arc::clone(
             exports
                 .effect("Stop")
+                .unwrap()
+                .native_contract
+                .as_ref()
+                .unwrap(),
+        );
+        let echo = Arc::clone(
+            exports
+                .effect("Echo")
+                .unwrap()
+                .native_contract
+                .as_ref()
+                .unwrap(),
+        );
+        let bytes = Arc::clone(
+            exports
+                .effect("EchoBytes")
                 .unwrap()
                 .native_contract
                 .as_ref()
@@ -131,28 +141,42 @@ impl Fixture {
         Self {
             graph,
             registry,
-            scalar,
+            make,
             stop,
+            echo,
+            bytes,
             ordinary,
         }
     }
 
     fn instance(&self, unit: bool) -> EffectInstance {
-        if unit {
-            return EffectInstance::new(self.stop.effect(), Box::new([]));
-        }
-        EffectInstance::new_kinded(
-            self.scalar.effect(),
-            Box::new([
-                KindedArgument::RowArg(EffectRow::empty()),
-                KindedArgument::TypeArg(Type::Int),
-                KindedArgument::RowArg(EffectRow::empty()),
-            ]),
+        EffectInstance::new(
+            if unit {
+                self.stop.effect()
+            } else {
+                self.make.effect()
+            },
+            Box::new([]),
         )
     }
 
     fn program(&self, unit: bool) -> UnvalidatedEffectProgram {
-        let symbol = if unit { &self.stop } else { &self.scalar };
+        self.program_with_checked_declarations(unit, true)
+    }
+
+    fn program_with_checked_declarations(
+        &self,
+        unit: bool,
+        include_checked: bool,
+    ) -> UnvalidatedEffectProgram {
+        let mut program = self.program_for(if unit { &self.stop } else { &self.make });
+        if !include_checked {
+            program.registry = Arc::new(ResolvedRegistry::default());
+        }
+        program
+    }
+
+    fn program_for(&self, symbol: &Arc<CheckedForeignSymbol>) -> UnvalidatedEffectProgram {
         let origin = Origin::Source(
             self.graph
                 .module(self.graph.entry())
@@ -161,132 +185,65 @@ impl Fixture {
                 .span(crate::source::ByteRange::new(0, 1).unwrap())
                 .unwrap(),
         );
-        let report = Type::Application(
-            Box::new(Type::Nominal(symbol.call_codec().ids().call)),
-            Box::new(if unit { Type::Unit } else { Type::Int }),
-        );
-        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&self.registry));
-        // Keep every sealed generic builtin's actual declaration in this
-        // independently built forest. Retaining only byte_read/byte_write
-        // leaves the newer Data/copy parameter inventory unconsumed.
-        let declarations = self
-            .registry
-            .scalar_preflights()
-            .filter_map(|(_, fact)| {
-                fact.role()
-                    .borrowed_parameter(fact.module())
-                    .map(|parameter| (fact, parameter))
-            })
-            .collect::<Vec<_>>();
-        builder
-            .reserve_resolved_binders(declarations.iter().map(|(fact, _)| fact.function()))
-            .unwrap();
-        let mut members = Vec::new();
-        for (fact, parameter) in declarations {
-            let operation = match fact.role() {
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteRead => {
-                    crate::core::packed::Intrinsic::ForeignByteRead {
-                        function: fact.function(),
-                    }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ByteWrite => {
-                    crate::core::packed::Intrinsic::ForeignByteWrite {
-                        function: fact.function(),
-                    }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::DataOf => {
-                    crate::core::packed::Intrinsic::ForeignDataOf {
-                        function: fact.function(),
-                    }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ReplaceData => {
-                    crate::core::packed::Intrinsic::ForeignReplaceData {
-                        function: fact.function(),
-                    }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyBytes => {
-                    crate::core::packed::Intrinsic::ForeignCopyBytes {
-                        function: fact.function(),
-                    }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::CopyNul => {
-                    crate::core::packed::Intrinsic::ForeignCopyNul {
-                        function: fact.function(),
-                    }
-                }
-                crate::foreign::scalar_preflight::ForeignScalarPreflightRole::ExtentValue => {
-                    crate::core::packed::Intrinsic::ForeignExtentValue {
-                        function: fact.function(),
-                    }
-                }
-                _ => unreachable!(),
-            };
-            let mut parameters = vec![(parameter, crate::types::Kind::Type)];
-            if let Some(data) = fact.role().data_parameter(fact.module()) {
-                parameters.push((data, crate::types::Kind::Type));
-            }
-            let intrinsic = builder
-                .intrinsic(
-                    operation,
-                    fact.module(),
-                    fact.signature().clone(),
-                    fact.origin().clone(),
-                )
-                .unwrap();
-            let abstracted = builder
-                .type_abstraction(
-                    parameters,
-                    intrinsic,
-                    fact.core_signature().clone(),
-                    fact.origin().clone(),
-                )
-                .unwrap();
-            let binder = builder
-                .resolved_binder(
-                    fact.function(),
-                    fact.core_signature().clone(),
-                    fact.origin().clone(),
-                )
-                .unwrap();
-            members.push((binder, abstracted));
-        }
-        let operand = if unit {
-            builder.unit(Type::Unit, origin.clone()).unwrap()
-        } else {
-            builder
-                .integer(
-                    Integer::parse_decimal("1").unwrap(),
-                    Type::Int,
-                    origin.clone(),
-                )
-                .unwrap()
+        let Type::Function(domain, result) = symbol.source_signature() else {
+            panic!("signature");
         };
-        let operand = builder
-            .recursive_binding(
-                members,
-                operand,
-                if unit { Type::Unit } else { Type::Int },
-                origin.clone(),
-            )
-            .unwrap();
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&self.registry));
+        let operand = match domain.as_ref() {
+            Type::Unit => builder.unit(Type::Unit, origin.clone()).unwrap(),
+            Type::Bytes | Type::Nominal(_) => {
+                let (operation, module) = if domain.as_ref() == &Type::Bytes {
+                    (
+                        crate::core::packed::Intrinsic::BytesEmpty,
+                        self.graph
+                            .modules()
+                            .iter()
+                            .find(|module| module.id().is_builtin_bytes())
+                            .unwrap()
+                            .id(),
+                    )
+                } else {
+                    (
+                        crate::core::packed::Intrinsic::AddressNull,
+                        self.graph
+                            .modules()
+                            .iter()
+                            .find(|module| module.id().is_builtin_foreign())
+                            .unwrap()
+                            .id(),
+                    )
+                };
+                let callable = builder
+                    .intrinsic(
+                        operation,
+                        module,
+                        Type::Function(Box::new(Type::Unit), domain.clone()),
+                        origin.clone(),
+                    )
+                    .unwrap();
+                let unit = builder.unit(Type::Unit, origin.clone()).unwrap();
+                builder
+                    .application(callable, unit, domain.as_ref().clone(), origin.clone())
+                    .unwrap()
+            }
+            _ => panic!("fixture operand"),
+        };
+        let instance = EffectInstance::new(symbol.effect(), Box::new([]));
         let request = builder
             .request(
-                self.instance(unit),
+                instance.clone(),
                 symbol.operation(),
                 operand,
-                report.clone(),
-                EffectRow::singleton(self.instance(unit)),
+                result.as_ref().clone(),
+                EffectRow::singleton(instance.clone()),
                 origin.clone(),
             )
             .unwrap();
         let root = builder
             .native_interpret(
                 request,
-                Box::new([NativeInterpretation::new(
-                    self.instance(unit),
-                    Arc::clone(symbol),
-                )]),
-                report,
+                Box::new([NativeInterpretation::new(instance, Arc::clone(symbol))]),
+                result.as_ref().clone(),
                 EffectRow::empty(),
                 origin,
             )
@@ -302,24 +259,13 @@ impl Fixture {
         else {
             panic!("boundary");
         };
-        let other = |ty| {
-            NativeInterpretation::new(
-                EffectInstance::new_kinded(
-                    self.scalar.effect(),
-                    Box::new([
-                        KindedArgument::RowArg(EffectRow::empty()),
-                        KindedArgument::TypeArg(ty),
-                        KindedArgument::RowArg(EffectRow::empty()),
-                    ]),
-                ),
-                Arc::clone(&self.scalar),
-            )
-        };
         boundary.interpretations = Box::new([
             NativeInterpretation::new(self.instance(true), Arc::clone(&self.stop)),
-            other(Type::Unit),
-            other(Type::Int),
-            other(Type::Bool),
+            NativeInterpretation::new(
+                EffectInstance::new(self.bytes.effect(), Box::new([])),
+                Arc::clone(&self.bytes),
+            ),
+            NativeInterpretation::new(self.instance(false), Arc::clone(&self.make)),
         ]);
         program
     }
@@ -349,22 +295,14 @@ impl Fixture {
     }
 
     fn donor(&self) -> Arc<CheckedForeignSymbol> {
-        let codec = self.scalar.call_codec();
         let mut work = TypeWorkBudget::default();
-        let context = ForeignBindingContext::new(
-            &self.registry,
-            codec.module(),
-            codec.source(),
-            codec.ids(),
-            &mut work,
-        )
-        .unwrap();
+        let context = ForeignBindingContext::new(&self.registry);
         Arc::new(
             bind_foreign_symbol(
-                self.scalar.library(),
-                Arc::clone(self.scalar.prepared()),
-                self.scalar.symbol_index(),
-                self.registry.effect(self.scalar.effect()).unwrap(),
+                self.make.library(),
+                Arc::clone(self.make.prepared()),
+                self.make.symbol_index(),
+                self.registry.effect(self.make.effect()).unwrap(),
                 &context,
                 &mut work,
             )
@@ -374,11 +312,13 @@ impl Fixture {
 }
 
 #[test]
-fn native_interpret_accepts_scalar_and_zero_argument_void_and_revalidates_transform() {
+fn native_interpret_accepts_address_bytes_and_void_and_revalidates_transform() {
     let fixture = Fixture::new();
     for (program, symbol) in [
-        (fixture.program(false), &fixture.scalar),
+        (fixture.program(false), &fixture.make),
         (fixture.program(true), &fixture.stop),
+        (fixture.program_for(&fixture.echo), &fixture.echo),
+        (fixture.program_for(&fixture.bytes), &fixture.bytes),
         (fixture.program_with_unordered_instances(), &fixture.stop),
     ] {
         let checked = fixture.validate(program).unwrap();
@@ -410,13 +350,86 @@ fn native_interpret_accepts_scalar_and_zero_argument_void_and_revalidates_transf
     }
 }
 
+#[test]
+fn native_interpret_requires_original_registered_declarations() {
+    let fixture = Fixture::new();
+    fixture
+        .validate(fixture.program(false))
+        .expect("original declarations independently admit the native boundary");
+    let incomplete = fixture.program_with_checked_declarations(false, false);
+    assert!(!Arc::ptr_eq(&incomplete.registry, &fixture.registry));
+    assert!(
+        fixture.validate(incomplete).is_err(),
+        "a checked symbol cannot authorize a forest without its original registry declarations"
+    );
+}
+
+#[test]
+fn native_bindings_require_exact_symbols_and_unique_registration() {
+    use crate::foreign::source_runtime::{
+        NativeArgument, NativeCallError, NativeReply, SourceNativeBindings,
+        admit_source_native_program,
+    };
+    fn callback(arguments: &[NativeArgument]) -> Result<NativeReply, NativeCallError> {
+        if !arguments.is_empty() {
+            return Err(NativeCallError);
+        }
+        Ok(NativeReply::Address(core::ptr::null_mut()))
+    }
+    let fixture = Fixture::new();
+    let program = fixture.validate(fixture.program(false)).unwrap();
+    let mut bindings = SourceNativeBindings::default();
+    assert!(
+        bindings
+            .insert(
+                Arc::clone(&fixture.make),
+                callback,
+                &mut TypeWorkBudget::with_limit(0)
+            )
+            .is_err()
+    );
+    assert!(
+        bindings.invoke(&fixture.make, &[]).is_err(),
+        "refused registration leaves no callback"
+    );
+    bindings
+        .insert(
+            Arc::clone(&fixture.make),
+            callback,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+    assert!(
+        bindings
+            .insert(
+                Arc::clone(&fixture.make),
+                callback,
+                &mut TypeWorkBudget::default()
+            )
+            .is_err()
+    );
+    assert_eq!(
+        bindings.invoke(&fixture.make, &[]).unwrap(),
+        NativeReply::Address(core::ptr::null_mut())
+    );
+    assert!(bindings.invoke(&fixture.donor(), &[]).is_err());
+    admit_source_native_program(&program, &bindings, &mut TypeWorkBudget::default()).unwrap();
+    let mut foreign = SourceNativeBindings::default();
+    foreign
+        .insert(fixture.donor(), callback, &mut TypeWorkBudget::default())
+        .unwrap();
+    assert!(
+        admit_source_native_program(&program, &foreign, &mut TypeWorkBudget::default()).is_err()
+    );
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Mutation {
     Ordinary,
     OtherSymbol,
     SameOperationDonor,
     Duplicate,
-    MissingActual,
+    MissingInterpretation,
     ExtraActual,
     WrongTag,
     WrongKind,
@@ -434,14 +447,14 @@ enum Mutation {
 fn native_interpret_independently_rejects_malformed_sets_actuals_and_rows() {
     let fixture = Fixture::new();
     let donor = fixture.donor();
-    assert_eq!(donor.operation(), fixture.scalar.operation());
-    assert!(!Arc::ptr_eq(&donor, &fixture.scalar));
+    assert_eq!(donor.operation(), fixture.make.operation());
+    assert!(!Arc::ptr_eq(&donor, &fixture.make));
     for mutation in [
         Mutation::Ordinary,
         Mutation::OtherSymbol,
         Mutation::SameOperationDonor,
         Mutation::Duplicate,
-        Mutation::MissingActual,
+        Mutation::MissingInterpretation,
         Mutation::ExtraActual,
         Mutation::WrongTag,
         Mutation::WrongKind,
@@ -463,71 +476,55 @@ fn native_interpret_independently_rejects_malformed_sets_actuals_and_rows() {
         };
         match mutation {
             Mutation::Ordinary => {
-                boundary.interpretations[0].effect =
-                    EffectInstance::new(fixture.ordinary, Box::new([]))
+                boundary.interpretations[0].effect = EffectInstance::new_kinded(
+                    fixture.ordinary,
+                    Box::new([
+                        KindedArgument::RowArg(EffectRow::empty()),
+                        KindedArgument::TypeArg(Type::Int),
+                    ]),
+                )
             }
             Mutation::OtherSymbol => boundary.interpretations[0].symbol = Arc::clone(&fixture.stop),
             Mutation::SameOperationDonor => boundary.interpretations[0].symbol = Arc::clone(&donor),
             Mutation::Duplicate => {
                 boundary.interpretations = Box::new([
-                    NativeInterpretation::new(fixture.instance(false), Arc::clone(&fixture.scalar)),
+                    NativeInterpretation::new(fixture.instance(false), Arc::clone(&fixture.make)),
                     NativeInterpretation::new(fixture.instance(true), Arc::clone(&fixture.stop)),
-                    NativeInterpretation::new(fixture.instance(false), Arc::clone(&fixture.scalar)),
+                    NativeInterpretation::new(fixture.instance(false), Arc::clone(&fixture.make)),
                 ])
             }
-            Mutation::MissingActual => {
-                boundary.interpretations[0].effect =
-                    EffectInstance::new(fixture.scalar.effect(), Box::new([]))
-            }
+            Mutation::MissingInterpretation => boundary.interpretations = Box::new([]),
             Mutation::ExtraActual => {
-                boundary.interpretations[0].effect = EffectInstance::new_kinded(
-                    fixture.scalar.effect(),
-                    Box::new([
-                        KindedArgument::RowArg(EffectRow::empty()),
-                        KindedArgument::TypeArg(Type::Int),
-                        KindedArgument::RowArg(EffectRow::empty()),
-                        KindedArgument::TypeArg(Type::Unit),
-                    ]),
-                );
+                boundary.interpretations[0].effect =
+                    EffectInstance::new(fixture.make.effect(), Box::new([Type::Int]));
             }
             Mutation::WrongTag => {
                 boundary.interpretations[0].effect = EffectInstance::new_kinded(
-                    fixture.scalar.effect(),
-                    Box::new([
-                        KindedArgument::TypeArg(Type::Int),
-                        KindedArgument::TypeArg(Type::Int),
-                        KindedArgument::RowArg(EffectRow::empty()),
-                    ]),
-                )
+                    fixture.make.effect(),
+                    Box::new([KindedArgument::RowArg(EffectRow::empty())]),
+                );
             }
             Mutation::WrongKind | Mutation::UnboundType => {
                 let actual = if matches!(mutation, Mutation::WrongKind) {
-                    Type::Nominal(fixture.scalar.call_codec().ids().call)
+                    fixture
+                        .registry
+                        .effect(fixture.ordinary)
+                        .unwrap()
+                        .parameters[0]
+                        .id
                 } else {
-                    Type::Variable(fixture.scalar.parameter_ids()[1])
+                    TypeVariableId::generated(0)
                 };
-                boundary.interpretations[0].effect = EffectInstance::new_kinded(
-                    fixture.scalar.effect(),
-                    Box::new([
-                        KindedArgument::RowArg(EffectRow::empty()),
-                        KindedArgument::TypeArg(actual),
-                        KindedArgument::RowArg(EffectRow::empty()),
-                    ]),
-                );
+                boundary.interpretations[0].effect =
+                    EffectInstance::new(fixture.make.effect(), Box::new([Type::Variable(actual)]));
             }
             Mutation::UnboundRow => {
                 boundary.interpretations[0].effect = EffectInstance::new_kinded(
-                    fixture.scalar.effect(),
-                    Box::new([
-                        KindedArgument::RowArg(EffectRow::open(
-                            crate::types::EffectRowVariable::Rigid(
-                                fixture.scalar.parameter_ids()[0],
-                            ),
-                            Box::new([]),
-                        )),
-                        KindedArgument::TypeArg(Type::Int),
-                        KindedArgument::RowArg(EffectRow::empty()),
-                    ]),
+                    fixture.make.effect(),
+                    Box::new([KindedArgument::RowArg(EffectRow::open(
+                        crate::types::EffectRowVariable::Rigid(TypeVariableId::generated(1)),
+                        Box::new([]),
+                    ))]),
                 );
             }
             Mutation::ForeignBody => boundary.body = fixture.program(true).root,
@@ -565,10 +562,7 @@ fn native_interpret_full_validation_has_exact_one_short_and_fresh_work_cuts() {
             .span(crate::source::ByteRange::new(0, 1).unwrap())
             .unwrap();
         let origin = Origin::Source(span);
-        let report = Type::Application(
-            Box::new(Type::Nominal(fixture.stop.call_codec().ids().call)),
-            Box::new(Type::Unit),
-        );
+        let report = Type::Unit;
         let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&fixture.registry));
         let operand = builder.unit(Type::Unit, origin.clone()).unwrap();
         let request = builder
@@ -671,24 +665,20 @@ fn native_interpret_full_validation_has_exact_one_short_and_fresh_work_cuts() {
 #[test]
 fn native_interpret_subtracts_only_listed_exact_instances() {
     let fixture = Fixture::new();
-    let other = || {
+    let other = || fixture.instance(true);
+    let ordinary = || {
         EffectInstance::new_kinded(
-            fixture.scalar.effect(),
+            fixture.ordinary,
             Box::new([
                 KindedArgument::RowArg(EffectRow::empty()),
-                KindedArgument::TypeArg(Type::Bool),
-                KindedArgument::RowArg(EffectRow::empty()),
+                KindedArgument::TypeArg(Type::Int),
             ]),
         )
     };
-    let body = EffectRow::closed(Box::new([
-        fixture.instance(false),
-        other(),
-        EffectInstance::new(fixture.ordinary, Box::new([])),
-    ]));
+    let body = EffectRow::closed(Box::new([fixture.instance(false), other(), ordinary()]));
     let set = [NativeInterpretation::new(
         fixture.instance(false),
-        Arc::clone(&fixture.scalar),
+        Arc::clone(&fixture.make),
     )];
     let outward = crate::core::effect::native_interpret_outward_row(
         &body,
@@ -696,16 +686,10 @@ fn native_interpret_subtracts_only_listed_exact_instances() {
         &mut TypeWorkBudget::default(),
     )
     .unwrap();
-    assert_eq!(
-        outward,
-        EffectRow::closed(Box::new([
-            other(),
-            EffectInstance::new(fixture.ordinary, Box::new([]))
-        ]))
-    );
+    assert_eq!(outward, EffectRow::closed(Box::new([other(), ordinary()])));
     let unused = [NativeInterpretation::new(
-        fixture.instance(true),
-        Arc::clone(&fixture.stop),
+        EffectInstance::new(fixture.echo.effect(), Box::new([])),
+        Arc::clone(&fixture.echo),
     )];
     assert_eq!(
         crate::core::effect::native_interpret_outward_row(

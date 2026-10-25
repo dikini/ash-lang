@@ -1,0 +1,21 @@
+   Compiling ash v0.0.0 (/tmp/ash-owner-build-snapshot-1a8ecef0/source)
+   Compiling ash-host-6-0 v0.0.0 (/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0)
+warning: function `__ash_native_m313a31_e0_o0__provide` should have a snake case name
+  --> src/main.rs:28:8
+   |
+28 | pub fn __ash_native_m313a31_e0_o0__provide() -> ash::build::PrivateNativeBridge {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `__ash_native_m313a31_e0_o0_provide`
+   |
+   = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: function `__ash_native_m313a31_e1_o0__provide` should have a snake case name
+  --> src/main.rs:46:8
+   |
+46 | pub fn __ash_native_m313a31_e1_o0__provide() -> ash::build::PrivateNativeBridge {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `__ash_native_m313a31_e1_o0_provide`
+
+warning: `ash-host-6-0` (bin "ash-host-6-0") generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 50s
+
+Cleaning generated Cargo package ash-host-6-0
+     Removed 21 files, 909.3MiB total

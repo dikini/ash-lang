@@ -1,0 +1,18 @@
+{
+  "root": "/tmp/ash-owner-static-stage3-mangled",
+  "hashes": {
+    "tuple.json": "8a7135d8a59d34edfbc5ff78cf0e24252c9b9613e3bdbda978a0c4a1e128f390",
+    "relink.monitor.json": "77d7591aeebdb62af79525b0327cb303ad3dac23cb1790340286f0638767d7b0",
+    "inspection.monitor.json": "9cd21cd0b2173bb00e37893c97919ec0f533651492759b818e039129a8806eb5",
+    "preflight-inputs.json": "d13aaf43f324abfee7ace916c163a8408c5024f1810d5ce70165a50f66e751fc",
+    "verify_inputs.py": "693c4f2707baa5c4d7a6f7a8ebf2f9b84fce27f2a5ec52e42c8f2f58a2846b36",
+    "prepare_candidate.py": "bb7fc46163204bfe6072b1cb37852a2621825de8bd187bd270a3984d5f01d394",
+    "finalize_static.py": "95743eceb7704b7d7367d716e3c3eb7574146ccf3a94d531336c145a6f44ff03",
+    "provenance.json": "57cb3074b4add3105094b10f79ca71a2d6aa855ec2070398d47febddb8513852",
+    "manifest.json": "887cf3244263bdde6c33c0ef19065768e346d778812e34ba167269c9d842f9a9"
+  },
+  "records": 19,
+  "bytes": 109186,
+  "scope": "Preparation only, one new --no-demangle rendering argument; map64/log16/static/source/native unchanged; no execution assignment",
+  "pending": "Independent exact tuple/collector review and root sole-Cargo assignment"
+}

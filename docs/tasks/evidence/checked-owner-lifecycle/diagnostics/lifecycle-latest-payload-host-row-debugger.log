@@ -1,0 +1,19 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x6ba5c60: /home/dikini/Projects/ash-lang/.worktree/checked-ffi/src/elaborate/foreign_host.rs:113. (4 locations)
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[Switching to Thread 0x7ffff7bff6c0 (LWP 1476912)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1.1, ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::finish_foreign_host<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, source=0x7ffff00ebec0, span=..., values=0x7ffff7bd9c30) at src/elaborate/foreign_host.rs:113
+113	        let effects = crate::core::effect::foreign_host_outward_row(
+$1 = ash::types::EffectRow {known: alloc::boxed::Box<[ash::types::EffectInstance], alloc::alloc::Global> [], tail: core::option::Option<ash::types::EffectRowTail>::Some(ash::types::EffectRowTail {variable: ash::types::EffectRowVariable::Rigid(ash::types::TypeVariableId::Resolved{module: ash::module::ModuleId {namespace: 254, graph: 0, value: 4156302032}, local: 18}), lacks: alloc::boxed::Box<[ash::types::EffectInstance], alloc::alloc::Global> []})}
+$2 = ash::core::effect::ForeignHostIdentity {identity: ash::types::TypeVariableId::Resolved{module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}, local: 1}, effect: ash::types::EffectId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, declaration: 0}}
+$3 = Vec(size=0)
+#0  ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::finish_foreign_host<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, source=0x7ffff00ebec0, span=..., values=0x7ffff7bd9c30) at src/elaborate/foreign_host.rs:113
+#1  0x000055555c150532 in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::step_expression_task<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, task=..., context=0x7ffff7be4e78, tasks=0x7ffff7bd9a10, values=0x7ffff7bd9c30, declarations=0x7ffff7bd9c60) at src/elaborate.rs:16070
+#2  0x000055555c1b0191 in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::elaborate_expression_work<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, initial=..., context=0x7ffff7be4e78) at src/elaborate.rs:15183
+#3  0x000055555c2044d2 in ash::elaborate::CoreElaborator<ash::core::effect::EffectOperationFamily>::elaborate_expression_with_context<ash::core::effect::EffectOperationFamily> (self=0x7ffff7bf0430, initial=..., context=0x7ffff7be4e78) at src/elaborate.rs:15024

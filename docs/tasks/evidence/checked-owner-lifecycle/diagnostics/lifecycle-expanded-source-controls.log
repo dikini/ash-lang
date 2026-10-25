@@ -1,0 +1,37 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+error[E0599]: no variant, associated function, or constant named `TypeResourceExhausted` found for enum `elaborate::TypeReason` in the current scope
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:522:103
+    |
+522 | ..., TypeReason::TypeResourceExhausted | TypeReason::ConstraintResourceExhausted | TypeReason::CoverageResourceExhausted(_))),
+    |                  ^^^^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `elaborate::TypeReason`
+    |
+   ::: src/elaborate.rs:89:1
+    |
+ 89 | pub enum TypeReason {
+    | ------------------- variant, associated function, or constant `TypeResourceExhausted` not found for this enum
+
+error[E0599]: no variant, associated function, or constant named `ConstraintResourceExhausted` found for enum `elaborate::TypeReason` in the current scope
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:522:139
+    |
+522 | ...ypeReason::ConstraintResourceExhausted | TypeReason::CoverageResourceExhausted(_))),
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `elaborate::TypeReason`
+    |
+   ::: src/elaborate.rs:89:1
+    |
+ 89 | pub enum TypeReason {
+    | ------------------- variant, associated function, or constant `ConstraintResourceExhausted` not found for this enum
+
+error[E0599]: no variant, associated function, or constant named `CoverageResourceExhausted` found for enum `elaborate::TypeReason` in the current scope
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:522:181
+    |
+522 | ...TypeReason::CoverageResourceExhausted(_))),
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `elaborate::TypeReason`
+    |
+   ::: src/elaborate.rs:89:1
+    |
+ 89 | pub enum TypeReason {
+    | ------------------- variant, associated function, or constant `CoverageResourceExhausted` not found for this enum
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `ash` (lib test) due to 3 previous errors

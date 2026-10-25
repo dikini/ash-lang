@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 12 tests
+test core::validate::source_declarations::tests::syntax_loan_returns_lexer_parser_and_recovery_consumption_on_refusal ... ok
+test core::validate::source_declarations::tests::declaration_coordinate_work_is_exact_cumulative_and_retryable ... ok
+test core::validate::source_declarations::tests::original_admission_rejects_coherent_effect_id_and_operation_permutation ... ok
+test core::validate::source_declarations::tests::source_control_original_nominal_projection_keeps_defining_positions ... ok
+test core::validate::source_declarations::tests::defining_categories_allocate_after_data_despite_an_early_foreign_library ... ok
+test core::validate::source_declarations::tests::original_admission_rejects_coherent_owner_access_id_permutation ... ok
+test core::validate::source_declarations::tests::original_coordinate_authentication_preserves_work_and_rejects_missing_or_donor_sources ... ok
+test core::validate::source_declarations::tests::checked_builtin_original_selective_legacy_view_has_no_host_or_omission_proof ... ok
+test core::validate::source_declarations::tests::original_admission_rejects_consistently_rebound_foreign_symbol_id_permutation ... ok
+test core::validate::source_declarations::tests::checked_builtin_original_declarations_require_exact_source_and_host_role ... ok
+unused ordering: exact=47176, reused=5390; six actual cache-hit carrier changes refused before reuse; globals-only use, exact/one-short prefix and retries
+test core::validate::source_declarations::tests::source_control_unused_ordering_checks_the_current_cached_forest ... ok
+test core::validate::source_declarations::tests::source_control_original_registry_retains_distinct_resource_categories ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1980 filtered out; finished in 2.65s
+

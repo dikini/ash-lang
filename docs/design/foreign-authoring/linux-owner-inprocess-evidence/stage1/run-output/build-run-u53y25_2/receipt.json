@@ -1,0 +1,219 @@
+{
+  "schema": 1,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "d011fc6be127e51d05937a6bd7e560f22c4a818878fdb4ec587d930a2103883e",
+  "monitor": {
+    "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "size_before": 18877,
+    "size_after": 18877,
+    "hashed_bytes": 18877,
+    "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 5341
+  },
+  "run_directory": "/tmp/ash-owner-compiler-stage1/run-output/build-run-u53y25_2",
+  "output_path": "/tmp/ash-owner-compiler-stage1/run-output/build-run-u53y25_2/output.log",
+  "argv": [
+    "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "build",
+    "-p",
+    "ash",
+    "--locked",
+    "--offline",
+    "--jobs",
+    "1",
+    "--bin",
+    "ash",
+    "--target-dir",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "--message-format=json-render-diagnostics",
+    "-vv"
+  ],
+  "child_pid": 6,
+  "child_exit": 0,
+  "reason": "exit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 80344,
+  "retained_output_bytes": 80344,
+  "output_truncated": false,
+  "watched_files": [],
+  "inputs": [
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source.tar",
+      "size_before": 98672640,
+      "size_after": 98672640,
+      "hashed_bytes": 98672640,
+      "sha256": "bc9a64b1956df0d7b777809b1311184cd04996d4e2f5476a811fbe85d94dceb4",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 6812
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+      "size_before": 814765,
+      "size_after": 814765,
+      "hashed_bytes": 814765,
+      "sha256": "a17ca66398d6cb9d4f46d2cf2fa82b0197682b8b5c76dd9624995c2733c1160b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 10083
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/runtime-content-inputs.json",
+      "size_before": 30707,
+      "size_after": 30707,
+      "hashed_bytes": 30707,
+      "sha256": "81cb83ee6bb03a8c4d9c28f0bc041cf722313058b8650c373aac499e898c883f",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 14073
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/selected-source.json",
+      "size_before": 5032,
+      "size_after": 5032,
+      "hashed_bytes": 5032,
+      "sha256": "1c1cdc7e5058fd746e5e62044ee5a1b1261bf01d7ea65adfc50d46ae5b269ceb",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 14076
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+      "size_before": 6923,
+      "size_after": 6923,
+      "hashed_bytes": 6923,
+      "sha256": "7e95c8961f0786037353b303c5501a562f45c874dcf883f59debe536e591dd8e",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 14077
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "size_before": 15239,
+      "size_after": 15239,
+      "hashed_bytes": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 21840
+    },
+    {
+      "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+      "size_before": 18877,
+      "size_after": 18877,
+      "hashed_bytes": 18877,
+      "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 5341
+    },
+    {
+      "path": "/usr/bin/python3.14",
+      "size_before": 7477160,
+      "size_after": 7477160,
+      "hashed_bytes": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26347805
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/verify_inputs.py",
+      "size_before": 3667,
+      "size_after": 3667,
+      "hashed_bytes": 3667,
+      "sha256": "125630d0b56bf1faf455619056ea2c93648109aaf20b236212bff5731aab8dff",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 22196
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/observe_compiler.py",
+      "size_before": 6039,
+      "size_after": 6039,
+      "hashed_bytes": 6039,
+      "sha256": "6474128d18e3fcac780bf73d777859ba102028fe5fbadf87563bd85ade3a34db",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 22278
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size_before": 4096,
+      "size_after": 4096,
+      "hashed_bytes": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 26591
+    }
+  ],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 6,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "limits": {
+    "deadline_seconds": 1200,
+    "output_bytes": 16777216,
+    "sidefile_bytes": 16777216
+  },
+  "environment_keys": [
+    "CARGO_BUILD_JOBS",
+    "CARGO_HOME",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "RUSTC",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTC_WRAPPER",
+    "RUSTDOC"
+  ],
+  "executable": {
+    "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "size_before": 42839824,
+    "size_after": 42839824,
+    "hashed_bytes": 42839824,
+    "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953",
+    "hash_is_prefix": false,
+    "device": 66309,
+    "inode": 48105489
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 6,
+  "child_session": 6,
+  "final_limit_failures": [],
+  "elapsed_seconds": 186.28588301199943,
+  "observed_output_sha256": "a7940756a6be220fb0a0e3d9eba670f96059ad84929709b78e0861f492e211ec",
+  "output_file": {
+    "path": "/tmp/ash-owner-compiler-stage1/run-output/build-run-u53y25_2/output.log",
+    "size_before": 80344,
+    "size_after": 80344,
+    "hashed_bytes": 80344,
+    "sha256": "a7940756a6be220fb0a0e3d9eba670f96059ad84929709b78e0861f492e211ec",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 33938
+  }
+}

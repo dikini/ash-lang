@@ -1,0 +1,24 @@
+{
+  "command": [
+    "gdb",
+    "-batch",
+    "-x",
+    "/tmp/ash-pr97/latest-payload-host-row.gdb",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 4.944,
+  "inputs_equal": true,
+  "count": 582,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "3119ebdc57d307ed73d2b3387a3a9ee593593e4e225e4cdb59b87b74760d0d8a",
+  "log_sha256": "5d1692f174911578354d301c90d3fa2660e85685ef13e7a5dde7a59240766909",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

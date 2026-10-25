@@ -1,0 +1,40 @@
+{
+  "command": [
+    "timeout",
+    "--kill-after=10s",
+    "180s",
+    "gdb",
+    "-q",
+    "--batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "set breakpoint pending on",
+    "-ex",
+    "source /tmp/ash-checked-byte-windows/exclusive-profile/phase-ledger-two-owner-cost.py",
+    "-ex",
+    "run",
+    "-ex",
+    "python require_completed_target()",
+    "--args",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 78.284,
+  "inputs_equal": true,
+  "count": 591,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30",
+  "log_sha256": "098bfa296d67c266300cc36f2fbb17474bc418e7b9bda9fc8ed7b32c3b759d21",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "selected_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "selected_tree": "e4ab5e35b50d64326e548fc54cf264a4af170832",
+  "pins": [
+    {
+      "path": "/usr/bin/python3.14",
+      "resolved": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    },
+    {
+      "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+      "resolved": "/tmp/ash-owner-build-monitor/build_monitor.py",
+      "size": 18877,
+      "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/compiler-build.monitor.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/compiler-build.monitor.json",
+      "size": 3230,
+      "sha256": "d011fc6be127e51d05937a6bd7e560f22c4a818878fdb4ec587d930a2103883e"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "resolved": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "size": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source.tar",
+      "resolved": "/tmp/ash-owner-build-snapshot-1a8ecef0/source.tar",
+      "size": 98672640,
+      "sha256": "bc9a64b1956df0d7b777809b1311184cd04996d4e2f5476a811fbe85d94dceb4"
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+      "resolved": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+      "size": 814765,
+      "sha256": "a17ca66398d6cb9d4f46d2cf2fa82b0197682b8b5c76dd9624995c2733c1160b"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/runtime-content-inputs.json",
+      "resolved": "/tmp/ash-owner-packaging-1a8ecef0/runtime-content-inputs.json",
+      "size": 30707,
+      "sha256": "81cb83ee6bb03a8c4d9c28f0bc041cf722313058b8650c373aac499e898c883f"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/selected-source.json",
+      "resolved": "/tmp/ash-owner-packaging-1a8ecef0/selected-source.json",
+      "size": 5032,
+      "sha256": "1c1cdc7e5058fd746e5e62044ee5a1b1261bf01d7ea65adfc50d46ae5b269ceb"
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+      "resolved": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+      "size": 6923,
+      "sha256": "7e95c8961f0786037353b303c5501a562f45c874dcf883f59debe536e591dd8e"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/verify_inputs.py",
+      "resolved": "/tmp/ash-owner-compiler-stage1/verify_inputs.py",
+      "size": 3667,
+      "sha256": "125630d0b56bf1faf455619056ea2c93648109aaf20b236212bff5731aab8dff"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/observe_compiler.py",
+      "resolved": "/tmp/ash-owner-compiler-stage1/observe_compiler.py",
+      "size": 6039,
+      "sha256": "6474128d18e3fcac780bf73d777859ba102028fe5fbadf87563bd85ade3a34db"
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "resolved": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    }
+  ],
+  "tool_native_manifest": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+  "snapshot_manifest": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+  "source_root": "/tmp/ash-owner-build-snapshot-1a8ecef0/source",
+  "private_directories": [
+    "/tmp/ash-owner-compiler-stage1",
+    "/tmp/ash-owner-compiler-stage1/run-output",
+    "/tmp/ash-owner-build-snapshot-1a8ecef0"
+  ],
+  "shared_cache": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+  "cargo_config_absence_paths": [
+    "/.cargo/config",
+    "/.cargo/config.toml",
+    "/tmp/.cargo/config",
+    "/tmp/.cargo/config.toml",
+    "/tmp/ash-owner-build-snapshot-1a8ecef0/.cargo/config",
+    "/tmp/ash-owner-build-snapshot-1a8ecef0/.cargo/config.toml",
+    "/tmp/ash-owner-build-snapshot-1a8ecef0/source/.cargo/config",
+    "/home/dikini/.cargo/config"
+  ],
+  "outer_environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  }
+}

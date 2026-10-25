@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+buffer nested cleanup startup decoded: 43195
+buffer nested cleanup startup authenticated facts: 59507
+buffer nested cleanup startup total: 327676
+
+thread 'build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget' (84) panicked at src/build/source_resource_image.rs:3023:16:
+called `Result::unwrap()` on an `Err` value: Validation(ValidationError { reason: Resource, node: None, cause: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget ... FAILED
+
+failures:
+
+failures:
+    build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2117 filtered out; finished in 0.67s
+
+error: test failed, to rerun pass `--lib`

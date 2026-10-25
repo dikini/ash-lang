@@ -1,0 +1,21 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "--test",
+    "checked_foreign_wrappers",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 41.901,
+  "source_configuration_before_after_equal": true,
+  "file_count": 523,
+  "source_configuration_tree_sha256": "34de4cca6f3d106f005f7df2d72efcff97f4ab464ecfb499fba986427d0d342a",
+  "log_sha256": "a01d840746638450e269a7dad82a326ff55c348c34469b5a8623cfa75ef45d64"
+}

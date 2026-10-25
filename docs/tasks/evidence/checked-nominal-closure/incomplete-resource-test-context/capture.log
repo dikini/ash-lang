@@ -1,0 +1,43 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 36 tests
+test core::capture::tests::dependency_failure_storage_is_charged_exact_and_retryable ... ok
+test core::capture::tests::capture_graph_visits_charge_aliases_and_distinct_graphs_with_fresh_retries ... ok
+test core::capture::tests::closed_empty_cleanup_rows_have_exact_prefixed_admission_and_open_rows_do_not ... ok
+test core::capture::tests::imported_capture_carriers_authenticate_identity_and_unknown_state ... ok
+test core::capture::tests::method_use_index_preserves_same_node_order_and_exact_work ... ok
+test core::capture::tests::empty_cleanup_query_charges_the_complete_graph_before_returning ... ok
+test core::capture::tests::original_header_projection_keeps_rows_order_forall_and_reader_scope_bindings ... ok
+test core::capture::tests::request_copy_retains_exact_legacy_and_group_work_boundaries ... ok
+test core::capture::tests::metadata_scalar_admission_keeps_prior_facts_and_complete_row_shielding ... ok
+test core::capture::tests::requested_metadata_cached_complete_bindings_filter_prefilled_state ... ok
+test core::capture::tests::original_header_projection_completion_and_merges_have_exact_refusal_boundaries ... ok
+test core::capture::tests::actual_provider_query_keeps_contextual_resumes_unavailable ... ok
+test core::capture::tests::requested_metadata_distinct_roots_reuse_shared_descending_dag ... ok
+test core::capture::tests::generic_cell_body_free_write_summary_authenticates_contents_graph_and_return ... ok
+test core::capture::tests::requested_metadata_empty_completed_bindings_preserve_large_metadata_and_seeded_membership ... ok
+test core::capture::tests::requested_metadata_capacity_bounds_complete_surviving_and_bound_facts ... ok
+test core::capture::tests::requested_metadata_forward_and_cyclic_recipes_keep_independent_order ... ok
+test core::capture::tests::requested_metadata_generic_function_body_order_is_a_structural_beneficiary ... ok
+test core::capture::tests::requested_metadata_invalid_coordinates_do_not_publish_and_valid_retry_is_independent ... ok
+test core::capture::tests::stored_metadata_retains_row_tail_and_lacks_but_not_quantified_variables ... ok
+test core::capture::tests::wide_row_metadata_charges_pending_slots_before_reservation ... ok
+test core::capture::tests::no_cleanup_graph_still_rejects_a_forged_nonempty_discard_row ... ok
+test core::capture::tests::actual_capture_domain_preserves_ordinals_and_refuses_reachable_orphan_completion ... ok
+test core::capture::tests::capture_work_has_exact_one_short_and_retry_boundaries ... ok
+test core::capture::tests::sparse_shared_capture_metadata_scans_are_charged_and_retryable ... ok
+test core::capture::tests::raw_core_rejects_skipped_completion_and_restored_live_owners ... ok
+test core::capture::tests::final_core_recomputes_owned_capture_after_same_typed_call_target_change ... ok
+test core::capture::tests::request_identity_is_independent_of_shared_core_origins ... ok
+test core::capture::tests::local_callable_partial_initialization_exhaustion_is_stack_safe ... ok
+test core::capture::tests::deep_capture_equations_and_retained_types_are_stack_safe_and_retryable ... ok
+test core::capture::tests::strict_discovery_retains_the_complete_inferred_cleanup_rows_with_exact_retries ... ok
+test core::capture::tests::linked_core_reselects_handlers_when_type_instances_coincide ... ok
+test core::capture::tests::final_core_recomputes_registration_callback_completion_from_actual_target ... ok
+test core::capture::tests::requested_metadata_every_work_cut_publishes_only_complete_roots_and_retries ... ok
+test core::capture::tests::raw_core_preserves_the_selected_capture_prefix ... ok
+test core::capture::tests::requested_metadata_deep_preparation_and_drop_use_explicit_storage ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 1973 filtered out; finished in 0.19s
+

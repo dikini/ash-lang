@@ -1,0 +1,161 @@
+{
+  "status": "SUCCESS_STATIC_PACKAGING_NO_STARTUP",
+  "execution_manifest": {
+    "path": "execution-manifest.json",
+    "size": 6367,
+    "sha256": "c5ed0c3fd5255cbbbf854ab3964cafe76b81006c92fc087e9a296ed3a015ec83"
+  },
+  "static_receipt": {
+    "path": "static-receipt.json",
+    "size": 1946,
+    "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+  },
+  "readback": {
+    "path": "execution-readback.json",
+    "size": 9862,
+    "sha256": "c9c4ff4c9c02b84727a299bf73c3619e8a4367b7071974a203a0a53f8065bf70"
+  },
+  "phase_exits": [
+    {
+      "name": "before-relink",
+      "exit": 0
+    },
+    {
+      "name": "static-relink",
+      "exit": 0
+    },
+    {
+      "name": "after-relink",
+      "exit": 0
+    },
+    {
+      "name": "prepare-candidate",
+      "exit": 0
+    },
+    {
+      "name": "readelf-metadata",
+      "exit": 0
+    },
+    {
+      "name": "finalize-static-receipt",
+      "exit": 0
+    }
+  ],
+  "map": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/whole-static.map",
+    "size": 100345205,
+    "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b"
+  },
+  "candidate": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+    "size": 71022184,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+  },
+  "static_manifest": {
+    "path": "static-manifest.json",
+    "size": 48307,
+    "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+  },
+  "source_before": {
+    "phase": "before-relink",
+    "source_files": 2784,
+    "source_bytes": 96452672,
+    "commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+    "tree": "e4ab5e35b50d64326e548fc54cf264a4af170832",
+    "all_source_tool_native_config_pins_equal": true,
+    "source_is_hash_frozen_not_hostile_writer_containment": true,
+    "temporary_available_bytes": 206910361600,
+    "known_output_footprint_bytes": 583532544,
+    "space_is_observation_not_reservation": true
+  },
+  "source_after": {
+    "phase": "after-relink",
+    "source_files": 2784,
+    "source_bytes": 96452672,
+    "commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+    "tree": "e4ab5e35b50d64326e548fc54cf264a4af170832",
+    "all_source_tool_native_config_pins_equal": true,
+    "source_is_hash_frozen_not_hostile_writer_containment": true,
+    "temporary_available_bytes": 206637166592,
+    "known_output_footprint_bytes": 583532544,
+    "space_is_observation_not_reservation": true
+  },
+  "monitors": [
+    {
+      "phase": "static-relink",
+      "receipt": {
+        "path": "build-run-ymqweo36/receipt.json",
+        "size": 12696,
+        "sha256": "507e23a81da27429c8fe9df7a432c9fc0f390d694dcaf5b465fc89f4a21b900d"
+      },
+      "reason": "exit",
+      "child_exit": 0,
+      "cleanup": {
+        "all_children_reaped": true,
+        "remaining_children": [],
+        "reaped": [
+          {
+            "pid": 6,
+            "wait_status": 0,
+            "exit_code": 0
+          }
+        ],
+        "reaped_count": 1,
+        "reaped_records_truncated": false,
+        "group_sigkill_sent": true,
+        "escaped_group_detected": false,
+        "reaping_pending": false,
+        "pending_observed": false
+      },
+      "limits": {
+        "deadline_seconds": 1200,
+        "output_bytes": 16777216,
+        "sidefile_bytes": 16777216,
+        "map_bytes": 134217728
+      },
+      "truncated": false,
+      "final_limit_failures": [],
+      "elapsed": 9.225067174000287
+    },
+    {
+      "phase": "readelf-metadata",
+      "receipt": {
+        "path": "build-run-f8k7r2nj/receipt.json",
+        "size": 5639,
+        "sha256": "64d9b1cb792d8130136a0c5bdcbb99c0fce2550ad38698b4723c12d2d5303e6f"
+      },
+      "reason": "exit",
+      "child_exit": 0,
+      "cleanup": {
+        "all_children_reaped": true,
+        "remaining_children": [],
+        "reaped": [
+          {
+            "pid": 46,
+            "wait_status": 0,
+            "exit_code": 0
+          }
+        ],
+        "reaped_count": 1,
+        "reaped_records_truncated": false,
+        "group_sigkill_sent": true,
+        "escaped_group_detected": false,
+        "reaping_pending": false,
+        "pending_observed": false
+      },
+      "limits": {
+        "deadline_seconds": 1200,
+        "output_bytes": 16777216,
+        "sidefile_bytes": 16777216,
+        "map_bytes": 134217728
+      },
+      "truncated": false,
+      "final_limit_failures": [],
+      "elapsed": 0.008160377001331653
+    }
+  ],
+  "LOAD_records": 78,
+  "unavailable_LOAD_records": 10,
+  "image_executed": false,
+  "sole_Cargo_slot_released": true
+}

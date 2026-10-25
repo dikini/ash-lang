@@ -1,0 +1,1949 @@
+{
+  "qualification": "All original tested snapshots/operators/raw logs/receipts/maps retained losslessly. Current evidence/prose assembled after tests; executables remain external with receipt pins. No native output execution, Clippy or whole runtime pass claimed.",
+  "files": [
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/Cargo.lock",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "Cargo.lock",
+      "bytes": 10376,
+      "sha256": "43f15df79f13d673fd1c8730079585d858d2697c110eb4f61d25880068a86dd4",
+      "payload": "objects/43f15df79f13d673fd1c8730079585d858d2697c110eb4f61d25880068a86dd4.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/Cargo.toml",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "Cargo.toml",
+      "bytes": 1332,
+      "sha256": "4177619ae4a137a86656e6661781f48f1aab8fba434e5f58e9b1651e0aae81a9",
+      "payload": "objects/4177619ae4a137a86656e6661781f48f1aab8fba434e5f58e9b1651e0aae81a9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/build.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "build.rs",
+      "bytes": 2798,
+      "sha256": "a9de5bfe4be2618454e1e7999c65feb0d4aefb2ec7efd696c4b747fbd6f49e79",
+      "payload": "objects/a9de5bfe4be2618454e1e7999c65feb0d4aefb2ec7efd696c4b747fbd6f49e79.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/candidate.patch",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "candidate.patch",
+      "bytes": 152054,
+      "sha256": "fde1f25b708e46c70998376e48781e56452ac1ab69c9a7ff58cd9d265558217f",
+      "payload": "objects/fde1f25b708e46c70998376e48781e56452ac1ab69c9a7ff58cd9d265558217f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/docs__tasks__TASK-0053-checked-owner-core-execution.md",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "docs__tasks__TASK-0053-checked-owner-core-execution.md",
+      "bytes": 24621,
+      "sha256": "5304ffcae05e786ba087b022d2b4013a85d7a1a8ceed363f33b7195cb4dddde2",
+      "payload": "objects/5304ffcae05e786ba087b022d2b4013a85d7a1a8ceed363f33b7195cb4dddde2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/docs__tasks__plans__checked-owner-core-execution.md",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "docs__tasks__plans__checked-owner-core-execution.md",
+      "bytes": 22477,
+      "sha256": "b59a814787ba4e8a0af536c99297b0cfbb6dcda0c1048e6da4c5881627a0f5d0",
+      "payload": "objects/b59a814787ba4e8a0af536c99297b0cfbb6dcda0c1048e6da4c5881627a0f5d0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/libraries__native_buffer.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "libraries__native_buffer.ash",
+      "bytes": 3722,
+      "sha256": "acd7789977db5c840cce9bdcf5dc23fb9d3bf7755c47a24d000f170fb83458cc",
+      "payload": "objects/acd7789977db5c840cce9bdcf5dc23fb9d3bf7755c47a24d000f170fb83458cc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/libraries__sqlite.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "libraries__sqlite.ash",
+      "bytes": 36033,
+      "sha256": "62678732750384524584f86affa649039746ab098e30cb8cf09d160528ed8361",
+      "payload": "objects/62678732750384524584f86affa649039746ab098e30cb8cf09d160528ed8361.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/manifest.json",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "manifest.json",
+      "bytes": 11447,
+      "sha256": "21ebf5810d4d7b091ecf0f327dfe891a00280e015276342902502ff3ca0d0d96",
+      "payload": "objects/21ebf5810d4d7b091ecf0f327dfe891a00280e015276342902502ff3ca0d0d96.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/proposal.json",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "proposal.json",
+      "bytes": 5259,
+      "sha256": "5f1945cbcfa93033fc35c8a813cd91a2dba0ad0916ad04a04e6840fc4969b9fd",
+      "payload": "objects/5f1945cbcfa93033fc35c8a813cd91a2dba0ad0916ad04a04e6840fc4969b9fd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/run.py",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "run.py",
+      "bytes": 16563,
+      "sha256": "d8190a46d56f562b405b329eb334d6192e876534e67015792a8fec5f133de11d",
+      "payload": "objects/d8190a46d56f562b405b329eb334d6192e876534e67015792a8fec5f133de11d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/rust-toolchain.toml",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "rust-toolchain.toml",
+      "bytes": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "payload": "objects/cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__artifacts.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__artifacts.rs",
+      "bytes": 6441,
+      "sha256": "ca60a2ccd64e92153ba01b1cb37e41ad1a6b03e4f92757460f68df147e6347dc",
+      "payload": "objects/ca60a2ccd64e92153ba01b1cb37e41ad1a6b03e4f92757460f68df147e6347dc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__artifacts_tests.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__artifacts_tests.rs",
+      "bytes": 11940,
+      "sha256": "f988537e423309c2c82be3849fcdd94483e47873c720ea0a3211cb42d5414a7a",
+      "payload": "objects/f988537e423309c2c82be3849fcdd94483e47873c720ea0a3211cb42d5414a7a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__bridge.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__bridge.rs",
+      "bytes": 55813,
+      "sha256": "573babbb3412571a9b500d82bd725548e9ecbf7c58f615026a3fc441783310d7",
+      "payload": "objects/573babbb3412571a9b500d82bd725548e9ecbf7c58f615026a3fc441783310d7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__checked_leaf.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__checked_leaf.rs",
+      "bytes": 10696,
+      "sha256": "bfe5404ee5e2ac8941fbc19a55eb3799b7ca6fefe40140d48c240f15e5e9e575",
+      "payload": "objects/bfe5404ee5e2ac8941fbc19a55eb3799b7ca6fefe40140d48c240f15e5e9e575.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__checked_native_build.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__checked_native_build.rs",
+      "bytes": 57208,
+      "sha256": "d57618ae4890100e6c91cef3b26408c67386d6feba8273bf8bf17271a63d6e09",
+      "payload": "objects/d57618ae4890100e6c91cef3b26408c67386d6feba8273bf8bf17271a63d6e09.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__checked_owner_leaf.rs.in",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__checked_owner_leaf.rs.in",
+      "bytes": 6583,
+      "sha256": "f2d9e4b1d82604e4e02485e98135b2a58bdf0f7c0f6358e59747a6e88d37d354",
+      "payload": "objects/f2d9e4b1d82604e4e02485e98135b2a58bdf0f7c0f6358e59747a6e88d37d354.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__checked_receipt.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__checked_receipt.rs",
+      "bytes": 38476,
+      "sha256": "a9c9a2c8ca4f536468ccf42f8c0b0c3a5802a144c71988bbedfd6aa3045f52f8",
+      "payload": "objects/a9c9a2c8ca4f536468ccf42f8c0b0c3a5802a144c71988bbedfd6aa3045f52f8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__checked_receipt_tests.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__checked_receipt_tests.rs",
+      "bytes": 20113,
+      "sha256": "34c404b132be7b491d1ce2bcea4df1c8be4fe715d58285a9e77cc3a60a29a503",
+      "payload": "objects/34c404b132be7b491d1ce2bcea4df1c8be4fe715d58285a9e77cc3a60a29a503.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__checked_request.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__checked_request.rs",
+      "bytes": 46278,
+      "sha256": "baa4ca1963e43641f4557277864f15f4376727529ea118e14eb6dff8307846ff",
+      "payload": "objects/baa4ca1963e43641f4557277864f15f4376727529ea118e14eb6dff8307846ff.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__emit.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__emit.rs",
+      "bytes": 29864,
+      "sha256": "ff569e65a0590a23af33235c8476da187d71110f4feb2a67ba9462287a6c9ca3",
+      "payload": "objects/ff569e65a0590a23af33235c8476da187d71110f4feb2a67ba9462287a6c9ca3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__host.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__host.rs",
+      "bytes": 36011,
+      "sha256": "d911a46ab4f3ad53335ffb1789ba29d7699cc4f9c1bb701a8cdc43d4b7434ff5",
+      "payload": "objects/d911a46ab4f3ad53335ffb1789ba29d7699cc4f9c1bb701a8cdc43d4b7434ff5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__image.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__image.rs",
+      "bytes": 543930,
+      "sha256": "0b0c8e19d2dd5b45347b246498a68b3e99265f7adfd1751f302d220669ef53f0",
+      "payload": "objects/0b0c8e19d2dd5b45347b246498a68b3e99265f7adfd1751f302d220669ef53f0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__image_provenance_tests.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__image_provenance_tests.rs",
+      "bytes": 17179,
+      "sha256": "8555f54187ab729345e159d6c6b66a0568fb92c1bf61275b5478f5ff128000bc",
+      "payload": "objects/8555f54187ab729345e159d6c6b66a0568fb92c1bf61275b5478f5ff128000bc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__image_row_order.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__image_row_order.rs",
+      "bytes": 18893,
+      "sha256": "8434b91e61079385600af3a2132942b16cb5b3cf031348341e55f76e60299a8c",
+      "payload": "objects/8434b91e61079385600af3a2132942b16cb5b3cf031348341e55f76e60299a8c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__mod.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__mod.rs",
+      "bytes": 20500,
+      "sha256": "6d96a8b5fbfccc4daf452a33d844bd2efa84ce18dbc9ada5467c33ab96084ad4",
+      "payload": "objects/6d96a8b5fbfccc4daf452a33d844bd2efa84ce18dbc9ada5467c33ab96084ad4.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__build__source_resource_image.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__build__source_resource_image.rs",
+      "bytes": 192113,
+      "sha256": "db523d0bfde924c688384f8aa6c1ed808832d5492274733315747e2716985885",
+      "payload": "objects/db523d0bfde924c688384f8aa6c1ed808832d5492274733315747e2716985885.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__checked_copy_boundary_tests.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__checked_copy_boundary_tests.rs",
+      "bytes": 16535,
+      "sha256": "3d8e9117d1eab730b49655ae97428124ac3cdb2e7f4062378a4614db9b34844f",
+      "payload": "objects/3d8e9117d1eab730b49655ae97428124ac3cdb2e7f4062378a4614db9b34844f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__checked_reporting.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__checked_reporting.rs",
+      "bytes": 10363,
+      "sha256": "1005fc3a02862c1d457fe636aee4dc2828f6b8cbc399c6864ed6cafd9bd8ff10",
+      "payload": "objects/1005fc3a02862c1d457fe636aee4dc2828f6b8cbc399c6864ed6cafd9bd8ff10.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__checked_reports.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__checked_reports.rs",
+      "bytes": 18744,
+      "sha256": "24782685e9b998b3c9350017c562e774f3fd7fbd2fa735899b83ce26edfc7eae",
+      "payload": "objects/24782685e9b998b3c9350017c562e774f3fd7fbd2fa735899b83ce26edfc7eae.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__checked_scope_finish.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__checked_scope_finish.rs",
+      "bytes": 36737,
+      "sha256": "c66042b8f7a905da3079e37e7c6529a943ccad9cdf422cb877978f07776e201a",
+      "payload": "objects/c66042b8f7a905da3079e37e7c6529a943ccad9cdf422cb877978f07776e201a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__foreign.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__foreign.rs",
+      "bytes": 90389,
+      "sha256": "92649a22d8d1cb244815167c42145be0fefe1686da25924f818b1dee9dea105b",
+      "payload": "objects/92649a22d8d1cb244815167c42145be0fefe1686da25924f818b1dee9dea105b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__machine.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__machine.rs",
+      "bytes": 380241,
+      "sha256": "1344063f98c4d54bbf663d955c94e2776b9a65dc5ed63f866bb1a474c164172d",
+      "payload": "objects/1344063f98c4d54bbf663d955c94e2776b9a65dc5ed63f866bb1a474c164172d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__mod.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__mod.rs",
+      "bytes": 987,
+      "sha256": "31449db90143130d01f122d20753b697f3e89a4e8e77983f9f04d063e5fef3e1",
+      "payload": "objects/31449db90143130d01f122d20753b697f3e89a4e8e77983f9f04d063e5fef3e1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__source_owner_phases.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__source_owner_phases.rs",
+      "bytes": 134476,
+      "sha256": "e957ce55a7f4fe4be78632fd839a6857d187a6f29798f342497883cf0813c66f",
+      "payload": "objects/e957ce55a7f4fe4be78632fd839a6857d187a6f29798f342497883cf0813c66f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__source_resource_phases.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__source_resource_phases.rs",
+      "bytes": 104205,
+      "sha256": "8c6a77c997ba59754bccde983d6a2be96d13447be0788579069ea146ea238977",
+      "payload": "objects/8c6a77c997ba59754bccde983d6a2be96d13447be0788579069ea146ea238977.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__eval__source_window_phases.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__eval__source_window_phases.rs",
+      "bytes": 69755,
+      "sha256": "2c04291f2b213b2a650dbd57c367d4405568cb8a878f5482918b0bee541857a2",
+      "payload": "objects/2c04291f2b213b2a650dbd57c367d4405568cb8a878f5482918b0bee541857a2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__foreign__checked_builtins.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__foreign__checked_builtins.rs",
+      "bytes": 31771,
+      "sha256": "eba6b97763dfbf79e89a5d0e98e2277d03455e8fd3987f92fd68270321882e41",
+      "payload": "objects/eba6b97763dfbf79e89a5d0e98e2277d03455e8fd3987f92fd68270321882e41.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__foreign__checked_control.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__foreign__checked_control.rs",
+      "bytes": 54294,
+      "sha256": "5ecba28dc4367ca93521c25003739f64de3529da2c02e9a8d88ebd4f18db18d8",
+      "payload": "objects/5ecba28dc4367ca93521c25003739f64de3529da2c02e9a8d88ebd4f18db18d8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__foreign__source_bindings.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__foreign__source_bindings.rs",
+      "bytes": 75324,
+      "sha256": "bd52bc0d7e56f77837728fc95ad78df0e039bd69db1d835143eb9bcaf9544629",
+      "payload": "objects/bd52bc0d7e56f77837728fc95ad78df0e039bd69db1d835143eb9bcaf9544629.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__foreign__source_owner_boundary_tests.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__foreign__source_owner_boundary_tests.rs",
+      "bytes": 46180,
+      "sha256": "211be8fd7e292718a46e4df07cd177c32bc8a6192be98e310387b1306e12e4df",
+      "payload": "objects/211be8fd7e292718a46e4df07cd177c32bc8a6192be98e310387b1306e12e4df.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__foreign__source_owner_runtime.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__foreign__source_owner_runtime.rs",
+      "bytes": 59347,
+      "sha256": "df5e42d51bd8dd0b2815045c0e936991d4de7bbafb5896185a2b74f41f59e1f7",
+      "payload": "objects/df5e42d51bd8dd0b2815045c0e936991d4de7bbafb5896185a2b74f41f59e1f7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/src__foreign__source_runtime.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "src__foreign__source_runtime.rs",
+      "bytes": 18426,
+      "sha256": "7c17b0e792b749cd40a4624415ba9827a74025468efe7817514671683b04a2cc",
+      "payload": "objects/7c17b0e792b749cd40a4624415ba9827a74025468efe7817514671683b04a2cc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__checked-owner-runtime__owner.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__checked-owner-runtime__owner.ash",
+      "bytes": 5753,
+      "sha256": "71dc568d0cb1525d1ee6db9a355f466c19c5e316b356da78caa631974c1871f5",
+      "payload": "objects/71dc568d0cb1525d1ee6db9a355f466c19c5e316b356da78caa631974c1871f5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__checked-owner-runtime__owner.c",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__checked-owner-runtime__owner.c",
+      "bytes": 851,
+      "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac",
+      "payload": "objects/1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__checked-owner-runtime__owner.h",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__checked-owner-runtime__owner.h",
+      "bytes": 333,
+      "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3",
+      "payload": "objects/a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__native-buffer__discard_cleanup.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__native-buffer__discard_cleanup.ash",
+      "bytes": 752,
+      "sha256": "e7caf3c8a24908b0ec94260da4a1b3d035ed0fccde8094c39bf1cd9478767706",
+      "payload": "objects/e7caf3c8a24908b0ec94260da4a1b3d035ed0fccde8094c39bf1cd9478767706.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__source-native__cases__combined.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__source-native__cases__combined.ash",
+      "bytes": 1568,
+      "sha256": "62b8c0e6e404c775c1277e646fa1bd74dac6ba8edc3f5a5a1b82e96715904d49",
+      "payload": "objects/62b8c0e6e404c775c1277e646fa1bd74dac6ba8edc3f5a5a1b82e96715904d49.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__source-native__facade.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__source-native__facade.ash",
+      "bytes": 35,
+      "sha256": "908cbad5bada8003b250cca14dbd2ba9c2c90d5952dd8a0037c579edb2b01a1e",
+      "payload": "objects/908cbad5bada8003b250cca14dbd2ba9c2c90d5952dd8a0037c579edb2b01a1e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__source-native__helper.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__source-native__helper.ash",
+      "bytes": 258,
+      "sha256": "95deb7190a48a093cb6262c93936d2cf66eb37c02fcafe97895070237f492197",
+      "payload": "objects/95deb7190a48a093cb6262c93936d2cf66eb37c02fcafe97895070237f492197.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__source-native__native.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__source-native__native.ash",
+      "bytes": 747,
+      "sha256": "0d57cea27665575ffdae1c92173677309ca0b47d1d0fa92e8a3c21bc79ffc843",
+      "payload": "objects/0d57cea27665575ffdae1c92173677309ca0b47d1d0fa92e8a3c21bc79ffc843.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__source-native__native_counter.c",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__source-native__native_counter.c",
+      "bytes": 1284,
+      "sha256": "30cb7d2bed3252c6869f23ce72f1a846aeace042102d7bacf1a3c3ad54bffe7e",
+      "payload": "objects/30cb7d2bed3252c6869f23ce72f1a846aeace042102d7bacf1a3c3ad54bffe7e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__source-owner__dependent_owner.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__source-owner__dependent_owner.ash",
+      "bytes": 5717,
+      "sha256": "542326baaba3391f26c5cdf0521e52c7a1699769cfb9c8b29f8ad54e94ecc4af",
+      "payload": "objects/542326baaba3391f26c5cdf0521e52c7a1699769cfb9c8b29f8ad54e94ecc4af.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__fixtures__source-owner__owner.ash",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__fixtures__source-owner__owner.ash",
+      "bytes": 2695,
+      "sha256": "d17c2107b80f28c14f15a9b5c867572becc39975dc54809efdfefde8869e6130",
+      "payload": "objects/d17c2107b80f28c14f15a9b5c867572becc39975dc54809efdfefde8869e6130.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/tests__program_build_native.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "tests__program_build_native.rs",
+      "bytes": 29504,
+      "sha256": "3f6977487e08108488c84bf0a115817f9e88222d9778e8377f0efe216c9380de",
+      "payload": "objects/3f6977487e08108488c84bf0a115817f9e88222d9778e8377f0efe216c9380de.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/trusted-preparation__Cargo.toml",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "trusted-preparation__Cargo.toml",
+      "bytes": 388,
+      "sha256": "f7ec6ca0485176d77e43d3591646525cf045c88606fc086e727a9105a1e67ce0",
+      "payload": "objects/f7ec6ca0485176d77e43d3591646525cf045c88606fc086e727a9105a1e67ce0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/trusted-preparation__src__lib.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "trusted-preparation__src__lib.rs",
+      "bytes": 2383,
+      "sha256": "db7fa7656f1eef029432445f69227aa2b6ebdff44089b5999788e81f20c1b438",
+      "payload": "objects/db7fa7656f1eef029432445f69227aa2b6ebdff44089b5999788e81f20c1b438.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/trusted-preparation__src__linux.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "trusted-preparation__src__linux.rs",
+      "bytes": 12900,
+      "sha256": "1392e4392b8b6eb89eb58f79ca71c70fde3a2222c019506b5a78857e71d277cd",
+      "payload": "objects/1392e4392b8b6eb89eb58f79ca71c70fde3a2222c019506b5a78857e71d277cd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/trusted-preparation__src__protected.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "trusted-preparation__src__protected.rs",
+      "bytes": 23663,
+      "sha256": "4732aa200bc05bd06b78ccf38c2c104391ca7834b35c49b5e2b13683d2282034",
+      "payload": "objects/4732aa200bc05bd06b78ccf38c2c104391ca7834b35c49b5e2b13683d2282034.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01-freeze/trusted-preparation__src__sealed.rs",
+      "run": "checked-owner-connected-settlement-01-freeze",
+      "relative": "trusted-preparation__src__sealed.rs",
+      "bytes": 10414,
+      "sha256": "b9b308ab355cc336594886f93d592ed46fe87bbb9df3e9b0f3c9a2706439aed9",
+      "payload": "objects/b9b308ab355cc336594886f93d592ed46fe87bbb9df3e9b0f3c9a2706439aed9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/batch-results.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "batch-results.json",
+      "bytes": 53917,
+      "sha256": "09f6d1819e0eed2ba2d89fcc87e4afb02aca0f07a581eb6e57ef608b376f9241",
+      "payload": "objects/09f6d1819e0eed2ba2d89fcc87e4afb02aca0f07a581eb6e57ef608b376f9241.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/cache-after.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "cache-after.json",
+      "bytes": 200,
+      "sha256": "6086892e473c839d1b1fdd3285428ca1244b1aea89ea9da6c819a78426afb7c8",
+      "payload": "objects/6086892e473c839d1b1fdd3285428ca1244b1aea89ea9da6c819a78426afb7c8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/cache-before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "cache-before.json",
+      "bytes": 200,
+      "sha256": "2003b51ae176a2a4073cae563f8804a08956485bb37b7cbd9c985f5e5ceed25b",
+      "payload": "objects/2003b51ae176a2a4073cae563f8804a08956485bb37b7cbd9c985f5e5ceed25b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-01.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-01.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-01.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-01.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-01.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-01.log",
+      "bytes": 53946,
+      "sha256": "68879cbc55362fd450526c0ff05909cd90bbac22aaf59ad1ea43f564e8d8ceed",
+      "payload": "objects/68879cbc55362fd450526c0ff05909cd90bbac22aaf59ad1ea43f564e8d8ceed.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-01.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-01.process.json",
+      "bytes": 340,
+      "sha256": "9bd56eff21ff4c7fb49977eb6054866d4136c21f7d1b4eb4ac0efeb05d0bb8d2",
+      "payload": "objects/9bd56eff21ff4c7fb49977eb6054866d4136c21f7d1b4eb4ac0efeb05d0bb8d2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-01.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-01.receipt.json",
+      "bytes": 5626,
+      "sha256": "e0432daf6d413bead297956852f233ccbf8bb5edc06051a37dda464c8b96bf45",
+      "payload": "objects/e0432daf6d413bead297956852f233ccbf8bb5edc06051a37dda464c8b96bf45.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-01.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-01.resources.json",
+      "bytes": 26126,
+      "sha256": "9796c2ee6546c241e1d4a330694ec51156a58a0a5cb9708fbfb555b68a2a35f9",
+      "payload": "objects/9796c2ee6546c241e1d4a330694ec51156a58a0a5cb9708fbfb555b68a2a35f9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-02.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-02.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-02.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-02.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-02.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-02.log",
+      "bytes": 52594,
+      "sha256": "895297ed19b184b3ed6f9e95e2eb306ffc30bb472a69468ed5c7f9f59b5c7a5d",
+      "payload": "objects/895297ed19b184b3ed6f9e95e2eb306ffc30bb472a69468ed5c7f9f59b5c7a5d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-02.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-02.process.json",
+      "bytes": 410,
+      "sha256": "1aee6f5a7dae2da01dbff81cf9c005fdcaf7fbc302066b4ef607f051c1678080",
+      "payload": "objects/1aee6f5a7dae2da01dbff81cf9c005fdcaf7fbc302066b4ef607f051c1678080.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-02.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-02.receipt.json",
+      "bytes": 5688,
+      "sha256": "89b9536c032d7e9400c97eec4048a68d36c88eb0d5205366c2ac159e64f3c678",
+      "payload": "objects/89b9536c032d7e9400c97eec4048a68d36c88eb0d5205366c2ac159e64f3c678.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-02.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-02.resources.json",
+      "bytes": 780,
+      "sha256": "05b99dfb4b1d46d1196a4c98124713008dc263d197a0ca3c4b95667365969783",
+      "payload": "objects/05b99dfb4b1d46d1196a4c98124713008dc263d197a0ca3c4b95667365969783.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-03.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-03.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-03.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-03.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-03.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-03.log",
+      "bytes": 52715,
+      "sha256": "acee38b688a4b45be8cf9d683dfe614e1a63ec1f66110d0bbcb58b2a73f789f3",
+      "payload": "objects/acee38b688a4b45be8cf9d683dfe614e1a63ec1f66110d0bbcb58b2a73f789f3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-03.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-03.process.json",
+      "bytes": 325,
+      "sha256": "88bdc4962fa5af65212e04d6beb1cc71a93cb2b9b29f71b89dfa799428677628",
+      "payload": "objects/88bdc4962fa5af65212e04d6beb1cc71a93cb2b9b29f71b89dfa799428677628.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-03.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-03.receipt.json",
+      "bytes": 5603,
+      "sha256": "e4abb84a67ed1d09b8f1b75514b7ffde4114694b096a9a9499d6cfa0657444f6",
+      "payload": "objects/e4abb84a67ed1d09b8f1b75514b7ffde4114694b096a9a9499d6cfa0657444f6.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-03.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-03.resources.json",
+      "bytes": 778,
+      "sha256": "b4f890285c62da491993776deb9e8af3a66b6cdba5cd316a5bbdb0ba108efbe6",
+      "payload": "objects/b4f890285c62da491993776deb9e8af3a66b6cdba5cd316a5bbdb0ba108efbe6.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-04.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-04.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-04.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-04.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-04.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-04.log",
+      "bytes": 53190,
+      "sha256": "41acb39d73ce5a0560d495a831bcb520573e068e944e35bf4e6e7985971c6aa4",
+      "payload": "objects/41acb39d73ce5a0560d495a831bcb520573e068e944e35bf4e6e7985971c6aa4.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-04.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-04.process.json",
+      "bytes": 329,
+      "sha256": "e4cb9ad3deafd5936ae3f285910f75b657f7ab1f5f6cdf74194d45d974ae1b3a",
+      "payload": "objects/e4cb9ad3deafd5936ae3f285910f75b657f7ab1f5f6cdf74194d45d974ae1b3a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-04.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-04.receipt.json",
+      "bytes": 5606,
+      "sha256": "23db19cf47eaa89a03df1dab1ae89b033c1453749f0cc1f7b616e320787e07f9",
+      "payload": "objects/23db19cf47eaa89a03df1dab1ae89b033c1453749f0cc1f7b616e320787e07f9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-04.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-04.resources.json",
+      "bytes": 779,
+      "sha256": "a4180a29847af0c0b86a8ceea1743d84af2565a8667b82accbbd3445fa553738",
+      "payload": "objects/a4180a29847af0c0b86a8ceea1743d84af2565a8667b82accbbd3445fa553738.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-05.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-05.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-05.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-05.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-05.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-05.log",
+      "bytes": 53993,
+      "sha256": "ef3063b9fc059c617b9ba3a18c900960c18a132bdba563c6034a10ffd49aa708",
+      "payload": "objects/ef3063b9fc059c617b9ba3a18c900960c18a132bdba563c6034a10ffd49aa708.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-05.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-05.process.json",
+      "bytes": 337,
+      "sha256": "bba6d0b1cfdede410463104c60f239c8bf880622d70e92379fcb18f1cc86a8a8",
+      "payload": "objects/bba6d0b1cfdede410463104c60f239c8bf880622d70e92379fcb18f1cc86a8a8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-05.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-05.receipt.json",
+      "bytes": 5618,
+      "sha256": "3444ca7919041775fb9e00c9d837062bcdafb48c88367345fdb31b32aff64767",
+      "payload": "objects/3444ca7919041775fb9e00c9d837062bcdafb48c88367345fdb31b32aff64767.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-05.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-05.resources.json",
+      "bytes": 778,
+      "sha256": "05505200d4bb62e1ad15ad8fd1e4dce1c9e8d7b29a8e1358cb880522c089d931",
+      "payload": "objects/05505200d4bb62e1ad15ad8fd1e4dce1c9e8d7b29a8e1358cb880522c089d931.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-06.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-06.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-06.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-06.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-06.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-06.log",
+      "bytes": 52634,
+      "sha256": "6929eb9eef216e89c7083ac63fd521a9ee0544144d3a68e981b52afa37ae12b0",
+      "payload": "objects/6929eb9eef216e89c7083ac63fd521a9ee0544144d3a68e981b52afa37ae12b0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-06.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-06.process.json",
+      "bytes": 451,
+      "sha256": "88f8276d9e8de6bde5dc0817186b90971a8a4aa1eaf00c8cbd6dd6aa4cec5d0b",
+      "payload": "objects/88f8276d9e8de6bde5dc0817186b90971a8a4aa1eaf00c8cbd6dd6aa4cec5d0b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-06.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-06.receipt.json",
+      "bytes": 5728,
+      "sha256": "e890a14f141aefcf01f9efcd840af1c2443d7f7799baf94388ca6ee419863818",
+      "payload": "objects/e890a14f141aefcf01f9efcd840af1c2443d7f7799baf94388ca6ee419863818.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-06.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-06.resources.json",
+      "bytes": 780,
+      "sha256": "7d550c247a5124de065c3589fb700446d1812c141c0d737e8e0999bf00fb0ef7",
+      "payload": "objects/7d550c247a5124de065c3589fb700446d1812c141c0d737e8e0999bf00fb0ef7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-07.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-07.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-07.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-07.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-07.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-07.log",
+      "bytes": 52707,
+      "sha256": "e703c39bc9b97292e6f1f5ff43c88dc54700751ccadf572402fe8b45011e0b91",
+      "payload": "objects/e703c39bc9b97292e6f1f5ff43c88dc54700751ccadf572402fe8b45011e0b91.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-07.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-07.process.json",
+      "bytes": 324,
+      "sha256": "488f082719a4cee5491ab753485787a622858540bb7994388773dfc371e55585",
+      "payload": "objects/488f082719a4cee5491ab753485787a622858540bb7994388773dfc371e55585.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-07.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-07.receipt.json",
+      "bytes": 5601,
+      "sha256": "9c55b2ac775b1851cf54dabd17845d355800e076a8221d24b6a3e859cd1412bc",
+      "payload": "objects/9c55b2ac775b1851cf54dabd17845d355800e076a8221d24b6a3e859cd1412bc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-07.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-07.resources.json",
+      "bytes": 780,
+      "sha256": "3283351ca0edaf25967cd96144afee63a1accbdbe5cbc5984c7ff20de2c5f04a",
+      "payload": "objects/3283351ca0edaf25967cd96144afee63a1accbdbe5cbc5984c7ff20de2c5f04a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-08.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-08.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-08.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-08.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-08.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-08.log",
+      "bytes": 52612,
+      "sha256": "9afa8eeb2798f5b407b42a270a5b798b4f7285ea7273d2d9b6470aad1405bec5",
+      "payload": "objects/9afa8eeb2798f5b407b42a270a5b798b4f7285ea7273d2d9b6470aad1405bec5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-08.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-08.process.json",
+      "bytes": 337,
+      "sha256": "e67e14affbc5eb5901c57b408c43a65689e29819fd022d75b6159639cf2a3230",
+      "payload": "objects/e67e14affbc5eb5901c57b408c43a65689e29819fd022d75b6159639cf2a3230.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-08.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-08.receipt.json",
+      "bytes": 5614,
+      "sha256": "d40e1a37df3a3931f45432038ef0ef5186f1e9b5ef8e04082ed90bc78011f447",
+      "payload": "objects/d40e1a37df3a3931f45432038ef0ef5186f1e9b5ef8e04082ed90bc78011f447.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-08.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-08.resources.json",
+      "bytes": 779,
+      "sha256": "5fc029e7060714f5bb6c1ecde1379549374a4ae9f0c8e9c84cdc23397a22cc27",
+      "payload": "objects/5fc029e7060714f5bb6c1ecde1379549374a4ae9f0c8e9c84cdc23397a22cc27.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-09.before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-09.before.json",
+      "bytes": 1079537,
+      "sha256": "fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb",
+      "payload": "objects/fe81ec054ebbe2abccae0c9904a6e866c3461a440709adcfd102e36eb01039cb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-09.inputs.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-09.inputs.json",
+      "bytes": 2184722,
+      "sha256": "24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33",
+      "payload": "objects/24f5a685d8598d0472f96735d13beef32fe0688c4c27a62d87de87c913329a33.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-09.log",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-09.log",
+      "bytes": 53453,
+      "sha256": "afd01122ffe80c9de091a2565312a7ab874caadff4067d784d98854d1c69ae7e",
+      "payload": "objects/afd01122ffe80c9de091a2565312a7ab874caadff4067d784d98854d1c69ae7e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-09.process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-09.process.json",
+      "bytes": 415,
+      "sha256": "ec80ad6cfbe815758aff7e7ed2a6dec52c57009f1c40e2c01a882b127858af38",
+      "payload": "objects/ec80ad6cfbe815758aff7e7ed2a6dec52c57009f1c40e2c01a882b127858af38.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-09.receipt.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-09.receipt.json",
+      "bytes": 5695,
+      "sha256": "59a23f22468a06530bf0d62b2cf76ca9195f5021f44bd9acc074c0d1ec67f6f5",
+      "payload": "objects/59a23f22468a06530bf0d62b2cf76ca9195f5021f44bd9acc074c0d1ec67f6f5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/phase-09.resources.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "phase-09.resources.json",
+      "bytes": 779,
+      "sha256": "75873ac2818edd508d919c58975dea8009d2db1122f77241901cd0f42f011075",
+      "payload": "objects/75873ac2818edd508d919c58975dea8009d2db1122f77241901cd0f42f011075.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/runner-process.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "runner-process.json",
+      "bytes": 966,
+      "sha256": "5e385171b52aade3ad64aeb4f4a7e4aaa462b5e8a07afdfd0a098b2b9af8fd31",
+      "payload": "objects/5e385171b52aade3ad64aeb4f4a7e4aaa462b5e8a07afdfd0a098b2b9af8fd31.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/tools-after.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "tools-after.json",
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d",
+      "payload": "objects/9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-01/tools-before.json",
+      "run": "checked-owner-connected-settlement-01",
+      "relative": "tools-before.json",
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d",
+      "payload": "objects/9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/Cargo.lock",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "Cargo.lock",
+      "bytes": 10376,
+      "sha256": "43f15df79f13d673fd1c8730079585d858d2697c110eb4f61d25880068a86dd4",
+      "payload": "objects/43f15df79f13d673fd1c8730079585d858d2697c110eb4f61d25880068a86dd4.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/Cargo.toml",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "Cargo.toml",
+      "bytes": 1332,
+      "sha256": "4177619ae4a137a86656e6661781f48f1aab8fba434e5f58e9b1651e0aae81a9",
+      "payload": "objects/4177619ae4a137a86656e6661781f48f1aab8fba434e5f58e9b1651e0aae81a9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/build.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "build.rs",
+      "bytes": 2798,
+      "sha256": "a9de5bfe4be2618454e1e7999c65feb0d4aefb2ec7efd696c4b747fbd6f49e79",
+      "payload": "objects/a9de5bfe4be2618454e1e7999c65feb0d4aefb2ec7efd696c4b747fbd6f49e79.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/candidate.patch",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "candidate.patch",
+      "bytes": 158535,
+      "sha256": "59086374d0334e705c61466dbf18357e543b985fe4cc23fe129b1bf39b914a00",
+      "payload": "objects/59086374d0334e705c61466dbf18357e543b985fe4cc23fe129b1bf39b914a00.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/docs__tasks__TASK-0053-checked-owner-core-execution.md",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "docs__tasks__TASK-0053-checked-owner-core-execution.md",
+      "bytes": 24621,
+      "sha256": "5304ffcae05e786ba087b022d2b4013a85d7a1a8ceed363f33b7195cb4dddde2",
+      "payload": "objects/5304ffcae05e786ba087b022d2b4013a85d7a1a8ceed363f33b7195cb4dddde2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/docs__tasks__plans__checked-owner-core-execution.md",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "docs__tasks__plans__checked-owner-core-execution.md",
+      "bytes": 22477,
+      "sha256": "b59a814787ba4e8a0af536c99297b0cfbb6dcda0c1048e6da4c5881627a0f5d0",
+      "payload": "objects/b59a814787ba4e8a0af536c99297b0cfbb6dcda0c1048e6da4c5881627a0f5d0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/libraries__native_buffer.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "libraries__native_buffer.ash",
+      "bytes": 3722,
+      "sha256": "acd7789977db5c840cce9bdcf5dc23fb9d3bf7755c47a24d000f170fb83458cc",
+      "payload": "objects/acd7789977db5c840cce9bdcf5dc23fb9d3bf7755c47a24d000f170fb83458cc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/libraries__sqlite.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "libraries__sqlite.ash",
+      "bytes": 36033,
+      "sha256": "62678732750384524584f86affa649039746ab098e30cb8cf09d160528ed8361",
+      "payload": "objects/62678732750384524584f86affa649039746ab098e30cb8cf09d160528ed8361.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/manifest.json",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "manifest.json",
+      "bytes": 11448,
+      "sha256": "3349ceaaccdfc71d85d97c129db43e83af829273d23a455adefa573d80376ce7",
+      "payload": "objects/3349ceaaccdfc71d85d97c129db43e83af829273d23a455adefa573d80376ce7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/proposal.json",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "proposal.json",
+      "bytes": 5591,
+      "sha256": "c09f0c7b14c2f3f700390afd4a4d3c03fcc6d31498bdfff2c2f4b296206f41f0",
+      "payload": "objects/c09f0c7b14c2f3f700390afd4a4d3c03fcc6d31498bdfff2c2f4b296206f41f0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/repair.delta",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "repair.delta",
+      "bytes": 15700,
+      "sha256": "16d8b378009026201516861fd554d2136bd6b37706ccaf0d7a3afa988b5b04b1",
+      "payload": "objects/16d8b378009026201516861fd554d2136bd6b37706ccaf0d7a3afa988b5b04b1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/run.py",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "run.py",
+      "bytes": 16563,
+      "sha256": "ad1e4f16e5cb23d5ddbee6c0f89fa4d8773cd012210a60e9bb8500ff005d5ff2",
+      "payload": "objects/ad1e4f16e5cb23d5ddbee6c0f89fa4d8773cd012210a60e9bb8500ff005d5ff2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/rust-toolchain.toml",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "rust-toolchain.toml",
+      "bytes": 103,
+      "sha256": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+      "payload": "objects/cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__artifacts.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__artifacts.rs",
+      "bytes": 6441,
+      "sha256": "ca60a2ccd64e92153ba01b1cb37e41ad1a6b03e4f92757460f68df147e6347dc",
+      "payload": "objects/ca60a2ccd64e92153ba01b1cb37e41ad1a6b03e4f92757460f68df147e6347dc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__artifacts_tests.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__artifacts_tests.rs",
+      "bytes": 11940,
+      "sha256": "f988537e423309c2c82be3849fcdd94483e47873c720ea0a3211cb42d5414a7a",
+      "payload": "objects/f988537e423309c2c82be3849fcdd94483e47873c720ea0a3211cb42d5414a7a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__bridge.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__bridge.rs",
+      "bytes": 55813,
+      "sha256": "573babbb3412571a9b500d82bd725548e9ecbf7c58f615026a3fc441783310d7",
+      "payload": "objects/573babbb3412571a9b500d82bd725548e9ecbf7c58f615026a3fc441783310d7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__checked_leaf.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__checked_leaf.rs",
+      "bytes": 10696,
+      "sha256": "bfe5404ee5e2ac8941fbc19a55eb3799b7ca6fefe40140d48c240f15e5e9e575",
+      "payload": "objects/bfe5404ee5e2ac8941fbc19a55eb3799b7ca6fefe40140d48c240f15e5e9e575.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__checked_native_build.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__checked_native_build.rs",
+      "bytes": 57208,
+      "sha256": "d57618ae4890100e6c91cef3b26408c67386d6feba8273bf8bf17271a63d6e09",
+      "payload": "objects/d57618ae4890100e6c91cef3b26408c67386d6feba8273bf8bf17271a63d6e09.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__checked_owner_leaf.rs.in",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__checked_owner_leaf.rs.in",
+      "bytes": 6583,
+      "sha256": "f2d9e4b1d82604e4e02485e98135b2a58bdf0f7c0f6358e59747a6e88d37d354",
+      "payload": "objects/f2d9e4b1d82604e4e02485e98135b2a58bdf0f7c0f6358e59747a6e88d37d354.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__checked_receipt.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__checked_receipt.rs",
+      "bytes": 38476,
+      "sha256": "a9c9a2c8ca4f536468ccf42f8c0b0c3a5802a144c71988bbedfd6aa3045f52f8",
+      "payload": "objects/a9c9a2c8ca4f536468ccf42f8c0b0c3a5802a144c71988bbedfd6aa3045f52f8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__checked_receipt_tests.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__checked_receipt_tests.rs",
+      "bytes": 20113,
+      "sha256": "34c404b132be7b491d1ce2bcea4df1c8be4fe715d58285a9e77cc3a60a29a503",
+      "payload": "objects/34c404b132be7b491d1ce2bcea4df1c8be4fe715d58285a9e77cc3a60a29a503.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__checked_request.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__checked_request.rs",
+      "bytes": 46278,
+      "sha256": "baa4ca1963e43641f4557277864f15f4376727529ea118e14eb6dff8307846ff",
+      "payload": "objects/baa4ca1963e43641f4557277864f15f4376727529ea118e14eb6dff8307846ff.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__emit.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__emit.rs",
+      "bytes": 29864,
+      "sha256": "ff569e65a0590a23af33235c8476da187d71110f4feb2a67ba9462287a6c9ca3",
+      "payload": "objects/ff569e65a0590a23af33235c8476da187d71110f4feb2a67ba9462287a6c9ca3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__host.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__host.rs",
+      "bytes": 36011,
+      "sha256": "d911a46ab4f3ad53335ffb1789ba29d7699cc4f9c1bb701a8cdc43d4b7434ff5",
+      "payload": "objects/d911a46ab4f3ad53335ffb1789ba29d7699cc4f9c1bb701a8cdc43d4b7434ff5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__image.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__image.rs",
+      "bytes": 543930,
+      "sha256": "0b0c8e19d2dd5b45347b246498a68b3e99265f7adfd1751f302d220669ef53f0",
+      "payload": "objects/0b0c8e19d2dd5b45347b246498a68b3e99265f7adfd1751f302d220669ef53f0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__image_provenance_tests.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__image_provenance_tests.rs",
+      "bytes": 17179,
+      "sha256": "8555f54187ab729345e159d6c6b66a0568fb92c1bf61275b5478f5ff128000bc",
+      "payload": "objects/8555f54187ab729345e159d6c6b66a0568fb92c1bf61275b5478f5ff128000bc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__image_row_order.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__image_row_order.rs",
+      "bytes": 18893,
+      "sha256": "8434b91e61079385600af3a2132942b16cb5b3cf031348341e55f76e60299a8c",
+      "payload": "objects/8434b91e61079385600af3a2132942b16cb5b3cf031348341e55f76e60299a8c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__mod.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__mod.rs",
+      "bytes": 20500,
+      "sha256": "6d96a8b5fbfccc4daf452a33d844bd2efa84ce18dbc9ada5467c33ab96084ad4",
+      "payload": "objects/6d96a8b5fbfccc4daf452a33d844bd2efa84ce18dbc9ada5467c33ab96084ad4.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__build__source_resource_image.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__build__source_resource_image.rs",
+      "bytes": 192113,
+      "sha256": "db523d0bfde924c688384f8aa6c1ed808832d5492274733315747e2716985885",
+      "payload": "objects/db523d0bfde924c688384f8aa6c1ed808832d5492274733315747e2716985885.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__checked_copy_boundary_tests.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__checked_copy_boundary_tests.rs",
+      "bytes": 16535,
+      "sha256": "3d8e9117d1eab730b49655ae97428124ac3cdb2e7f4062378a4614db9b34844f",
+      "payload": "objects/3d8e9117d1eab730b49655ae97428124ac3cdb2e7f4062378a4614db9b34844f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__checked_reporting.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__checked_reporting.rs",
+      "bytes": 11409,
+      "sha256": "1565cfb6784a85dbe05e3ef4f24f38c0d6ba541b2ce755b9de796d721b7bbfbd",
+      "payload": "objects/1565cfb6784a85dbe05e3ef4f24f38c0d6ba541b2ce755b9de796d721b7bbfbd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__checked_reports.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__checked_reports.rs",
+      "bytes": 19386,
+      "sha256": "ec679b1f6037e97a203a3f72939c8e1b2fd5d8453bc2c5473e606df8d2b13f28",
+      "payload": "objects/ec679b1f6037e97a203a3f72939c8e1b2fd5d8453bc2c5473e606df8d2b13f28.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__checked_scope_finish.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__checked_scope_finish.rs",
+      "bytes": 39994,
+      "sha256": "48860fe1d6fdc0a4b9a4ec7b8e1aa2ef29e5f28afdc5d3da3c1ac848d40394e0",
+      "payload": "objects/48860fe1d6fdc0a4b9a4ec7b8e1aa2ef29e5f28afdc5d3da3c1ac848d40394e0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__foreign.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__foreign.rs",
+      "bytes": 90389,
+      "sha256": "92649a22d8d1cb244815167c42145be0fefe1686da25924f818b1dee9dea105b",
+      "payload": "objects/92649a22d8d1cb244815167c42145be0fefe1686da25924f818b1dee9dea105b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__machine.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__machine.rs",
+      "bytes": 380241,
+      "sha256": "eeed7e45a70991d3005dc3923e05ae6b03fb41bfab97186555199219cfab38bb",
+      "payload": "objects/eeed7e45a70991d3005dc3923e05ae6b03fb41bfab97186555199219cfab38bb.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__mod.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__mod.rs",
+      "bytes": 1009,
+      "sha256": "177fcaad9807fcb24ac9b229d05da59fbe95052cc8f23d32d56440b96c86b918",
+      "payload": "objects/177fcaad9807fcb24ac9b229d05da59fbe95052cc8f23d32d56440b96c86b918.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__source_owner_phases.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__source_owner_phases.rs",
+      "bytes": 134476,
+      "sha256": "e957ce55a7f4fe4be78632fd839a6857d187a6f29798f342497883cf0813c66f",
+      "payload": "objects/e957ce55a7f4fe4be78632fd839a6857d187a6f29798f342497883cf0813c66f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__source_resource_phases.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__source_resource_phases.rs",
+      "bytes": 104815,
+      "sha256": "641ed3783b476c02b6500ff9692dfe45dd4dfd0c2b8e1ce25c3c494dc421b25d",
+      "payload": "objects/641ed3783b476c02b6500ff9692dfe45dd4dfd0c2b8e1ce25c3c494dc421b25d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__eval__source_window_phases.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__eval__source_window_phases.rs",
+      "bytes": 69755,
+      "sha256": "2c04291f2b213b2a650dbd57c367d4405568cb8a878f5482918b0bee541857a2",
+      "payload": "objects/2c04291f2b213b2a650dbd57c367d4405568cb8a878f5482918b0bee541857a2.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__foreign__checked_builtins.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__foreign__checked_builtins.rs",
+      "bytes": 31771,
+      "sha256": "eba6b97763dfbf79e89a5d0e98e2277d03455e8fd3987f92fd68270321882e41",
+      "payload": "objects/eba6b97763dfbf79e89a5d0e98e2277d03455e8fd3987f92fd68270321882e41.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__foreign__checked_control.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__foreign__checked_control.rs",
+      "bytes": 54294,
+      "sha256": "5ecba28dc4367ca93521c25003739f64de3529da2c02e9a8d88ebd4f18db18d8",
+      "payload": "objects/5ecba28dc4367ca93521c25003739f64de3529da2c02e9a8d88ebd4f18db18d8.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__foreign__source_bindings.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__foreign__source_bindings.rs",
+      "bytes": 75324,
+      "sha256": "bd52bc0d7e56f77837728fc95ad78df0e039bd69db1d835143eb9bcaf9544629",
+      "payload": "objects/bd52bc0d7e56f77837728fc95ad78df0e039bd69db1d835143eb9bcaf9544629.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__foreign__source_owner_boundary_tests.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__foreign__source_owner_boundary_tests.rs",
+      "bytes": 46180,
+      "sha256": "211be8fd7e292718a46e4df07cd177c32bc8a6192be98e310387b1306e12e4df",
+      "payload": "objects/211be8fd7e292718a46e4df07cd177c32bc8a6192be98e310387b1306e12e4df.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__foreign__source_owner_runtime.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__foreign__source_owner_runtime.rs",
+      "bytes": 59347,
+      "sha256": "df5e42d51bd8dd0b2815045c0e936991d4de7bbafb5896185a2b74f41f59e1f7",
+      "payload": "objects/df5e42d51bd8dd0b2815045c0e936991d4de7bbafb5896185a2b74f41f59e1f7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/src__foreign__source_runtime.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "src__foreign__source_runtime.rs",
+      "bytes": 18426,
+      "sha256": "7c17b0e792b749cd40a4624415ba9827a74025468efe7817514671683b04a2cc",
+      "payload": "objects/7c17b0e792b749cd40a4624415ba9827a74025468efe7817514671683b04a2cc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__checked-owner-runtime__owner.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__checked-owner-runtime__owner.ash",
+      "bytes": 5753,
+      "sha256": "71dc568d0cb1525d1ee6db9a355f466c19c5e316b356da78caa631974c1871f5",
+      "payload": "objects/71dc568d0cb1525d1ee6db9a355f466c19c5e316b356da78caa631974c1871f5.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__checked-owner-runtime__owner.c",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__checked-owner-runtime__owner.c",
+      "bytes": 851,
+      "sha256": "1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac",
+      "payload": "objects/1d97ce9f9aac79124f90da5979dd32ee7c372f502bf18f35aadc4fb4f83975ac.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__checked-owner-runtime__owner.h",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__checked-owner-runtime__owner.h",
+      "bytes": 333,
+      "sha256": "a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3",
+      "payload": "objects/a19e9d5742cf54991d38ff88b2c1c10f8123dc5d006bafdc812c9ce72de35ff3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__native-buffer__discard_cleanup.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__native-buffer__discard_cleanup.ash",
+      "bytes": 752,
+      "sha256": "e7caf3c8a24908b0ec94260da4a1b3d035ed0fccde8094c39bf1cd9478767706",
+      "payload": "objects/e7caf3c8a24908b0ec94260da4a1b3d035ed0fccde8094c39bf1cd9478767706.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__source-native__cases__combined.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__source-native__cases__combined.ash",
+      "bytes": 1568,
+      "sha256": "62b8c0e6e404c775c1277e646fa1bd74dac6ba8edc3f5a5a1b82e96715904d49",
+      "payload": "objects/62b8c0e6e404c775c1277e646fa1bd74dac6ba8edc3f5a5a1b82e96715904d49.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__source-native__facade.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__source-native__facade.ash",
+      "bytes": 35,
+      "sha256": "908cbad5bada8003b250cca14dbd2ba9c2c90d5952dd8a0037c579edb2b01a1e",
+      "payload": "objects/908cbad5bada8003b250cca14dbd2ba9c2c90d5952dd8a0037c579edb2b01a1e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__source-native__helper.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__source-native__helper.ash",
+      "bytes": 258,
+      "sha256": "95deb7190a48a093cb6262c93936d2cf66eb37c02fcafe97895070237f492197",
+      "payload": "objects/95deb7190a48a093cb6262c93936d2cf66eb37c02fcafe97895070237f492197.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__source-native__native.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__source-native__native.ash",
+      "bytes": 747,
+      "sha256": "0d57cea27665575ffdae1c92173677309ca0b47d1d0fa92e8a3c21bc79ffc843",
+      "payload": "objects/0d57cea27665575ffdae1c92173677309ca0b47d1d0fa92e8a3c21bc79ffc843.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__source-native__native_counter.c",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__source-native__native_counter.c",
+      "bytes": 1284,
+      "sha256": "30cb7d2bed3252c6869f23ce72f1a846aeace042102d7bacf1a3c3ad54bffe7e",
+      "payload": "objects/30cb7d2bed3252c6869f23ce72f1a846aeace042102d7bacf1a3c3ad54bffe7e.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__source-owner__dependent_owner.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__source-owner__dependent_owner.ash",
+      "bytes": 5717,
+      "sha256": "542326baaba3391f26c5cdf0521e52c7a1699769cfb9c8b29f8ad54e94ecc4af",
+      "payload": "objects/542326baaba3391f26c5cdf0521e52c7a1699769cfb9c8b29f8ad54e94ecc4af.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__fixtures__source-owner__owner.ash",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__fixtures__source-owner__owner.ash",
+      "bytes": 2695,
+      "sha256": "d17c2107b80f28c14f15a9b5c867572becc39975dc54809efdfefde8869e6130",
+      "payload": "objects/d17c2107b80f28c14f15a9b5c867572becc39975dc54809efdfefde8869e6130.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/tests__program_build_native.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "tests__program_build_native.rs",
+      "bytes": 29504,
+      "sha256": "3f6977487e08108488c84bf0a115817f9e88222d9778e8377f0efe216c9380de",
+      "payload": "objects/3f6977487e08108488c84bf0a115817f9e88222d9778e8377f0efe216c9380de.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/trusted-preparation__Cargo.toml",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "trusted-preparation__Cargo.toml",
+      "bytes": 388,
+      "sha256": "f7ec6ca0485176d77e43d3591646525cf045c88606fc086e727a9105a1e67ce0",
+      "payload": "objects/f7ec6ca0485176d77e43d3591646525cf045c88606fc086e727a9105a1e67ce0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/trusted-preparation__src__lib.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "trusted-preparation__src__lib.rs",
+      "bytes": 2383,
+      "sha256": "db7fa7656f1eef029432445f69227aa2b6ebdff44089b5999788e81f20c1b438",
+      "payload": "objects/db7fa7656f1eef029432445f69227aa2b6ebdff44089b5999788e81f20c1b438.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/trusted-preparation__src__linux.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "trusted-preparation__src__linux.rs",
+      "bytes": 12900,
+      "sha256": "1392e4392b8b6eb89eb58f79ca71c70fde3a2222c019506b5a78857e71d277cd",
+      "payload": "objects/1392e4392b8b6eb89eb58f79ca71c70fde3a2222c019506b5a78857e71d277cd.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/trusted-preparation__src__protected.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "trusted-preparation__src__protected.rs",
+      "bytes": 23663,
+      "sha256": "4732aa200bc05bd06b78ccf38c2c104391ca7834b35c49b5e2b13683d2282034",
+      "payload": "objects/4732aa200bc05bd06b78ccf38c2c104391ca7834b35c49b5e2b13683d2282034.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02-freeze/trusted-preparation__src__sealed.rs",
+      "run": "checked-owner-connected-settlement-02-freeze",
+      "relative": "trusted-preparation__src__sealed.rs",
+      "bytes": 10414,
+      "sha256": "b9b308ab355cc336594886f93d592ed46fe87bbb9df3e9b0f3c9a2706439aed9",
+      "payload": "objects/b9b308ab355cc336594886f93d592ed46fe87bbb9df3e9b0f3c9a2706439aed9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/batch-results.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "batch-results.json",
+      "bytes": 53912,
+      "sha256": "5e7c6f18446c8a78cf0b840a50e165bed61a66622b69f662a672fd644fee937a",
+      "payload": "objects/5e7c6f18446c8a78cf0b840a50e165bed61a66622b69f662a672fd644fee937a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/cache-after.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "cache-after.json",
+      "bytes": 200,
+      "sha256": "400f9772335d377951a57a3e17d50ac36e3a5742e8a95720e7f823d52acc5ea3",
+      "payload": "objects/400f9772335d377951a57a3e17d50ac36e3a5742e8a95720e7f823d52acc5ea3.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/cache-before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "cache-before.json",
+      "bytes": 200,
+      "sha256": "3bea2eb5930cf0e2710d0db3557ac89ee47aa6605a2eb3bf38573822fefa35f7",
+      "payload": "objects/3bea2eb5930cf0e2710d0db3557ac89ee47aa6605a2eb3bf38573822fefa35f7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-01.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-01.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-01.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-01.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-01.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-01.log",
+      "bytes": 54076,
+      "sha256": "107192679f05497c0db3191312043361e4cbac118dc79c33a94402b02d2a28ba",
+      "payload": "objects/107192679f05497c0db3191312043361e4cbac118dc79c33a94402b02d2a28ba.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-01.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-01.process.json",
+      "bytes": 339,
+      "sha256": "780ef16ac678b47d67226d893d260e46b7fe144ad203453fbab4a0a7946d530f",
+      "payload": "objects/780ef16ac678b47d67226d893d260e46b7fe144ad203453fbab4a0a7946d530f.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-01.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-01.receipt.json",
+      "bytes": 5626,
+      "sha256": "91781ea6f3b98db3aefdafa1779418d4608368215439c027d04c0e052bf14377",
+      "payload": "objects/91781ea6f3b98db3aefdafa1779418d4608368215439c027d04c0e052bf14377.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-01.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-01.resources.json",
+      "bytes": 20581,
+      "sha256": "c955654b69626e8ea6add89fc66d3b99c8b4887d42311026ef4c78af819e2921",
+      "payload": "objects/c955654b69626e8ea6add89fc66d3b99c8b4887d42311026ef4c78af819e2921.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-02.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-02.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-02.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-02.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-02.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-02.log",
+      "bytes": 52594,
+      "sha256": "52691a74e38340222f09975ad956c56135bd6d075dc34409922bcfe0e5cd507d",
+      "payload": "objects/52691a74e38340222f09975ad956c56135bd6d075dc34409922bcfe0e5cd507d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-02.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-02.process.json",
+      "bytes": 410,
+      "sha256": "bdd8b4049b27b7edb267b0aaea843975b1532c57647ccb7431f7141fb1485bb9",
+      "payload": "objects/bdd8b4049b27b7edb267b0aaea843975b1532c57647ccb7431f7141fb1485bb9.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-02.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-02.receipt.json",
+      "bytes": 5687,
+      "sha256": "45edbaa0c4b3b82b219e0603d74d1c9fd1c54b8f7cb8649aa1f98309c88d10b1",
+      "payload": "objects/45edbaa0c4b3b82b219e0603d74d1c9fd1c54b8f7cb8649aa1f98309c88d10b1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-02.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-02.resources.json",
+      "bytes": 777,
+      "sha256": "db72b8e615d139bb1fefe4b7af893f67e1346f6ca93b0560dc4d51b0a1bcff67",
+      "payload": "objects/db72b8e615d139bb1fefe4b7af893f67e1346f6ca93b0560dc4d51b0a1bcff67.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-03.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-03.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-03.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-03.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-03.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-03.log",
+      "bytes": 52715,
+      "sha256": "5745aefefaf8047f4a1171dd9b9b3a23f223c4b7584a566b2a754d22715a9d15",
+      "payload": "objects/5745aefefaf8047f4a1171dd9b9b3a23f223c4b7584a566b2a754d22715a9d15.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-03.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-03.process.json",
+      "bytes": 326,
+      "sha256": "94caeac03c9ffd69aa7272033d40c9ef5979dd60177d77f7ebcb716bbf4e39c6",
+      "payload": "objects/94caeac03c9ffd69aa7272033d40c9ef5979dd60177d77f7ebcb716bbf4e39c6.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-03.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-03.receipt.json",
+      "bytes": 5602,
+      "sha256": "19136a4da75a198f0153ae22baa58651ccd910067c7feb845c11a286f10d88af",
+      "payload": "objects/19136a4da75a198f0153ae22baa58651ccd910067c7feb845c11a286f10d88af.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-03.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-03.resources.json",
+      "bytes": 780,
+      "sha256": "982d3f33ae55ac2fd1fc81dfe759cc87e9e438fe4912818032689019d68a0eff",
+      "payload": "objects/982d3f33ae55ac2fd1fc81dfe759cc87e9e438fe4912818032689019d68a0eff.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-04.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-04.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-04.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-04.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-04.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-04.log",
+      "bytes": 53190,
+      "sha256": "de91494ff2aa46a6aaf1a84b59e3157abb2a51598c91dcb41cd02b1142f5ef49",
+      "payload": "objects/de91494ff2aa46a6aaf1a84b59e3157abb2a51598c91dcb41cd02b1142f5ef49.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-04.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-04.process.json",
+      "bytes": 329,
+      "sha256": "2eefcee3103ba85bb5f9b8b7ba4685f082af0ce2913e7e8335c4dd337cb51b0d",
+      "payload": "objects/2eefcee3103ba85bb5f9b8b7ba4685f082af0ce2913e7e8335c4dd337cb51b0d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-04.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-04.receipt.json",
+      "bytes": 5606,
+      "sha256": "13835a56d74d9da20ee2d793d43ad69402f768f3e81a2370b81578f3668a19f7",
+      "payload": "objects/13835a56d74d9da20ee2d793d43ad69402f768f3e81a2370b81578f3668a19f7.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-04.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-04.resources.json",
+      "bytes": 778,
+      "sha256": "4a3118f3805daed4e5efa7e21309c3533962dfcfbb0e847f5b46495b687e4c87",
+      "payload": "objects/4a3118f3805daed4e5efa7e21309c3533962dfcfbb0e847f5b46495b687e4c87.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-05.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-05.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-05.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-05.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-05.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-05.log",
+      "bytes": 53993,
+      "sha256": "6735f9d76b31a5149a2990b7d3d09bdb179cac6af4c6037aa6c870486cc81276",
+      "payload": "objects/6735f9d76b31a5149a2990b7d3d09bdb179cac6af4c6037aa6c870486cc81276.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-05.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-05.process.json",
+      "bytes": 337,
+      "sha256": "081939c92a53f5bf30e2f90b4466fa1dd6ba3d586e71e7a93ca602ddf4f413dc",
+      "payload": "objects/081939c92a53f5bf30e2f90b4466fa1dd6ba3d586e71e7a93ca602ddf4f413dc.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-05.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-05.receipt.json",
+      "bytes": 5618,
+      "sha256": "e468c91dd1644d71882f6b0f2a5fbe1df86653ab0b3ccff55a1b422daface527",
+      "payload": "objects/e468c91dd1644d71882f6b0f2a5fbe1df86653ab0b3ccff55a1b422daface527.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-05.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-05.resources.json",
+      "bytes": 780,
+      "sha256": "de99ea900449065a440ca7bead981fbd27a7d463b30c68be6a1a5e468d20f8a0",
+      "payload": "objects/de99ea900449065a440ca7bead981fbd27a7d463b30c68be6a1a5e468d20f8a0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-06.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-06.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-06.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-06.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-06.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-06.log",
+      "bytes": 52634,
+      "sha256": "6e82ef9f4a1914fd92e0e4be9ec25ffc3118f5bd17a48a1fb649bd83cdd53ad1",
+      "payload": "objects/6e82ef9f4a1914fd92e0e4be9ec25ffc3118f5bd17a48a1fb649bd83cdd53ad1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-06.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-06.process.json",
+      "bytes": 451,
+      "sha256": "3f99d36ecf5df1daf4edbfa1b2a4c2f999f42e3abb1e6bceeee8381dc78ebef0",
+      "payload": "objects/3f99d36ecf5df1daf4edbfa1b2a4c2f999f42e3abb1e6bceeee8381dc78ebef0.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-06.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-06.receipt.json",
+      "bytes": 5727,
+      "sha256": "5531935165b8fa543a724ee3c35cfd65f6a1937365b0b96ba15be81b62a27146",
+      "payload": "objects/5531935165b8fa543a724ee3c35cfd65f6a1937365b0b96ba15be81b62a27146.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-06.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-06.resources.json",
+      "bytes": 779,
+      "sha256": "e7a22ab21391b5c663ec06d0ee65389e9b4f3c01e37cbbbec56c45615be3c239",
+      "payload": "objects/e7a22ab21391b5c663ec06d0ee65389e9b4f3c01e37cbbbec56c45615be3c239.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-07.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-07.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-07.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-07.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-07.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-07.log",
+      "bytes": 52707,
+      "sha256": "e47def09750279a6667c7fb23037a9a73dbaa8b88a0cb97ac744a6ce7a171e1c",
+      "payload": "objects/e47def09750279a6667c7fb23037a9a73dbaa8b88a0cb97ac744a6ce7a171e1c.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-07.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-07.process.json",
+      "bytes": 324,
+      "sha256": "e08626b988e88ebcf6db7abcbb78a59b6f2d8cea55606dedb07589dddd4b5101",
+      "payload": "objects/e08626b988e88ebcf6db7abcbb78a59b6f2d8cea55606dedb07589dddd4b5101.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-07.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-07.receipt.json",
+      "bytes": 5601,
+      "sha256": "48f6fa4c45f7ce06071d7b582a2f131bc532163af6b7b0916104c6f9a38ab369",
+      "payload": "objects/48f6fa4c45f7ce06071d7b582a2f131bc532163af6b7b0916104c6f9a38ab369.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-07.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-07.resources.json",
+      "bytes": 779,
+      "sha256": "3326fd52a22276185f5f35202ef89ff47830135b400cc3c42ce873664f30b403",
+      "payload": "objects/3326fd52a22276185f5f35202ef89ff47830135b400cc3c42ce873664f30b403.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-08.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-08.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-08.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-08.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-08.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-08.log",
+      "bytes": 52612,
+      "sha256": "aef14f464163d5a43a965b11b65a98d5687f426eff7ff8989c5d877f925fd61b",
+      "payload": "objects/aef14f464163d5a43a965b11b65a98d5687f426eff7ff8989c5d877f925fd61b.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-08.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-08.process.json",
+      "bytes": 336,
+      "sha256": "6da5065822721569bfdfd524a60a394e09cb8f54721559fe1a185871aacfbc1a",
+      "payload": "objects/6da5065822721569bfdfd524a60a394e09cb8f54721559fe1a185871aacfbc1a.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-08.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-08.receipt.json",
+      "bytes": 5614,
+      "sha256": "1261447510c2a28b6969595697597af5a73b6713c3ba82d8300338baa659051d",
+      "payload": "objects/1261447510c2a28b6969595697597af5a73b6713c3ba82d8300338baa659051d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-08.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-08.resources.json",
+      "bytes": 779,
+      "sha256": "010b6d1fb1dd75c8eb13941c931d0cb28d47bf78e817de01b1337b3dd81dca7d",
+      "payload": "objects/010b6d1fb1dd75c8eb13941c931d0cb28d47bf78e817de01b1337b3dd81dca7d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-09.before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-09.before.json",
+      "bytes": 1079537,
+      "sha256": "e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1",
+      "payload": "objects/e7fa56fd93e1871fa0ef2893c1abbd55ffba53b131a22f048a193c283ed289c1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-09.inputs.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-09.inputs.json",
+      "bytes": 2184722,
+      "sha256": "f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d",
+      "payload": "objects/f4af7dec264c5235fc812bdbcf242d9adeb7a8a93f917f59702b8e40b0cd5d2d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-09.log",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-09.log",
+      "bytes": 52599,
+      "sha256": "b0fccd4f60fd256e78d03c380424c723b6d06930810eba3d2ec24e9c6975be5d",
+      "payload": "objects/b0fccd4f60fd256e78d03c380424c723b6d06930810eba3d2ec24e9c6975be5d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-09.process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-09.process.json",
+      "bytes": 415,
+      "sha256": "131b804f335e7dd0141068cadea245202af13c790cf8544940411dd308facbc1",
+      "payload": "objects/131b804f335e7dd0141068cadea245202af13c790cf8544940411dd308facbc1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-09.receipt.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-09.receipt.json",
+      "bytes": 5693,
+      "sha256": "8df8682daec72a4d04a52ad7f5736bcf84db77e9a89e0d7bf1901cff1e1f57ec",
+      "payload": "objects/8df8682daec72a4d04a52ad7f5736bcf84db77e9a89e0d7bf1901cff1e1f57ec.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/phase-09.resources.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "phase-09.resources.json",
+      "bytes": 780,
+      "sha256": "54b95f91a1a439acb70fd8808211622b3d29f0066708b662da7cb3346beeb622",
+      "payload": "objects/54b95f91a1a439acb70fd8808211622b3d29f0066708b662da7cb3346beeb622.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/runner-process.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "runner-process.json",
+      "bytes": 966,
+      "sha256": "511760b52a9ec64d235e78a6229e58baa54f5bab7d81c9e401dec56a6e4ab9f1",
+      "payload": "objects/511760b52a9ec64d235e78a6229e58baa54f5bab7d81c9e401dec56a6e4ab9f1.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/tools-after.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "tools-after.json",
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d",
+      "payload": "objects/9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d.gz"
+    },
+    {
+      "origin": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-connected-settlement-02/tools-before.json",
+      "run": "checked-owner-connected-settlement-02",
+      "relative": "tools-before.json",
+      "bytes": 2621,
+      "sha256": "9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d",
+      "payload": "objects/9d48d1f33bd3c4524e6f96ce7ace93bb5d373a1f3ba8d8591d8bd0c61de3854d.gz"
+    }
+  ]
+}

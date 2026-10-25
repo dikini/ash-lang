@@ -285,17 +285,18 @@ mod tests {
         identity(&mut builder, &mut work).unwrap();
         assert!(builder.settled_zonk_nodes[0]);
         let id = InferenceVariableId::new(10);
+        let index = node.index().unwrap();
+        builder.nodes[index].effects =
+            EffectRow::open(EffectRowVariable::inference(id), Box::new([]));
         builder
-            .set_provider_copy_node_row(
-                node,
-                EffectRow::open(EffectRowVariable::inference(id), Box::new([])),
-            )
+            .invalidate_settled_zonk_range(index..index + 1)
             .unwrap();
-        assert!(!builder.settled_zonk_nodes[0]);
+        assert!(!builder.settled_zonk_nodes[index]);
         identity(&mut builder, &mut work).unwrap();
         assert!(!builder.settled_zonk_nodes[0]);
+        builder.nodes[index].effects = EffectRow::empty();
         builder
-            .set_provider_copy_node_row(node, EffectRow::empty())
+            .invalidate_settled_zonk_range(index..index + 1)
             .unwrap();
         identity(&mut builder, &mut work).unwrap();
         assert!(builder.settled_zonk_nodes[0]);

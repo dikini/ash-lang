@@ -1,0 +1,10 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.71s
+     Running tests/checked_foreign_wrappers.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_wrappers-d19b8ff85fbff406)
+
+running 2 tests
+test checked_constructor_payload_private_leaf_survives_renamed_reexport ... ok
+test checked_constructor_payload_private_leaf_survives_body_free_consumer_and_core ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.09s
+

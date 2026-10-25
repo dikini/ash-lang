@@ -1,0 +1,225 @@
+{
+  "scope": "11 distinct focused units; real private evaluator uses safe Rust storage/injected native observations, no C/native/generated startup/protected activation",
+  "source_files": 4798,
+  "source_map": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-01.before.json",
+    "bytes": 781057,
+    "sha256": "1d00c6c76ed9b9818f38b1b9ea8bc51657484ac2385e2ca082f4ba5fca9add59"
+  },
+  "source_aggregate_sha256": "bfd04853072f51f26f100e055fc477c2dd9e35b9197970b56042c747e73dac33",
+  "all22_before_after_maps_equal": true,
+  "all_tools_equal": true,
+  "tests": [
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_initialized_eight_byte_full_request_preparation",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 291.173,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-01.log",
+        "bytes": 49332,
+        "sha256": "92645277c18e9214f36939c62fa333d923e2edde9aa67ab2136ebfd7319f399a"
+      }
+    },
+    {
+      "selector": "eval::machine::source_window_phases::checked_copy_boundary_tests::checked_copy_real_phase_admission_observation_and_output_failure",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 3.663,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-02.log",
+        "bytes": 49136,
+        "sha256": "8633ba844a1556460f4d2e1f7cf50d2e79dc59ab9cd0891c33125f61a4ca0ad1"
+      }
+    },
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_record_survives_unpublished_output_failure",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.444,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-03.log",
+        "bytes": 49113,
+        "sha256": "2ed484e546fa217b3bf4da7a3dc9022c358c3607e836943c04ed4aba51c5f4a0"
+      }
+    },
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_reservation_is_exact_short_spent_and_fresh",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.447,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-04.log",
+        "bytes": 49113,
+        "sha256": "2b02844273b55dcc4756d1de88e0044cca57455060b414369e0e56f0476e45bf"
+      }
+    },
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_exact_activation_scope_and_independent_group",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.449,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-05.log",
+        "bytes": 49115,
+        "sha256": "4a17e85bc4187355c2377140a1788976d011f01a8fc6c91ef9005ec0d5349582"
+      }
+    },
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_finish_commit_survives_output_failure_without_replay",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.444,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-06.log",
+        "bytes": 49123,
+        "sha256": "01dd33d3cebb437a314c009b9d5aaa5937e37c3a6c6aa3e10a2f71b8e99ed378"
+      }
+    },
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_request_window_donor_and_operation_substitution_refuse",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.583,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-07.log",
+        "bytes": 49125,
+        "sha256": "b370e8964132b798c9096f63a20403c8959c0e9979eacb5b57477f20fcbaa599"
+      }
+    },
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_null_return_and_closed_public_admission_are_distinct",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.6,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-08.log",
+        "bytes": 49123,
+        "sha256": "5aff0cd0e243330fc1fa65f53ad792d9ae36c933a9b44e15595ea8c763b75b80"
+      }
+    },
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_policy_data_is_not_approval_and_short_capacity_refuses",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.446,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-09.log",
+        "bytes": 49125,
+        "sha256": "dfe79ca48b02fee567d1764db719c0ec14d41727bfa4e608dd0e4a2ae17601d7"
+      }
+    },
+    {
+      "selector": "foreign::source_bindings::boundary_tests::checked_owner_boundary_requires_existing_exact_physical_slot_authority",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.436,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-10.log",
+        "bytes": 49118,
+        "sha256": "737d859269ea5a4e7b763ce7b4f487d31ce642738df0f37cc2eb9e4f5b363aab"
+      }
+    },
+    {
+      "selector": "eval::machine::source_resource_phases::checked_owner_boundary_discarded_finish_continuation_model",
+      "exit": 0,
+      "selected": 1,
+      "seconds": 1.585,
+      "raw": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-boundary-real-copy-tuple/phase-11.log",
+        "bytes": 49103,
+        "sha256": "b1d3057284ce4652e904baedbabbd6ad1985ba5544d226c816e4b9f1afb48b17"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "ash",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-22af73f736e026cd"
+        ],
+        "executable": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-22af73f736e026cd",
+        "fresh": false
+      },
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-22af73f736e026cd",
+        "bytes": 854348032,
+        "sha256": "39adb6c4998debda2f7ca72d64f486dd86186d3d2f8fab18d9fb2e9a0dc08d77"
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "phase": 1,
+      "warnings": 0
+    },
+    {
+      "phase": 2,
+      "warnings": 0
+    },
+    {
+      "phase": 3,
+      "warnings": 0
+    },
+    {
+      "phase": 4,
+      "warnings": 0
+    },
+    {
+      "phase": 5,
+      "warnings": 0
+    },
+    {
+      "phase": 6,
+      "warnings": 0
+    },
+    {
+      "phase": 7,
+      "warnings": 0
+    },
+    {
+      "phase": 8,
+      "warnings": 0
+    },
+    {
+      "phase": 9,
+      "warnings": 0
+    },
+    {
+      "phase": 10,
+      "warnings": 0
+    },
+    {
+      "phase": 11,
+      "warnings": 0
+    }
+  ],
+  "min_available_memory_bytes": 11774410752,
+  "max_sampled_group_rss_bytes": 6215340032,
+  "qualification": "memory/group sampling is observation, not quota/complete peak; inherited compile/inventory failures preserved separately"
+}

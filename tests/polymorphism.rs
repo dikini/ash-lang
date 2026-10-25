@@ -140,15 +140,10 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
-        Value::NativeStateView(_) => "native-state-view",
-        Value::NativeWindowView(_) => "native-window-view",
-        Value::NativeWindowExtent(_) => "native-window-extent",
-        Value::LayoutWitness(_) => "layout-witness",
-        Value::Reference { .. } => "reference",
-        Value::Bytes(_) | Value::BytePrefix(_) => "bytes",
+        Value::Bytes(_) => "bytes",
+        Value::Address(_) => "address",
         Value::String(_) => "string",
         Value::Intrinsic(_) => "intrinsic",
-        Value::ByteCallable(_) => "byte-callable",
         Value::Integer(_) => "integer",
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",
@@ -171,7 +166,6 @@ const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
         RuntimeFailure::EnvironmentCapacity => "runtime.environment-capacity",
         RuntimeFailure::InvalidControlState => "runtime.invalid-control-state",
         RuntimeFailure::ForeignBinding => "runtime.foreign-binding",
-        RuntimeFailure::ResourceCompletion => "runtime.resource-completion",
         RuntimeFailure::HeapCapacity => "runtime.heap-capacity",
         RuntimeFailure::CapturedControlCapacity => "runtime.captured-control-capacity",
         RuntimeFailure::ResourceCapacity => "runtime.resource-capacity",
@@ -696,7 +690,6 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
         RuntimeFailure::EnvironmentCapacity,
         RuntimeFailure::InvalidControlState,
         RuntimeFailure::ForeignBinding,
-        RuntimeFailure::ResourceCompletion,
         RuntimeFailure::HeapCapacity,
         RuntimeFailure::CapturedControlCapacity,
         RuntimeFailure::InvalidLocation,
@@ -777,10 +770,7 @@ fn eligible_local_relay_generalizes_higher_kinded_parameters() {
                     work.push((Payload::Type(domain), true));
                     work.push((Payload::Row(codomain.effects()), below_function));
                 }
-                Payload::Type(
-                    ash::types::Type::ResourceApply(_, arguments)
-                    | ash::types::Type::ForeignOwnerApply(_, arguments),
-                ) => work.extend(
+                Payload::Type(ash::types::Type::ResourceApply(_, arguments)) => work.extend(
                     arguments
                         .iter()
                         .map(|argument| (Payload::Argument(argument), below_function)),

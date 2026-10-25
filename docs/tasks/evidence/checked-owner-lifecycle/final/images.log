@@ -1,0 +1,35 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 16 tests
+test build::image::source_resource_image::tests::buffer_source_forests_and_byte_calls_survive_both_core_transforms ... ok
+test build::image::source_resource_image::tests::original_registry_view_roundtrips_without_client_lexical_parameters ... ok
+test build::image::source_resource_image::tests::authenticated_native_fact_view_rejects_same_value_executable_suffix_records ... ok
+buffer diagnostic compilation: CompilationWork { source_checking: Some(PhaseCost { completed: true, phase: SourceChecking, used: 175671, allowance: Some(5470400) }), final_elaboration: Some(PhaseCost { completed: true, phase: FinalElaboration, used: 55477, allowance: Some(5470400) }), independent_core: Some(PhaseCost { completed: true, phase: IndependentCore, used: 152766, allowance: Some(2359110) }) }
+buffer startup after decode: 38709
+buffer startup after complete fact authentication: 52753
+test build::image::source_resource_image::tests::source_scope_image_checks_original_forests_and_exact_copies_without_sources ... ok
+buffer nested cleanup startup decoded: 40726
+buffer nested cleanup startup authenticated facts: 55626
+buffer startup after reconstruction: 318936
+test build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget ... ok
+test build::image::source_resource_image::tests::source_resource_declaration_catalogs_share_one_exact_wire_record ... ok
+original-template structure session work=42617, three fresh registry passes work=109663; exact/one-short/prefix/two fresh retries; moved source/module/header/registry refused
+test build::image::source_resource_image::tests::source_template_registry_session_is_exact_input_only_and_budgeted ... ok
+buffer nested cleanup startup total: 311424
+test build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget ... ok
+source control image: bytes=17782, facts=12597, cumulative work=156098; three pre-provider original-claim refusals
+test build::image::source_resource_image::tests::source_control_image_checks_rows_before_provider_and_retries_exactly ... ok
+payload helper image restoration exact work=177616; prefix/one-short/two retries and four loan/copy refusals
+test build::image::source_resource_image::tests::payload_helper_image_closes_global_loans_and_rejects_copied_donors ... ok
+test build::image::source_resource_image::tests::arena_image_reconstruction_keeps_one_cumulative_allowance ... ok
+test build::image::source_resource_image::tests::buffer_cell_cleanup_image_keeps_scope_binders_and_canonical_origin ... ok
+dependent discard image: bytes=29005, facts=19310, cumulative checked-library work=314929; exact/one-short/prefix/two fresh retries
+test build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work ... ok
+test build::image::source_resource_image::tests::active_original_view_accounts_for_uninstantiated_window_metadata ... ok
+test build::image::source_resource_image::tests::buffer_registration_image_keeps_hook_contracts_and_completion_edges ... ok
+conditional source image work=460289; exact/prefix/one-short/fresh, two distinct requests and nine original/phase/domain/capture claim refusals
+test build::image::source_resource_image::tests::source_control_image_retains_original_pending_owner_and_each_actual_request ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 2065 filtered out; finished in 2.27s
+

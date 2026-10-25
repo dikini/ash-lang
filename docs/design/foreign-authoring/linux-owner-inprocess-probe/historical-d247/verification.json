@@ -1,0 +1,104 @@
+{
+  "test_methods": 11,
+  "cases": [
+    {
+      "case": "test_direct_sidefile_bound_observes_overshoot-0",
+      "reason": "watched_file_limit",
+      "child_exit": -9,
+      "child_pid": 64,
+      "reaped_count": 1,
+      "receipt_sha256": "a7479ef2c4940987758e955a02abf5c2cf2d8d99eaf37e64a2b3c0630a826dcc"
+    },
+    {
+      "case": "test_normal_and_nonzero_exit-1",
+      "reason": "exit",
+      "child_exit": 0,
+      "child_pid": 66,
+      "reaped_count": 1,
+      "receipt_sha256": "fa20f55e27ad53c83834073ae8b55d79bb8d4c805ace1e50bf31728b6555faf6"
+    },
+    {
+      "case": "test_normal_and_nonzero_exit-2",
+      "reason": "exit",
+      "child_exit": 7,
+      "child_pid": 68,
+      "reaped_count": 1,
+      "receipt_sha256": "c4160e4e32e104a12b111f35d6f7b30e06b727d581dbb341fa6d802e0fbcb8f1"
+    },
+    {
+      "case": "test_output_bound-3",
+      "reason": "output_limit",
+      "child_exit": -9,
+      "child_pid": 70,
+      "reaped_count": 1,
+      "receipt_sha256": "6590635755891ee11b2148cfca8221468516330f2735d44c0b571057a02fd62f"
+    },
+    {
+      "case": "test_owned_escaped_descendant_is_refused_and_reaped-4",
+      "reason": "unsupported_group_escape",
+      "child_exit": -9,
+      "child_pid": 72,
+      "reaped_count": 2,
+      "receipt_sha256": "77777fcbc78e7eaff3defe8a8ac2de297a5f0137bc2ab210476a74667d037aa7"
+    },
+    {
+      "case": "test_postspawn_setup_failure_reaps-5",
+      "reason": "monitor_error",
+      "child_exit": -9,
+      "child_pid": 75,
+      "reaped_count": 1,
+      "receipt_sha256": "cc539f3db2492420751bb19ad129edbabeeb425b33dce172ab2f75863e43004f"
+    },
+    {
+      "case": "test_setup_refusal_starts_no_child-6",
+      "reason": "setup_refusal",
+      "child_exit": null,
+      "child_pid": null,
+      "reaped_count": 0,
+      "receipt_sha256": "2ebf1ca495210922b893c249e1c10b6b08d92c1cdf46696cb03307e8644a52b7"
+    },
+    {
+      "case": "test_successful_leader_cannot_leave_descendants-7",
+      "reason": "leader_exit_with_descendants",
+      "child_exit": 0,
+      "child_pid": 78,
+      "reaped_count": 2,
+      "receipt_sha256": "aa15ef2f635c3ea88c1342c16619e35623d37a70cf6d8318f033123251f4e6ec"
+    },
+    {
+      "case": "test_timeout_reaps_descendant-8",
+      "reason": "deadline",
+      "child_exit": -9,
+      "child_pid": 81,
+      "reaped_count": 2,
+      "receipt_sha256": "c91cee4655d38fdcdcf651ea3d11c1972da0df1192a4f1abab1d5a19f3ac1a71"
+    },
+    {
+      "case": "test_unrelated_owned_control_group_is_not_signalled-9",
+      "reason": "deadline",
+      "child_exit": -9,
+      "child_pid": 85,
+      "reaped_count": 1,
+      "receipt_sha256": "b0af29d5c2aaa8c0ca8a16fd1118b815e4e65c58388e88084f33aafef9b0ed38"
+    },
+    {
+      "case": "test_unsupported_subreaper_refuses_before_spawn-10",
+      "reason": "setup_refusal",
+      "child_exit": null,
+      "child_pid": null,
+      "reaped_count": 0,
+      "receipt_sha256": "abf37937ac2d362877eee4e967d19f0f3c6f06ca19bc727ac271dfc662069ffc"
+    },
+    {
+      "case": "test_wrong_tool_pin_refuses_before_spawn-11",
+      "reason": "setup_refusal",
+      "child_exit": null,
+      "child_pid": null,
+      "reaped_count": 0,
+      "receipt_sha256": "a100c19a3f85cc90fd8658eb2258fdf77f65ba5877bc681667b9bfd5b9ba4a39"
+    }
+  ],
+  "final_evidence_directory": "/tmp/ash-owner-build-monitor/safe-test-evidence-21513ucy",
+  "monitor_sha256": "d247f459596822d4305aa4f8021a5ebea44c78104ef98e0442db87b140d16a8f",
+  "source_before_after_equal": true
+}

@@ -1,0 +1,22 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 34s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 3 tests
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_prepares_initialized_state_and_actual_view_extent_contracts ... ok
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_initialized_state_and_views_bind_explicitly' (718) panicked at src/elaborate/checked_byte_window_tests.rs:204:10:
+prepared initialized State and real view/extent contracts must bind before checked primitive source admission: Resolution(ResolveError(ResolveErrorData { diagnostic: Diagnostic { reason: UnavailableExport, primary: SourceLabel { span: Span { source: SourceId(1), range: ByteRange { start: 5287, end: 5304 } }, message: "the dependency exports no declaration with this spelling" }, related: [], expected: None, found: Some("checked_byte_read"), help: None }, context: Some(MissingExport) }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_initialized_state_and_views_bind_explicitly ... FAILED
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_default_profile_refuses ... ok
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_initialized_state_and_views_bind_explicitly
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 2101 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `--lib`

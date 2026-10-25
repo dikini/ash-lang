@@ -1,0 +1,259 @@
+{
+  "base": "f7f13071851a4abfdd344f0bb5a1d5b99a2fbb1f",
+  "scope": "Static owner-free scalar checked hosts and independent Core correspondence; checked execution, owner lifecycle, complete F3 and F-core remain pending.",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+  "focused_tests_passed": 46,
+  "source_configuration_before_after_equal": true,
+  "source_configuration_file_count": 518,
+  "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+  "manifest": "docs/tasks/evidence/checked-ffi-hosts/source-configuration.json",
+  "manifest_algorithm": "SHA256(UTF8(json.dumps(path_to_exact_file_SHA256,sort_keys=True,separators=(comma,colon)))) with no trailing newline; README defines path inventory.",
+  "changed_source_specification_configuration_sha256": {
+    "spec/static-semantics.md": "ec59a34ac988934eba210bb16c81543c2b241d5461d6b1321e7da5e1ea7c0d12",
+    "spec/syntax.md": "bc8260e6fb2903c41eb280b5f0dd172c99a68929ce19cb9636ecf5de33d9e6f5",
+    "src/build/image.rs": "f55be2e11ad9528e77dba4a5cba3c4c0abe0bc025c6a886ee7965d4417142c54",
+    "src/calibration_features.rs": "c09b686c5c14a44446b0201af04c0e80a63362635e4b6b3eab2fecf5c1ee1a63",
+    "src/core/capture.rs": "9f8b57ef14e14769d2b756f476cc28a8b09061ef0bf5c7c68de4c7705a0e20a9",
+    "src/core/effect.rs": "a58ab4b94ae15eb8ac3480e3e5ad001e294d433aa8ec3c0e942ea4334f20f4f7",
+    "src/core/provider/handler.rs": "8fdbd904ad5473e008e20a3316066c093e4178ccfb1f21ad1e4e9889edbc4065",
+    "src/core/provider/row/demand.rs": "a9bd1d10eafb896c8ed813277ca5beecc1bfb7ca8fe417d4e2bc4ebfe35c25f7",
+    "src/core/provider/row/realize.rs": "cddafb01d7a903dc72e9ba0668d2d0dea00dda0bbe1ed431293db257d8d3489d",
+    "src/core/transform.rs": "9b4f716f603e554d00457115228b0d7ada89523912dc9e72f4f02b383fc102cc",
+    "src/core/validate.rs": "4b2a14043a0682c09e10e5fafda95f84ff2d53541e09ef1bbb7315d3c1800639",
+    "src/core/validate/foreign_host_tests.rs": "8298a2234fb9461b6517c84b0d6d926c3a52d1c76fe6e94d909e0c36aafa611e",
+    "src/core/validate/semantic_type_variables.rs": "621d648cf2b2f6c5aa3ac8027698058bfa4493b20f16ce2860179bf39d6ad310",
+    "src/core/validate/source_declarations.rs": "24403767425fce136e20a3544532d1702b9606a369013812c4057408b64b2797",
+    "src/elaborate.rs": "b9186cb5f3794b01e564500cde14ae7ad8d4e5a0bdd775c2dcc6e1042101a01a",
+    "src/elaborate/foreign_host.rs": "574f417cbdf532c1eabf53db2483eff27b141e4a56d853bd24a8d176afebab98",
+    "src/elaborate/module_bodies.rs": "3df75ad8313902543922f0c250f274f40e15f2c240161c79126fc61c3c8bc877",
+    "src/elaborate/provider.rs": "c656537d6612dce8f38e97bf905e4105eddfbe01f03606ea64d242012952712c",
+    "src/elaborate/provider_external.rs": "1e1ca355b2ae57c13a9e1a2d79149e25aae424312b5c57972c70b4a21ba816cf",
+    "src/elaborate/source_resource.rs": "05526eccb12bae318feacedf1591a7b07fe995f41858258d5a2f312e7e4f2cea",
+    "src/eval/machine.rs": "f455a6456922fc2b9a5de46c2aefaba65e0e3ca62beb6bff5901af77a590c43c",
+    "src/evidence_audit.rs": "707a707569d8fc644365c979d43a3900dce36b8a1609e2f8b93e5f949273a2a2",
+    "src/evidence_validation.rs": "b1485ed7965e2ad7b5bc6e30cc11fd0a6e20c7267e5b88dd67e0e017d08fae36",
+    "src/evidence_validation/provider_prepass.rs": "07b0419f5610354e82edb7bbdb10ffb24ce672571eb8589afb93cf03a123df74",
+    "src/foreign.rs": "b97b8802f0fc7fcff88133c214500e1ef46971ed6b75c553f6fee4d9815ea40b",
+    "src/foreign/checked_builtins.rs": "21ef55655d32ec73bb4ff0137e4610ef10d323a21cab98147fda6de84f2b2650",
+    "src/foreign/checked_source.rs": "0e31543a59c553be441ae128e27461e30059e7c2f7bd18309a5ff2deb58ef71b",
+    "src/foreign/source_bindings.rs": "bf4fbc8af971854d12fae3591233539d0e6a3b49cff0030c22a83e9553eeaa09",
+    "src/kind.rs": "5995504c17eaacad67f7a1938c99b7e340d4dc7a17c913a1e89619f5139c8111",
+    "src/module.rs": "5cd487ae33d6098dc3817dccf2c88a8eb536d581ef500cd33df63eae9618ea63",
+    "src/module/foreign_host.rs": "a712ed5f2e4b4fa1c55f297c84efb0388f3e993fb6fea6538f5913fe5ac144e8",
+    "src/parser/grammar.rs": "9bdbfa5aa3303ee1c75a4f83149b6a6bf2b284d02fa165c1fd22d5903ca8ce37",
+    "src/parser/mod.rs": "ebc0b2b31bdd1139c00b588103d29ff4bb3bc70a30b1aaff0266eabd2d0b177b",
+    "src/parser/project.rs": "e8a8913e2e081c66194958564c2eb477c52349440129a1220ecab7813d6c242a",
+    "src/resolve.rs": "a1e7cf51e6220051148f41f19160081fbf4a206b39951ad6f4d56875d5c4f39e",
+    "src/resolve/foreign.rs": "df1d9aa8d948a262207664030e6c28913eaebe14d7a21a10a22882ad427102b7",
+    "src/resolve/foreign_host_tests.rs": "85f92c47f83bab86d0c931aec009960079c40f5c4374f391c14aea672ea72962",
+    "src/resolved.rs": "620dbb0074c4296ba2ae52f41284921443f4851ebfe1fca41cb0387a057af6c9",
+    "src/resolved/image_subset_tests.rs": "523d8951832be1c04b86da100e6a1b804a7a67d7b3c1d9323517533f8c9990ee",
+    "src/surface.rs": "17a05c5644733eebb49d55c8446bdcf13474ce95eb20e2aa72d508a312d0b458",
+    "tests/checked_foreign_host.rs": "5fda53a60960a4cf320e0ea1021e2771f4c92a998a566d523fe4e578d5e62f09",
+    "tests/interface_selection.rs": "4772a5229bcff18f33bb94f9c98b3432160376fcccdd8284b60cf17954a26409",
+    "tests/interfaces.rs": "ed4480ff8dcd076a4a4bf12d801d2cabbdd1f895c10636244e3d69800c0d2eee",
+    "Cargo.toml": "2d1a3d056418f5feb2e36d3ff99924e30f6a9136900b7aa2bb73ead902a1395c",
+    "Cargo.lock": "26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08",
+    "rust-toolchain.toml": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+    ".cargo/config.toml": "2eb887744ac35113f513a449e09d637cf4ae0e08e8361bd7b3401e41e37051f9",
+    "build.rs": "a9de5bfe4be2618454e1e7999c65feb0d4aefb2ec7efd696c4b747fbd6f49e79"
+  },
+  "checks": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "checked_host",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.436,
+      "source_configuration_before_after_equal": true,
+      "file_count": 518,
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "aff3f700179c915e7dbd70c72121f409a7a727bfcb9b23a436d9fc19be5d86c8",
+      "log": "docs/tasks/evidence/checked-ffi-hosts/host-verified.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "checked_builtin",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.386,
+      "source_configuration_before_after_equal": true,
+      "file_count": 518,
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "b165be034f5f59532758f9c65cf33ad5da43a2599eec1ccc0b85c006c344a335",
+      "log": "docs/tasks/evidence/checked-ffi-hosts/builtin-verified.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "module::foreign_host::tests",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.349,
+      "source_configuration_before_after_equal": true,
+      "file_count": 518,
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "c4cc290c3094c8befd7b51c58099b3d930db806bae278f207f8713192cff3168",
+      "log": "docs/tasks/evidence/checked-ffi-hosts/module-verified.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "build::image::tests::scalar_preflight_image_reconstructs_authority_and_refuses_forged_records",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.509,
+      "source_configuration_before_after_equal": true,
+      "file_count": 518,
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "eea080af9b49d3b1aa23da61e05df3073745eefc2830c38b52d1fbbc197ee9d4",
+      "log": "docs/tasks/evidence/checked-ffi-hosts/legacy-image-verified.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "source_owner_post_record_tests",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 2.325,
+      "source_configuration_before_after_equal": true,
+      "file_count": 518,
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "06227b0f8965e997b04b1407061590978776e20793ee918529012526a6ac6275",
+      "log": "docs/tasks/evidence/checked-ffi-hosts/legacy-owner-verified.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--test",
+        "checked_foreign_host",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 4.81,
+      "source_configuration_before_after_equal": true,
+      "file_count": 518,
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "36a5bdb7cb95c1ea71748f4fd7a7f8866619be76351b39f031c47f421225ce6b",
+      "log": "docs/tasks/evidence/checked-ffi-hosts/source-verified.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--test",
+        "program_build",
+        "pure_generated_host_restores_reexported_scalar_checks_without_native_links",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 3.665,
+      "source_configuration_before_after_equal": true,
+      "file_count": 518,
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "645b06a3f30b520721460827aa0e652f269bfbd8fdbd28d75188b4facab92288",
+      "log": "docs/tasks/evidence/checked-ffi-hosts/generated-legacy.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "--test",
+        "checked_foreign_host",
+        "--test",
+        "interfaces",
+        "--test",
+        "interface_selection",
+        "--test",
+        "program_build",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.596,
+      "source_configuration_before_after_equal": true,
+      "file_count": 518,
+      "source_configuration_tree_sha256": "90a950105f06dd3ff47b5d6258e5e200548f48c44c1ee8a1b4852fece3798f15",
+      "log_sha256": "434ba53e50d29a48cf1ea2bd4b71f01cb360c03aa833abb22fbfdaddcdb9d933",
+      "log": "docs/tasks/evidence/checked-ffi-hosts/clippy.log"
+    }
+  ],
+  "observed_red_evidence": [
+    {
+      "receipt": "red-original-coordinate.receipt.json",
+      "scope": "Before exact synthetic builtin source-role correspondence; legacy owner templates refused."
+    },
+    {
+      "receipt": "red-omitted-formal-census.receipt.json",
+      "scope": "Temporary test-only traces identified original projected variable14 at expected4; final code removes traces and proves only absent original builtin4..13."
+    }
+  ],
+  "light_checks": {
+    "format": "cargo fmt --all -- --check",
+    "markdown": "MD013-disabled lint of six changed Markdown files and evidence README",
+    "whitespace": "Source/spec/docs/JSON pass; raw Cargo .log bytes excluded, including EOF blanks."
+  },
+  "acceptance": "Candidate verification only. Independent exact-head review, GitHub integration and author acceptance readback remain pending; all whole-F3 criteria stay open.",
+  "review_findings_addressed": [
+    "Actual checked scalar host preserves ordinary Ping through source and independent Core; its ordinary outer handler removes Ping.",
+    "Unexecuted checked branch statically checks, but runtime admission refuses before branch selection; public default driver fails ForeignContract during resolution before native binding."
+  ]
+}

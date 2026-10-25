@@ -19,11 +19,11 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed semantic transition is under review.
+No proposed change is listed.
 
 ## Accepted changes
 
-No accepted transition awaits product checkpoint retention.
+No accepted proposal is listed.
 The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
 retains the completed transition, verified local Main integration and
 historical retrieval commands.

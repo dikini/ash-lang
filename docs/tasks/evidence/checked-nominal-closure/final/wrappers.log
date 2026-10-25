@@ -1,0 +1,25 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.16s
+     Running tests/checked_foreign_wrappers.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_wrappers-d19b8ff85fbff406)
+
+running 17 tests
+test checked_closed_wrapper_requires_opt_in_for_a_body_free_consumer ... ok
+test checked_selected_method_only_requires_body_free_consumer_opt_in ... ok
+test checked_imported_wrapper_rejects_a_reordered_host_actual ... ok
+test checked_recursive_wrapper_retains_its_private_closed_callee ... ok
+test checked_closed_wrapper_reexport_preserves_its_original_host_contract ... ok
+test checked_selected_module_direct_method_preserves_body_free_core ... ok
+test checked_closed_wrapper_keeps_internal_host_bound_across_two_instantiations ... ok
+test checked_capture_only_private_nominal_survives_hidden_reexport ... ok
+test checked_branch_only_native_dependencies_survive_a_closed_host_row ... ok
+test checked_higher_order_wrapper_retains_its_private_closed_callee ... ok
+test checked_imported_generic_wrapper_preserves_complete_actuals_through_core ... ok
+test legacy_native_wrapper_summary_remains_valid_without_checked_opt_in ... ok
+test checked_opaque_snapshot_keeps_native_requirements_without_constructor_access ... ok
+test checked_selected_module_method_prerequisites_preserve_body_free_core ... ok
+test checked_selected_capture_only_private_nominal_survives_body_free_core ... ok
+test checked_capture_only_private_nominal_survives_body_free_consumer_and_core ... ok
+test checked_selected_opaque_prerequisite_reexport_preserves_two_contract_core ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

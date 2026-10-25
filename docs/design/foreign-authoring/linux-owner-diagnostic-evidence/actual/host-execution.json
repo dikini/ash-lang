@@ -1,0 +1,149 @@
+{
+  "scope": "One separately root-assigned normal-tool-escalated trusted owner diagnostic; sandbox refusal preserved; no retry",
+  "launch": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launch-proposal.json",
+    "size": 5607,
+    "sha256": "57fff96d43acbefdbe95c4a6fe27a0478e9d944e62d274f1f8f441599146e449"
+  },
+  "before": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/diagnostic.py",
+      "size": 22555,
+      "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/policy.json",
+      "size": 3172,
+      "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json",
+      "size": 1495,
+      "sha256": "24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+      "size": 71022184,
+      "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+      "size": 1946,
+      "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+    },
+    {
+      "path": "/tmp/ash-owner-header-closure-delivery/payload/docs/design/foreign-authoring/linux-owner-header-closure-evidence/ownerful-premise.proposed.json",
+      "size": 23612,
+      "sha256": "9e4ca3f8f46d61e8a8e8c5a0508d10dfd5cf5c6948ceacc61ade558e8aee882e"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-manifest.json",
+      "size": 48307,
+      "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+      "size": 2941,
+      "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+    }
+  ],
+  "interpreter_before": {
+    "path": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "argv": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/diagnostic.py",
+    "--approval",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic",
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "directory_identity": {
+    "mode": "0o700",
+    "uid": 1000,
+    "device": 66309,
+    "inode": 49555204
+  },
+  "started_unix": 1792670407.9390378,
+  "sandbox_inventory_before": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/execution-manifest.json",
+    "size": 2852,
+    "sha256": "b257a33b93b9b89e5a4d820ef68cec0fdb9e0daf4cb5cb435f07e0540cb002b0"
+  },
+  "pid": 730789,
+  "exit": 0,
+  "finished_unix": 1792670408.9507139,
+  "stdout": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stdout.json",
+    "size": 3153,
+    "sha256": "a777be64e6fd858c9e81ec5a0afca2e457beef720b57c767166f080c1888cf1f"
+  },
+  "stderr": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-stderr.log",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "after": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/diagnostic.py",
+      "size": 22555,
+      "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/policy.json",
+      "size": 3172,
+      "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json",
+      "size": 1495,
+      "sha256": "24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+      "size": 71022184,
+      "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+      "size": 1946,
+      "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+    },
+    {
+      "path": "/tmp/ash-owner-header-closure-delivery/payload/docs/design/foreign-authoring/linux-owner-header-closure-evidence/ownerful-premise.proposed.json",
+      "size": 23612,
+      "sha256": "9e4ca3f8f46d61e8a8e8c5a0508d10dfd5cf5c6948ceacc61ade558e8aee882e"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-manifest.json",
+      "size": 48307,
+      "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+      "size": 2941,
+      "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+    }
+  ],
+  "interpreter_after": {
+    "path": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "sandbox_inventory_after": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/execution-manifest.json",
+    "size": 2852,
+    "sha256": "b257a33b93b9b89e5a4d820ef68cec0fdb9e0daf4cb5cb435f07e0540cb002b0"
+  },
+  "all_sandbox_records_equal": true,
+  "all_pins_before_after_equal": true
+}

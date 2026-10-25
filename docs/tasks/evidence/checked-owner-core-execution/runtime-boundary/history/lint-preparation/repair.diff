@@ -1,0 +1,53 @@
+diff --git a/src/eval/source_owner_phases.rs b/src/eval/source_owner_phases.rs
+index 84accdd9..f971ddaf 100644
+--- a/src/eval/source_owner_phases.rs
++++ b/src/eval/source_owner_phases.rs
+@@ -538,10 +538,10 @@ impl OwnerAcquireRecorded<'_> {
+     ) -> Result<OwnerAcquireReported, OwnerPhaseFailure> {
+         let checked = self.slots.checked.take();
+         let mut result = self.report_inner(heap);
+-        if result.is_err() {
+-            if let Some(checked) = &checked {
+-                checked.output_failed();
+-            }
++        if result.is_err()
++            && let Some(checked) = &checked
++        {
++            checked.output_failed();
+         }
+         if let Ok(reported) = &mut result {
+             reported.checked = checked;
+@@ -812,10 +812,10 @@ impl OwnerTeardownRecorded<'_> {
+     ) -> Result<OwnerTeardownReported, OwnerPhaseFailure> {
+         let checked = self.slots.checked.take();
+         let result = self.report_inner(heap);
+-        if result.is_err() {
+-            if let Some(checked) = checked {
+-                checked.output_failed();
+-            }
++        if result.is_err()
++            && let Some(checked) = checked
++        {
++            checked.output_failed();
+         }
+         result
+     }
+diff --git a/src/eval/source_resource_phases.rs b/src/eval/source_resource_phases.rs
+index db6a079d..ac3a579c 100644
+--- a/src/eval/source_resource_phases.rs
++++ b/src/eval/source_resource_phases.rs
+@@ -359,10 +359,10 @@ impl Machine<'_> {
+             .as_ref()
+             .map(|control| control.prepaid_scope_observer());
+         let result = self.return_source_resource_inner(boundary, value);
+-        if result.is_err() {
+-            if let Some(control) = checked {
+-                control.output_failed();
+-            }
++        if result.is_err()
++            && let Some(control) = checked
++        {
++            control.output_failed();
+         }
+         result
+     }

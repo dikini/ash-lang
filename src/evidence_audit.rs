@@ -118,16 +118,7 @@ where
                 pending.push(matched.scrutinee.as_ref());
                 pending.extend(matched.arms.iter().map(|arm| &arm.body));
             }
-            ResolvedExprKind::CopyWindow(window) => reserve_and_extend(
-                &mut pending,
-                [window.state.as_ref(), window.body.as_ref()],
-                budget,
-            )?,
-            ResolvedExprKind::ProviderResource(resource) => reserve_and_extend(
-                &mut pending,
-                [resource.initializer.as_ref(), resource.body.as_ref()],
-                budget,
-            )?,
+
             ResolvedExprKind::Resource(resource) => reserve_and_extend(
                 &mut pending,
                 [resource.initializer.as_ref(), resource.body.as_ref()],

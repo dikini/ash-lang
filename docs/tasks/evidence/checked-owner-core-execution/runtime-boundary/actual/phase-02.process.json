@@ -1,0 +1,17 @@
+{
+  "pid": 735,
+  "pgid": 735,
+  "argv": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--message-format=json-render-diagnostics",
+    "--lib",
+    "eval::machine::source_window_phases::checked_copy_boundary_tests::checked_copy_real_phase_admission_observation_and_output_failure",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "started_unix": 1792707051.3643353
+}

@@ -1,0 +1,187 @@
+{
+  "status": "READ_ONLY_DOCUMENT_EVIDENCE_CHECKS",
+  "base": "c8a1fee506a00f68065cb08c6e2e9911d44a58aa",
+  "exact_original_copies": 107,
+  "json_parsed_before_this_record": 61,
+  "python_asts": 10,
+  "relative_links": [
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "linux-profile-experiment.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../DN-0057-checked-ffi-module-boundaries.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../../tasks/TASK-0050-checked-ffi-regions-control-program.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../../tasks/plans/checked-ffi-regions-control.md#f2-validate-the-linux-execution-profile"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../../proposals/CP-0024-checked-foreign-host-profile.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "../../decisions/AD-0015-linux-scalar-inprocess-whole-images.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "linux-owner-inprocess-evidence/README.md#actual-assigned-results"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "linux-owner-inprocess-evidence/README.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-experiment.md",
+      "target": "linux-owner-inprocess-probe/README.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "../linux-owner-inprocess-experiment.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "preparation/selected-archive-manifest.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "build_monitor.py"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "test_monitor.py"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "verification-repaired.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "safe-tests-repaired-final.log"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "preparation/commands.unexecuted.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "preparation/compiler-build.monitor.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-probe/README.md",
+      "target": "../linux-owner-inprocess-evidence/README.md"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "../linux-owner-inprocess-experiment.md#prospective-map-only-budget-amendment"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "../linux-owner-inprocess-probe/preparation/selected-archive-manifest.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage1/experiment-contract.txt"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/experiment/owner.ash"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/experiment/entry.ash"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generated/src/main.rs"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generated/Cargo.toml"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generated/Cargo.lock"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generated-manifest.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/selected-Cargo.lock.seed"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage1/observed-compiler.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage2/generation-receipt.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage3-default/execution-readback.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage3-no-discarded/execution-readback.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "maps/stage3-default.prefix"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "maps/stage3-no-discarded.prefix"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "stage3-no-discarded/map-detail-evidence.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "../linux-owner-inprocess-probe/build_monitor.py"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "retention-index.json"
+    },
+    {
+      "source": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/README.md",
+      "target": "manifest.json"
+    }
+  ],
+  "raw_prefixes": [
+    {
+      "path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/maps/stage3-default.prefix",
+      "size": 16777216,
+      "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5",
+      "trailing_space_lines": 0,
+      "ends_with_lf": false,
+      "qualification": "Exact historical raw prefix; whitespace is captured artifact data, not authored prose; not complete map."
+    },
+    {
+      "path": "docs/design/foreign-authoring/linux-owner-inprocess-evidence/maps/stage3-no-discarded.prefix",
+      "size": 16777216,
+      "sha256": "cb91bca15d2f3469175d7c1a2e9a6f67530a1ac7fb4028b68316823bc10453c9",
+      "trailing_space_lines": 15027,
+      "ends_with_lf": false,
+      "qualification": "Exact historical raw prefix; whitespace is captured artifact data, not authored prose; not complete map."
+    }
+  ],
+  "probes_or_builds_run": false,
+  "authority": "Prospective map-only contract amendment; no retry/startup authorization",
+  "qualifications": [
+    "Existing historical monitor has one shared watched-file cap; no per-class enforcement implementation is delivered.",
+    "The 64 MiB map change requires retained amendment and a separately reviewed fresh tuple/monitor with logs still16 MiB.",
+    "Source/native binaries and complete oversize maps remain external; original execution manifests intentionally reference omitted records.",
+    "Authored prose whitespace passes; exact recorded raw files retain original whitespace and final-newline state."
+  ]
+}

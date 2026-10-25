@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 4 tests
+test resolved::tests::freeze_rejects_coherently_forged_checked_method_binder_before_publication ... ok
+test resolved::tests::freeze_rejects_forged_monomorphic_method_source_mirror_before_publication ... ok
+test resolved::tests::freeze_rejects_unbacked_foreign_opaque_owner_before_publication ... ok
+
+thread 'freeze-missing-local-hidden-nominal' (172) panicked at src/resolved.rs:39403:17:
+assertion `left == right` failed: missing local authority must reject before any parameter clone cell
+  left: 16
+ right: 6
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters' (170) panicked at src/resolved.rs:39413:14:
+rejected deep hidden authority must tear down iteratively: Any { .. }
+test resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters ... FAILED
+
+failures:
+
+failures:
+    resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 2075 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p ash --lib`

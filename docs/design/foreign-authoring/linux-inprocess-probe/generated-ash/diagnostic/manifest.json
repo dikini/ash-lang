@@ -1,0 +1,30 @@
+{
+  "files": {
+    "README.md": {
+      "sha256": "1a64f34ba66afa0f52fceb86c34f80a1cde199601985b67ce02873016e3a8ffd",
+      "size_bytes": 4523
+    },
+    "approval-template.json": {
+      "sha256": "6fa0599ab5ce33233ede2b3d3a41cd28f4f6361508db478d7956055aaa7736d4",
+      "size_bytes": 692
+    },
+    "diagnostic.py": {
+      "sha256": "7e16e3104ed86acd2eb162bf054d3dce7df51300a43a67145ed9e6884cf6c77f",
+      "size_bytes": 21331
+    },
+    "policy.json": {
+      "sha256": "b39884904664be89ca29f756b8bf6f39558e81603a3a3a45d2901676795f8976",
+      "size_bytes": 2302
+    },
+    "test_diagnostic.py": {
+      "sha256": "7b7e746bd9cd2ce0f2f6dcee89d48d99afe9effa3b48ee91351f04387d950424",
+      "size_bytes": 8140
+    },
+    "unit-tests.log": {
+      "sha256": "253b8c1142f0b90f75f86e460ffa4ac2ad0b48a8c3f57365c8f2e736ed4e13f1",
+      "size_bytes": 1361
+    }
+  },
+  "status": "PREPARED; no image execution",
+  "version": 1
+}

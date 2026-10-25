@@ -9,13 +9,25 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active implementation tasks.
+No active task is listed.
+
+[TASK-0053](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0053-checked-owner-core-execution.md) and
+[TASK-0054](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0054-checked-sqlite-source-policy.md) are superseded
+assignments, not completed delivery gates. Their history remains in Git.
 
 The generic cell product checkpoint is integrated into local `main`. Its
 [case map, verification and local history](../design/generic-cell/evidence.md)
 record the completed transition, Main integration and exact scope.
 [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md)
 remains separate design work.
+
+## Completed source/static work
+
+[TASK-0051: Checked FFI Contract Carriers](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0051-checked-ffi-contract-carriers.md)
+records complete original F3 source/summary/Core/private-image work. The
+[obligation map](evidence/checked-ffi-original-acceptance/README.md) distinguishes
+its evidence from later runtime/native and milestone gates; issue closure follows
+reviewed acceptance retention and readback.
 
 ## ffi-ash closure coordination
 

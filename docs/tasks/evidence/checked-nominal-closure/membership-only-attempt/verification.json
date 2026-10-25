@@ -1,0 +1,219 @@
+[
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "ash",
+      "--locked",
+      "--lib",
+      "declaration_closure",
+      "--",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "seconds": 96.198,
+    "input_count": 557,
+    "input_aggregate_sha256": "b83231157ba0cd7e335bb76af70fd19ac7d45ed02da539820fe0e9a8c2094604",
+    "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+    "before_after_equal": true,
+    "raw_sha256": "a387b27da70d7eaed7df3feb9c6c15ae6c49c09835615481e66de514a2a7d106",
+    "environment": {
+      "RUSTC_WRAPPER": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null
+    }
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "ash",
+      "--locked",
+      "--lib",
+      "resolved::checked_",
+      "--",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "seconds": 0.387,
+    "input_count": 557,
+    "input_aggregate_sha256": "b83231157ba0cd7e335bb76af70fd19ac7d45ed02da539820fe0e9a8c2094604",
+    "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+    "before_after_equal": true,
+    "raw_sha256": "98017d3416ce5bd711a6865bfa923df65cbd1c1bf6f9f601e8615982ede567df",
+    "environment": {
+      "RUSTC_WRAPPER": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null
+    }
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "ash",
+      "--locked",
+      "--test",
+      "checked_foreign_wrappers",
+      "--",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "seconds": 3.939,
+    "input_count": 557,
+    "input_aggregate_sha256": "b83231157ba0cd7e335bb76af70fd19ac7d45ed02da539820fe0e9a8c2094604",
+    "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+    "before_after_equal": true,
+    "raw_sha256": "18e70f6a1fe07e3d8374f5e9fd6d36018a6db77306121f8e8089e8418f9e243b",
+    "environment": {
+      "RUSTC_WRAPPER": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null
+    }
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "ash",
+      "--locked",
+      "--lib",
+      "imported",
+      "--",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "seconds": 3.705,
+    "input_count": 557,
+    "input_aggregate_sha256": "b83231157ba0cd7e335bb76af70fd19ac7d45ed02da539820fe0e9a8c2094604",
+    "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+    "before_after_equal": true,
+    "raw_sha256": "ff204f803d5ff205e3021efbcdd11a2141a4c21411465edaa521e283db88c9ca",
+    "environment": {
+      "RUSTC_WRAPPER": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null
+    }
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "ash",
+      "--locked",
+      "--lib",
+      "build::image::source_resource_image::tests",
+      "--",
+      "--nocapture"
+    ],
+    "exit_code": 101,
+    "seconds": 2.231,
+    "input_count": 557,
+    "input_aggregate_sha256": "b83231157ba0cd7e335bb76af70fd19ac7d45ed02da539820fe0e9a8c2094604",
+    "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+    "before_after_equal": true,
+    "raw_sha256": "d098d1b4b33db6fbaee2c3eec3cdd80c7ba625cf87147dfcccd256df0a18f7ee",
+    "environment": {
+      "RUSTC_WRAPPER": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null
+    }
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "ash",
+      "--locked",
+      "--lib",
+      "build::source_owner_post_record_tests",
+      "--",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "seconds": 1.297,
+    "input_count": 557,
+    "input_aggregate_sha256": "b83231157ba0cd7e335bb76af70fd19ac7d45ed02da539820fe0e9a8c2094604",
+    "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+    "before_after_equal": true,
+    "raw_sha256": "a019768a046a056dc1065763db0a1927b77098028fe83bc9b3eca31f9528c81a",
+    "environment": {
+      "RUSTC_WRAPPER": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null
+    }
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "ash",
+      "--locked",
+      "--lib",
+      "core::capture::tests",
+      "--",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "seconds": 0.381,
+    "input_count": 557,
+    "input_aggregate_sha256": "b83231157ba0cd7e335bb76af70fd19ac7d45ed02da539820fe0e9a8c2094604",
+    "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+    "before_after_equal": true,
+    "raw_sha256": "106521012ade36d99f84a0df1f124579ac61bcc5b5bdd974b8ad9399272ba98a",
+    "environment": {
+      "RUSTC_WRAPPER": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null
+    }
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "ash",
+      "--locked",
+      "--lib",
+      "--tests",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "seconds": 100.813,
+    "input_count": 557,
+    "input_aggregate_sha256": "b83231157ba0cd7e335bb76af70fd19ac7d45ed02da539820fe0e9a8c2094604",
+    "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+    "before_after_equal": true,
+    "raw_sha256": "a5dfde676be4d637f909c2e252dab127e8f74f3b0ba14a249f17029ad446db9c",
+    "environment": {
+      "RUSTC_WRAPPER": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null
+    }
+  }
+]

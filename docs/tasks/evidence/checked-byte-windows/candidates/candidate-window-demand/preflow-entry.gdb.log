@@ -1,0 +1,41 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x882ab54: file src/core/provider.rs, line 236.
+Breakpoint 2 at 0x4d4f86c: file src/core/validate.rs, line 3904.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 392205)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 392205)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 2, ash::core::validate::SourceResourceStructureSession::check_with_handler_graph (self=0x7ffff7be1e40, program=0x7ffff7be1cd0, original=0x7ffff00ecc70, answer=false, sources=..., module_sources=..., globals=0x7ffff7bd8b18, handler_graph=..., work=0x7ffff7be4410) at src/core/validate.rs:3904
+3904	        if handler_graph.is_some() || self.original_provider.is_some() {
+#0  ash::core::validate::SourceResourceStructureSession::check_with_handler_graph (self=0x7ffff7be1e40, program=0x7ffff7be1cd0, original=0x7ffff00ecc70, answer=false, sources=..., module_sources=..., globals=0x7ffff7bd8b18, handler_graph=..., work=0x7ffff7be4410) at src/core/validate.rs:3904
+#1  0x000055555cc46ec5 in ash::core::source_resource::CheckedSourceResourceTemplate::admit_with_globals (header=..., acquire=..., finish=..., handler=..., handler_inputs=..., globals=..., sources=..., module_sources=..., work=0x7ffff7be4410, session=0x7ffff7be1e40) at src/core/source_resource.rs:1308
+#2  0x000055555ade792c in ash::elaborate::source_resource::compile::{closure#1} () at src/elaborate/source_resource.rs:1359
+#3  0x0000555559ea8703 in ash::elaborate::source_resource::compile (module=0x7ffff7bf91d0, registry=0x7ffff7be84a8, interfaces=..., schemes=..., work=0x7ffff7bf0f90, coverage=0x7ffff7bf0fb0, constraints=0x7ffff7bfa370, original_provider=..., rewrite_work_limit=177952) at src/elaborate/source_resource.rs:1269
+#4  0x000055555c0fa566 in ash::elaborate::check_module_with_budget_family::{closure#0}<ash::core::effect::EffectOperationFamily> () at src/elaborate.rs:22753
+#5  0x000055555c03d7a5 in ash::elaborate::check_module_with_budget_family<ash::core::effect::EffectOperationFamily> (resolved=..., provider_codes=0x7ffff7bfa310, type_work=0x7ffff7bfa320, coverage_work=0x7ffff7bfa368, constraint_work=0x7ffff7bfa370, rewrite_work=..., source_capture_observer=...) at src/elaborate.rs:22628
+#6  0x000055555bb87835 in ash::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work (resolved=..., provider_codes=0x7ffff7bfa310, type_work=0x7ffff7bfa320, coverage_work=0x7ffff7bfa368, constraint_work=0x7ffff7bfa370, rewrite_work=...) at src/elaborate.rs:22523
+#7  0x000055555ca8c387 in ash::elaborate::checked_owner_lifecycle_tests::check_graph (graph=0x7ffff7bfde68) at src/elaborate/checked_owner_lifecycle_tests.rs:87
+#8  0x0000555559f0f138 in ash::elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_all_four_primitives_check_actual_source_and_summary () at src/elaborate/checked_byte_window_tests.rs:255
+#9  0x000055555ac9d9d7 in ash::elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_all_four_primitives_check_actual_source_and_summary::{closure#0} () at src/elaborate/checked_byte_window_tests.rs:252
+#10 0x000055555a47d076 in core::ops::function::FnOnce::call_once<ash::elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_all_four_primitives_check_actual_source_and_summary::{closure_env#0}, ()> () at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#11 0x000055555e12090b in core::ops::function::FnOnce::call_once<fn() -> core::result::Result<(), alloc::string::String>, ()> () at library/core/src/ops/function.rs:250
+#12 test::__rust_begin_short_backtrace<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>> () at library/test/src/lib.rs:724
+#13 0x000055555e12e185 in test::run_test_in_process::{closure#0} () at library/test/src/lib.rs:747
+#14 core::panic::unwind_safe::{impl#23}::call_once<core::result::Result<(), alloc::string::String>, test::run_test_in_process::{closure_env#0}> () at library/core/src/panic/unwind_safe.rs:275
+#15 std::panicking::catch_unwind::do_call<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure_env#0}>, core::result::Result<(), alloc::string::String>> () at library/std/src/panicking.rs:581
+#16 std::panicking::catch_unwind<core::result::Result<(), alloc::string::String>, core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure_env#0}>> () at library/std/src/panicking.rs:544
+#17 std::panic::catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure_env#0}>, core::result::Result<(), alloc::string::String>> () at library/std/src/panic.rs:359
+self = 0x7ffff7be1e40
+program = 0x7ffff7be1cd0
+original = 0x7ffff00ecc70
+answer = false
+sources = &[&ash::source::SourceFile] [0x7ffff009dbe0, 0x7ffff0058880]
+module_sources = &[(ash::module::ModuleId, ash::source::SourceId)] [(ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::Admitted, graph: 1, value: 0}, ash::source::SourceId (0)), (ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 1}, ash::source::SourceId (1))]
+globals = 0x7ffff7bd8b18
+handler_graph = core::option::Option<&ash::core::source_resource::handler_rows::SourceHandlerGraph>::None
+work = 0x7ffff7be4410

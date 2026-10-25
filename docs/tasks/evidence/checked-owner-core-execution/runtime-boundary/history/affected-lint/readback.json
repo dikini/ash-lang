@@ -1,0 +1,28 @@
+{
+  "phases": 14,
+  "tests_passed": 55,
+  "exits": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    101
+  ],
+  "all_inputs_equal": true,
+  "source_files": 4868,
+  "source_aggregate_sha256": "4928f5d20c5b316105471e6735725c63b9bb41727711e2d1aac6fb8af687c17f",
+  "all_owned_groups_empty": true,
+  "tools_equal": true,
+  "min_sampled_available_bytes": 14033784832,
+  "max_sampled_group_rss_bytes": 2426032128,
+  "qualification": "samples are not quotas/complete peaks; legacy success establishes only the existing helper result/trace assertions, not checked native authority"
+}

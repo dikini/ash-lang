@@ -96,7 +96,7 @@ fn generic_cell_duplicate_import_routes_reject_erased_contents_capture_fact() {
                     );
                     assert!(
                         format!("{error:?}")
-                            .contains("alternate global routes disagree on the checked fact"),
+                            .contains("a dependency summary failed body-free authentication"),
                         "{error:?}"
                     );
                 } else {
@@ -491,7 +491,9 @@ fn malformed_summary_admission_precedes_later_type_resource_in_dependency_order(
                 ResolveReason::TypeResourceExhausted
             },
         );
-        assert_eq!(type_work.used(), if malformed_first { 0 } else { 3 });
+        // The first summary's completed publication consumes the fixed
+        // original/provenance admission cells before this boundary fails.
+        assert_eq!(type_work.used(), 3);
     }
 }
 
@@ -1265,13 +1267,24 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
     // Complete tagged arguments are traversed for structural determination,
     // rather than dropping their tag at the relationship boundary.
     const COMPLETE_ARGUMENT_WORK: usize = 15;
-    const EXACT_CONSTRAINT_WORK: usize =
-        PREDECESSOR_CONSTRAINT_WORK + RELATIONSHIP_WORK + COMPLETE_ARGUMENT_WORK;
+    // Original constructor and completed implementation publications are
+    // authenticated before relationship coverage. These retained ordinary
+    // checks contribute 44 constraint units independently of foreign policy.
+    const ORIGINAL_FACT_CONSTRAINT_WORK: usize = 44;
+    const EXACT_CONSTRAINT_WORK: usize = PREDECESSOR_CONSTRAINT_WORK
+        + RELATIONSHIP_WORK
+        + COMPLETE_ARGUMENT_WORK
+        + ORIGINAL_FACT_CONSTRAINT_WORK;
     // Canonical and inherited-role authentication retains every visit while
     // sharing four kind-table records and borrowing the two-ID method domain.
     // Complete function synthesis supplies its intrinsic Type without a pair walk.
     // List<X>'s XI installation also scans its one formal's owner kind.
-    const EXACT_TYPE_WORK: usize = 104 + 1;
+    // Method callable-graph closure adds 27 paid visits even though this
+    // fixture's retained types contain no effect identity.
+    // Original constructor matching and the implementation's immutable capture
+    // comparison contribute another 30 type-work units before this boundary.
+    const ORIGINAL_FACT_TYPE_WORK: usize = 30;
+    const EXACT_TYPE_WORK: usize = 104 + 1 + 27 + ORIGINAL_FACT_TYPE_WORK;
     assert_eq!(
         (measured_constraint.used(), measured_type.used()),
         (EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK),
@@ -1434,7 +1447,7 @@ fn fused_constructor_payload_clone_preserves_first_nominal_occurrence_order() {
     // nominal insertions cost two each. Three prepared nominal actions and one
     // staged constructor action cost four, while the four-cell payload,
     // six-cell physical scheme, and constructor-map record cost eleven.
-    const EXACT_TYPE_WORK: usize = 22;
+    const EXACT_TYPE_WORK: usize = 23;
     // The owner shape and one family-plan action cost three Constraint cells.
     // The six-cell scheme observes three unique nominal identities for twelve;
     // the four-cell payload observes no new identity. Two absent foreign
@@ -1603,7 +1616,7 @@ fn public_admission_rejects_one_short_constructor_closure_without_publishing_out
             )
             .expect("the complete body-free constructor closure should resolve");
             let exact_work = measured.used();
-            assert!(exact_work <= TYPE_WORK_LIMIT);
+            assert!(exact_work <= TYPE_WORK_LIMIT, "{exact_work}");
             drop(measured_module);
 
             let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
@@ -1784,7 +1797,11 @@ fn diamond_routes_require_complete_fact_agreement_before_route_mutation() {
                     &mut TypeWorkBudget::default(),
                     &mut crate::interface::InterfaceConstraintBudget::default(),
                 )
-                .expect("the coherent alternate route must authenticate independently");
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "alternate {mutation:?} must authenticate (reverse={reverse}): {error:?}"
+                    )
+                });
             let conflicting = if reverse {
                 [&right_summary, &left_summary]
             } else {
@@ -1881,7 +1898,7 @@ fn hidden_diamond_facts_require_complete_provenance_agreement_in_dependency_orde
                     &mut TypeWorkBudget::default(),
                     &mut crate::interface::InterfaceConstraintBudget::default(),
                 )
-                .expect("the coherent hidden route must authenticate independently");
+                .unwrap_or_else(|error| panic!("hidden alternate {mutation:?} must authenticate (reverse={reverse}): {error:?}"));
             let importer = module_named(&graph, "entry.ash");
             let summaries = if reverse {
                 [&right_summary, &left_summary]

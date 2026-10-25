@@ -1,0 +1,27 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--lib",
+    "scalar_owner_source_host_legacy_table_pays_full_checked_inventory_fallback",
+    "--",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 0.254,
+  "inputs_equal": true,
+  "count": 593,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "9dd3b1e3fb74ce09fb299bff194e37be9c4c459e61c76541a7b17ee3eca7636a",
+  "log_sha256": "bc7f8f5b26b19f07ee99a2e123213991906d8b33831778d909afa169bc60f063",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

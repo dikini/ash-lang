@@ -1,0 +1,9 @@
+{
+  "binary": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "binary_sha256": "67fa8067ef89efec1d05fce2bf50c0fda565bc7476d499a54d05be84171daedf",
+  "compiled_by": "lifecycle-expanded-source-controls2",
+  "inputs": 582,
+  "source_aggregate": "2b4f7ca895bfbe1818e12310e604dfe36970ce7b0108bac84de460eee4db9671",
+  "gdb_script_sha256": "e073e2cf4d1a50f22fcd5a13c3f2da3b1c628750ac12ccf4bd76df6004aed9bf",
+  "scope": "Rust source checking test only; debugger stopping does not establish pass or Ash/native execution"
+}

@@ -1,0 +1,214 @@
+{
+  "status": "FIFTH_MAP128_PROJECT_DISK_PREPARATION_NOT_ASSIGNED",
+  "retained_amendment": {
+    "commit": "5cb93a9fd03d963377b0a79bc2e18404c54c2c47",
+    "contract": {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+      "size": 20440,
+      "sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd"
+    },
+    "reviewed_payload_manifest": {
+      "path": "/tmp/ash-owner-map128-amendment/handoff.json",
+      "resolved": "/tmp/ash-owner-map128-amendment/handoff.json",
+      "size": 1012,
+      "sha256": "8ee761f796b5308228d3a6eec5162fce31b1144d93390d9f7989bc429c539f0d"
+    }
+  },
+  "monitor_preparation": {
+    "source": {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "resolved": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+    },
+    "tests": {
+      "path": "/tmp/ash-owner-map-class-monitor/test_monitor.py",
+      "resolved": "/tmp/ash-owner-map-class-monitor/test_monitor.py",
+      "size": 17592,
+      "sha256": "2516606e251c73640c96895ef063933566aa68dbde3ea8f1426e8fffb0e1e4b0"
+    },
+    "schema": {
+      "path": "/tmp/ash-owner-map-class-monitor/schema2.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/schema2.json",
+      "size": 1756,
+      "sha256": "9342c91888e525eb6e3f96754c34b381cfffdf4fba059d69b5552ada3faf13f6"
+    },
+    "manifest": {
+      "path": "/tmp/ash-owner-map-class-monitor/review-manifest.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/review-manifest.json",
+      "size": 101211,
+      "sha256": "637d3f361af2cd383ef6faef29e624ab6824b1e1f9827cbb9f1750b02cd05ad7"
+    },
+    "fresh_suite": {
+      "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/suite-receipt.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/reviewed-suite/suite-receipt.json",
+      "size": 27800,
+      "sha256": "416168520e7932d48bb5f8b9069b7c27b8e774a35cba30219884ce02cd792266"
+    },
+    "source_before": {
+      "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/before.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/reviewed-suite/before.json",
+      "size": 666,
+      "sha256": "c99b58ff6c3bcb9a75c74cfb85f6eb3b89e03f1d98671c26f8fe29c6d98361e8"
+    },
+    "source_after": {
+      "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/after.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/reviewed-suite/after.json",
+      "size": 666,
+      "sha256": "c99b58ff6c3bcb9a75c74cfb85f6eb3b89e03f1d98671c26f8fe29c6d98361e8"
+    },
+    "command": {
+      "path": "/tmp/ash-owner-map-class-monitor/reviewed-suite/command.json",
+      "resolved": "/tmp/ash-owner-map-class-monitor/reviewed-suite/command.json",
+      "size": 647,
+      "sha256": "d86e9baffc168d5a8761ba0d920571e8a939755c08ffcb06a9ac92725b65e27f"
+    },
+    "qualification": "Independent preparation clear; reduced synthetic caps, no real map success or tuple assignment."
+  },
+  "failed_attempts": [
+    {
+      "inventory": {
+        "path": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+        "resolved": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+        "size": 6078,
+        "sha256": "dd6798e80d0d19c3fabeefdd29c4f348fba5ceed25b76b909ecf0373f3ab5857"
+      },
+      "sequence": {
+        "path": "/tmp/ash-owner-static-stage3/execution-readback.json",
+        "resolved": "/tmp/ash-owner-static-stage3/execution-readback.json",
+        "size": 3159,
+        "sha256": "5bcc9c16131102b628bcf41ab8dff4acbafdac8ba565c672b62081d77a6b17ef"
+      },
+      "monitor_receipt": {
+        "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+        "resolved": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/receipt.json",
+        "size": 9633,
+        "sha256": "3ee3aa6574144d1aabbfe21314a58bd680de8478b35a27b8727b2a184a2a3566"
+      },
+      "exact_bounded_prefix": {
+        "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+        "resolved": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+        "size": 16777216,
+        "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5"
+      },
+      "full_map_hash_claimed": false,
+      "remains_refused": true
+    },
+    {
+      "inventory": {
+        "path": "/tmp/ash-owner-static-stage3-map-detail/execution-manifest.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map-detail/execution-manifest.json",
+        "size": 4185,
+        "sha256": "34ae188c6e255524b16458a181610cd1a9b9b64a0bddd592aa93188a330b8b68"
+      },
+      "sequence": {
+        "path": "/tmp/ash-owner-static-stage3-map-detail/execution-readback.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map-detail/execution-readback.json",
+        "size": 3313,
+        "sha256": "3521592052c0e3636d21e7d1dfaeb952f8dccf8550ff6109e3b9b349e6bc6d6b"
+      },
+      "monitor_receipt": {
+        "path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/receipt.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/receipt.json",
+        "size": 11748,
+        "sha256": "0281568d84d0da673d94b42fea3694d300ee630ca1f797f25217b946826321d6"
+      },
+      "exact_bounded_prefix": {
+        "path": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/watched-0.log",
+        "resolved": "/tmp/ash-owner-static-stage3-map-detail/build-run-gbjzjclf/watched-0.log",
+        "size": 16777216,
+        "sha256": "cb91bca15d2f3469175d7c1a2e9a6f67530a1ac7fb4028b68316823bc10453c9"
+      },
+      "full_map_hash_claimed": false,
+      "remains_refused": true
+    },
+    {
+      "inventory": {
+        "path": "/tmp/ash-owner-static-stage3-map64/execution-manifest.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map64/execution-manifest.json",
+        "size": 5653,
+        "sha256": "0e8c27baf81cee14df242ab547f88dfbbb92e1d977d472fa5ecbaf93494c3363"
+      },
+      "sequence": {
+        "path": "/tmp/ash-owner-static-stage3-map64/execution-readback.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map64/execution-readback.json",
+        "size": 3350,
+        "sha256": "67ee130a263ddff720a3e18d430c86bee13f86eb91e4f31c10f55701d9d2f783"
+      },
+      "monitor_receipt": {
+        "path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/receipt.json",
+        "resolved": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/receipt.json",
+        "size": 12160,
+        "sha256": "8700c90915aca2d1837d1b200f0040eb41cd0b5312a7bd251288e28dd04f2b1f"
+      },
+      "exact_bounded_prefix": {
+        "path": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log",
+        "resolved": "/tmp/ash-owner-static-stage3-map64/build-run-5p6l8giw/watched-0.log",
+        "size": 67108864,
+        "sha256": "0e62a016e6bca947d2ce30ae523a0ff1e429eb45bffa7f85b477a1275dad94ab"
+      },
+      "full_map_hash_claimed": false,
+      "remains_refused": true
+    },
+    {
+      "inventory": {
+        "path": "/tmp/ash-owner-static-stage3-mangled/execution-manifest.json",
+        "resolved": "/tmp/ash-owner-static-stage3-mangled/execution-manifest.json",
+        "size": 6248,
+        "sha256": "a7333c85f1173a9ce528175b47bba15096b0fe8ac240317eaf907957522c5982"
+      },
+      "sequence": {
+        "path": "/tmp/ash-owner-static-stage3-mangled/execution-readback.json",
+        "resolved": "/tmp/ash-owner-static-stage3-mangled/execution-readback.json",
+        "size": 3378,
+        "sha256": "379bfa877fcc4e3a758f3676bb18d5babd5b30644bb444953d404aeb6d6b3a96"
+      },
+      "monitor_receipt": {
+        "path": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/receipt.json",
+        "resolved": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/receipt.json",
+        "size": 12227,
+        "sha256": "3019a9f70a834f259efc183b8d350886afd15def3dca4777437473a5caa1efd5"
+      },
+      "exact_bounded_prefix": {
+        "path": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/watched-0.log",
+        "resolved": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/watched-0.log",
+        "size": 67108864,
+        "sha256": "af27c6e1f59f1d26c56d996989500bab10274e839702d0a3e9af0f11aca6d1d5"
+      },
+      "full_map_hash_claimed": false,
+      "remains_refused": true
+    }
+  ],
+  "representation_proposal": {
+    "new_root_only_argument": [
+      "-C",
+      "link-arg=-Wl,--no-demangle"
+    ],
+    "analysis": {
+      "path": "/tmp/ash-owner-map64-postmortem/prefix-analysis.json",
+      "resolved": "/tmp/ash-owner-map64-postmortem/prefix-analysis.json",
+      "size": 14715,
+      "sha256": "372f086b5a4dba77c694040d06cf81eb486900f437c53e0a050c63a64e6f3f16"
+    },
+    "postmortem": {
+      "path": "/tmp/ash-owner-map64-postmortem/README.md",
+      "resolved": "/tmp/ash-owner-map64-postmortem/README.md",
+      "size": 3615,
+      "sha256": "bac98b096e3b44a6fc55d110cee309c62580f60e314a24af0a6fc47591fcb62e"
+    },
+    "postmortem_manifest": {
+      "path": "/tmp/ash-owner-map64-postmortem/manifest.json",
+      "resolved": "/tmp/ash-owner-map64-postmortem/manifest.json",
+      "size": 530,
+      "sha256": "7ded4f480835cbff6b25dd746bc829cfbf6285226d256b73fad89cb336005e04"
+    },
+    "manual": {
+      "path": "/usr/share/man/man1/ld.bfd.1.gz",
+      "size": 49180,
+      "sha256": "2f7c363d588b25cf60ac64322f3cd30eb01c7807e6bddaa82580d256dbdd1e9e"
+    },
+    "scope": "Only output symbol-name representation; no additional map record removal, cap/semantic/native change, fit/candidate byte-identity claim or execution permission."
+  },
+  "fifth_delta": "Retained map-only128MiB amendment; independently reviewed monitor128; fresh private project-disk outputs. Logs16/image128 unchanged. Same semantic/static flags and both diagnostic options; no execution assignment or predicted fit."
+}

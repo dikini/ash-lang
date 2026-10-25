@@ -180,14 +180,11 @@ implementation matching, summary authentication, and validation use this
 structural and injective form. Both the function and argument are immediate
 strict subterms of an application.
 
-Source resource applications and row-bearing foreign Owner State applications
-retain separate complete ordered Type/Row vectors. Their exact original
-declarations determine the argument kinds, arity and identity. A State application
-uses its foreign nominal identity, distinct from the resource access-family
-identity; every inherited Row remains a Row even when it is empty or phantom.
-The saturated State has kind `Type`. A Type-only Owner retains ordinary nominal
-application form. These forms add no Row argument to an ordinary nominal,
-interface or effect declaration.
+Resource-family checking facts retain their complete ordered Type/Row vectors.
+Their original declaration identities determine argument kinds and arity. These
+metadata facts do not authorize nonbuiltin provider instantiation or native
+lifecycle execution, and add no Row argument to ordinary nominal, interface or
+effect declarations.
 
 Constructor payloads, global and method value types, pattern and term-binder
 types, source expression types, entry results, and ordinary Core value
@@ -205,9 +202,9 @@ codomain, term-binder type, or any other source monotype. A method scheme
 remains separate in `MU`; the elaboration specification defines its sole
 authenticated compiler-generated Core evidence position.
 
-`EffectRow` is valid as a complete global or eligible generalized-local kind,
-and in the complete native-symbol, source-resource and foreign Owner vectors
-defined below. It cannot occur within a written function-kind annotation. Ordinary
+`EffectRow` is valid as a complete global or eligible generalized-local kind.
+Resource-family metadata preserves its ordered Type/Row argument kinds.
+`EffectRow` cannot occur within a written function-kind annotation. Ordinary
 nominal, interface, implementation, effect and method parameter lists admit
 only their existing ordinary kinds. A row tail must resolve to an in-scope
 `EffectRow` binder. A row variable cannot occur in an ordinary value position,
@@ -991,352 +988,65 @@ main () = true + 1
 
 ## Source foreign declarations
 
-Foreign declarations are passive. The admitted subset contains owner-free
-calls with scalar or void results, and owner contracts with declared dependencies. Each library
-has exactly one profile, `"x86_64-unknown-linux-gnu"`. Scalar representations
-are signed or unsigned 8-, 32- or 64-bit integers, or `size_t`. These ABI
-representations introduce no ordinary fixed-width Ash integer type.
+A `foreign library` is passive. It has exactly one profile,
+`"x86_64-unknown-linux-gnu"`, and zero or more symbols. Each symbol has a nonempty
+NUL-free native link name and a closed source function type. Unsupported profiles
+and signatures reject statically. The declaration has no representation,
+operand, status, owner, host, output or lifecycle clauses, and neither libraries
+nor symbols bind type or row parameters.
 
-Each symbol has one outer pure source arrow and a complete ordered parameter
-vector containing only `Type` and `EffectRow` parameters. Omitted kinds are
-`Type`. Parameters are retained even when they contribute no ABI operand.
-Native symbol names are nonempty strings without NUL. Every scalar ABI input maps
-exactly once to a source position whose selected type is mathematical `Int`, or
-to a checked scalar constant from the same original library with the exact
-declared representation;
-negative or out-of-range source positions and missing or repeated ABI input
-mappings reject. The source domain may contain a product, and dotted positions
-select its nested leaves.
+The canonical `@builtin.foreign.Address` is an opaque nominal of kind `Type`.
+Ordinary import, opacity and nominal identity rules apply. The builtin functions
+`null : Unit -> Address`, `is_null : Address -> Bool` and
+`equal : (Address, Address) -> Bool` have empty effect rows. No integer conversion,
+ordering, arithmetic, dereference or memory-management operation is provided.
+Pointer equality proves neither validity nor allocation identity. Raw Address
+values have no resource dependency, ownership witness or escape restriction.
+Ordinary modules may encapsulate them with existing data, handlers and cleanup.
 
-A scalar constant's mathematical literal must fit its declared representation.
-It publishes an ordinary `Int` value under the library declaration's publication
-mode; qualified, selected and re-exported references retain its defining binder.
-Its value requires no C or header evaluation. A native constant operand retains
-the original constant member, representation and value, independently of an
-ordinary source reference to that value. Equal values or spellings do not make
-another member interchangeable. Arbitrary constant expressions and header macro
-evaluation remain outside this checkpoint.
+The native mapping is fixed by the whole source domain and result:
 
-A `sentinel Name : Representation = all_bits_one` declaration requires an exact
-`function_address` representation in the same original library. It supplies
-only the non-callable fixed operand role selected by
-`operand N from constant Name`. That ABI input must name the sentinel's exact representation declaration;
-another representation or equal-bit member is not interchangeable. Sentinel
-members publish no ordinary term, `Int`, pointer, function or callable symbol.
-They cannot supply a source-projected argument, an owner address, a scalar
-predicate or a native result. `from null` does not provide this role. It supplies
-only an explicitly admitted nullable address ABI input, with no State, view,
-scalar or function-address authority. A sentinel grants no access or window permission.
+| Source position | C mapping |
+| --- | --- |
+| Whole `Unit` domain | No arguments. |
+| Whole canonical `Address` domain | One data pointer, preserving null. |
+| Whole `Bytes` domain | One readonly data pointer. |
+| Flat tuple of Address/Bytes | One pointer per component in source order. |
+| Canonical `Address` result | Data pointer, preserving null. |
+| `Unit` result | Actual C void; no native result is read. |
 
-An owner declaration introduces an opaque nominal state family without source
-constructors. Its explicit owned position selects a `Type` formal. Canonical
-admission retains every original parameter identity, kind and defining origin;
-the complete ordered vector admits `Type` and `EffectRow` formals and rejects
-function-kind formals. Imported aliases preserve that original vector. An equal
-kind vector or same-shaped nominal does not establish the Owner role.
-An owner address uses an `opaque` or `bytes` representation and one authenticated
-teardown symbol from the same defining library. Declared dependencies retain
-their original owner roles and exact preceding state applications; a same-shaped
-or same-spelled state supplies no dependency authority.
+Bytes results, numeric slots, String inputs, out-pointers, Unit tuple components,
+nested tuples, variadics, callbacks and structs by value are unsupported. An
+ordinary same-shaped nominal does not become Address. There is no implicit
+length, encoding, NUL, scalar conversion or ABI output storage.
 
-An acquisition symbol maps its direct pointer result or its initialized opaque
-owner-output slot to the exact saturated state family. The direct-pointer form
-returns the canonical `Foreign.Call<Foreign.Output<Foreign.Nullable<State>>>`
-codec. The scalar-status form returns `Foreign.Call` of a product containing
-the status `Int`, the nullable owner output and an optional `offset_into` output;
-the output fields follow ABI order as specified below. A current-state
-operand must select the matching state application in the source product; its
-pointer ABI role does not accept an `Int` substitute. A teardown returns the
-canonical `Foreign.Call<Foreign.Disposition<T>>` for its independent result and
-records consumption or retention of the selected state. The executable resource
-checkpoint below admits `void` teardown with `T = Unit` and scalar-status
-teardown with `T = Int`. Scalar-status teardown requires `output result as scalar`,
-exactly one Current operand, and `retained_dependents block`. Its total finite
-alternatives test the raw Result against original same-representation declared
-literals, with one final `otherwise`. Each alternative gives exactly one
-consumed/retained fact for that Current position and exactly one readable
-Result fact; a bare scalar cannot be unreadable. Repeated or contradictory
-selectors, missing coverage and
-mismatched positions reject. Owner libraries retain these original checked
-literal facts separately from ordinary constant binders and native operand
-selection. A result predicate grants neither source value nor operand authority.
+Bytes retains its ordinary immutable managed semantics. Its backing is held
+through the synchronous native call. Empty Bytes supplies no readable byte and
+the pointer does not encode length or emptiness. Native mutation or freeing of
+managed backing violates the binding assumption. A function retaining or
+returning that pointer requires the module to keep the original Bytes alive
+through every subsequent native use. An Address result does not capture or
+infer that relation. There is no Address-to-Bytes/String or arbitrary memory
+read/write operation.
 
-An owner-producing symbol may declare `destruction_operand q from p scalar`.
-The producer's exact owner result or typed output selects its original owner's
-declared host destructor. Here `q` is a zero-based ABI argument of that destructor;
-`p` selects an independent `Int` leaf of this producer's original source input
-product. These coordinates belong to different original signatures. The clause
-does not supply an ordinary operand of the producer's C ABI, so cleanup-only
-source inputs remain admissible. An ordinary legal computation may supply the
-integer; no additional origin restriction applies to that value.
+Each symbol supplies one ordinary effect instance with operation
+`call : Domain -> Result`. A request retains that symbol in the ordinary effect
+row, including when Result is Unit. Ordinary exact handlers may implement it
+using the usual clause, continuation and row rules. For a native program entry,
+the generated linked host interprets the remaining required admitted symbol
+effects; only those exact instances are subtracted from the entry row. Residual
+ordinary effects and open rows reject under the existing entry rules. Compilation
+supplies no executable binding. Supplied callback entries are checked against
+original symbols before Ash runs; a selected native invocation requires its
+exact entry. This association check does not establish table completeness.
 
-The target must already be a source-projected scalar operand of the original
-destructor. Result, output, Current/Enclosing, address, constant and sentinel
-targets reject, as do non-integer or invalid source paths. Each dynamic scalar
-destructor argument requires exactly one mapping on every producer of that owner.
-Missing, extra and duplicate targets reject. If several destructor ABI arguments
-project the same original destructor source leaf, their mappings must select the
-same producer leaf; each ABI representation retains its separate narrowing rule.
-Admission preserves the complete ordered Type/Row contexts, original member
-identities and clause origins through imports, copying and private facts.
-
-Header evaluation remains outside this checkpoint. Byte-owner
-preparation also checks its initialized extent against the selected
-mathematical `Int` source leaf. This passive check supplies no byte access or
-executable owner activation; an admitted resource scope supplies the separate
-controlled execution boundary.
-
-An owner-free scalar ABI result requires `output result as scalar` and an
-`otherwise` outcome declaring `readable result`. Its source codomain is the
-exact canonical `@builtin.foreign` type `Call<Int>`. A `void` result has no
-output role or readability fact and has codomain `Call<Unit>`; `outcome
-otherwise {}` provides its total empty outcome. `void` is not an ABI input. A
-zero-argument C function has zero ABI operands, as in `abi () -> void`.
-
-Declaration checking authenticates the canonical result nominal and constructor
-identities, complete parameter kinds and defining origins. A same-spelled or
-same-shaped client type does not replace the common codec. ABI preparation is
-retained once per defining library, then bound to the original effect and
-operation facts. Summaries preserve those immutable contracts and reject
-changed table coverage, signature or parameter correspondence.
-
-Owner-free native calls retain their exact effect instances in ordinary function
-rows. Ordinary `handle` clauses cannot install a native symbol's interpreter.
-Program compilation installs an explicit checked Core interpretation for the
-entry's admitted owner-free native instances. Only those exact instances are
-removed; the resulting entry row must be empty. An ordinary effect or unresolved
-row tail cannot be discharged through this boundary.
-
-Source contracts and checked Core confer no executable bridge binding. Execution
-requires separately admitted bindings before Ash runs; ordinary execution with
-missing bindings refuses without compiling or linking a host implicitly.
-Owner acquisition and teardown requests are unavailable in ordinary callables,
-and controlled state cannot occur in their parameters, results or captures. An admitted
-source lifecycle phase authorizes only its exact original owner operations and
-complete Type/Row instances. The owner-free program interpretation cannot
-authorize these requests. Retained row arguments remain part of source identity
-even when an owner application's native projection contains only Type arguments.
-
-The common module also exports the pure functions
-`Foreign.checked_i64 : Int -> Foreign.Call<Int>` and
-`Foreign.checked_size_t : Int -> Foreign.Call<Int>`. Both have empty
-effect rows.
-For the GNU64 profile, the first accepts the inclusive range
-`[-2^63, 2^63 - 1]`; the second accepts `[0, 2^64 - 1]`. Success returns the
-unchanged mathematical `Int`; a range failure returns `ConversionFailed` with
-an opaque `ConversionError`. Their original builtin function identities, type
-annotations, provenance and result-codec allocation survive selected imports
-and facade publication. Same-spelled client functions grant no builtin
-authority.
-These checks grant no native-call, access or ownership permission and do not
-replace a later native call's exact operand conversion.
-
-`Foreign.checked_nul : String -> Foreign.Call<Unit>` is an ordinary pure
-preflight with the same original builtin identity and codec requirements. It
-accepts an empty or nonempty string with no NUL byte and otherwise returns an
-opaque conversion error. It supplies no native input, access, State, ownership
-or call authority and does not replace native-call input preparation.
-
-The canonical byte functions have empty ordinary effect rows and signatures
-`Foreign.byte_read<S> : (S, Int) -> Foreign.Call<Int>` and
-`Foreign.byte_write<S> : (S, Int, Int) -> Foreign.Call<Unit>`. Their generic state
-parameter is compiler-sealed: only the exact descriptor-witnessed initialized
-live state in an admitted source lifecycle or handler phase can authorize an
-application. Ordinary instantiation with an arbitrary or merely compatible `S`,
-including forwarding through an ordinary generic helper, grants no permission.
-The result codec is the existing canonical `Foreign.Call` allocation, with an
-opaque conversion error; this choice applies only to these byte primitives.
-
-An input `nul` role requires ordinary `String`; a `bytes(length_position)` role
-requires independent `Bytes` or UTF-8 bytes of `String`, with a checked integer length. `call_borrow` and
-`copy` both forbid retaining the prepared Ash input address after return. They
-are foreign assumptions about the callee, not permission to retain an Ash view.
-An `out` operand declares private initialized storage and has no source operand.
-The canonical result product contains the non-void result first, followed by
-output slots in ABI order; zero fields use `Unit`, and one field is unwrapped.
-Scalar results are bare `Int`; pointer and slot results retain their checked
-`Output`/`Nullable` roles. One call may create at most one owner or finish one
-owner, never both. An `offset_into` output becomes an independent integer offset
-into its exact input, not an address.
-
-An access family is constructor-free and retains its original owner, fresh
-window position, extent convention and preserving member identities.
-`copy_window Family<W, ...> from state { body }` introduces fresh `W` only in
-the body and requires an authenticated live, pending or completing owner in a
-permitted direct provider phase. Its sealed interpretation admits only that
-original family's access-compatible members at the exact ordered Type/Row
-actuals. The outer resource interpretation remains exact and nonquantified.
-The current executable view-family application profile is Type-only; retained
-Row tags are not silently projected away or admitted by matching shape.
-
-Each view records its producing operation, exact owner/window and scalar keys.
-An extent query requires that view and those same keys; known unequal keys
-reject statically, and unknown keys require the runtime equality check before
-native entry. Nullable, unreadable and non-null empty outputs remain distinct.
-Windows cannot suspend, complete their owner, escape in values/evidence/rows,
-or pass State/view permission through an ordinary callable.
-
-`Foreign.copy_bytes<V> : (V, Foreign.Extent<V>) -> Foreign.Call<Bytes>` and
-`Foreign.copy_nul<V> : (V, Int) -> Foreign.Call<Bytes>` require the exact sealed
-live view in a direct provider window. `Foreign.Extent<V>` is opaque,
-unconstructible and tied to that exact view. `extent_value<V> :
-Foreign.Extent<V> -> Int` exposes only an independent copied length. Compatible
-types, donor extents or ordinary generic instantiation supply no authority.
-`Foreign.data_of<S, D> : S -> D` and `Foreign.replace_data<S, D> : (S, D) -> Unit`
-use only the exact descriptor-supplied State/private-data relation in an admitted
-phase. They grant no State transport or native-call permission to helpers.
-Owner/access declarations and their parsed contracts alone grant no executable
-permission.
-
-## Source resource declarations
-
-A source resource declaration retains its explicit owned position, complete
-ordered Type/Row formals, input, native state, private data, acquisition,
-completion and body-result report types. Its provider application, provided
-effect, complete native interpretation list, codec and all lifecycle and handler
-patterns retain defining identities and provenance. The family is a declaration;
-it creates no activation. A foreign state family retains its opaque nominal
-identity and complete ordered Type/Row application, distinct from a resource
-instance's access family.
-
-The `owned` formal has kind `Type` and coincides with the foreign state family's
-declared owned argument. Input and private data cannot contain the current owned
-identity, and borrowed owner identities must be declared dependencies. Private
-`D` cannot contain any current, provisional or enclosing native State token or
-view, including inside tuples, ordinary ADT wrappers or a generic application.
-This prohibition is checked in the defining header and after complete Type/Row
-specialization. A permitted local enclosing State in acquisition or finish does
-not authorize storing it in `D`. Ordinary declared-dependency access handles are
-distinct and remain subject to exact identity, liveness and revocation checks.
-Every native interpretation must match the original state owner and its complete
-symbol arguments. The admitted list contains one acquisition, one Current
-finish member and the exact permitted scalar query/usage members. The owner's original
-declared host destructor is authenticated separately, even when source finish
-selects a retaining member. A same-spelled symbol, swapped
-argument, ordinary state ADT or ordinary effect cannot replace those facts.
-Incorrect authored headers report `type.argument`.
-
-The associated interface and effect have the same uniquely named methods and
-operations. After substituting their complete arguments, each method has the
-operation's exact value domain and result and the single associated effect
-instance as its effect row. Declaration order need not agree. An existing
-implementation, duplicate resource association, missing operation or mismatched
-method cannot establish this relation. Ordinary implementation and `with`
-selection cannot introduce the sealed provider. Selective imports and facades
-retain original source headers and a passive declaration census for rejection;
-neither record publishes additional names or executable evidence.
-
-Acquisition introduces checked lexical forwarding for every associated method.
-Ordinary namespace calls and constrained polymorphic helpers select that same
-evidence. Each forwarding preserves the original method and operation identities,
-complete Type/Row arguments, unchanged typed operand and exact provided effect.
-Independent Core checking authenticates the source occurrence, generated binders
-and request forest against their original association. Copying a claim or taking
-evidence from another activation cannot grant authority.
-
-Both report codecs authenticate ordinary library ADTs by their exact constructor
-order and field types. Acquisition has `Acquired(State, D)` then `Refused(I)`;
-completion has `Consumed`, `ConsumedFailure(E)` then `Retained(State, E)`.
-The `scope` report has `NotAcquired(I)` then `Completed(Answer, Completion<E>)`, where
-completion status has `Closed`, `ConsumedError(E)` then `RetainedError(E)`.
-Constructor spellings alone grant no authority. The single result binder
-`Answer` is replaced by the checked body type; independent `I` and `E` are
-ordinary source types rather than fixed `Unit` errors.
-
-The `acquired_only` report has `Success(Answer)` then `Failure(I)`, with no
-completion-status field. Checking substitutes the report's actual type arguments
-into its constructor payloads and compares those exact types. A one-parameter
-`Outcome<T> = Success(T) | Failure(Error)` can therefore use a concrete acquisition
-error; a generic error parameter follows the same check. Constructor names and
-parameter positions do not select this codec. A consumed completion failure is
-terminal rather than a successful report. Retention cannot be reported as a
-successful `acquired_only` completion.
-
-Acquire checks from the declared input to acquisition type. Finish checks from
-`(State, D)` to completion type. Their patterns and the handlers' `(State, D)`
-pattern must cover every value. Successful acquisition returns its witnessed
-fresh native state and independent private payload. Refusal cannot publish that
-state. A returning finish path preserves the recorded native disposition:
-`Consumed` and `ConsumedFailure` require consumption; `Retained` requires an
-attempted teardown that retained the same current state. Bare `Retained` or an
-unconsumed `Consumed` does not authorize completion. Invalid authored lifecycle
-or handler flow reports `type.argument`.
-
-The compiler checks each original lifecycle and handler template once in its
-defining module. Instances specialize that immutable code with complete
-Type/Row substitutions and fresh local identities. Independent final Core
-checking reconstructs the original correspondence; parsing, export summaries
-and compiler copying claims cannot grant execution authority.
-
-For `resource Family<arguments> handle = initializer { body }`, the initializer
-checks in the preceding scope at the substituted input type. It runs once before
-the fresh identity enters scope. The complete argument vector replaces only the
-explicit owned position with that identity; all inherited positions keep their
-Type or Row tags. The handle is a non-owning access value available inside the
-body. The report type, outward effects, evidence and stored dependencies cannot
-expose the fresh identity; an escape reports `type.resource-escape`.
-
-This implementation checkpoint executes opaque and initialized byte owners,
-including declared retained dependencies, with complete ordered Type/Row state
-arguments
-and either report codec. Its `void` or scalar-status finish and
-host-destruction contracts admit total consumed or retained dispositions. A
-Current call can also be blocked before native entry while a retained dependent
-remains live. Associated interfaces may contain multiple methods with the exact
-operation types and rows described above; method-local type parameters remain
-unsupported by this carrier. Resource and symbol arguments retain their
-complete Type/Row vectors. The lifecycle checker admits native requests,
-ordinary constructor and product assembly, sequential bindings, matches and
-sealed byte calls. A byte call must retain its original canonical function,
-TypeApplication and Apply occurrences, original state family and owner,
-selected evidence and copied specialization. Both the caller and defining
-declaration retain their complete ordered Type/Row actuals independently of
-`S`, including arguments absent from the callable's value type. Branch-selected
-canonical aliases retain each alternative's defining context. Independent Core
-checks these relationships rather than granting permission from the monomorphic
-operand type. Byte calls borrow the fresh acquired or current live state
-without consuming it; their independent results cannot expose that state.
-Ordinary outward requests in these phases must carry independent operands and
-cannot synthesize native-state lineage. The instance's handler output is the
-body row minus its exact provided instance, union the source handler's direct
-ordinary requests. The scope's outward row additionally includes initializer,
-acquisition and finish effects, removing only the listed exact native instances
-from the interpreted phases. Other ordinary rows remain.
-
-Capture/resume moves the same activation and owner without acquisition. Owned
-discard completes acquired source scopes in structural order while required outer
-resources remain live. It must retain the interpreters needed by source finish;
-a running finish or unfinished closing operation cannot be abandoned. The
-surrounding structural cleanup rules check these obligations independently.
-Acquisition capture can retain an unpublished guard; discarding it revokes that
-guard without inventing private data or a source finish input. A consumed
-`ConsumedFailure(E)` during owned discard is terminal `ResourceCompletion` for
-both codecs. Normal `scope` return still reports `ConsumedError(E)`.
-
-Ordinary pure module-global helpers may consume and return independent lifecycle
-payloads. Same-module and imported definitions preserve their complete ordered
-Type/Row schemes and actual instances, including explicit ordinary annotations
-that close an inferred effect row. Helper arguments and results cannot transport
-native State or its view; a compatible function type grants no descriptor or
-native-effect permission. Original and copied calls remain independently checked
-against the same defining global.
-
-Privileged lifecycle wrappers and source `given` forwarding remain unsupported.
-These are restrictions of the bounded foreign-resource profile, not additional
-language rules for all resources.
-The compiler-owned cell rules below remain unchanged. Ordinary buffers use the
-declared-source resource rules.
-
-Dependency roles come from the original foreign owner declaration and are
-instantiated before introducing the new owned identity. Input and private-data
-traversal checks all typed access positions, including ordinary constructor
-payloads, against these exact preceding activations. A same-typed donor,
-undeclared identity or stale access is not a dependency witness. Retaining an
-owner revokes ordinary source access and protects the same transitive dependency
-closure. Required finish may obtain a physically live declared enclosing State;
-this does not restore ordinary access or grant another native operand role.
-Independent source, Core, specialization and image checks retain original header,
-forest and complete Type/Row correspondence.
+A source signature and link name assert an `extern "C"` signature and behavior;
+the compiler does not establish the native assertion. Module-authored functions
+supply null tests, length checks, errors, lifetime interpretation and cleanup.
+The ordinary resource, handler, capture, scoped cleanup, work and depth rules
+remain unchanged. Nonbuiltin provider instantiation is unsupported; no source
+native-State resource declaration or compiler-interpreted foreign lifecycle is
+introduced by this boundary.
 
 ## Effects
 
@@ -1682,9 +1392,9 @@ the preceding scope. The body receives a fresh rigid kind-`Type` owner, access
 `Cell<R,T>` and exact provider evidence. Ordinary checking computes the union
 of initializer effects with body effects minus exactly `Ops<R,T>`. Other
 instances remain outward. Reads are applications and do not generalize their
-results. Existing ordinary kind, type, row, sealed-evidence, State/view transport
-and continuation restrictions apply before dependency admission. In particular,
-restricted native State and views cannot become cell payloads through wrappers.
+results. Existing ordinary kind, type, row, sealed-evidence and continuation
+restrictions apply before dependency admission. An Address payload gains no
+resource dependency merely by containing a native pointer.
 
 `R` identifies the cell's logical owner, not an allocation region. The cell's
 lifetime is exactly its resource scope. Longer-lived backing storage cannot
@@ -1714,7 +1424,7 @@ Writes from clauses, other handlers and resumed computations update contents
 in control order. Capturing and resuming preserves established acquisition
 relations; placing a younger scope outside a restored frame does not make it
 an enclosing owner of that older activation. Existing payload crossing, scoped
-escape, native retention and structural completion checks continue to apply.
+escape and structural completion checks continue to apply.
 
 Ordinary errors retain precedence. Unproved retention or escape reports
 `type.resource-escape` at the initializer, replacement or escaping expression,
@@ -1822,46 +1532,6 @@ general acquisition/destructor declarations, ownership transfer, existential pac
 general foreign API, abort, exception, cancellation, suspension or general
 cleanup. Local `newtype` keeps its separate erasure and escape rules; it does
 not acquire a resource or its sealed authority.
-
-## Scoped native buffers
-
-`libraries/native_buffer.ash` declares a passive `calloc`/`free` library for the
-supported GNU x86-64 profile. Its source contracts use the ordinary checked
-resource, effect and foreign declarations; the compiler grants no authority to
-the module's filename or exported spellings.
-
-| Name | Contract |
-| --- | --- |
-| `Buffer<R>` | Declared resource family; its access value is duplicable while that exact owner is live. |
-| `Provider<Buffer<R>>` | Sealed exact provider supplied by acquisition. |
-| `Outcome<T>` | Ordinary data `Success(T)` or `Failure(Error)`. |
-| `Error` | Ordinary nullary `InvalidLength`, `AllocationFailed`, `InvalidIndex`, `InvalidByte`. |
-| `Ops<Buffer<R>>` | `length : Buffer<R> -> Int`, `read : (Buffer<R>, Int) -> Outcome<Int>`, `write : (Buffer<R>, Int, Int) -> Outcome<Unit>`. |
-| `length`, `read`, `write` | Ordinary associated methods requiring the exact provider and operation instance. |
-
-After importing the source module as `Buffer`,
-`resource Buffer.Buffer<R> b = length { body }` checks its initializer as `Int`
-in the preceding scope. The checked header introduces fresh rigid `R`, local
-private native State, ordinary length data, the access value `b : Buffer<R>` and
-its associated provider. No native State is stored in ordinary data. The
-`acquired_only` codec yields `Outcome<T>` for body type `T`, including nested
-`Outcome` values. The outward row retains ordinary effects after removing only
-the exact associated/native instances listed by the original header.
-
-Results, outward rows, stored captures, evidence and operation metadata cannot
-export the acquired identity. An inner scope may return an outer dependency
-whose owner remains live. Success projection preserves body dependencies;
-allocation refusal supplies no access value. Capture and resume move the same
-owner without reacquisition. Exact ordinary handlers retain precedence,
-including generic coincidence and imported callbacks; ordinary row/lacks rules
-continue to apply. Cleanup cannot replace a removed override with a default
-source handler.
-
-The provider proves neither allocation success nor numeric bounds. The library
-and common checked primitives enforce those at runtime. Its current native
-build does not add support for ordinary local-newtype/non-resource lexical
-dictionary image records: those source/Core programs retain their independent
-rules and receive the existing unsupported-build diagnostic.
 
 ## Interfaces and constrained schemes
 
@@ -2718,7 +2388,7 @@ family module-and-program-typing:
     checked_program = checked_modules in dependency order
     main is a local checked scheme in entry
     main is monomorphic Function(Unit, result_type ! effects) with no requirements
-    effects is empty or a closed row of admitted owner-free native instances
+    effects is empty or a closed row of admitted native symbol instances
     closed(result_type)
     ===>
     |-program checked_program, entry ⇒ result_type
@@ -2778,7 +2448,7 @@ neither validation nor synthesis selects implementations again.
 declare exactly one local `main`; an imported `main` cannot satisfy the
 premise. Its checked scheme must have no type parameters, domain `Unit`, a
 closed result and no requirements. Its latent effect row must be empty or a
-closed row containing only admitted owner-free native instances. The linked
+closed row containing only admitted native symbol instances. The linked
 entry is wrapped by the explicit native Core interpretation when needed; its
 outward row after exact subtraction must be empty. Entry failures have this
 order: missing local `main`, polymorphic scheme, wrong domain, inadmissible effect

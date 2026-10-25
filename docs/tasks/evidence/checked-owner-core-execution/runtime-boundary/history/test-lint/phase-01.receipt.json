@@ -1,0 +1,1206 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--offline",
+    "--locked",
+    "--message-format=json",
+    "--lib",
+    "--tests",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "exit_code": 101,
+  "seconds": 134.19,
+  "expected_selected": null,
+  "actual_selected": null,
+  "timed_out": false,
+  "stop_reason": null,
+  "output_limit": false,
+  "source_count": 4868,
+  "inputs_equal": true,
+  "source_aggregate_sha256": "1c953e0963ba0155e110c8c99112ffca828392c4f18bb2015f705856ff9eefab",
+  "log": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-runtime-lint-repair-units/phase-01.log",
+    "bytes": 86758,
+    "sha256": "9a772bddeeebc4954bee80981abe0ec8d16c9febbdad78806e3e7bf089f603fe"
+  },
+  "artifacts": [
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "custom-build"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "build-script-build",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/build.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 0,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/build/ash-cc67b3c14eeaf5f5/build-script-build"
+        ],
+        "executable": null,
+        "fresh": true
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "ash",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libash-ed84952b9a48879a.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "compiler_work_reporting",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/compiler_work_reporting.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libcompiler_work_reporting-c5e159ab66ad22f1.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "interface_modules",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/interface_modules.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libinterface_modules-38e3ede693b90fa8.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "cleanup_reporting",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/cleanup_reporting.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libcleanup_reporting-53a16bcb536fbee8.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "integer",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/integer.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libinteger-bc77de4224b78291.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "resource_scope_modules",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/resource_scope_modules.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libresource_scope_modules-e1e3ca6b169dc80f.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "file_diagnostic_dispatch",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/file_diagnostic_dispatch.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libfile_diagnostic_dispatch-f33d1931e86790f2.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "functions",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/functions.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libfunctions-8b3d81c8d0ff4f23.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "provider_arena_allocation",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/provider_arena_allocation.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libprovider_arena_allocation-25be4a6dc920ddac.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "local_newtypes_syntax",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/local_newtypes_syntax.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/liblocal_newtypes_syntax-4e062de0cddb764b.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "runtime_diagnostics",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/runtime_diagnostics.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libruntime_diagnostics-d0cf639d38479d54.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "source_resource_syntax",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/source_resource_syntax.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libsource_resource_syntax-9e585471ee64fe45.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "effect_typing",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/effect_typing.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libeffect_typing-218bb108cb1eb2a8.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "provider_owner_rows",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/provider_owner_rows.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libprovider_owner_rows-1ac6a70c9977fe46.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "foreign_codec_failures",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/foreign_codec_failures.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libforeign_codec_failures-016f81b1c51dd4dc.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "interface_diagnostics",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/interface_diagnostics.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libinterface_diagnostics-a47e3f3c9327f82e.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "foreign_source_owner_contracts",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/foreign_source_owner_contracts.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libforeign_source_owner_contracts-a0ea4b221bcc5dee.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "diagnostic_input",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/diagnostic_input.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libdiagnostic_input-2ec7ad0faf2e8a67.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "diagnostic_json",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/diagnostic_json.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libdiagnostic_json-b9ab2bfbc0818d56.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "cli_build",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/cli_build.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libcli_build-8627eddd994ada27.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "cleanup_syntax",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/cleanup_syntax.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libcleanup_syntax-9eae7d2ddcd8d1c4.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "kinds_syntax",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/kinds_syntax.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libkinds_syntax-4280a0e13bf74a9b.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "modular_closure",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/modular_closure.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libmodular_closure-4c360906d2a15a81.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "modules_syntax",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/modules_syntax.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libmodules_syntax-6c3f2a0487dd2976.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "provider_sqlite_control",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/provider_sqlite_control.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libprovider_sqlite_control-963d054f004d16b9.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "interfaces",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/interfaces.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libinterfaces-a93ac60d8cdea7c6.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "resource_provider_resolution",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/resource_provider_resolution.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libresource_provider_resolution-0c39f13020257c2e.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "module_newtypes",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/module_newtypes.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libmodule_newtypes-388eab3b6ab6ed74.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "diagnostic_options",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/diagnostic_options.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libdiagnostic_options-4ff377476dfb7291.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "checked_foreign_lifecycle",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/checked_foreign_lifecycle.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libchecked_foreign_lifecycle-c8a4de9f9d55a18c.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "resolution",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/resolution.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libresolution-475dda6b60d47067.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "spec_examples",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/spec_examples.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libspec_examples-53c14924f024487b.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    },
+    {
+      "cargo": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/dikini/Projects/ash-lang/.worktree/checked-owner-passive#ash@0.0.0",
+        "manifest_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "hooks_core",
+          "src_path": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive/tests/hooks_core.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/libhooks_core-95cf85a0a1a83f2d.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      }
+    }
+  ],
+  "child_reaped": true,
+  "processes_before_namespace": [],
+  "owned_group_after": [],
+  "environment": {
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  },
+  "resource_observations": {
+    "sample_count": 29,
+    "min_available_memory_bytes": 9861197824,
+    "max_sampled_owned_group_rss_sum_bytes": 3583094784,
+    "min_project_free_bytes": 188294967296,
+    "min_tmp_free_bytes": 12371304448
+  }
+}

@@ -1098,8 +1098,6 @@ runtime-allocator-refused = The host allocator refused a storage reservation.
 runtime-storage-reservation-failed = A host storage reservation failed; its underlying cause is undetermined.
 runtime-resource-admission-refused = Resource admission was refused; its underlying cause is undetermined.
 runtime-resource-packed-bytes = packed bytes
-runtime-resource-foreign-admission = foreign admission
-runtime-resource-foreign-codec-storage = foreign codec storage
 runtime-work-budget-exhausted = The runtime work budget cannot admit the requested work.
 runtime-phase-acquisition = resource acquisition
 runtime-phase-capture = continuation capture or restoration
@@ -1139,7 +1137,7 @@ runtime-label-requested = Requested additional units
 runtime-label-available = Available additional units
 runtime-label-teardown = First teardown failure
 runtime-label-cleanup = Cleanup status
-invocation-usage = Expected: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>, or ash build --output FILE [--target TARGET] [--cargo-target-dir PATH] [--native-static PATH]... [--native-shared PATH]... [--root name=path]... <entry-file>, or ash check-ffi --header FILE... --mapping FILE --compiler FILE --output DIR [--target TARGET] [--root name=path]... <entry-file>. Options must precede the entry file and may be supplied only once, except roots, native inputs and check-ffi headers.
+invocation-usage = Expected: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>, or ash build --output FILE [--target TARGET] [--cargo-target-dir PATH] [--native-static PATH]... [--native-shared PATH]... [--root name=path]... <entry-file>. Options must precede the entry file and may be supplied only once, except roots and native inputs.
 build-failure = Ash could not build the native program: { $detail }.
 check-ffi-failure = Ash could not verify the C headers: { $detail }.
 output-write = Ash could not write the program result to standard output.

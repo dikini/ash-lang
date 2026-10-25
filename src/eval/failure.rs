@@ -20,10 +20,6 @@ pub enum ResourceFailureCause {
 /// The resource whose admission failed, with units when the boundary knows them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeResource {
-    /// Foreign operation or codec admission whose work or storage cause is unavailable.
-    ForeignAdmission,
-    /// Foreign codec scratch and executable binding admission storage.
-    ForeignCodecStorage,
     /// Ordinary immutable packed byte storage.
     PackedBytes,
     /// Pending structural type destruction tasks.
@@ -75,8 +71,6 @@ impl RuntimeResource {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::ForeignAdmission => "foreign admission",
-            Self::ForeignCodecStorage => "foreign codec storage",
             Self::PackedBytes => "packed bytes",
             Self::TypeDisposal => "type disposal tasks",
             Self::KindDisposal => "kind disposal tasks",

@@ -1,0 +1,25 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--lib",
+    "checked_owner_lifecycle_",
+    "--",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 101,
+  "seconds": 200.239,
+  "inputs_equal": true,
+  "count": 583,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "79ef47137751f5481dd461041f442da7a54ae5339ed9188f3af89708fa6ed4e8",
+  "log_sha256": "9b21851e816d29bcc9c9f285e312278214dd0c65f8bc723268be4c8a3fd5be32",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

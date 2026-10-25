@@ -1,0 +1,80 @@
+[
+  {
+    "stem": "checked-prepared-all-four-static-first",
+    "map": "aaba67a85e718e9c1239b9798cda874e4e03589871bb9067eb606b0b51146255.inputs.json.gz",
+    "exit_code": 101,
+    "raw_sha256": "f312e3ef4c2fa0c327944ed9fcc87cc363e9d72691afda052b3264a8815dd0af"
+  },
+  {
+    "stem": "checked-prepared-borrow-repair-all-four",
+    "map": "47b226df02505dd0f4c185a435c37f886c49bda6eaf4e56094bb5f71e350c04e.inputs.json.gz",
+    "exit_code": 101,
+    "raw_sha256": "cbafde2282f36295821b0c65c62d3b53916d62e0defedfdf92695b4a42dcf9e0"
+  },
+  {
+    "stem": "checked-prepared-borrow-repair-zero-assumption",
+    "map": "47b226df02505dd0f4c185a435c37f886c49bda6eaf4e56094bb5f71e350c04e.inputs.json.gz",
+    "exit_code": 0,
+    "raw_sha256": "5672e4eb1ca1ef969aaa4e3974e50a1717bbe18417b9e7abd9474fd1cb9ee702"
+  },
+  {
+    "stem": "retained-host-summary-controls",
+    "map": "57392c2524d80dca53114fec14a32c845d12881997bf5b56d4e67e560587c5d4.inputs.json.gz",
+    "exit_code": 101,
+    "raw_sha256": "1ae1ae78c17cc395e648eefc3b52f22c91e81bc674a5557a20fc75729c2df0f5"
+  },
+  {
+    "stem": "retained-host-fixed-buffer-startups",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 101,
+    "raw_sha256": "f2fe385dd32777c02cc8eeb2536f066b231aa2ac8564b387e711d763bf515cbd"
+  },
+  {
+    "stem": "retained-host-fixed-checked-selective",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 0,
+    "raw_sha256": "22713c00cb35fc74858886cf6cfcf3ea9eb9d9b50987dc22fdfae38e7042883e"
+  },
+  {
+    "stem": "retained-host-fixed-dependent-startup",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 101,
+    "raw_sha256": "c050b0e0981a70397a6e95f227019f98c952141e522d22af024f31cc23353367"
+  },
+  {
+    "stem": "retained-host-fixed-full-static-image",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 101,
+    "raw_sha256": "8bbe20f4e5fd5f2c4afddb0b3cd2ef615dd9c709640a472ba5e53cb24ed9a367"
+  },
+  {
+    "stem": "retained-host-fixed-legacy-fallback",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 0,
+    "raw_sha256": "7e269cc1a8932ded11c1c05af942a9e40177b72dec3b4786d818228e579ab93b"
+  },
+  {
+    "stem": "retained-host-fixed-operation-controls",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 0,
+    "raw_sha256": "011bb2c0415dd3a313cc02a49c5d7bddd19b019fab23a7cd718ecd1961d99d20"
+  },
+  {
+    "stem": "retained-host-fixed-original-selective",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 0,
+    "raw_sha256": "e642658924deef1b2220638660b1bcc0904168fb9e98adc83e729f306535d958"
+  },
+  {
+    "stem": "retained-host-fixed-source-all-four",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 0,
+    "raw_sha256": "82bc79e50910e50d379148e779997c8296d69ef72010337ee98c6a064f558a42"
+  },
+  {
+    "stem": "retained-host-fixed-summary-controls",
+    "map": "a38a9a7bd5a6aacc45d873b1604130f7eeaa7b92aa97acbaad5a0e870b1f3ab4.inputs.json.gz",
+    "exit_code": 0,
+    "raw_sha256": "8117fdfca7869b48bc4493d1743c8cd5360d6d983030b57dcbd0d9ff06450d21"
+  }
+]

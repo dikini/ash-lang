@@ -1,0 +1,23 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x73bdc96: file src/core/provider/row/demand.rs, line 1169.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 53378)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 53378)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::core::provider::row::demand::DirectDemandProof::reconstruct (recipe=0x7ffff7bd3ff0, entry=0x7ffff7bd39e8, work=0x7ffff7be4230) at src/core/provider/row/demand.rs:1169
+1169	            return Err(invalid(program.root));
+$1 = alloc::vec::Vec<ash::core::provider::row::demand::DemandAtomId, alloc::alloc::Global> {buf: alloc::raw_vec::RawVec<ash::core::provider::row::demand::DemandAtomId, alloc::alloc::Global> {inner: alloc::raw_vec::RawVecInner<alloc::alloc::Global> {ptr: core::ptr::unique::Unique<u8> {pointer: core::ptr::non_null::NonNull<u8> {pointer: 0x7ffff00b4550}, _marker: core::marker::PhantomData<u8>}, cap: core::num::niche_types::UsizeNoHighBit (4), alloc: alloc::alloc::Global}, _marker: core::marker::PhantomData<ash::core::provider::row::demand::DemandAtomId>}, len: 1}
+$2 = alloc::vec::Vec<ash::core::provider::row::demand::DemandAtomId, alloc::alloc::Global> {buf: alloc::raw_vec::RawVec<ash::core::provider::row::demand::DemandAtomId, alloc::alloc::Global> {inner: alloc::raw_vec::RawVecInner<alloc::alloc::Global> {ptr: core::ptr::unique::Unique<u8> {pointer: core::ptr::non_null::NonNull<u8> {pointer: 0x7ffff00b5150}, _marker: core::marker::PhantomData<u8>}, cap: core::num::niche_types::UsizeNoHighBit (1), alloc: alloc::alloc::Global}, _marker: core::marker::PhantomData<ash::core::provider::row::demand::DemandAtomId>}, len: 1}
+#0  ash::core::provider::row::demand::DirectDemandProof::reconstruct (recipe=0x7ffff7bd3ff0, entry=0x7ffff7bd39e8, work=0x7ffff7be4230) at src/core/provider/row/demand.rs:1169
+#1  0x000055555b0599d1 in ash::core::provider::row::HandlerRowRecipeDraft::reconstruct (entry=0x7ffff7bd7be0, work=0x7ffff7be4230) at src/core/provider/row.rs:647
+#2  0x000055555bce375f in ash::core::source_resource::{impl#13}::admit_with_globals::{closure#4} (graph=0x7ffff7bd89a8) at src/core/source_resource.rs:1258
+#3  0x000055555a63c41b in core::option::Option<&ash::core::source_resource::handler_rows::SourceHandlerGraph>::map<&ash::core::source_resource::handler_rows::SourceHandlerGraph, core::result::Result<ash::core::provider::row::HandlerRowRecipeDraft, ash::core::validate::ValidationError>, ash::core::source_resource::{impl#13}::admit_with_globals::{closure_env#4}> (self=..., f=...) at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162
+#4  0x000055555cbbdd09 in ash::core::source_resource::CheckedSourceResourceTemplate::admit_with_globals (header=..., acquire=..., finish=..., handler=..., handler_inputs=..., globals=..., sources=..., module_sources=..., work=0x7ffff7be4230, session=0x7ffff7be1c60) at src/core/source_resource.rs:1257
+#5  0x000055555ad7a42c in ash::elaborate::source_resource::compile::{closure#1} () at src/elaborate/source_resource.rs:1359
+#6  0x000055555a4b5543 in ash::elaborate::source_resource::compile (module=0x7ffff7bf8ff0, registry=0x7ffff7be82c8, interfaces=..., schemes=..., work=0x7ffff7bf0db0, coverage=0x7ffff7bf0dd0, constraints=0x7ffff7bfa190, original_provider=..., rewrite_work_limit=99824) at src/elaborate/source_resource.rs:1269
+#7  0x000055555c088fc6 in ash::elaborate::check_module_with_budget_family::{closure#0}<ash::core::effect::EffectOperationFamily> () at src/elaborate.rs:22749

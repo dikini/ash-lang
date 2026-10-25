@@ -1,0 +1,36 @@
+Retained safe-test evidence: /tmp/ash-owner-build-monitor/safe-test-evidence-4g0sphcw
+test_late_output_after_last_sample_is_refused (__main__.MonitorTests.test_late_output_after_last_sample_is_refused) ... FAIL
+test_late_sidefile_after_last_sample_is_refused (__main__.MonitorTests.test_late_sidefile_after_last_sample_is_refused) ... FAIL
+test_cumulative_watch_records_are_bounded (__main__.MonitorTests.test_cumulative_watch_records_are_bounded) ... FAIL
+
+======================================================================
+FAIL: test_late_output_after_last_sample_is_refused (__main__.MonitorTests.test_late_output_after_last_sample_is_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ash-owner-build-monitor/test_monitor.py", line 130, in test_late_output_after_last_sample_is_refused
+    self.assertEqual(rc, 1); self.assertEqual(receipt['reason'], 'output_limit')
+    ~~~~~~~~~~~~~~~~^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_late_sidefile_after_last_sample_is_refused (__main__.MonitorTests.test_late_sidefile_after_last_sample_is_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ash-owner-build-monitor/test_monitor.py", line 138, in test_late_sidefile_after_last_sample_is_refused
+    self.assertEqual(rc, 1); self.assertEqual(receipt['reason'], 'watched_file_limit')
+    ~~~~~~~~~~~~~~~~^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_cumulative_watch_records_are_bounded (__main__.MonitorTests.test_cumulative_watch_records_are_bounded)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/ash-owner-build-monitor/test_monitor.py", line 152, in test_cumulative_watch_records_are_bounded
+    self.assertEqual(result, None if index<2 else 'watch_record_limit')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: None != 'watch_record_limit'
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.411s
+
+FAILED (failures=3)

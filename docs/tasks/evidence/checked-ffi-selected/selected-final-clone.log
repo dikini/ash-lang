@@ -1,0 +1,69 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 56 tests
+test elaborate::tests::function_part_clones_charge_forall_domain_binders ... ok
+test core::dialect::tests::provider_forwarding_clone_preserves_capability_and_has_an_exact_work_boundary ... ok
+test elaborate::tests::function_part_clones_charge_both_children_but_not_the_outer_arrow ... ok
+test elaborate::tests::pattern_decision_row_clone_has_an_exact_atomic_boundary_and_fresh_retry ... ok
+test core::validate::tests::constructor_pattern_substitutions_precharge_phantom_argument_clones ... ok
+test core::validate::tests::phantom_type_application_charges_argument_clones_at_the_exact_boundary ... ok
+test elaborate::borrowed_owner_argument_tests::borrowed_hidden_inputs_keep_three_owned_maps_without_temporary_clones ... ok
+test elaborate::tests::public_context_admission_charges_fact_metadata_before_context_clone ... ok
+
+running 1 test
+test elaborate::tests::checked_parameter_clone_discards_a_deep_origin_on_partial_failure_and_exact_retry ... ok
+test elaborate::tests::perform_scheduling_keeps_cloned_domain_owned_across_exact_failures ... ok
+test elaborate::tests::popped_finish_function_clone_failure_discards_pattern_origins_on_a_small_stack ... ok
+test elaborate::tests::public_synthesis_rejects_unresolved_inference_before_context_clone ... ok
+test elaborate::tests::recursive_global_elaboration_does_not_clone_the_complete_context ... ok
+test elaborate::tests::public_deep_types_reject_before_clone_and_drop_on_a_small_stack ... ok
+test core::validate::tests::borrowed_value_type_matching_does_not_clone_deep_types_on_a_small_stack ... ok
+test elaborate::tests::retained_forall_clones_charge_quantifier_identities_before_allocation ... ok
+test elaborate::tests::retained_type_clones_require_the_exact_preallocation_budget ... ok
+test eval::machine::foreign::integer_codec_tests::codec_budget_refusal_retains_phase_and_erased_clone_cause ... ok
+test eval::machine::instantiation::tests::runtime_row_clone_reservation_failures_are_reports_not_panics ... ok
+test eval::machine::tests::environment_clone_and_extension_share_the_existing_chain ... ok
+test elaborate::tests::registration_callback_check_disposes_first_deep_clone_when_second_clone_fails ... ok
+test evidence::tests::cloned_pending_ingress_retains_one_scope_head_at_exact_atomic_dual_boundaries ... ok
+test elaborate::tests::resource_finish_keeps_cloned_result_owned_across_exact_row_failure ... ok
+test elaborate::tests::lexical_selection_second_clone_failure_discards_first_type_iteratively ... ok
+test evidence::tests::replacement_map_charges_indexes_and_cloned_arguments_exactly_before_publication ... ok
+test elaborate::tests::public_check_rejects_wide_higher_rank_expected_type_before_clone ... ok
+test interface::tests::constrained_scheme_clone_charges_binder_record_and_kind_nodes ... ok
+test interface::tests::determination_key_clone_charges_each_retained_position_before_publication ... ok
+test interface::tests::empty_evidence_slot_clones_have_independent_one_shot_cells ... ok
+test interface::tests::one_way_head_matcher_has_exact_constraint_and_type_clone_boundaries ... ok
+test interface::tests::selected_evidence_slot_clones_share_the_flat_plan ... ok
+test resolve::module_tests::fused_constructor_payload_clone_preserves_first_nominal_occurrence_order ... ok
+test resolve::tests::imported_parameter_clone_late_failure_dismantles_deep_completed_binders ... ok
+test core::transform::tests::extracted_tuple_and_constructor_children_survive_parent_clone_failure ... ok
+test resolved::tests::checked_impl_summary_clone_uses_its_exact_constraint_budget ... ok
+test resolved::tests::checked_impl_clone_late_argument_failure_dismantles_deep_head_parameter_provenance ... ok
+test elaborate::tests::popped_finish_function_builder_failure_discards_cloned_body_type_on_a_small_stack ... ok
+test elaborate::tests::resolved_application_clone_discards_a_deep_first_argument_when_the_second_is_one_short ... ok
+test types::tests::effect_row_and_computation_clone_are_exact_atomic_and_retryable ... ok
+test resolved::tests::implementation_authorization_clone_has_an_exact_flat_small_stack_boundary ... ok
+test types::tests::retained_type_clones_charge_every_cell_before_rebuilding ... ok
+test core::transform::tests::accumulated_type_arguments_survive_one_short_result_clone ... ok
+test evidence::tests::local_prerequisite_clone_discards_a_deep_first_argument_on_second_failure ... ok
+test elaborate::tests::popped_check_function_clone_failure_discards_expected_on_a_small_stack ... ok
+test resolved::tests::checker_view_constructor_clone_failure_discards_staged_deep_nominal_on_a_small_stack ... ok
+test core::transform::tests::provider_state_access_rebuild_is_exact_bounded_and_disposes_partial_clones ... ok
+test evidence_validation::tests::linked_catalog_head_clone_discards_a_deep_first_argument_when_the_second_is_one_short ... ok
+test resolved::tests::effect_clone_refusal_prices_text_and_discards_retained_deep_operations ... ok
+test core::effect::rewrite_tests::hook_target_retention_is_exact_retryable_and_disposes_deep_partial_clones ... ok
+test resolved::checked_selected_tests::checked_selected_publication_deep_origins_clone_refuse_replace_and_drop_iteratively ... ok
+test evidence::tests::deep_method_clone_ingress_has_atomic_dual_budget_retries ... ok
+test types::tests::nested_row_arguments_clone_and_substitute_on_a_small_stack ... ok
+test elaborate::tests::public_synthesis_charges_a_wide_context_type_before_context_clone ... ok
+test elaborate::tests::popped_check_function_provenance_failure_discards_cloned_parts_on_a_small_stack ... ok
+test elaborate::tests::operational_provenance_failure_discards_cloned_function_parts_on_a_small_stack ... ok
+test core::effect::tests::nested_hook_recompute_owns_partial_target_clones ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1990 filtered out; finished in 0.51s
+
+test core::effect::tests::nested_hook_recompute_owns_partial_target_clones ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 1935 filtered out; finished in 0.52s
+

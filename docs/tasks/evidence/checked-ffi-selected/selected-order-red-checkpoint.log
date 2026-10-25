@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'core::validate::selected_evidence_tests::checked_selected_host_single_module_authenticates_each_core_phase' (23) panicked at src/core/validate/selected_evidence_tests.rs:46:10:
+selected host nominal/variable registry admission: ValidationError { reason: Registry, node: None, cause: None }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test core::validate::selected_evidence_tests::checked_selected_host_single_module_authenticates_each_core_phase ... FAILED
+
+failures:
+
+failures:
+    core::validate::selected_evidence_tests::checked_selected_host_single_module_authenticates_each_core_phase
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1979 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p ash --lib`

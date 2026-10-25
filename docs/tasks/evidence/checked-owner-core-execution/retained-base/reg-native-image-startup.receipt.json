@@ -1,0 +1,27 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--lib",
+    "build::native_image_tests::"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "exit_code": 0,
+  "seconds": 0.576,
+  "expected_selected": 3,
+  "actual_selected": 3,
+  "inputs_equal": true,
+  "count": 3668,
+  "aggregate_algorithm": "SHA256 sorted-key compact JSON UTF-8 no newline of every tracked and nonignored untracked file byte hash",
+  "aggregate_sha256": "c3114a82f7f13ec066f0f00f1c0aecb17914401e20fc9762bab20596c0bbf23b",
+  "log_sha256": "240aa8da8c7e890cb6e0a8cdfad8f2bd828c30cf355193cfe4efe0dfebe10aa6",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

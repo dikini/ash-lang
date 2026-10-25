@@ -1,0 +1,40 @@
+{
+  "status": "PROSPECTIVE_RECOMMENDATION_NOT_POLICY_OR_TUPLE_APPROVAL",
+  "measured_producer": {
+    "path": "/tmp/ash-owner-generation-stage2/experiment/ordinary-host",
+    "size": 475650552,
+    "sha256": "d5799c76fbf3be8b06a473906b4e73ce82b1fdf90db4a1b1923d958816fe0a61",
+    "full_hash_before_after_equal": true
+  },
+  "partial_fourth_prefix": {
+    "path": "/tmp/ash-owner-static-stage3-mangled/build-run-ppvqh10e/watched-0.log",
+    "bytes": 67108864,
+    "sha256": "af27c6e1f59f1d26c56d996989500bab10274e839702d0a3e9af0f11aca6d1d5",
+    "full_map_claimed": false
+  },
+  "model": {
+    "observed_nonpaired_bytes_per_pair": 355.1973763338601,
+    "all_ordinary_symbol_rows": 131160,
+    "all_ordinary_symbol_name_bytes": 27704553,
+    "formula": "2*ordinary_all_name_bytes + ordinary_symbol_rows*observed_nonpaired_bytes_per_pair",
+    "estimated_complete_map_bytes": 101996793.8799491,
+    "is_guaranteed_upper_bound": false
+  },
+  "proposed_map_only_bytes": 134217728,
+  "headroom_ratio_above_model": 0.31590144056856495,
+  "log_output_bytes_unchanged": 16777216,
+  "known_future_output_footprint_bytes": 583532544,
+  "location_proposed_not_created": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging",
+  "requires": [
+    "Retained prospective policy amendment",
+    "New independently reviewed per-class monitor and collectors; no self-test widening",
+    "Fresh exact tuple and root sole-Cargo assignment",
+    "Future actual available-space checks; no input/cache copying/deletion"
+  ],
+  "exclusions": [
+    "No retry/build/linker/readelf/header query/native startup",
+    "No complete-map/hash/closure substitution",
+    "No changed semantic/static/source/native flags",
+    "No whole F2/ownerful architecture/runtime acceptance"
+  ]
+}

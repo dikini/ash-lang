@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "d5314368e6e3402dcb8dee4200d6f37cb9cc2b2acd6b58fffa2da2079e080c53",
+  "monitor": {
+    "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "size_before": 18877,
+    "size_after": 18877,
+    "hashed_bytes": 18877,
+    "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 5341
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-v8mpob32/build-run-97wuh7wc",
+  "output_path": "/tmp/ash-build-monitor-test-v8mpob32/build-run-97wuh7wc/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "import time; time.sleep(60)"
+  ],
+  "child_pid": 34,
+  "child_exit": -9,
+  "reason": "deadline",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 0,
+  "retained_output_bytes": 0,
+  "output_truncated": false,
+  "watched_files": [],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 34,
+        "wait_status": 9,
+        "exit_code": -9
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": true
+  },
+  "limits": {
+    "deadline_seconds": 0.2,
+    "output_bytes": 16384,
+    "sidefile_bytes": 16384
+  },
+  "environment_keys": [],
+  "executable": {
+    "path": "/usr/bin/python3.14",
+    "size_before": 7477160,
+    "size_after": 7477160,
+    "hashed_bytes": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347805
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 34,
+  "child_session": 34,
+  "final_limit_failures": [],
+  "elapsed_seconds": 0.21509043000014572,
+  "observed_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-v8mpob32/build-run-97wuh7wc/output.log",
+    "size_before": 0,
+    "size_after": 0,
+    "hashed_bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 13805
+  }
+}

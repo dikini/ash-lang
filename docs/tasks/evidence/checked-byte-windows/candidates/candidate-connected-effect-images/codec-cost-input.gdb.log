@@ -1,0 +1,29 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 508911)]
+CODEC INPUT ash::types::TypeWorkBudget {used: 4115, limit: 327680}
+CODEC IDS ash::foreign::checked_source::ForeignCallCodecIds {call: ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 2}, owner: ash::types::NominalOwner::Module, declaration: 1}, returned: ash::types::ConstructorId {owner: ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 2}, owner: ash::types::NominalOwner::Module, declaration: 1}, constructor: 0}, conversion_failed: ash::types::ConstructorId {owner: ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 2}, owner: ash::types::NominalOwner::Module, declaration: 1}, constructor: 1}, conversion_error: ash::types::NominalTypeId {module: ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 2}, owner: ash::types::NominalOwner::Module, declaration: 0}}
+FACT ROLE ash::foreign::scalar_preflight::ForeignScalarPreflightRole::I64
+[Switching to Thread 0x7ffff7bff6c0 (LWP 508911)]
+
+Thread 2 "build::image::s" hit Breakpoint -1, ash::foreign::checked_source::CheckedForeignCallCodec::authenticate (module=..., source=..., ids=..., registry=0x7ffff001ef30, work=0x7ffff7be8f70) at src/foreign/checked_source.rs:111
+111	        authenticate_codec(module, source, ids, registry, work)?;
+#0  ash::foreign::checked_source::CheckedForeignCallCodec::authenticate (module=..., source=..., ids=..., registry=0x7ffff001ef30, work=0x7ffff7be8f70) at src/foreign/checked_source.rs:111
+#1  0x000055555b0f964b in ash::foreign::scalar_preflight::CheckedForeignScalarPreflight::authenticate (self=0x7ffff001eb70, registry=0x7ffff001ef30, work=0x7ffff7be8f70) at src/foreign/scalar_preflight.rs:717
+#2  0x000055555ddc6a76 in ash::resolved::ResolvedRegistry::retain_scalar_preflight (self=0x7ffff001ef30, fact=..., work=0x7ffff7be8f70) at src/resolved.rs:21551
+#3  0x000055555caf3750 in ash::resolve::Resolver::bind_scalar_preflights (self=0x7ffff7be83f0, loaded=0x7ffff000a0a0, declarations=0x7ffff7be36a0) at src/resolve/foreign.rs:302
+#4  0x000055555a002190 in ash::resolve::resolve_module_names_with_budget::{closure#5} () at src/resolve.rs:1932
+#5  0x000055555cb03422 in ash::resolve::resolve_module_names_with_budget (loaded=0x7ffff000a0a0, dependencies=..., type_work=0x7ffff7becab0, constraint_work=0x7ffff7bfb550, catalogue=..., checked_foreign_profile=false) at src/resolve.rs:1829
+#6  0x000055555cb03dcc in ash::resolve::resolve_module_for_foreign_profile (loaded=0x7ffff000a0a0, dependencies=..., type_work=0x7ffff7becab0, constraint_work=0x7ffff7bfb550, catalogue=..., checked_foreign_profile=false) at src/resolve.rs:1622
+#7  0x000055555cb0458e in ash::resolve::resolve_module_with_foreign_catalog (loaded=0x7ffff000a0a0, dependencies=..., type_work=0x7ffff7becab0, constraint_work=0x7ffff7bfb550, catalogue=...) at src/resolve.rs:1604

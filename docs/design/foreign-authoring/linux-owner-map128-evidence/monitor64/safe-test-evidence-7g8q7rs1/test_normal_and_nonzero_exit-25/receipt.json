@@ -1,0 +1,90 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "42a32f2fa8a69ba92bcbfe5303654a97bb564da8fc6c93d75d5111153a8b91bd",
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size_before": 20745,
+    "size_after": 20745,
+    "hashed_bytes": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 55540
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-5n4lfv23/build-run-s0bwu7ts",
+  "output_path": "/tmp/ash-build-monitor-test-5n4lfv23/build-run-s0bwu7ts/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "import sys; print(\"trusted-child\"); sys.exit(7)"
+  ],
+  "child_pid": 40,
+  "child_exit": 7,
+  "reason": "exit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 14,
+  "retained_output_bytes": 14,
+  "output_truncated": false,
+  "watched_files": [],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 40,
+        "wait_status": 1792,
+        "exit_code": 7
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "map_relative_path": null,
+  "limits": {
+    "deadline_seconds": 2,
+    "output_bytes": 16384,
+    "sidefile_bytes": 16384,
+    "map_bytes": 67108864
+  },
+  "environment_keys": [],
+  "executable": {
+    "path": "/usr/bin/python3.14",
+    "size_before": 7477160,
+    "size_after": 7477160,
+    "hashed_bytes": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347805
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 40,
+  "child_session": 40,
+  "final_limit_failures": [],
+  "elapsed_seconds": 0.024643230999572552,
+  "observed_output_sha256": "0f0f5fca882f90859766c4f3410417c773798d99b5123c1d088e5b8cbf78ee4a",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-5n4lfv23/build-run-s0bwu7ts/output.log",
+    "size_before": 14,
+    "size_after": 14,
+    "hashed_bytes": 14,
+    "sha256": "0f0f5fca882f90859766c4f3410417c773798d99b5123c1d088e5b8cbf78ee4a",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 57214
+  }
+}

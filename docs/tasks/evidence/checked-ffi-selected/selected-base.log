@@ -1,0 +1,24 @@
+   Compiling ash v0.0.0 (/tmp/ash-pr89-base-upndun0s)
+   Compiling ash-foreign-adapter v0.0.0 (/tmp/ash-pr89-base-upndun0s/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 40s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+buffer diagnostic compilation: CompilationWork { source_checking: Some(PhaseCost { completed: true, phase: SourceChecking, used: 214429, allowance: Some(5470400) }), final_elaboration: Some(PhaseCost { completed: true, phase: FinalElaboration, used: 55493, allowance: Some(5470400) }), independent_core: Some(PhaseCost { completed: true, phase: IndependentCore, used: 165336, allowance: Some(2359110) }) }
+buffer startup after decode: 38705
+buffer startup after complete fact authentication: 52747
+buffer startup after reconstruction: 327680
+
+thread 'build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget' (859) panicked at src/build/source_resource_image.rs:3399:13:
+buffer startup: Validation(ValidationError { reason: Resource, node: None, cause: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget ... FAILED
+
+failures:
+
+failures:
+    build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1975 filtered out; finished in 0.33s
+
+error: test failed, to rerun pass `-p ash --lib`

@@ -1,0 +1,55 @@
+{
+  "status": "READ_ONLY_PREPARATION_NO_LINKER_TOOL_EXECUTION",
+  "failed_execution_manifest": {
+    "path": "/tmp/ash-owner-static-stage3/execution-manifest.json",
+    "sha256": "dd6798e80d0d19c3fabeefdd29c4f348fba5ceed25b76b909ecf0373f3ab5857"
+  },
+  "failed_monitor_receipt_sha256": "3ee3aa6574144d1aabbfe21314a58bd680de8478b35a27b8727b2a184a2a3566",
+  "bounded_prefix": {
+    "path": "/tmp/ash-owner-static-stage3/build-run-mwoqlg55/watched-0.log",
+    "size": 16777216,
+    "sha256": "63767c4105e76634735b0ed1dabe4dc2fdc1236fb06f6e4c009e5f7946afb0f5",
+    "markers": {
+      "Discarded input sections": 519242,
+      "Memory Configuration": -1,
+      "Linker script and memory map": -1,
+      "LOAD ": -1,
+      "OUTPUT(": -1
+    },
+    "prefix_bytes_after_discarded_header": 16257974
+  },
+  "actual_failed_map_observed_size": 17346560,
+  "full_failed_map_complete_or_hashed": false,
+  "manual": {
+    "path": "/usr/share/man/man1/ld.bfd.1.gz",
+    "resolved": "/usr/share/man/man1/ld.bfd.1.gz",
+    "size": 49180,
+    "sha256": "2f7c363d588b25cf60ac64322f3cd30eb01c7807e6bddaa82580d256dbdd1e9e",
+    "decompressed_bytes": 174576,
+    "decompressed_sha256": "d68694b33179394f19c779f3b3cf04272571c55f28cacf913fbf2bd85e2999ec",
+    "excerpt": "oline.\n.RE\n.RS 4\n.RE\n.IP \\fB\\-\\-print\\-map\\-discarded\\fR 4\n.IX Item \"--print-map-discarded\"\n.PD 0\n.IP \\fB\\-\\-no\\-print\\-map\\-discarded\\fR 4\n.IX Item \"--no-print-map-discarded\"\n.PD\nPrint (or do not print) the list of discarded and garbage collected sections\nin the link map.  Enabled by default.\n.IP \\fB\\-\\-print\\-map\\-locals\\fR 4\n.IX Item \"--print-ma",
+    "meaning": "The documented option only suppresses discarded/garbage-collected section listings in the map; it does not alter garbage collection, executable semantics, native symbols, source or declared ABI."
+  },
+  "package_status_readback": [
+    {
+      "Package": "binutils",
+      "Version": "2.46-3ubuntu2",
+      "Architecture": "amd64",
+      "Status": "install ok installed"
+    },
+    {
+      "Package": "binutils-common",
+      "Version": "2.46-3ubuntu2",
+      "Architecture": "amd64",
+      "Status": "install ok installed"
+    },
+    {
+      "Package": "binutils-x86-64-linux-gnu",
+      "Version": "2.46-3ubuntu2",
+      "Architecture": "amd64",
+      "Status": "install ok installed"
+    }
+  ],
+  "proposed_delta": "Add root-only -C link-arg=-Wl,--no-print-map-discarded; fresh output/watch directory and map path. All existing caps, GNU/BFD framing/nonemptyLOAD/exactlibc gates unchanged.",
+  "uncertainty": "Does not establish new complete map fits16MiB, final image fits128MiB or links. Full produced map hash and LOAD associations remain required after a separately assigned successful attempt. Missing linker temporaries remain producer-trust limits."
+}

@@ -1,0 +1,48 @@
+{
+  "source": "83d050b40c92572b98b2d337f04126311373cd22",
+  "tree": "b22c8e6378b054e0c866faf5b2a171e89e06f16e",
+  "source_configuration_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+  "environment_overrides": {
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "unset_environment": [
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_BUILD_TARGET"
+  ],
+  "commands": [
+    {
+      "name": "ordinary-prepare",
+      "command": [
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/ash",
+        "build",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--cargo-target-dir",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+        "--native-static",
+        "/usr/lib/x86_64-linux-gnu/libc.a",
+        "--output",
+        "/tmp/ash-generated-scalar.d771qtm9/ordinary-host",
+        "/tmp/ash-generated-scalar.d771qtm9/entry.ash"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 196.896,
+      "log_sha256": "56406cfd310edf53149c6bb5c2a2444b657e5d7f2216ae4460e422b497306f84"
+    }
+  ],
+  "executed_generated_image": false,
+  "compiler_sha256": "a6068524ee48775391f72c3e49234c46becff06da68541bf4126e9537ed56dab",
+  "compiler_build_reused_from": "/tmp/ash-generated-scalar.dwlpe5nj/preparation-receipt.json",
+  "previous_failed_input_sha256": "084a9158b728396200ee1b243f30e32bc90a027ab1878beac1656c3a6d8322ee",
+  "input_sha256": "885b517cce5d0af84d392e65b1881f54da1202b96700b1b196ee7d8da516f3ed",
+  "fixture_change": "Replace unsupported subtraction expression with existing passive signed foreign constant Negative=-7 and pass that Int binder.",
+  "fixture_authority": [
+    "spec/syntax.md foreign_integer/passive const",
+    "tests/foreign_source_syntax.rs SCALAR MinusOne",
+    "tests/foreign_source_admission.rs checked_foreign_literal_constants_publish_through_imported_aliases"
+  ],
+  "source_configuration_before_after_equal": true
+}

@@ -1,0 +1,320 @@
+{
+  "schema": 1,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "0cfbb235c796ce7f517e884da9e3732686f1ec5f757851edbc398a2ddf77eb8a",
+  "monitor": {
+    "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+    "size_before": 18877,
+    "size_after": 18877,
+    "hashed_bytes": 18877,
+    "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 5341
+  },
+  "run_directory": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7",
+  "output_path": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7/output.log",
+  "argv": [
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/ash",
+    "build",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--cargo-target-dir",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "--native-static",
+    "/usr/lib/x86_64-linux-gnu/libc.a",
+    "--output",
+    "/tmp/ash-owner-generation-stage2/experiment/ordinary-host",
+    "/tmp/ash-owner-generation-stage2/experiment/entry.ash"
+  ],
+  "child_pid": 6,
+  "child_exit": 0,
+  "reason": "exit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 58,
+  "retained_output_bytes": 58,
+  "output_truncated": false,
+  "watched_files": [
+    {
+      "relative_path": ".ash-build/ash-host-6-0/native-build.log",
+      "observed_peak_bytes": 1156,
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/native-build.log",
+      "size_before": 1156,
+      "size_after": 1156,
+      "hashed_bytes": 1156,
+      "sha256": "232dc2ed1ea1a11723b1e25df8eb6604184abe35e0a957ef125be539455c30c8",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40598,
+      "retained_path": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7/watched-0.log"
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source.tar",
+      "size_before": 98672640,
+      "size_after": 98672640,
+      "hashed_bytes": 98672640,
+      "sha256": "bc9a64b1956df0d7b777809b1311184cd04996d4e2f5476a811fbe85d94dceb4",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 6812
+    },
+    {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+      "size_before": 814765,
+      "size_after": 814765,
+      "hashed_bytes": 814765,
+      "sha256": "a17ca66398d6cb9d4f46d2cf2fa82b0197682b8b5c76dd9624995c2733c1160b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 10083
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/runtime-content-inputs.json",
+      "size_before": 30707,
+      "size_after": 30707,
+      "hashed_bytes": 30707,
+      "sha256": "81cb83ee6bb03a8c4d9c28f0bc041cf722313058b8650c373aac499e898c883f",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 14073
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/selected-source.json",
+      "size_before": 5032,
+      "size_after": 5032,
+      "hashed_bytes": 5032,
+      "sha256": "1c1cdc7e5058fd746e5e62044ee5a1b1261bf01d7ea65adfc50d46ae5b269ceb",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 14076
+    },
+    {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/tool-native-inputs.json",
+      "size_before": 6923,
+      "size_after": 6923,
+      "hashed_bytes": 6923,
+      "sha256": "7e95c8961f0786037353b303c5501a562f45c874dcf883f59debe536e591dd8e",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 14077
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/default-linker-inputs.json",
+      "size_before": 4096,
+      "size_after": 4096,
+      "hashed_bytes": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 26591
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/experiment-contract.md",
+      "size_before": 15239,
+      "size_after": 15239,
+      "hashed_bytes": 15239,
+      "sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 21840
+    },
+    {
+      "path": "/tmp/ash-owner-build-monitor/build_monitor.py",
+      "size_before": 18877,
+      "size_after": 18877,
+      "hashed_bytes": 18877,
+      "sha256": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 5341
+    },
+    {
+      "path": "/usr/bin/python3.14",
+      "size_before": 7477160,
+      "size_after": 7477160,
+      "hashed_bytes": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26347805
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/owner.ash",
+      "size_before": 2671,
+      "size_after": 2671,
+      "hashed_bytes": 2671,
+      "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 31798
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/entry.ash",
+      "size_before": 148,
+      "size_after": 148,
+      "hashed_bytes": 148,
+      "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 31799
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "size_before": 6238972,
+      "size_after": 6238972,
+      "hashed_bytes": 6238972,
+      "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26363793
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "size_before": 3442,
+      "size_after": 3442,
+      "hashed_bytes": 3442,
+      "sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 34124
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/execution-readback.json",
+      "size_before": 4699,
+      "size_after": 4699,
+      "hashed_bytes": 4699,
+      "sha256": "d6c71a4485bf4be6e68c6c7d9c2f8fa27b6ce8936f3dc219bf611d56b7f0d0f3",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 33930
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/execution-manifest.json",
+      "size_before": 6253,
+      "size_after": 6253,
+      "hashed_bytes": 6253,
+      "sha256": "f3a36463e39f84d85a56be4ea6538ab9148de718462dfe069e15d6851637bae4",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 34225
+    },
+    {
+      "path": "/tmp/ash-owner-compiler-stage1/compiler-correspondence/cargo-selected-records.json",
+      "size_before": 2734,
+      "size_after": 2734,
+      "hashed_bytes": 2734,
+      "sha256": "740ab45f33a38c5df77cfd136f4ac8a08adf2b4ea4824aff1666651fbdcb6cbb",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 34131
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/default-linker-inputs.json",
+      "size_before": 4096,
+      "size_after": 4096,
+      "hashed_bytes": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 34655
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/verify_inputs.py",
+      "size_before": 4311,
+      "size_after": 4311,
+      "hashed_bytes": 4311,
+      "sha256": "a78992538278b49679161bc1a3eef35f6590db3eb98b74fe1d16e7d90c6971ec",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 34660
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/collect_generated.py",
+      "size_before": 7285,
+      "size_after": 7285,
+      "hashed_bytes": 7285,
+      "sha256": "bccd35f02fc6e06091449365479eb413d664438acf2e587fa5e4af9805f80ff3",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 34810
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/selected-Cargo.lock.seed",
+      "size_before": 10251,
+      "size_after": 10251,
+      "hashed_bytes": 10251,
+      "sha256": "26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 34661
+    }
+  ],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 6,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "limits": {
+    "deadline_seconds": 1200,
+    "output_bytes": 16777216,
+    "sidefile_bytes": 16777216
+  },
+  "environment_keys": [
+    "CARGO_BUILD_JOBS",
+    "CARGO_HOME",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "RUSTC",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTC_WRAPPER",
+    "RUSTDOC"
+  ],
+  "executable": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/ash",
+    "size_before": 589364584,
+    "size_after": 589364584,
+    "hashed_bytes": 589364584,
+    "sha256": "5dca1b624bf206c44c6c4d3037675193800516eb936a0cf6420e67394e998d3e",
+    "hash_is_prefix": false,
+    "device": 66309,
+    "inode": 49481419
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 6,
+  "child_session": 6,
+  "final_limit_failures": [],
+  "elapsed_seconds": 171.92436710900074,
+  "observed_output_sha256": "db0522a155fa97092d59b8a3f539ffdefe441a0265561174e63e1f623722725a",
+  "output_file": {
+    "path": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7/output.log",
+    "size_before": 58,
+    "size_after": 58,
+    "hashed_bytes": 58,
+    "sha256": "db0522a155fa97092d59b8a3f539ffdefe441a0265561174e63e1f623722725a",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 40586
+  }
+}

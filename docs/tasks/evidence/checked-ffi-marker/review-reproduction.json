@@ -1,0 +1,64 @@
+{
+  "candidate": "e3d5bb967b42084ce2652be0834d63d22f362f64",
+  "reason": "Reviewer requested retained raw logs; initial tool outputs had no local raw log locator.",
+  "before_after_files_sha256": {
+    "src/parser/foreign_grammar.rs": "e1953dc4def083fe8d096d4711074143725f704ceeb3fda13e0957b3777769ee",
+    "src/parser/foreign_project.rs": "2c50fb7419b2da8040cc105c23749d47c29cf88969801845371bdffdd58d7722",
+    "src/surface/foreign.rs": "cb2e5fd5c92dd843d6838941bac3b4542e90a733501c27fc7f231ade82c80495",
+    "src/foreign/source_contract.rs": "ec8146d12f8db35d351fa540bfcbd9ce69576dbf4d18a45196f666a61d79b48b",
+    "tests/foreign_source_syntax.rs": "212b348e92e4d1badf00f42125c591434a972e5f7b78f0c81b48962157b0f1c1",
+    "tests/foreign_source_contracts.rs": "54e61fca67985fe31606d003ff32a145914239f3b8c57d2bf6821efdde90ca60",
+    "tests/foreign_source_admission.rs": "31fa881f79d7ccff70fdf53a44656621b7920251905a2356525ef216f574e630",
+    "spec/syntax.md": "0bd32a7d6304f58da050e9864036653921846ce1b6df84727f0dec0accc6c781",
+    "spec/static-semantics.md": "954666faa6b5b099d10b68d6015f96c75247be74e0a45f6c59d43acc66b2dfff",
+    "Cargo.toml": "2d1a3d056418f5feb2e36d3ff99924e30f6a9136900b7aa2bb73ead902a1395c",
+    "Cargo.lock": "26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08",
+    "rust-toolchain.toml": "cdb9bea833b62d4c26fbba417000b2929746d667ba25ad4eee40dfa61aa75a89",
+    ".cargo/config.toml": "2eb887744ac35113f513a449e09d637cf4ae0e08e8361bd7b3401e41e37051f9"
+  },
+  "source_diff_vs_candidate": "empty for src/tests/spec and listed build configuration",
+  "checks": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--test",
+        "foreign_source_syntax",
+        "--test",
+        "foreign_source_contracts",
+        "--test",
+        "foreign_source_admission"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.612,
+      "log": "docs/tasks/evidence/checked-ffi-marker/focused-tests.log",
+      "sha256": "1767df23a0063189e1b53b8b80811ad3f62feb9ca2c07955d603bbc4c29408b8"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "--test",
+        "foreign_source_syntax",
+        "--test",
+        "foreign_source_contracts",
+        "--test",
+        "foreign_source_admission",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 0.205,
+      "log": "docs/tasks/evidence/checked-ffi-marker/focused-clippy.log",
+      "sha256": "4cf86278c1e6d659943a46a3d7e3da429ac15be90f0f17742e24ef85228e7d3e"
+    }
+  ]
+}

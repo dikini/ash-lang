@@ -1,0 +1,85 @@
+{
+  "status": "FIFTH_PREPARATION_ONLY",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 2886,
+      "sha256": "cf1360388d73f7bad867039a34f115bdb3115dd3d54c844b33e13ed482004324"
+    },
+    {
+      "path": "default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "experiment-contract.md",
+      "size": 20440,
+      "sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd"
+    },
+    {
+      "path": "finalize_static.py",
+      "size": 8011,
+      "sha256": "2c464d38c851150dbe7c99fd1edaa986533093212ccb9c5e68ee8db287cfa412"
+    },
+    {
+      "path": "inspection.monitor.json",
+      "size": 2116,
+      "sha256": "84d6fed91fe8306959b76ad0bce1a88dd3d223b63fa62e6e1ccfced7d0953924"
+    },
+    {
+      "path": "map-detail-evidence.json",
+      "size": 2815,
+      "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838"
+    },
+    {
+      "path": "output-location.json",
+      "size": 1037,
+      "sha256": "9dbc5efdc25dd9da5871bf836e52745408fa05130b9f227bb4f1d6ee75021ad2"
+    },
+    {
+      "path": "preflight-inputs.json",
+      "size": 24563,
+      "sha256": "14cbf020adce26fba69d34a5f05e9abc7172f1b6f337e47e524e618b0436b9f6"
+    },
+    {
+      "path": "preparation-readback.json",
+      "size": 432,
+      "sha256": "40e2288dea08a3f9296334bf3144cdfedc44ffcd491da6f428fa3ec3247d8828"
+    },
+    {
+      "path": "preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "prepare_candidate.py",
+      "size": 5779,
+      "sha256": "7d43928376bc5cf86b73a3bcbf6fc0f99288c4cf86d9b0d0dba5731b40904d2e"
+    },
+    {
+      "path": "provenance.json",
+      "size": 10076,
+      "sha256": "bd4aa8455a6ad97f86f7352e61a64d366b0ae6d0931c1bf89ff48013e294a895"
+    },
+    {
+      "path": "readonly-check-command.json",
+      "size": 601,
+      "sha256": "5579866a6e5a1bb106c46f825e87d4ca43403b7613ada422a40cf6a847a8db77"
+    },
+    {
+      "path": "relink.monitor.json",
+      "size": 6987,
+      "sha256": "c4e0763be4cf0dae15ecd276b55311f2f1dc7ed4015556e0ddf702f73a18bcf8"
+    },
+    {
+      "path": "tuple.json",
+      "size": 18429,
+      "sha256": "e7172095ba95ef46c62f59cf2d37472d137d276467b2f10117278e07ee41816f"
+    },
+    {
+      "path": "verify_inputs.py",
+      "size": 4726,
+      "sha256": "0acefa6762571928b12d5e9a48f32b6d732755424da6ada203b10d8bbdfb929d"
+    }
+  ]
+}

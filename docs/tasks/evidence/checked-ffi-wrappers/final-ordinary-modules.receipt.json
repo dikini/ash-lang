@@ -1,0 +1,21 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--test",
+    "module_elaboration",
+    "--test",
+    "effect_modules",
+    "--",
+    "--nocapture"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 5.065,
+  "source_configuration_before_after_equal": true,
+  "file_count": 520,
+  "source_configuration_tree_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+  "log_sha256": "c0a2182d2b762e5ad5b5521a91b879c9a5a19ea2249c375e03a14fc92d8f6bbe"
+}

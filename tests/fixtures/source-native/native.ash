@@ -1,25 +1,11 @@
-import @builtin.foreign as Foreign
+import @builtin.foreign as F
 
-pub foreign library Counter {
+pub foreign library Fixture {
     profile "x86_64-unknown-linux-gnu"
-    repr I8 = signed(8)
-    repr U64 = unsigned(64)
-    symbol Echo<Before : EffectRow, T, After : EffectRow> : Int -> Foreign.Call<Int> {
-        name "ash_counter_echo_i8"
-        abi (I8) -> I8
-        operand 0 from 0 scalar
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-    symbol Maximum : Unit -> Foreign.Call<Int> {
-        name "ash_counter_max_u64"
-        abi () -> U64
-        output result as scalar
-        outcome otherwise { readable result }
-    }
-    symbol Stop : Unit -> Foreign.Call<Unit> {
-        name "ash_counter_void"
-        abi () -> void
-        outcome otherwise {}
-    }
+    symbol Make : Unit -> F.Address { name "fixture_make" }
+    symbol Fail : Unit -> F.Address { name "fixture_fail" }
+    symbol Echo : F.Address -> F.Address { name "fixture_echo" }
+    symbol Release : F.Address -> Unit { name "fixture_release" }
+    symbol Pair : (F.Address, Bytes) -> F.Address { name "fixture_pair" }
+    symbol EchoBytes : Bytes -> F.Address { name "fixture_echo_bytes" }
 }

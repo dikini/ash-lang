@@ -399,3 +399,123 @@ fn alternating_resource_row_arguments_clone_compare_hash_and_drop_on_small_stack
         .join()
         .expect("alternating owners remain stack safe");
 }
+
+mod support;
+
+#[test]
+fn local_annotations_require_the_enclosing_rigid_row_exclusion() {
+    for lexical_body in [false, true] {
+        for established in [false, true] {
+            let callback_row = if established { "H | Delta" } else { "| Delta" };
+            let accepted_body = if lexical_body {
+                "newtype Token = Token(Unit)\nwith Run<Token, {| Delta}> {\nrun (token, callback) = callback ()\n}\n()\n"
+            } else {
+                "()\n"
+            };
+            let source = format!(
+                "effect H {{\nop : Unit -> Unit\n}}\n\
+                 interface Run<Key : Type, Rows : EffectRow> {{\n\
+                 run : (Key, Unit -> Unit ! {{| Rows}}) -> Unit ! {{H | Rows}}\n}}\n\
+                 caller<Delta : EffectRow> : (Unit -> Unit ! {{{callback_row}}}) -> Unit\n\
+                 caller callback = {{\n\
+                 let accept : (Unit -> Unit ! {{H | Delta}}) -> Unit = fn(accepted) {{\n()\n}}\n\
+                 accept (fn(ignored) {{\n{accepted_body}}})\n}}\n\
+                 observe : Unit -> Unit ! {{H}}\nobserve () = perform H.op ()\n\
+                 main : Unit -> Int\nmain () = {{\nlet ignored = caller observe\n42\n}}\n"
+            );
+            let result = support::run_module("rigid-row-annotation.ash", &source);
+            if established {
+                assert_eq!(result.unwrap().value_display(), "42");
+            } else {
+                let failure =
+                    result.expect_err("a local annotation cannot strengthen arbitrary rigid Delta");
+                assert!(failure.is_source_rejection(), "{failure:?}");
+                assert_eq!(failure.reason_code(), "effect.row-exclusion");
+                assert!(
+                    matches!(&failure, ash::driver::PipelineFailure::Typing(_)),
+                    "{failure:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_bare_local_row_preserves_the_enclosing_declarations_exclusions() {
+    let source = r"effect H {
+op : Unit -> Unit
+}
+caller<Delta : EffectRow> : (Unit -> Unit ! {| Delta}) -> Unit ! {H | Delta}
+caller callback = {
+let invoke : Unit -> Unit ! {| Delta} = fn(ignored) {
+callback ()
+}
+()
+}
+main : Unit -> Int
+main () = 42
+";
+    assert_eq!(
+        support::run_module("established-bare-row.ash", source)
+            .unwrap()
+            .value_display(),
+        "42"
+    );
+}
+
+#[test]
+fn row_arguments_have_no_standalone_or_ordinary_nominal_type_denotation() {
+    use ash::driver::PipelineFailure;
+    for (declaration, standalone_row) in [
+        ("pub invalid : {| Rows} -> Unit\ninvalid value = ()\n", true),
+        ("pub type Invalid<A : EffectRow> = Invalid(A)\n", false),
+        (
+            "pub type Box<A> = Box(A)\npub invalid : Box<{}> -> Unit\ninvalid value = ()\n",
+            false,
+        ),
+    ] {
+        let source = format!("{declaration}\nmain : Unit -> Unit\nmain () = ()\n");
+        let failure = support::run_module("invalid-row-denotation.ash", &source)
+            .expect_err("ordinary monotypes cannot absorb row arguments or row-kind arrows");
+        if standalone_row {
+            assert!(
+                matches!(&failure, PipelineFailure::Syntax(_)),
+                "a standalone row is outside atomic type syntax: {failure:?}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    &failure,
+                    PipelineFailure::Resolution(_)
+                        | PipelineFailure::Kind(_)
+                        | PipelineFailure::Typing(_)
+                ),
+                "ordinary row arguments parse before kind rejection: {failure:?}"
+            );
+        }
+        assert!(failure.is_source_rejection(), "{failure:?}");
+    }
+}
+
+#[test]
+fn nested_owner_rows_obey_the_existing_depth_limit_on_a_small_stack() {
+    use ash::{
+        driver::PipelineFailure,
+        parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
+    };
+    std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
+        for depth in [STRUCTURAL_DEPTH_LIMIT + 1, 1_024] {
+            let row = format!("{}{{Inner}}{}", "{Outer<".repeat(depth - 1), ">}".repeat(depth - 1));
+            let source = format!("effect Inner {{\n    inner : Unit -> Unit\n}}\neffect Outer<Rows : EffectRow> {{\n    outer : Unit -> Unit\n}}\ninterface Witness<Rows : EffectRow> {{\n    witness : (Unit -> Unit ! {{| Rows}}) -> Unit ! {{| Rows}}\n}}\npub deep : Unit -> Unit where Witness<{row}>\ndeep () = ()\nmain : Unit -> Unit\nmain () = ()\n");
+            let failure = support::run_module("nested-row-depth.ash", &source)
+                .expect_err("complete nested rows consume the existing structural depth budget");
+            let PipelineFailure::Syntax(syntax) = &failure else {
+                panic!("the parser must reject the depth before source checking: {failure:?}");
+            };
+            assert_eq!(syntax.resource, Some(ResourceFailure::StructuralDepth { limit: STRUCTURAL_DEPTH_LIMIT }));
+            assert!(syntax.lexical.is_empty());
+            assert!(syntax.parser.is_empty());
+            assert!(!failure.is_source_rejection(), "a replaceable implementation depth limit is not a language rejection");
+        }
+    }).unwrap().join().unwrap();
+}

@@ -1,0 +1,356 @@
+diff --git a/src/core/capture.rs b/src/core/capture.rs
+index 4704996..2c8baf8 100644
+--- a/src/core/capture.rs
++++ b/src/core/capture.rs
+@@ -6539,6 +6539,22 @@ fn check_control_roots_with_rows(
+                 0,
+                 isolated.used(),
+             );
++            let mut deferred_work = TypeWorkBudget::default();
++            super::validate::startup_measurement::record("control.deferred.enter", 0, 0);
++            let deferred = super::validate::startup_measurement::with_deferred_calls(|| {
++                let mut separate = Analysis::new(graph, None, &mut deferred_work)?;
++                separate.collect_cleanup_rows = collect_cleanup_rows;
++                separate.check(&queries, &mut deferred_work)
++            });
++            super::validate::startup_measurement::record(
++                if deferred.is_ok() {
++                    "control.deferred.ok"
++                } else {
++                    "control.deferred.err"
++                },
++                0,
++                deferred_work.used(),
++            );
+         }
+         result?;
+         return Ok(std::mem::take(&mut analysis.cleanup_rows));
+@@ -7812,6 +7828,25 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn joint_worklist_scheduling_experiment_preserves_independent_core_guards() {
++        for deferred in [false, true] {
++            let checks = || {
++                // These controls independently rebuild actual Core; their
++                // assertions compare semantic rejection/values, not context IDs.
++                final_core_recomputes_owned_capture_after_same_typed_call_target_change();
++                final_core_recomputes_registration_callback_completion_from_actual_target();
++                raw_core_rejects_skipped_completion_and_restored_live_owners();
++            };
++            if deferred {
++                super::super::validate::startup_measurement::with_deferred_calls(checks);
++            } else {
++                checks();
++            }
++        }
++        assert!(!super::super::validate::startup_measurement::defer_calls());
++    }
++
+     #[test]
+     fn final_core_recomputes_owned_capture_after_same_typed_call_target_change() {
+         use super::super::{EffectExprKind, validate_effect, variable::VariableNode};
+diff --git a/src/core/capture/value.rs b/src/core/capture/value.rs
+index 6df5f68..bfbd72d 100644
+--- a/src/core/capture/value.rs
++++ b/src/core/capture/value.rs
+@@ -5227,6 +5227,13 @@ impl<'a> Analysis<'a> {
+             Some(Expr::Call { .. }) => "calls-after.close.ordinary.total",
+             _ => "calls-after.close.other.total",
+         };
++        #[cfg(test)]
++        let stage_result = if crate::core::validate::startup_measurement::defer_calls() {
++            Ok(())
++        } else {
++            self.close(budget)
++        };
++        #[cfg(not(test))]
+         let stage_result = self.close(budget);
+         #[cfg(test)]
+         crate::core::validate::startup_measurement::accumulate(
+@@ -13872,4 +13879,228 @@ mod tests {
+         );
+     }
+     // ASH_INPUT169_END_TESTS
++    // Injected value/control joint-driver probes, not reconstructed startup or
++    // full continuation-safety proofs. Context ordinals are schedule-local.
++    fn deferred_joint_settle(
++        analysis: &mut Analysis<'_>,
++        codes: &[usize],
++        prefixes: &mut [Option<DeliveredCallPrefix>],
++        targets: &mut std::collections::BTreeSet<usize>,
++        work: &mut TypeWorkBudget,
++    ) {
++        for _ in 0..16 {
++            let revision = analysis.revision();
++            for (code, prefix) in codes.iter().zip(prefixes.iter_mut()) {
++                let (successors, publication) = analysis
++                    .calls_after(*code, 0, prefix.as_ref(), work)
++                    .unwrap();
++                targets.extend(successors.targets.iter().map(|(code, _)| *code));
++                *prefix = Some(publication.publish(work).unwrap());
++            }
++            analysis.close(work).unwrap();
++            if revision == analysis.revision() {
++                return;
++            }
++        }
++        panic!("the finite injected joint-driver fixture must settle");
++    }
++
++    fn deferred_joint_relations(
++        analysis: &Analysis<'_>,
++        codes: &[usize],
++    ) -> std::collections::BTreeSet<(usize, &'static str, usize)> {
++        let mut result = std::collections::BTreeSet::new();
++        for slot in &analysis.slots {
++            if !codes.contains(&slot.key.0) {
++                continue;
++            }
++            for atom in &slot.atoms {
++                let relation = match atom {
++                    Atom::Unknown => ("unknown", 0),
++                    Atom::Free => ("free", 0),
++                    Atom::Closure(code, _) => ("closure", *code),
++                    Atom::Resource(owner, _) => ("resource", *owner),
++                    Atom::Reference(owner, _) => ("reference", *owner),
++                    Atom::Aggregate(code, _) => ("aggregate", *code),
++                    Atom::IndependentCallable => ("independent", 0),
++                    Atom::MetadataNeutral => ("metadata", 0),
++                    // This fixture installs no constructor/storage alternatives.
++                    Atom::Constructor(_) | Atom::Stored { .. } => {
++                        panic!("unexpected injected-fixture atom")
++                    }
++                };
++                result.insert((slot.key.0, relation.0, relation.1));
++            }
++        }
++        result
++    }
++
++    #[test]
++    fn deferred_joint_calls_reach_second_callee_and_late_owner_unknown() {
++        let mut graph = call_transfer_graph();
++        graph.expressions[4] = Expr::Merge(vec![2, 3, 7]);
++        graph.expressions.push(Expr::Call {
++            function: 6,
++            arguments: vec![1],
++            scalar: false,
++            type_application: false,
++        });
++        graph.sources.push(graph.sources[0]);
++        graph.positions.extend([(6, 6), (11, 11)]);
++        graph.targets.extend([(5, 50), (7, 70)]);
++        let run = |deferred| {
++            let execute = || {
++                let mut work = TypeWorkBudget::unbounded();
++                let mut analysis = Analysis::new(&graph, &mut work).unwrap();
++                let function = analysis.slot(0, 0, &mut work).unwrap();
++                let argument = analysis.slot(1, 0, &mut work).unwrap();
++                analysis.atom(argument, Atom::Free, &mut work).unwrap();
++                let capture = analysis.slot(3, 0, &mut work).unwrap();
++                analysis.atom(capture, Atom::Free, &mut work).unwrap();
++                // Queue the callee instead of installing its Closure atom by hand.
++                analysis.link(function, 5, 0, &mut work).unwrap();
++                let (first, publication) = analysis.calls_after(6, 0, None, &mut work).unwrap();
++                if deferred {
++                    assert!(
++                        first.targets.is_empty(),
++                        "outer close must reveal the queued callee"
++                    );
++                } else {
++                    assert!(first.targets.iter().any(|(code, _)| *code == 50));
++                }
++                let mut targets = first.targets.iter().map(|(code, _)| *code).collect();
++                let mut prefixes = [Some(publication.publish(&mut work).unwrap()), None];
++                deferred_joint_settle(
++                    &mut analysis,
++                    &[6, 11],
++                    &mut prefixes,
++                    &mut targets,
++                    &mut work,
++                );
++                assert!(targets.contains(&50) && targets.contains(&70));
++                let before = deferred_joint_relations(&analysis, &[6, 11]);
++
++                // The owner is generated by Resource transfer, then introduced
++                // late into the argument. Only one owner occurrence is injected.
++                let creation = analysis
++                    .context(0, Transition::Root(991), &mut work)
++                    .unwrap();
++                analysis.slot(9, creation, &mut work).unwrap();
++                analysis.close(&mut work).unwrap();
++                let owner = Atom::Resource(9, creation);
++                let owner_handle = analysis.indices[&(2, creation)];
++                assert!(analysis.slots[owner_handle].atoms.contains(&owner));
++                analysis.atom(argument, owner, &mut work).unwrap();
++                analysis.atom(function, Atom::Unknown, &mut work).unwrap();
++                deferred_joint_settle(
++                    &mut analysis,
++                    &[6, 11],
++                    &mut prefixes,
++                    &mut targets,
++                    &mut work,
++                );
++                let after = deferred_joint_relations(&analysis, &[6, 11]);
++                assert!(after.contains(&(6, "resource", 9)));
++                assert!(after.contains(&(6, "unknown", 0)));
++                assert!(after.contains(&(11, "resource", 9)));
++                assert!(after.contains(&(11, "unknown", 0)));
++                (targets, before, after)
++            };
++            if deferred {
++                crate::core::validate::startup_measurement::with_deferred_calls(execute)
++            } else {
++                execute()
++            }
++        };
++        assert_eq!(run(false), run(true));
++        assert!(!crate::core::validate::startup_measurement::defer_calls());
++    }
++
++    #[test]
++    fn deferred_joint_calls_keep_missing_native_and_late_owner_refusals() {
++        let mut graph = native_transfer_graph();
++        graph.expressions.extend([
++            Expr::Slot,
++            Expr::Function {
++                parameters: Vec::new(),
++                body: 1,
++                captures: Vec::new(),
++            },
++            Expr::Call {
++                function: 6,
++                arguments: Vec::new(),
++                scalar: false,
++                type_application: false,
++            },
++        ]);
++        graph.sources.extend([graph.sources[0]; 3]);
++        graph.positions.insert(908, 8);
++        graph.targets.insert(7, 70);
++        for deferred in [false, true] {
++            for mutation in 0..3 {
++                let execute = || {
++                    let mut work = TypeWorkBudget::unbounded();
++                    let mut analysis = Analysis::new(&graph, &mut work).unwrap();
++                    let function = analysis.slot(6, 0, &mut work).unwrap();
++                    analysis.link(function, 7, 0, &mut work).unwrap();
++                    let state = analysis.slot(0, 0, &mut work).unwrap();
++                    let reference = analysis.slot(2, 0, &mut work).unwrap();
++                    if mutation != 0 {
++                        analysis
++                            .atom(state, Atom::Resource(5, 0), &mut work)
++                            .unwrap();
++                        analysis
++                            .atom(reference, Atom::Reference(5, 0), &mut work)
++                            .unwrap();
++                    }
++                    let request = analysis.port(901, 0, &mut work).unwrap();
++                    analysis
++                        .external_native_result(
++                            request,
++                            900,
++                            0,
++                            super::super::NativeStorageResult::Load,
++                            &mut work,
++                        )
++                        .unwrap();
++                    let (_, publication) = analysis.calls_after(908, 0, None, &mut work).unwrap();
++                    publication.publish(&mut work).unwrap();
++                    analysis.close(&mut work).unwrap();
++                    if mutation == 0 {
++                        assert!(matches!(
++                            analysis.check_native_storage(&mut work),
++                            Err(Failure::Invalid)
++                        ));
++                        return;
++                    }
++                    analysis.check_native_storage(&mut work).unwrap();
++                    analysis
++                        .atom(
++                            state,
++                            if mutation == 1 {
++                                Atom::Resource(5, 1)
++                            } else {
++                                Atom::Unknown
++                            },
++                            &mut work,
++                        )
++                        .unwrap();
++                    // Eager discovers invalid late data in calls_after; deferred
++                    // must discover the same refusal at the joint driver's close.
++                    let result = analysis
++                        .calls_after(908, 0, None, &mut work)
++                        .and_then(|(_, publication)| publication.publish(&mut work))
++                        .and_then(|_| analysis.close(&mut work));
++                    assert!(matches!(result, Err(Failure::Invalid)));
++                };
++                if deferred {
++                    crate::core::validate::startup_measurement::with_deferred_calls(execute);
++                } else {
++                    execute();
++                }
++            }
++        }
++        // Value-level owner/unknown refusal is covered here; full continuation
++        // escape/discard safety requires the independent control/Core fixtures.
++    }
+ }
+diff --git a/src/core/validate/startup_measurement.rs b/src/core/validate/startup_measurement.rs
+index 5e04916..4f0f5f8 100644
+--- a/src/core/validate/startup_measurement.rs
++++ b/src/core/validate/startup_measurement.rs
+@@ -4,7 +4,7 @@
+ //! `reset` immediately before reconstruction and `snapshot` before reporting its
+ //! Result, including on failure. Snapshot disables recording on this thread.
+ 
+-use std::cell::RefCell;
++use std::cell::{Cell, RefCell};
+ 
+ #[derive(Clone, Debug)]
+ pub(crate) struct Event {
+@@ -15,6 +15,7 @@ pub(crate) struct Event {
+ 
+ thread_local! {
+     static EVENTS: RefCell<Option<Vec<Event>>> = const { RefCell::new(None) };
++    static DEFER_CALLS: Cell<bool> = const { Cell::new(false) };
+ }
+ 
+ pub(crate) fn reset() {
+@@ -52,7 +53,12 @@ pub(crate) fn accumulate(stage: &'static str, before: usize, after: usize) {
+         if let Some(events) = events.borrow_mut().as_mut() {
+             let start = events
+                 .iter()
+-                .rposition(|event| event.stage == "control.isolated.enter")
++                .rposition(|event| {
++                    matches!(
++                        event.stage,
++                        "control.isolated.enter" | "control.deferred.enter"
++                    )
++                })
+                 .map_or(0, |index| index + 1);
+             if let Some(event) = events[start..]
+                 .iter_mut()
+@@ -70,3 +76,20 @@ pub(crate) fn accumulate(stage: &'static str, before: usize, after: usize) {
+         }
+     });
+ }
++
++/// Test-only scheduling experiment. This scope supplies no graph/proof/result.
++pub(crate) fn with_deferred_calls<T>(operation: impl FnOnce() -> T) -> T {
++    struct Restore(bool);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            DEFER_CALLS.with(|value| value.set(self.0));
++        }
++    }
++    let previous = DEFER_CALLS.with(|value| value.replace(true));
++    let _restore = Restore(previous);
++    operation()
++}
++
++pub(crate) fn defer_calls() -> bool {
++    DEFER_CALLS.with(Cell::get)
++}

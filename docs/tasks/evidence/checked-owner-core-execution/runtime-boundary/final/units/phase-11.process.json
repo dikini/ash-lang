@@ -1,0 +1,17 @@
+{
+  "pid": 1440,
+  "pgid": 1440,
+  "argv": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--message-format=json-render-diagnostics",
+    "--lib",
+    "foreign::source_bindings::boundary_tests::checked_owner_boundary_requires_existing_exact_physical_slot_authority",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-owner-passive",
+  "started_unix": 1792728026.1711094
+}

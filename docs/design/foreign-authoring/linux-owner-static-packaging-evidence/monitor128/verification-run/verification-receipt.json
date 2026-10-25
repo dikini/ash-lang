@@ -1,0 +1,8 @@
+{
+  "status": "PASS_PREPARATION_ONLY_NOT_ACTIVATED",
+  "source_and_historical_before_after_equal": true,
+  "suite_methods": 21,
+  "suite_receipt_cases": 36,
+  "production_default_noop_cases": 1,
+  "native_or_build_commands_run": false
+}

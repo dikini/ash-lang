@@ -1,0 +1,85 @@
+{
+  "status": "HEADER_QUERY_REPAIRED_PREPARATION_ONLY",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 3193,
+      "sha256": "7728465d2b70bcad6e7722ebd1a592139479795c7ce1a1019517b2b69cd50c50"
+    },
+    {
+      "path": "association-test-command.json",
+      "size": 2333,
+      "sha256": "84596319ab3270297834431997042a1169389d5ac7b30f3cc389a425408d70de"
+    },
+    {
+      "path": "association-test-receipt.json",
+      "size": 2667,
+      "sha256": "882db683a66c9f9f426b9d47bd54e6017d0c7814edc51f9e00d67241d4bc3c8a"
+    },
+    {
+      "path": "association-test.stderr",
+      "size": 1003,
+      "sha256": "7ce7b39229522fef193890dea709922ebced67144507145d44bedee413327d74"
+    },
+    {
+      "path": "association-test.stdout",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "collect_dependencies.py",
+      "size": 7288,
+      "sha256": "b9fad73d35df9767f73d4b0a450f33eecd9ba9ed07768ecdad29e0a3c10d6e57"
+    },
+    {
+      "path": "manual-evidence.json",
+      "size": 1125,
+      "sha256": "ce7fd39c9d38570ce97a5a2e47720fdf3edd9b1b0ab12fb8ad242a97b5ccdf49"
+    },
+    {
+      "path": "owner-header-abi.c",
+      "size": 686,
+      "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694"
+    },
+    {
+      "path": "preflight-inputs.json",
+      "size": 10716,
+      "sha256": "738c146a7094719dab9836cafef7e48f3bce1bc3a019e7b5b9b15a576e57b023"
+    },
+    {
+      "path": "preparation-readback.json",
+      "size": 191,
+      "sha256": "91823e4dd2e0978766c401d65fc94e0d6966ece6ccc2c4040129dfbfc18be7e7"
+    },
+    {
+      "path": "preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "query.monitor.json",
+      "size": 5742,
+      "sha256": "f6685ed58846c4aac8c38e58bdc10329cfe80216198bcacf0f67c12c21b66dd5"
+    },
+    {
+      "path": "readonly-check-command.json",
+      "size": 873,
+      "sha256": "51df483e8d604aedb8d25e896ec76b40bd356115b21af7f65b5e2b36312927dc"
+    },
+    {
+      "path": "test_dependency_association.py",
+      "size": 3106,
+      "sha256": "eb5567dce665cf6ca0ab2a6a6cf4537e973c158af5a3eba54133b95f37c80871"
+    },
+    {
+      "path": "tuple.json",
+      "size": 10415,
+      "sha256": "a0508c640cb40fd28638dae16ff6b0d404dc7cba4e84cd41053f62046dc90e30"
+    },
+    {
+      "path": "verify_inputs.py",
+      "size": 2350,
+      "sha256": "4f83fbef2b08d27a818d161175feef56f6399cd68436405f1b075244584bf473"
+    }
+  ]
+}

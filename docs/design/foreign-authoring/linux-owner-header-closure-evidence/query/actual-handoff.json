@@ -1,0 +1,102 @@
+{
+  "status": "SUCCESS_DEPENDENCY_DISCOVERY_ONLY",
+  "phase_exits": [
+    {
+      "name": "before-query",
+      "exit": 0
+    },
+    {
+      "name": "dependency-query",
+      "exit": 0
+    },
+    {
+      "name": "after-query",
+      "exit": 0
+    },
+    {
+      "name": "collect-discovered-headers",
+      "exit": 0
+    }
+  ],
+  "execution_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/execution-manifest.json",
+    "size": 10259,
+    "sha256": "5bf5d522f30ed34ebbd9346e5fb434bf2f3c74a750405462e583301790089139"
+  },
+  "readback": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/execution-readback.json",
+    "size": 6346,
+    "sha256": "2e7d9cf4f327546e49222e36bdd7f015f5a7f0f503480682c00912c1e3dcabf5"
+  },
+  "receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json",
+    "size": 2976,
+    "sha256": "b89b81b854765f86df14d82cbd3d73a87fbb97b6b81d0413df4689fb1e0d5b03"
+  },
+  "discovered_header_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+    "size": 9529,
+    "sha256": "9b73bbf5f051cbf2c78d00ed8aaacc07072bfdef57c45ae1eae2a644baad5dcb"
+  },
+  "dependency_count_including_source": 28,
+  "post_query_dependency_bytes": 181397,
+  "raw_dependency": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/native-build.log",
+    "size": 1373,
+    "sha256": "747a091828204943704f753b7b9ad0f37911e0fd665453c2f8ad9fbeafdb74a3",
+    "device": 66309,
+    "inode": 49555298,
+    "mtime_ns": 1792666859789234003
+  },
+  "monitor_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/build-run-rdul_efb/receipt.json",
+    "size": 11601,
+    "sha256": "c25d886b63af3c6b2582da828239c7280c60210ee2858704e593799ff0097ddb"
+  },
+  "monitor_cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 6,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "monitor_reason": "exit",
+  "monitor_child_exit": 0,
+  "known_before": {
+    "phase": "before-query",
+    "known_pins_equal": true,
+    "known_pin_count": 25,
+    "transitive_headers_known": false,
+    "transitive_header_bytes_proven": false,
+    "query_run_by_verifier": false
+  },
+  "known_after": {
+    "phase": "after-query",
+    "known_pins_equal": true,
+    "known_pin_count": 25,
+    "transitive_headers_known": false,
+    "transitive_header_bytes_proven": false,
+    "query_run_by_verifier": false
+  },
+  "limits": {
+    "deadline_seconds": 1200,
+    "output_bytes": 16777216,
+    "sidefile_bytes": 16777216,
+    "map_bytes": 67108864
+  },
+  "full_header_byte_history_proven": false,
+  "syntax_static_assert_or_ABI_success": false,
+  "object_link_image_or_native_startup": false,
+  "qualification": "Discovered paths and post-query snapshots only. Known seed/tool/source/config before+after equality and raw dependency producer correspondence passed. Unknown transitive headers were not pre-pinned; later syntax-only closure review and exact assignment remain separate."
+}

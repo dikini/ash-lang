@@ -1,0 +1,161 @@
+[
+  {
+    "event": "exact_test",
+    "name": "ash::build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "sequence": 1
+  },
+  {
+    "caller": "ash::build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "event": "entry",
+    "kind": "restore",
+    "limit": 327680,
+    "meter": 140737349930024,
+    "sequence": 2,
+    "used": 56685
+  },
+  {
+    "caller": "ash::core::capture::check_control_roots",
+    "code_len": 401,
+    "event": "entry",
+    "graph": 140737349882384,
+    "kind": "root_gate",
+    "limit": 93000,
+    "meter": 140737349891040,
+    "sequence": 3,
+    "used": 17471
+  },
+  {
+    "caller": "ash::core::capture::control::Analysis::new",
+    "code_len": 401,
+    "event": "entry",
+    "graph": 140737349882384,
+    "kind": "prepare",
+    "limit": 93000,
+    "meter": 140737349891040,
+    "sequence": 4,
+    "used": 18025
+  },
+  {
+    "after": 18490,
+    "caller": "ash::core::capture::control::Analysis::new",
+    "code_len": 401,
+    "event": "return",
+    "graph": 140737349882384,
+    "inclusive": 465,
+    "kind": "prepare",
+    "limit": 93000,
+    "meter": 140737349891040,
+    "sequence": 5,
+    "used": 18025
+  },
+  {
+    "caller": "ash::core::capture::control::Analysis::new",
+    "code_len": 401,
+    "event": "entry",
+    "graph": 140737349882384,
+    "kind": "from_inventory",
+    "limit": 93000,
+    "meter": 140737349891040,
+    "sequence": 6,
+    "used": 18490
+  },
+  {
+    "after": 23218,
+    "caller": "ash::core::capture::control::Analysis::new",
+    "code_len": 401,
+    "event": "return",
+    "graph": 140737349882384,
+    "inclusive": 4728,
+    "kind": "from_inventory",
+    "limit": 93000,
+    "meter": 140737349891040,
+    "sequence": 7,
+    "used": 18490
+  },
+  {
+    "caller": "ash::core::capture::control::Analysis::check",
+    "event": "entry",
+    "kind": "candidates",
+    "limit": 93000,
+    "meter": 140737349891040,
+    "sequence": 8,
+    "slots": 1433,
+    "used": 91704,
+    "value_analysis": 140737349876192,
+    "value_graph": 140737220058176
+  },
+  {
+    "event": "failed_charge",
+    "limit": 93000,
+    "requested": 1,
+    "sequence": 9,
+    "stack": [
+      "ash::types::TypeWorkBudget::charge",
+      "ash::core::capture::charge",
+      "ash::core::capture::value::Analysis::resource_candidates",
+      "ash::core::capture::control::Analysis::check",
+      "ash::core::capture::check_control_roots_with_rows",
+      "ash::core::capture::check_control_roots",
+      "ash::core::capture::analyze_nodes_with_methods<ash::core::effect::EffectOperationFamily>",
+      "ash::core::capture::check_nodes_with_methods<ash::core::effect::EffectOperationFamily>",
+      "ash::core::capture::check_nodes<ash::core::effect::EffectOperationFamily>",
+      "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::run_effect_with_registry",
+      "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::run_effect",
+      "ash::core::validate::validate_effect_modules_with_work"
+    ],
+    "used": 93000
+  },
+  {
+    "after": 93000,
+    "caller": "ash::core::capture::control::Analysis::check",
+    "event": "return",
+    "inclusive": 1296,
+    "kind": "candidates",
+    "limit": 93000,
+    "meter": 140737349891040,
+    "sequence": 10,
+    "slots": 1433,
+    "used": 91704,
+    "value_analysis": 140737349876192,
+    "value_graph": 140737220058176
+  },
+  {
+    "after": 93000,
+    "caller": "ash::core::capture::check_control_roots",
+    "code_len": 401,
+    "event": "return",
+    "graph": 140737349882384,
+    "inclusive": 75529,
+    "kind": "root_gate",
+    "limit": 93000,
+    "meter": 140737349891040,
+    "sequence": 11,
+    "used": 17471
+  },
+  {
+    "after": 327680,
+    "caller": "ash::build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+    "event": "return",
+    "inclusive": 270995,
+    "kind": "restore",
+    "limit": 327680,
+    "meter": 140737349930024,
+    "sequence": 12,
+    "used": 56685
+  },
+  {
+    "calls": {
+      "candidates": 1,
+      "from_inventory": 1,
+      "prepare": 1,
+      "restore": 1,
+      "root_gate": 1
+    },
+    "event": "inferior_exit",
+    "exit_code": 101,
+    "limit": "inclusive phase costs overlap; same graph pointer establishes only immutable topology identity",
+    "open_root_windows": 0,
+    "restore_count": 1,
+    "sequence": 13
+  }
+]

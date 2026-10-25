@@ -1,0 +1,25 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 53.71s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 2 tests
+
+thread 'resolved::checked_resource_kind_closure_tests::checked_resource_kind_closure_accepts_actual_kind_only_probe_family' (719) panicked at src/resolved/checked_resource_kind_closure_tests.rs:41:10:
+source-owner checking with paid dependency code and unchanged default allowance: Internal(TypeResourceExhausted)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'resolved::checked_resource_kind_closure_tests::checked_resource_kind_closure_rejects_exact_missing_probe_kind' (720) panicked at src/resolved/checked_resource_kind_closure_tests.rs:41:10:
+source-owner checking with paid dependency code and unchanged default allowance: Internal(TypeResourceExhausted)
+test resolved::checked_resource_kind_closure_tests::checked_resource_kind_closure_accepts_actual_kind_only_probe_family ... FAILED
+test resolved::checked_resource_kind_closure_tests::checked_resource_kind_closure_rejects_exact_missing_probe_kind ... FAILED
+
+failures:
+
+failures:
+    resolved::checked_resource_kind_closure_tests::checked_resource_kind_closure_accepts_actual_kind_only_probe_family
+    resolved::checked_resource_kind_closure_tests::checked_resource_kind_closure_rejects_exact_missing_probe_kind
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2007 filtered out; finished in 0.17s
+
+error: test failed, to rerun pass `-p ash --lib`

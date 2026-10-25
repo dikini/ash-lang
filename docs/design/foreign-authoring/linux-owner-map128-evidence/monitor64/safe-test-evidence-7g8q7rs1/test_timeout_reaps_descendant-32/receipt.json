@@ -1,0 +1,95 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "0f2fa35b0e98b156971837d2f8328740a1b1cd2434edd177eb3862fe65bc4d77",
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size_before": 20745,
+    "size_after": 20745,
+    "hashed_bytes": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 55540
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-yzupjlhe/build-run-wzrcf8nc",
+  "output_path": "/tmp/ash-build-monitor-test-yzupjlhe/build-run-wzrcf8nc/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "import os,time; child=os.fork(); time.sleep(60)"
+  ],
+  "child_pid": 55,
+  "child_exit": -9,
+  "reason": "deadline",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 0,
+  "retained_output_bytes": 0,
+  "output_truncated": false,
+  "watched_files": [],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 55,
+        "wait_status": 9,
+        "exit_code": -9
+      },
+      {
+        "pid": 56,
+        "wait_status": 9,
+        "exit_code": -9
+      }
+    ],
+    "reaped_count": 2,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": true
+  },
+  "map_relative_path": null,
+  "limits": {
+    "deadline_seconds": 0.2,
+    "output_bytes": 16384,
+    "sidefile_bytes": 16384,
+    "map_bytes": 67108864
+  },
+  "environment_keys": [],
+  "executable": {
+    "path": "/usr/bin/python3.14",
+    "size_before": 7477160,
+    "size_after": 7477160,
+    "hashed_bytes": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347805
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 55,
+  "child_session": 55,
+  "final_limit_failures": [],
+  "elapsed_seconds": 0.21300380100001348,
+  "observed_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-yzupjlhe/build-run-wzrcf8nc/output.log",
+    "size_before": 0,
+    "size_after": 0,
+    "hashed_bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 57310
+  }
+}

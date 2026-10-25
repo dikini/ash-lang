@@ -262,22 +262,9 @@ fn validate_node_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), Proj
 fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), ProjectionError> {
     let mut shape = ShapeCursor::new(node, tokens);
     match node.kind {
-        NodeKind::ForeignLibrary
-        | NodeKind::ForeignMember
-        | NodeKind::ForeignRepresentation
-        | NodeKind::ForeignReference
-        | NodeKind::ForeignInteger
-        | NodeKind::ForeignSourcePosition
-        | NodeKind::ForeignNativePosition
-        | NodeKind::ForeignAbiOperand
-        | NodeKind::ForeignAbiRepresentation
-        | NodeKind::ForeignCallContract
-        | NodeKind::ForeignOperandRole
-        | NodeKind::ForeignOutputRole
-        | NodeKind::ForeignOutcomeTest
-        | NodeKind::ForeignOutcomeAtom
-        | NodeKind::ForeignOutcomeFact
-        | NodeKind::ForeignInputDiscipline => return foreign::validate_shape(node, tokens),
+        NodeKind::ForeignLibrary | NodeKind::ForeignMember => {
+            return foreign::validate_shape(node, tokens);
+        }
         NodeKind::Module => {
             while shape.peek_node_is(NodeKind::ImportDeclaration) {
                 shape.node(NodeKind::ImportDeclaration)?;
@@ -707,31 +694,6 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.node(NodeKind::TypeParameters)?;
             shape.token(&TokenKind::LeftBrace)?;
             shape.token(&TokenKind::LineEnd)?;
-            if shape.peek_node_is(NodeKind::SourceResourceField) {
-                for (index, role) in SOURCE_RESOURCE_FIELDS.iter().enumerate() {
-                    let field = shape.peek_node().ok_or(ProjectionError::MalformedTree(
-                        InternalReason::UnexpectedShape,
-                    ))?;
-                    let matches_role = direct_tokens(field, tokens).next().is_some_and(|token| {
-                        match &token.kind {
-                            TokenKind::Effect => *role == "effect",
-                            TokenKind::Identifier(word) => word.as_str() == *role,
-                            _ => false,
-                        }
-                    });
-                    if !matches_role {
-                        return malformed(InternalReason::UnexpectedShape);
-                    }
-                    shape.node(NodeKind::SourceResourceField)?;
-                    if index < SOURCE_RESOURCE_FIELDS.len() - 1
-                        || shape.peek_token_is(&TokenKind::LineEnd)
-                    {
-                        shape.token(&TokenKind::LineEnd)?;
-                    }
-                }
-                shape.token(&TokenKind::RightBrace)?;
-                return shape.finish();
-            }
             for index in 0..9 {
                 if index == 6 && shape.peek_node_is(NodeKind::ResourceFamily) {
                     shape.node(NodeKind::ResourceFamily)?;
@@ -776,68 +738,6 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 }
             }
             shape.token(&TokenKind::RightBrace)?;
-        }
-        NodeKind::SourceResourceField => {
-            let head = direct_tokens(node, tokens)
-                .next()
-                .ok_or(ProjectionError::MalformedTree(
-                    InternalReason::UnexpectedShape,
-                ))?;
-            if head.kind == TokenKind::Effect {
-                shape.token(&TokenKind::Effect)?;
-                shape.node(NodeKind::EffectInstance)?;
-                return shape.finish();
-            }
-            let TokenKind::Identifier(word) = &head.kind else {
-                return malformed(InternalReason::UnexpectedShape);
-            };
-            shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
-            match word.as_str() {
-                "owned" => {
-                    shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?
-                }
-                "input" | "state" | "data" | "acquisition" | "completion" | "provider" => {
-                    shape.node(NodeKind::Type)?;
-                }
-                "result" => {
-                    shape.node(NodeKind::Type)?;
-                    shape.token_matching(
-                        |kind| matches!(kind, TokenKind::Identifier(word) if word == "for"),
-                    )?;
-                    shape.node(NodeKind::TypeParameters)?;
-                }
-                "codec" => shape.token_matching(|kind| {
-                    matches!(kind, TokenKind::Identifier(word)
-                        if word == "scope" || word == "acquired_only")
-                })?,
-                "interpret" => {
-                    shape.node(NodeKind::EffectInstance)?;
-                    while shape.peek_token_is(&TokenKind::Comma) {
-                        shape.token(&TokenKind::Comma)?;
-                        shape.node(NodeKind::EffectInstance)?;
-                    }
-                }
-                "acquire" | "finish" => {
-                    shape.node(NodeKind::Pattern)?;
-                    shape.token(&TokenKind::FatArrow)?;
-                    shape.expression()?;
-                }
-                "handlers" => {
-                    shape.node(NodeKind::Pattern)?;
-                    shape.token(&TokenKind::LeftBrace)?;
-                    shape.token(&TokenKind::LineEnd)?;
-                    shape.node(NodeKind::HandlerClause)?;
-                    while shape.peek_token_is(&TokenKind::LineEnd) {
-                        shape.token(&TokenKind::LineEnd)?;
-                        if !shape.peek_node_is(NodeKind::HandlerClause) {
-                            break;
-                        }
-                        shape.node(NodeKind::HandlerClause)?;
-                    }
-                    shape.token(&TokenKind::RightBrace)?;
-                }
-                _ => return malformed(InternalReason::UnexpectedShape),
-            }
         }
         NodeKind::ResourceField => {
             let word = direct_tokens(node, tokens)
@@ -890,15 +790,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 _ => return malformed(InternalReason::UnexpectedShape),
             }
         }
-        NodeKind::CopyWindowExpression => {
-            shape.token(&TokenKind::CopyWindow)?;
-            shape.node(NodeKind::Type)?;
-            shape.token_matching(
-                |kind| matches!(kind, TokenKind::Identifier(word) if word == "from"),
-            )?;
-            shape.node(NodeKind::PrimaryExpression)?;
-            shape.node(NodeKind::Block)?;
-        }
+
         NodeKind::ProviderResourceExpression => {
             shape.token(&TokenKind::Resource)?;
             let instance = only_child_of_kind(node, NodeKind::EffectInstance)?;
@@ -1365,7 +1257,7 @@ fn project_surface_module(
     let mut effects = Vec::new();
     let mut implementations = Vec::new();
     let mut resources = Vec::new();
-    let mut source_resources = Vec::new();
+
     let mut definitions = Vec::new();
     for child in child_nodes(node) {
         match child.kind {
@@ -1389,16 +1281,8 @@ fn project_surface_module(
                 interfaces.push(project_interface_declaration(source, child, tokens)?);
             }
             NodeKind::ResourceDefinition => {
-                if child_nodes(child).any(|field| field.kind == NodeKind::SourceResourceField) {
-                    declaration_order.push(SurfaceDeclarationIndex::SourceResource(
-                        source_resources.len(),
-                    ));
-                    source_resources
-                        .push(project_source_resource_definition(source, child, tokens)?);
-                } else {
-                    declaration_order.push(SurfaceDeclarationIndex::Resource(resources.len()));
-                    resources.push(project_resource_definition(source, child, tokens)?);
-                }
+                declaration_order.push(SurfaceDeclarationIndex::Resource(resources.len()));
+                resources.push(project_resource_definition(source, child, tokens)?);
             }
             NodeKind::EffectDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Effect(effects.len()));
@@ -1427,7 +1311,7 @@ fn project_surface_module(
         implementations,
         definitions,
         resources,
-        source_resources,
+
         span: node_span(source, node, tokens)?,
     })
 }
@@ -2092,22 +1976,7 @@ fn project_expression(
                     )?));
                     tasks.push(ExpressionTask::Visit(value));
                 }
-                NodeKind::CopyWindowExpression => {
-                    let family =
-                        project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?;
-                    tasks.push(ExpressionTask::FinishCopyWindow {
-                        family,
-                        span: node_span(source, node, tokens)?,
-                    });
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
-                        node,
-                        NodeKind::Block,
-                    )?));
-                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
-                        node,
-                        NodeKind::PrimaryExpression,
-                    )?));
-                }
+
                 NodeKind::ProviderResourceExpression => {
                     let family = project_effect_instance(
                         source,
@@ -2389,22 +2258,7 @@ fn project_expression(
                     span,
                 });
             }
-            ExpressionTask::FinishCopyWindow { family, span } => {
-                let (state, body) = take_expression_pair(&mut projected)?;
-                let SurfaceExprKind::Block(body) = body.kind else {
-                    return malformed(InternalReason::UnexpectedShape);
-                };
-                projected.push(SurfaceExpr {
-                    kind: SurfaceExprKind::CopyWindow(Box::new(
-                        crate::surface::SurfaceCopyWindowExpr {
-                            family,
-                            state,
-                            body,
-                        },
-                    )),
-                    span,
-                });
-            }
+
             ExpressionTask::FinishProviderResource {
                 family,
                 arguments,
@@ -2668,10 +2522,7 @@ enum ExpressionTask<'a> {
     },
     FinishResume(Span),
     FinishCleanup(Span),
-    FinishCopyWindow {
-        family: SurfaceType,
-        span: Span,
-    },
+
     FinishProviderResource {
         family: SurfaceReference,
         arguments: Vec<SurfaceType>,
@@ -3655,7 +3506,6 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
             | NodeKind::HandlerExpression
             | NodeKind::ResumeExpression
             | NodeKind::ProviderResourceExpression
-            | NodeKind::CopyWindowExpression
             | NodeKind::ResourceExpression
             | NodeKind::HookExpression
             | NodeKind::RegistrationExpression
@@ -3764,122 +3614,6 @@ fn require_kind(node: &ConcreteNode, kind: NodeKind) -> Result<(), ProjectionErr
 
 fn malformed<T>(reason: InternalReason) -> Result<T, ProjectionError> {
     Err(ProjectionError::MalformedTree(reason))
-}
-
-const SOURCE_RESOURCE_FIELDS: &[&str] = &[
-    "owned",
-    "input",
-    "state",
-    "data",
-    "acquisition",
-    "completion",
-    "result",
-    "codec",
-    "provider",
-    "effect",
-    "interpret",
-    "acquire",
-    "finish",
-    "handlers",
-];
-
-fn project_source_resource_definition(
-    source: &SourceFile,
-    node: &ConcreteNode,
-    tokens: &[Token],
-) -> Result<crate::surface::SurfaceSourceResourceDefinition, ProjectionError> {
-    let mut fields = child_nodes(node).filter(|child| child.kind == NodeKind::SourceResourceField);
-    let fields_array: [Option<&ConcreteNode>; 14] = std::array::from_fn(|_| fields.next());
-    let [
-        Some(owned),
-        Some(input),
-        Some(state),
-        Some(data),
-        Some(acquisition),
-        Some(completion),
-        Some(result),
-        Some(codec),
-        Some(provider),
-        Some(provided),
-        Some(interpreted),
-        Some(acquire),
-        Some(finish),
-        Some(handlers),
-    ] = fields_array
-    else {
-        return malformed(InternalReason::UnexpectedShape);
-    };
-    if fields.next().is_some() {
-        return malformed(InternalReason::UnexpectedShape);
-    }
-    let field_type =
-        |field| project_type(source, only_child_of_kind(field, NodeKind::Type)?, tokens);
-    let field_pattern = |field| {
-        project_pattern(
-            source,
-            only_child_of_kind(field, NodeKind::Pattern)?,
-            tokens,
-        )
-    };
-    let codec_token = direct_tokens(codec, tokens)
-        .nth(1)
-        .ok_or(ProjectionError::MalformedTree(
-            InternalReason::UnexpectedShape,
-        ))?;
-    let codec_kind = match &codec_token.kind {
-        TokenKind::Identifier(word) if word == "scope" => {
-            crate::surface::SurfaceResourceReportCodecKind::Scope
-        }
-        TokenKind::Identifier(word) if word == "acquired_only" => {
-            crate::surface::SurfaceResourceReportCodecKind::AcquiredOnly
-        }
-        _ => return malformed(InternalReason::UnexpectedShape),
-    };
-    Ok(crate::surface::SurfaceSourceResourceDefinition {
-        public: direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub),
-        name: surface_name(
-            direct_tokens(node, tokens)
-                .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
-                .ok_or(ProjectionError::MalformedTree(
-                    InternalReason::UnexpectedShape,
-                ))?,
-        )?,
-        parameters: project_optional_type_parameters(source, node, tokens)?.ok_or(
-            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
-        )?,
-        owned: surface_name(direct_tokens(owned, tokens).nth(1).ok_or(
-            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
-        )?)?,
-        input: field_type(input)?,
-        state: field_type(state)?,
-        data: field_type(data)?,
-        acquisition: field_type(acquisition)?,
-        completion: field_type(completion)?,
-        result: field_type(result)?,
-        result_parameters: project_optional_type_parameters(source, result, tokens)?.ok_or(
-            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
-        )?,
-        codec: crate::surface::SurfaceResourceReportCodec {
-            kind: codec_kind,
-            span: codec_token.span,
-        },
-        provider: field_type(provider)?,
-        provided: project_effect_instance(
-            source,
-            only_child_of_kind(provided, NodeKind::EffectInstance)?,
-            tokens,
-        )?,
-        interpreted: child_nodes(interpreted)
-            .map(|instance| project_effect_instance(source, instance, tokens))
-            .collect::<Result<Vec<_>, _>>()?,
-        acquire_pattern: field_pattern(acquire)?,
-        acquire: project_expression(source, expression_child(acquire)?, tokens)?,
-        finish_pattern: field_pattern(finish)?,
-        finish: project_expression(source, expression_child(finish)?, tokens)?,
-        handlers_pattern: field_pattern(handlers)?,
-        handlers: project_resource_handler_clauses(source, handlers, tokens)?,
-        span: node_span(source, node, tokens)?,
-    })
 }
 
 fn project_resource_definition(
@@ -4046,81 +3780,7 @@ mod tests {
     }
 
     #[test]
-    fn product_resource_projection_rechecks_field_roles_lists_and_pattern_shapes() {
-        let text = "resource Test<R> {\n    owned R\n    input Unit\n    state Native.State<R>\n    data Unit\n    acquisition Acquire<Native.State<R>, Unit, Unit>\n    completion Finish<Native.State<R>, Unit>\n    result Scope<Unit, Unit, T> for <T>\n    codec scope\n    provider Provider<R>\n    effect Ops<R>\n    interpret Native.Allocate<R>, Native.Free<R>\n    acquire () => Acquired\n    finish state => Consumed\n    handlers state {\n        use () => resume ()\n    }\n}\n";
-        let source = SourceFile::new("resource-shape.ash", text).expect("fixture source");
-        let baseline = parse(lex(&source).expect("fixture lexes"));
-        assert!(project_module(&source, &baseline).is_ok());
-        for mutation in 0..5 {
-            let mut tree = baseline.clone();
-            let root = tree.root.as_mut().expect("fixture root");
-            let declaration =
-                find_node_mut(root, NodeKind::ResourceDefinition).expect("fixture declaration");
-            match mutation {
-                0 => {
-                    find_node_mut(declaration, NodeKind::SourceResourceField)
-                        .expect("owned field")
-                        .kind = NodeKind::ResourceField;
-                }
-                1 => {
-                    let interpreted = declaration.children.iter_mut().find_map(|child| {
-                        let ConcreteElement::Node(field) = child else { return None; };
-                        (field.kind == NodeKind::SourceResourceField
-                            && direct_tokens(field, &tree.tokens).next().is_some_and(|token|
-                                matches!(&token.kind, TokenKind::Identifier(word) if word == "interpret")))
-                            .then_some(field)
-                    }).expect("interpret field");
-                    let comma = interpreted
-                        .children
-                        .iter()
-                        .position(|child| {
-                            matches!(child, ConcreteElement::Token(index)
-                            if tree.tokens[*index].kind == TokenKind::Comma)
-                        })
-                        .expect("separator");
-                    interpreted.children.remove(comma);
-                }
-                2 => {
-                    find_node_mut(declaration, NodeKind::Pattern)
-                        .expect("acquire pattern")
-                        .kind = NodeKind::Binder;
-                }
-                3 => {
-                    let fields = declaration
-                        .children
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, child)| match child {
-                            ConcreteElement::Node(field)
-                                if field.kind == NodeKind::SourceResourceField =>
-                            {
-                                Some(index)
-                            }
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    declaration.children.swap(fields[1], fields[2]);
-                }
-                4 => {
-                    let interpreted = declaration.children.iter_mut().find_map(|child| {
-                        let ConcreteElement::Node(field) = child else { return None; };
-                        (field.kind == NodeKind::SourceResourceField
-                            && direct_tokens(field, &tree.tokens).next().is_some_and(|token|
-                                matches!(&token.kind, TokenKind::Identifier(word) if word == "interpret")))
-                            .then_some(field)
-                    }).expect("interpret field");
-                    interpreted.children.retain(|child| !matches!(child,
-                        ConcreteElement::Node(instance) if instance.kind == NodeKind::EffectInstance));
-                }
-                _ => unreachable!(),
-            }
-            assert_eq!(
-                project_module(&source, &tree),
-                Err(ProjectionError::MalformedTree(
-                    InternalReason::UnexpectedShape
-                ))
-            );
-        }
+    fn resource_instance_projection_rechecks_actual_argument_shape() {
         let source = SourceFile::new(
             "resource-instance-shape.ash",
             "main : Unit -> Int\nmain () = resource Lib.Test<R> state = 0 {\n    42\n}\n",

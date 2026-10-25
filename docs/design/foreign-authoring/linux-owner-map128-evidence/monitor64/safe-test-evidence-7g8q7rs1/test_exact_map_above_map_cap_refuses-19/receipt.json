@@ -1,0 +1,108 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "e16e6a613354a33bfc1e0d0f4110ba735c986ccac2ffd26441a3ba378bac5441",
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size_before": 20745,
+    "size_after": 20745,
+    "hashed_bytes": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 55540
+  },
+  "run_directory": "/tmp/ash-build-monitor-test-i4mka1t5/build-run-si_sswaa",
+  "output_path": "/tmp/ash-build-monitor-test-i4mka1t5/build-run-si_sswaa/output.log",
+  "argv": [
+    "/usr/bin/python3.14",
+    "-B",
+    "-c",
+    "from pathlib import Path; import time; p=Path(\"maps/whole-static.map\"); p.parent.mkdir(); p.write_bytes(b\"m\"*8192); time.sleep(.1)"
+  ],
+  "child_pid": 28,
+  "child_exit": -9,
+  "reason": "watched_file_limit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 0,
+  "retained_output_bytes": 0,
+  "output_truncated": false,
+  "watched_files": [
+    {
+      "relative_path": "maps/whole-static.map",
+      "observed_peak_bytes": 8192,
+      "file_class": "link_map",
+      "limit_bytes": 4096,
+      "path": "/tmp/ash-build-monitor-test-i4mka1t5/maps/whole-static.map",
+      "size_before": 8192,
+      "size_after": 8192,
+      "hashed_bytes": 4096,
+      "sha256": "13baaad085152f5bd8c0691f5b959fb47959ec5ef2d4d7ea89519ba28d4a02dd",
+      "hash_is_prefix": true,
+      "device": 47,
+      "inode": 57119,
+      "retained_path": "/tmp/ash-build-monitor-test-i4mka1t5/build-run-si_sswaa/watched-0.log"
+    }
+  ],
+  "inputs": [],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 28,
+        "wait_status": 9,
+        "exit_code": -9
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": true
+  },
+  "map_relative_path": "maps/whole-static.map",
+  "limits": {
+    "deadline_seconds": 2,
+    "output_bytes": 1024,
+    "sidefile_bytes": 1024,
+    "map_bytes": 4096
+  },
+  "environment_keys": [],
+  "executable": {
+    "path": "/usr/bin/python3.14",
+    "size_before": 7477160,
+    "size_after": 7477160,
+    "hashed_bytes": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347805
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 28,
+  "child_session": 28,
+  "final_limit_failures": [
+    "watched_file_limit"
+  ],
+  "elapsed_seconds": 0.049689069001033204,
+  "observed_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "output_file": {
+    "path": "/tmp/ash-build-monitor-test-i4mka1t5/build-run-si_sswaa/output.log",
+    "size_before": 0,
+    "size_after": 0,
+    "hashed_bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 57116
+  }
+}

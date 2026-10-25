@@ -1,0 +1,16 @@
+This opening parenthesis has no matching `)`.
+  --> /tmp/ash-generated-scalar.dwlpe5nj/entry.ash:14:28
+14 | main () = perform Abs.call (0 - 7)
+   |                            ^ This opening parenthesis has no matching `)`.
+  --> /tmp/ash-generated-scalar.dwlpe5nj/entry.ash:14:31
+14 | main () = perform Abs.call (0 - 7)
+   |                               ^ Found `-` here.
+reason: parse.unclosed-group
+A logical line end is required here.
+  --> /tmp/ash-generated-scalar.dwlpe5nj/entry.ash:14:31
+14 | main () = perform Abs.call (0 - 7)
+   |                               ^ A logical line end is required here.
+  --> /tmp/ash-generated-scalar.dwlpe5nj/entry.ash:14:35
+14 | main () = perform Abs.call (0 - 7)
+   |                                   ^ Parsing resumes at this boundary.
+reason: parse.expected-form

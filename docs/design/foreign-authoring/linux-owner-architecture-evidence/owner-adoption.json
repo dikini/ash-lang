@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "decision_id": "AD-0016",
+  "status": "OWNER_ADOPTED_MECHANISM_FINAL_WORDING_AND_RETENTION_PENDING",
+  "owner": "Root orchestrator under explicit human delegation for autonomous recommended choices",
+  "reviewed_draft_sha256": "4b379d6a8963c36f803bc849af0b74c40c832e432fedac4993798a0defe7ac15",
+  "diagnostic_retaining_commit": "0f94d650ca68e3453c9400023c64cf1e6f63a0fb",
+  "diagnostic_acceptance_confirmation": "https://github.com/dikini/ash-lang/issues/58#issuecomment-6340959368",
+  "selection": "Exact ownerful whole-static GNU in-process images with finite native/runtime applicability, independent protected per-image approval and an established fixed launch context",
+  "target": "x86_64-unknown-linux-gnu",
+  "language_authority": "Accepted CP-0024 governs language transitions; this non-language mechanism choice adds no new semantics or current Main behavior",
+  "conditions": [
+    "Preserve explicit allocator/lifetime/disposition/reporting/error/unwind/shutdown/loading/host-loss premises and ten missing temporary/build-source correspondence limits",
+    "No native-free truth, native memory read, strict no-loading or checked O/K/group proof inferred from the legacy diagnostic",
+    "Strict applicable per-image approval and protected store/context plus connected F3/F4/F6 enforcement are required before checked activation",
+    "Keep separate isolated mode and full F2/F4/F6/F7/C-to-S/copy/SQLite/F-core/F-final/Main obligations",
+    "Preserve AD-0015 scalar scope; no mode fallback or approval reuse"
+  ],
+  "required_before_publication": [
+    "Recheck unused ID and actual retaining base",
+    "Clarify genuine scalar-only alternative without implying a blanket block on static F3 or preparatory F4/F6 work",
+    "Stage final accepted wording and owner-adoption readback for independent review",
+    "Publish a separate PR and verify GitHub retention and partial acceptance"
+  ],
+  "native_execution_approval": false,
+  "product_activation_approval": false
+}

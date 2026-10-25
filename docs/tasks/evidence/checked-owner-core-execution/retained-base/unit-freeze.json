@@ -1,0 +1,24 @@
+{
+  "count": 3668,
+  "aggregate": "c3114a82f7f13ec066f0f00f1c0aecb17914401e20fc9762bab20596c0bbf23b",
+  "base": "bd725c97ad2807779fad8654b5bda985db34dd3f",
+  "branch": "codex/checked-owner-passive-retained",
+  "source_patch": "9e03cfdba92fbdbb53e6ec4a0ca9952e1c0882e06d61479a2c7af8ab1ffb251e",
+  "product_patch": "d6439f098ce1716f493f56302352261ad5b29e7d53ef7bba9265082f025f3f0a",
+  "style_patch": "5c1d2d117b6b6e4bf2c7fd00b5e852130bbc03f69d9b12cf0b1d12af1c83d180",
+  "runner_sha256": "9644aee61ef5ff9763830c30d00d436aecfe96792343ba2634f546753bb7f204",
+  "environment": {
+    "PATH": "/home/dikini/.elan/bin:/home/dikini/.local/bin:/home/dikini/bin:/home/dikini/.codex/tmp/arg0/codex-arg0BbwWYa:/home/dikini/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/home/dikini/.elan/bin:/home/dikini/.local/bin:/home/dikini/bin:/home/dikini/.kimi-code/bin:/home/dikini/.bun/bin:/home/dikini/.local/bin:/home/dikini/.opencode/bin:/home/dikini/.nvm/versions/node/v24.0.1/bin:/home/dikini/miniforge3/bin:/home/dikini/miniforge3/condabin:/home/dikini/.elan/bin:/home/dikini/.cargo/bin:/home/dikini/.local/bin:/home/dikini/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/dikini/.lmstudio/bin:/home/dikini/.cache/coursier/arc/https/github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%252B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz/jdk-21.0.11+10/bin:/home/dikini/.local/share/coursier/bin:/home/dikini/.lmstudio/bin:/home/dikini/.lmstudio/bin:/home/dikini/.cache/coursier/arc/https/github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%252B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz/jdk-21.0.11+10/bin:/home/dikini/.local/share/coursier/bin:/home/dikini/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/usr/lib/chatgpt/resources:/home/dikini/.lmstudio/bin:/home/dikini/.cache/coursier/arc/https/github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%252B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz/jdk-21.0.11+10/bin:/home/dikini/.local/share/coursier/bin",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "LD_LIBRARY_PATH": null,
+    "RUST_TEST_THREADS": null
+  },
+  "overrides": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target"
+  },
+  "input_map": "inputs-c3114a82.json.gz",
+  "original_full_freeze_sha256": "aff2afc14710e2ff8dd960f14bf3a1a0dfe44946b76a0c50489be949d0b549dc"
+}

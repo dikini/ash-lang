@@ -1,0 +1,40 @@
+{
+  "command": [
+    "timeout",
+    "--kill-after=10s",
+    "180s",
+    "gdb",
+    "-q",
+    "--batch",
+    "-ex",
+    "set pagination off",
+    "-ex",
+    "set breakpoint pending on",
+    "-ex",
+    "source /tmp/ash-checked-byte-windows/exclusive-profile/phase-ledger-dependent-cost.py",
+    "-ex",
+    "run",
+    "-ex",
+    "python require_completed_target()",
+    "--args",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work",
+    "--exact",
+    "--nocapture"
+  ],
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/checked-ffi",
+  "exit_code": 0,
+  "seconds": 77.117,
+  "inputs_equal": true,
+  "count": 591,
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "aggregate_sha256": "3f83448ae4eed4330543b0c7d12a4031cfc21469a02ace0a20f2dee1da6e1b30",
+  "log_sha256": "b6f39424d46e0c4f00e4ffcf7a4b07f00131dfcdc0003e0fcbca6bf9bbc12d68",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  }
+}

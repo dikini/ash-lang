@@ -9,7 +9,7 @@ Ash is a rank-1 language whose programs are acyclic graphs of passive source
 modules. Each `.ash` source file defines one unnamed module containing
 imports followed by nominal data or `newtype` declarations, method-only
 interface declarations, effect declarations, anonymous implementation
-declarations, scalar foreign-library declarations, and global function
+declarations, foreign-library declarations, and global function
 definitions. Global signatures may state
 explicit interface constraints and latent effect rows, and implementation
 heads may state explicit prerequisite constraints. A module has no result
@@ -95,52 +95,37 @@ live captures in structural order, then continues the clause with `Unit`.
 Inference proves safe closure without skipping outside or running completion
 owners. Its effect row includes invoked cleanup actions.
 
-An owner-free `foreign library` declaration supplies passive ABI facts
-and exact native effects with one `call` operation each. Complete ordered
-`Type` and `EffectRow` parameters and original contracts survive publication
-and imports. `@builtin.foreign` supplies ordinary common result types,
-including `Call<T>` and opaque `ConversionError`. Compilation installs an
-explicit checked Core interpretation for admitted owner-free native entry
-instances, leaving an empty outward row. Ordinary source handlers cannot
-install a native symbol's interpreter. Source contracts and checked Core supply
-no executable binding; default execution refuses missing bindings before Ash
-runs. Checked scalar literal constants publish ordinary mathematical `Int`
-values and supply exact declared native operands. A declared `function_address`
-sentinel supplies only a fixed all-bits-one native operand; it publishes no
-ordinary value and grants no call permission. Source resource declarations admit
-opaque and initialized byte owners with declared dependencies, private data and
-checked `scope` or `acquired_only` reports. Their owner families retain complete
-ordered Type/Row arguments with a Type-kind owned identity and support one
-acquisition and `void` or scalar-status finish and host-destruction contracts
-with total consumed or retained dispositions. Scalar status predicates use
-checked literal facts from the original owner library; the predicate itself
-grants no value or operand authority. Retention revokes ordinary access and
-quarantines the same
-owner and dependency closure; safe host destruction preserves dependency order.
-Ordinary pure module-global helpers may transform independent lifecycle payloads,
-including through same-module and imported polymorphic definitions. Their complete
-Type/Row instances and original copied calls remain checked; they cannot carry
-native State or acquire native permission. Privileged lifecycle wrappers remain
-unsupported. In permitted direct provider phases, sealed lexical copy windows
-produce independent bytes from exact live owner/view families under the bounded
-[copy rules](static-semantics.md#source-foreign-declarations). Windows cannot
-suspend, complete their owner or escape. Checked lexical forwarding supports
-the associated interface methods and ordinary
-constrained helpers, preserving exact operation types, effect rows and typed
-access operands. Sealed common byte reads and writes borrow the exact
-initialized live state in acquire, handler and finish phases. Original call
-correspondence, complete Type/Row instances and the unique guard authenticate
-access; private data and a compatible state type grant no permission.
-Conversion refusals are ordinary `Foreign.Call` results, and complete reply
-admission precedes native access. Outward capture/resume moves the same source
-owner; owned discard runs required finish computations in structural order with
-needed outer resources live, without an abandoned result wrapper. Running
-completion cannot be abandoned. Acquisition discard revokes an unpublished
-guard without fabricating private data. Exact constructor and native-call
-identities authenticate publication and completion; declarations alone confer
-no ownership. The [source-resource
-rules](static-semantics.md#source-resource-declarations) bound this lifecycle
-and its supported associated handler shape.
+A passive `foreign library` declares a target profile and symbols with source
+signatures and C link names. Each symbol is an ordinary effect with one `call`
+operation. Imports preserve its defining identity and perform no native work.
+Ordinary source handlers may handle these operations; generated linked hosts
+supply native interpretation for the remaining required symbol effects.
+
+`@builtin.foreign` supplies opaque nominal `Address` and pure `null`, `is_null`
+and `equal` functions. Address transports a C data pointer, including null,
+without an integer conversion. Equality compares pointer values and proves
+neither allocation identity nor validity. Copying an Address creates no
+ownership, lifetime or resource dependency. There is no constructor, arithmetic,
+dereference, memory-copy or freeing primitive.
+
+Whole `Unit` arguments map to no C arguments; whole Address or Bytes arguments
+map to one pointer. Flat tuples of Address/Bytes map to pointers in source order.
+Address results map to pointers and Unit results to actual C void. Bytes is
+argument-only. Numeric slots, out-pointers, nested tuples, Unit tuple components,
+callbacks, variadics and structs by value are unsupported.
+
+A Bytes argument exposes its immutable backing through a readonly pointer held
+through the synchronous call. There is no hidden length, NUL terminator or
+encoding conversion; empty Bytes promises no readable byte. Native code must
+not mutate or free managed backing. If it retains or returns the pointer, the
+binding module must keep the original Bytes alive for every later native use.
+An Address result does not retain or infer that relationship.
+
+Bindings express checks, conversions, null handling and cleanup in ordinary Ash.
+The declaration assumes the native signature and behavior; the compiler does not
+verify them. Existing handlers and scoped cleanup govern ordinary completion,
+capture and checked discard. No Address-to-Bytes/String or arbitrary memory
+read/write API is supplied.
 
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
@@ -150,18 +135,6 @@ their owner, including through request payloads. Copied integers may escape.
 Each execution has a fresh activation, and capture/resume moves the owned
 scope without duplication. Normal completion or owned abandonment releases it
 once.
-
-The ordinary passive [native-buffer library](../libraries/native_buffer.ash)
-uses `resource Buffer.Buffer<R> b = length { body }` after an explicit import.
-Its Ash acquisition, associated handlers and finish use common checked foreign
-contracts, bytes, guards and the `acquired_only` codec. Positive lengths acquire
-zeroed writable bytes; invalid lengths refuse before C. Acquisition returns
-ordinary `Failure(Error)` without a body, or releases normally and returns
-`Success(body_value)`. Nested outcomes remain nested. Capture/resume moves the
-same owner; owned discard completes it once without the abandoned wrapper.
-Generated hosts execute the native calls. The old builtin module, lowercase
-resource designator and fixed evaluator adapter are removed; cell semantics
-remain unchanged.
 
 `hook H { body }` supplies the empty identity chain for an exact effect API
 with one endomorphic `publish` operation. `register H transformer { body }`
@@ -189,7 +162,9 @@ Internal termination or exhaustion provides no source-cleanup guarantee.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
-Its computation row is empty. After checking every dependency, Ash links the
+Its computation row is empty or contains only required admitted native symbol
+effects, discharged by the generated interpretation. After checking every
+dependency, Ash links the
 module definition groups and evaluates `main ()`.
 Imports, exports, aliases, and opacity are static access rules and do not remain
 as runtime operations. Interface identities, implementation identities, and

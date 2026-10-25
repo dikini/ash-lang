@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-21",
+  "product_base": "7949b6d9136b0152ee9104e67bd0451cb9db4727",
+  "commands": [
+    {
+      "command": "/usr/bin/python3 deployment_preflight.py --label sandbox > deployment-sandbox.json",
+      "exit_code": 78,
+      "execution": "normal sandbox"
+    },
+    {
+      "command": "/usr/bin/python3 deployment_preflight.py --label approved-host > deployment-host.json",
+      "exit_code": 78,
+      "execution": "explicit approved require_escalated tool execution; no host policy changes"
+    }
+  ],
+  "files": {
+    "deployment_preflight.py": "000baa765e623d69a761e909e67fda31e0f88cfea216a82c0da8ace42c413ea7",
+    "setup_probe.py": "d5fb9ba05e43c1e775c75fe98794a7b9ae19f768c7f9378bb3399006aab61c2d",
+    "deployment-sandbox.json": "b56de5c8ed87f503969b4291b809461fc0c3ac8f9eadcd722fe751ebe1d1df74",
+    "deployment-host.json": "b6d8a4ecea0a9726336f55e803f75fdefb1b58fdf30984a16bd14487a101f309"
+  },
+  "design_inputs": {
+    "docs/design/foreign-authoring/linux-profile-experiment.md": "5d304ccf2632980b2d1df4fbcc15549ede5d7f369d40aa51e279550cffdc8070",
+    "docs/design/foreign-authoring/minimal-ffi-launch-and-artifacts.md": "504012805541a2e03dd090d6a4899645d787d72e0cfbf46eadcc1d31e229cb3c",
+    "docs/design/DN-0057-checked-ffi-module-boundaries.md": "43243e77cd3b44079fcfb3647a9009283d15485b784eb55e35d7f9c69c73b714"
+  },
+  "disposition": "fail closed; observed setup failures; no foreign or static test image executed; no accepted architecture; no cgroup enforcement test; temporary child namespaces disposed on process exit and child reaped",
+  "governing_preparation_commit": "1cf1014fac94c3dfdaa86b825c276847e31ec629",
+  "design_input_locator": "git show <governing_preparation_commit>:<design_inputs path>"
+}

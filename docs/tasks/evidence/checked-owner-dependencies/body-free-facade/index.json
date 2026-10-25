@@ -1,0 +1,808 @@
+{
+  "scope": "Test-only complete dependent-owner renamed body-free facade source/link/Core/identity/fold control, soleChild erasure and freshretry; three direct regressions+targetedClippy; historicalwrong-diagnostic premise retained; no image/native/Fcore claim",
+  "base": "2121d126c746300992e1cefccec87d24ec1414f4",
+  "maps": {
+    "6e9582d439e3cb0a492396b421048e35f6b2f892d2383a5034e21bc2e0b323b7": {
+      "blob": "blobs/6e9582d439e3cb0a492396b421048e35f6b2f892d2383a5034e21bc2e0b323b7.gz",
+      "size": 1301978,
+      "entries": 7450
+    },
+    "9d9049d724e6bda3dee588fba26d369d60bb9ec331c32ede9ca18c74172e5338": {
+      "blob": "blobs/9d9049d724e6bda3dee588fba26d369d60bb9ec331c32ede9ca18c74172e5338.gz",
+      "size": 71060,
+      "entries": 624
+    },
+    "8a6605c8f1afc13507dfd44dbb2b1a7118a3609bb9a67c8952d582c363874324": {
+      "blob": "blobs/8a6605c8f1afc13507dfd44dbb2b1a7118a3609bb9a67c8952d582c363874324.gz",
+      "size": 1425459,
+      "entries": 8004
+    },
+    "c38ede7f212c4fd5e564039aa59d97379467ed0407ff5b5a0e81ab35b7c0a181": {
+      "blob": "blobs/c38ede7f212c4fd5e564039aa59d97379467ed0407ff5b5a0e81ab35b7c0a181.gz",
+      "size": 72241,
+      "entries": 635
+    },
+    "f0196efaa52998e3d86280c42bd988a6a24a4037ec8642c9319999344f9de8ba": {
+      "blob": "blobs/f0196efaa52998e3d86280c42bd988a6a24a4037ec8642c9319999344f9de8ba.gz",
+      "size": 1425459,
+      "entries": 8004
+    },
+    "a6e27c8951f283462f920369bffff1831108f8703c0c00b19256ec6a004e26a6": {
+      "blob": "blobs/a6e27c8951f283462f920369bffff1831108f8703c0c00b19256ec6a004e26a6.gz",
+      "size": 72241,
+      "entries": 635
+    }
+  },
+  "records": [
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/cleanup.json",
+      "sha256": "f5818f1a3d79bc1d9d1f6b23221b632752a7330beabf213c6de23b876e45508b",
+      "size": 195,
+      "blob": "blobs/f5818f1a3d79bc1d9d1f6b23221b632752a7330beabf213c6de23b876e45508b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/freeze.json",
+      "sha256": "6cc4cc5762adf75dbf2488d73d5c84ce428da00652fdf831fd6aa1bb17c7923a",
+      "size": 1408395,
+      "blob": "blobs/f7f20b02341a520d4cf9f5d878c17fa6819e28769e48bdff98733abd6c8841de.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/inputs.json",
+      "sha256": "caf5079ca42f29ca3e59ab3e466f9781f9653c8b89ebf138267a168708b5f605",
+      "size": 2810780,
+      "blob": "blobs/ca201490dc68e5136be715a20da74d73dcc3c56b26ce5f994c167a31eb995a19.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/process.json",
+      "sha256": "98504c6aea4511d6195c9d331e071f5fb384256c1440e1b5e3647b4894e9136f",
+      "size": 373,
+      "blob": "blobs/98504c6aea4511d6195c9d331e071f5fb384256c1440e1b5e3647b4894e9136f.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/raw.log",
+      "sha256": "b485ae1581a6afbe477e458edfe81453fcb565aaf038015698803fff84cdd380",
+      "size": 1330,
+      "blob": "blobs/b485ae1581a6afbe477e458edfe81453fcb565aaf038015698803fff84cdd380.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/receipt.json",
+      "sha256": "096745fb772b31bd1af114f4fb9ee08bcdea22aaaf554b93a19a8eedca559eb0",
+      "size": 1507,
+      "blob": "blobs/096745fb772b31bd1af114f4fb9ee08bcdea22aaaf554b93a19a8eedca559eb0.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/resources.json",
+      "sha256": "c5efc3cfd1a1443355e57c5011f918089a8a3e8366e86b9dce4272d2932e4ce3",
+      "size": 10811,
+      "blob": "blobs/c5efc3cfd1a1443355e57c5011f918089a8a3e8366e86b9dce4272d2932e4ce3.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/retained-evidence-after.json",
+      "sha256": "6e5d5e149ea0db103cee3e6328ca043a8ec5e33d7e7e8920d6687283dff78808",
+      "size": 2739,
+      "blob": "blobs/6e5d5e149ea0db103cee3e6328ca043a8ec5e33d7e7e8920d6687283dff78808.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pair/retained-evidence-before.json",
+      "sha256": "6e5d5e149ea0db103cee3e6328ca043a8ec5e33d7e7e8920d6687283dff78808",
+      "size": 2739,
+      "blob": "blobs/6e5d5e149ea0db103cee3e6328ca043a8ec5e33d7e7e8920d6687283dff78808.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/pins.json",
+      "sha256": "d0f9efa6b20209f1903b1634ad0a5e8a240401ee9bcdd259ea0d0966642b3ff1",
+      "size": 1413734,
+      "blob": "blobs/06e941b754da480d7a23f44dca4083faed7143865fea9c7d454a85832b2d95d7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/proposal.json",
+      "sha256": "c04c338a7e9a7f43841fc8f571d6a913bf48a4b41fb13148051b3c0369cd337c",
+      "size": 1381,
+      "blob": "blobs/c04c338a7e9a7f43841fc8f571d6a913bf48a4b41fb13148051b3c0369cd337c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/retained-actual-artifact.json",
+      "sha256": "3b68e612532c32880a253868f1b04a85dc11e3d4a2177cec85416914a5e25428",
+      "size": 384,
+      "blob": "blobs/3b68e612532c32880a253868f1b04a85dc11e3d4a2177cec85416914a5e25428.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/run-batch.py",
+      "sha256": "f569edddb8fe40d98b6592a90123f2105462a61b1d82b8e446ecef7a8d71c736",
+      "size": 395,
+      "blob": "blobs/f569edddb8fe40d98b6592a90123f2105462a61b1d82b8e446ecef7a8d71c736.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/run.py",
+      "sha256": "3acf5ee9574b952db4e7e06d289817966dd97b354615e7f31d64b348175f56b1",
+      "size": 10233,
+      "blob": "blobs/3acf5ee9574b952db4e7e06d289817966dd97b354615e7f31d64b348175f56b1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/source.patch",
+      "sha256": "f8c9b926659f6922489ca713e43c4d17d2c13f6fa28a043603236d9c194d26fa",
+      "size": 12726,
+      "blob": "blobs/f8c9b926659f6922489ca713e43c4d17d2c13f6fa28a043603236d9c194d26fa.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/tested-source/docs/tasks/plans/checked-ffi-contract-carriers.md",
+      "sha256": "a9dafd7c083b1175063ac32a7ddb182e04f956e7a13d09574d04d664ab643f5f",
+      "size": 70334,
+      "blob": "blobs/a9dafd7c083b1175063ac32a7ddb182e04f956e7a13d09574d04d664ab643f5f.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/tested-source/src/elaborate/checked_owner_dependency_tests.rs",
+      "sha256": "48ff6eb15a9efc47d73b67fa183b4dc5fc25b71cf9641f82719a892f52af2d92",
+      "size": 21697,
+      "blob": "blobs/48ff6eb15a9efc47d73b67fa183b4dc5fc25b71cf9641f82719a892f52af2d92.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/tested-source/src/resolved/checked_dependency_wrapper_tests.rs",
+      "sha256": "9be885db21e9c7ab80d7cd3cdd01fe08ce7ba76b0e0da5b50c711026bd09cdb6",
+      "size": 7180,
+      "blob": "blobs/9be885db21e9c7ab80d7cd3cdd01fe08ce7ba76b0e0da5b50c711026bd09cdb6.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/tested-source/src/resolved/checked_hidden_provider_interface_tests.rs",
+      "sha256": "0d826b3b1b914d26df11ef7f91b04cf5089e26381f7ffff84c4558b0db6d75a7",
+      "size": 21848,
+      "blob": "blobs/0d826b3b1b914d26df11ef7f91b04cf5089e26381f7ffff84c4558b0db6d75a7.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-01/tested-source/src/resolved.rs",
+      "sha256": "26d6d239f2c329025de0232ed95916fe18201eeb9b274b19a28aa76053d8a8d2",
+      "size": 1804996,
+      "blob": "blobs/26d6d239f2c329025de0232ed95916fe18201eeb9b274b19a28aa76053d8a8d2.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/final-selector-inventory.json",
+      "sha256": "1f6215f80bd3569402d2e6579a6cf31d1d797bdaa567078c5fc0ca232186c58c",
+      "size": 1385,
+      "blob": "blobs/1f6215f80bd3569402d2e6579a6cf31d1d797bdaa567078c5fc0ca232186c58c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/libtest-list.txt",
+      "sha256": "51b94c2b85676eba7511ddb21f3f58db84378d5700660580eefab4dd987fc801",
+      "size": 231051,
+      "blob": "blobs/51b94c2b85676eba7511ddb21f3f58db84378d5700660580eefab4dd987fc801.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/cleanup.json",
+      "sha256": "ece110ceed123f85965300dd9fcf6e188917f3d6e148abff4c2ef71e69f465e7",
+      "size": 192,
+      "blob": "blobs/ece110ceed123f85965300dd9fcf6e188917f3d6e148abff4c2ef71e69f465e7.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/freeze.json",
+      "sha256": "531132c02fdfefdcb5757cbf7cd6800f6b656c7f468ece355c88aa8888f16a87",
+      "size": 1535317,
+      "blob": "blobs/35ed6b03040d3703c1dacac10a18f74d4410e429ea051fecaa4144eb5ad36c60.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/inputs.json",
+      "sha256": "78357412dc33d46f29f56773e7ce26911c1bb59d6d1f3e2a3887f42c8209214c",
+      "size": 3064624,
+      "blob": "blobs/143e81ff91b82aa421de7f99e9b616ad9c202b080a50f40fb91a1a6aaeb4175c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/process.json",
+      "sha256": "1bd41b09ed93db963ba0b2b02d01b622497dcbf7e83c14920176b8d75bf0b1d6",
+      "size": 374,
+      "blob": "blobs/1bd41b09ed93db963ba0b2b02d01b622497dcbf7e83c14920176b8d75bf0b1d6.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/raw.log",
+      "sha256": "2ed0f37a7746992516d82886dd0df411dc187078150b2968cc459d9de0633dc7",
+      "size": 6346,
+      "blob": "blobs/2ed0f37a7746992516d82886dd0df411dc187078150b2968cc459d9de0633dc7.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/receipt.json",
+      "sha256": "edd8bd3da66036512f520742ad004551be3c98797d41e8529c6e90dce2b04b92",
+      "size": 1570,
+      "blob": "blobs/edd8bd3da66036512f520742ad004551be3c98797d41e8529c6e90dce2b04b92.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/resources.json",
+      "sha256": "cab31e1b753b71cb1fbe75aa62f7bd6b9ba04fee5038e0c54fc1b0edd006f5c5",
+      "size": 11146,
+      "blob": "blobs/cab31e1b753b71cb1fbe75aa62f7bd6b9ba04fee5038e0c54fc1b0edd006f5c5.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/retained-evidence-after.json",
+      "sha256": "2d50b4534fd9a0d26500bd095fe624c8535f6aae483c1fe77e4fbff25df1579f",
+      "size": 3195,
+      "blob": "blobs/2d50b4534fd9a0d26500bd095fe624c8535f6aae483c1fe77e4fbff25df1579f.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pair/retained-evidence-before.json",
+      "sha256": "2d50b4534fd9a0d26500bd095fe624c8535f6aae483c1fe77e4fbff25df1579f",
+      "size": 3195,
+      "blob": "blobs/2d50b4534fd9a0d26500bd095fe624c8535f6aae483c1fe77e4fbff25df1579f.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/pins.json",
+      "sha256": "046d1f3f8ba9bbb09d3a83f655d95cf0ae4c45b5db3e4eddd43b76a47c4e5f27",
+      "size": 1541198,
+      "blob": "blobs/cf422f38030faa12392c1368659a9f41049c173b0bd32284a744c94f9d9156b2.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/proposal.json",
+      "sha256": "ff1ce769f40ad4c6e9570fed3a416e14383e0dd2dee4fbdeeed1a96702fbf997",
+      "size": 1445,
+      "blob": "blobs/ff1ce769f40ad4c6e9570fed3a416e14383e0dd2dee4fbdeeed1a96702fbf997.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/retained-actual-artifact.json",
+      "sha256": "3278c903f46a35cf67c807b033337acb4894c225b856bfb4cf20bd77c523cc0f",
+      "size": 384,
+      "blob": "blobs/3278c903f46a35cf67c807b033337acb4894c225b856bfb4cf20bd77c523cc0f.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/run-batch.py",
+      "sha256": "f569edddb8fe40d98b6592a90123f2105462a61b1d82b8e446ecef7a8d71c736",
+      "size": 395,
+      "blob": "blobs/f569edddb8fe40d98b6592a90123f2105462a61b1d82b8e446ecef7a8d71c736.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/run.py",
+      "sha256": "3acf5ee9574b952db4e7e06d289817966dd97b354615e7f31d64b348175f56b1",
+      "size": 10233,
+      "blob": "blobs/3acf5ee9574b952db4e7e06d289817966dd97b354615e7f31d64b348175f56b1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/source.patch",
+      "sha256": "f44ad6417c5883cd252cd55a8c988bc0e691e82e9b7f788524fb8abda8ed4546",
+      "size": 14584,
+      "blob": "blobs/f44ad6417c5883cd252cd55a8c988bc0e691e82e9b7f788524fb8abda8ed4546.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/tested-source/docs/tasks/plans/checked-ffi-contract-carriers.md",
+      "sha256": "58357fdd7eb0d19f323e6eefa220a67af579e9370a9668f1ef4074cc44346ce5",
+      "size": 70931,
+      "blob": "blobs/58357fdd7eb0d19f323e6eefa220a67af579e9370a9668f1ef4074cc44346ce5.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/tested-source/src/elaborate/checked_owner_dependency_tests.rs",
+      "sha256": "48ff6eb15a9efc47d73b67fa183b4dc5fc25b71cf9641f82719a892f52af2d92",
+      "size": 21697,
+      "blob": "blobs/48ff6eb15a9efc47d73b67fa183b4dc5fc25b71cf9641f82719a892f52af2d92.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/tested-source/src/resolved/checked_dependency_wrapper_tests.rs",
+      "sha256": "04dc1a6c2121c39b7606c2823790237e4bc68e64b550b08aff7866c9ca7cec72",
+      "size": 8403,
+      "blob": "blobs/04dc1a6c2121c39b7606c2823790237e4bc68e64b550b08aff7866c9ca7cec72.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/tested-source/src/resolved/checked_hidden_provider_interface_tests.rs",
+      "sha256": "0d826b3b1b914d26df11ef7f91b04cf5089e26381f7ffff84c4558b0db6d75a7",
+      "size": 21848,
+      "blob": "blobs/0d826b3b1b914d26df11ef7f91b04cf5089e26381f7ffff84c4558b0db6d75a7.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-03/tested-source/src/resolved.rs",
+      "sha256": "26d6d239f2c329025de0232ed95916fe18201eeb9b274b19a28aa76053d8a8d2",
+      "size": 1804996,
+      "blob": "blobs/26d6d239f2c329025de0232ed95916fe18201eeb9b274b19a28aa76053d8a8d2.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/cleanup.json",
+      "sha256": "9d48d4ec060a3e638ee89f3bdd2396fa87601fe53146cbb271110d3619252598",
+      "size": 193,
+      "blob": "blobs/9d48d4ec060a3e638ee89f3bdd2396fa87601fe53146cbb271110d3619252598.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/freeze.json",
+      "sha256": "32bed5270e6638dfeaef431902203578df8f5157f52558101eba9faafff24233",
+      "size": 1535291,
+      "blob": "blobs/9cee835d138b5f4b0c3fe562cb7683d5c5772edc75b44876a5cc11552f2a780a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/inputs.json",
+      "sha256": "f9981e722785a44e22cdb93e93ac2dc1df8d5a6e8768f2fcbc293036dfd01c43",
+      "size": 3064624,
+      "blob": "blobs/f5d403423b5df37a9325dcda022a4e1f0cafdb4c4fd5bf89627e1dc290070e64.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/process.json",
+      "sha256": "050d8e7496be33880cf94a33cf149e9e6599e8442e29dade87a31fae42644eed",
+      "size": 331,
+      "blob": "blobs/050d8e7496be33880cf94a33cf149e9e6599e8442e29dade87a31fae42644eed.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/raw.log",
+      "sha256": "24919b0e9f2c3a5da383f0f84b1518f36a62a0a5169fcf957756822faca30ea6",
+      "size": 6110,
+      "blob": "blobs/24919b0e9f2c3a5da383f0f84b1518f36a62a0a5169fcf957756822faca30ea6.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/receipt.json",
+      "sha256": "538433f2804e3d396a306a45d9677979bc0ebcad6a73336d1479e603e77fa68b",
+      "size": 1639,
+      "blob": "blobs/538433f2804e3d396a306a45d9677979bc0ebcad6a73336d1479e603e77fa68b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/resources.json",
+      "sha256": "04f16fc130dfd6b5ab249c1337732f7b3295ec63a77fc11fa37b9a11701ae887",
+      "size": 331,
+      "blob": "blobs/04f16fc130dfd6b5ab249c1337732f7b3295ec63a77fc11fa37b9a11701ae887.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/alias/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/author-terminal-summary.json",
+      "sha256": "01634782f236141cd5f6aae2aa8b1855bc4ec5226945f09df2c521c1a61ffa0c",
+      "size": 1503,
+      "blob": "blobs/01634782f236141cd5f6aae2aa8b1855bc4ec5226945f09df2c521c1a61ffa0c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/cleanup.json",
+      "sha256": "c88366460fc0ea6d667de7c1304b82f88aa49a288b76c4fb2524e4f51e031318",
+      "size": 193,
+      "blob": "blobs/c88366460fc0ea6d667de7c1304b82f88aa49a288b76c4fb2524e4f51e031318.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/freeze.json",
+      "sha256": "c868b32a4902200abd7a14ccefb0946257e9842654420577c63ee00b7303bde6",
+      "size": 1535194,
+      "blob": "blobs/1d738c4db99ca998053a83fcc7d6de5ebdf2b68fccf3076614aa30a1a9543289.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/inputs.json",
+      "sha256": "f9981e722785a44e22cdb93e93ac2dc1df8d5a6e8768f2fcbc293036dfd01c43",
+      "size": 3064624,
+      "blob": "blobs/f5d403423b5df37a9325dcda022a4e1f0cafdb4c4fd5bf89627e1dc290070e64.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/process.json",
+      "sha256": "b40db4d60bf785cc71ca76611bc3434923074b814f96a83a1b47b5f86a273b1d",
+      "size": 231,
+      "blob": "blobs/b40db4d60bf785cc71ca76611bc3434923074b814f96a83a1b47b5f86a273b1d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/raw.log",
+      "sha256": "b9c0464f754ed1f0ac511404d300a423e015b2bc0ee5a1a1e982a234f95025ca",
+      "size": 5932,
+      "blob": "blobs/b9c0464f754ed1f0ac511404d300a423e015b2bc0ee5a1a1e982a234f95025ca.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/receipt.json",
+      "sha256": "a5618de88fc19a794e3406793b077b295ef11782344e785be166d92e3b558620",
+      "size": 1407,
+      "blob": "blobs/a5618de88fc19a794e3406793b077b295ef11782344e785be166d92e3b558620.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/resources.json",
+      "sha256": "f0a5d104e775f8aadde2e69975d4e206643c3ecfa9ec9cf2a6bcefc4bf75f785",
+      "size": 4918,
+      "blob": "blobs/f0a5d104e775f8aadde2e69975d4e206643c3ecfa9ec9cf2a6bcefc4bf75f785.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/clippy/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/cleanup.json",
+      "sha256": "682dd092420a81688fdc1244d6f86748cc1270ff58bcb7b9101563c822e94fc6",
+      "size": 193,
+      "blob": "blobs/682dd092420a81688fdc1244d6f86748cc1270ff58bcb7b9101563c822e94fc6.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/freeze.json",
+      "sha256": "306db7cd6b0941131de8f1ed6f0cd91060953aa47869b95060017c37dfb28942",
+      "size": 1535335,
+      "blob": "blobs/18d316e12f1cc40643daed9e75a38043938b961a3e277de8449d89ad615567f0.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/inputs.json",
+      "sha256": "f9981e722785a44e22cdb93e93ac2dc1df8d5a6e8768f2fcbc293036dfd01c43",
+      "size": 3064624,
+      "blob": "blobs/f5d403423b5df37a9325dcda022a4e1f0cafdb4c4fd5bf89627e1dc290070e64.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/process.json",
+      "sha256": "6168ef819110a6336dd6a3b848de39b0338f1d6282c8debbbc84080bb9868f14",
+      "size": 376,
+      "blob": "blobs/6168ef819110a6336dd6a3b848de39b0338f1d6282c8debbbc84080bb9868f14.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/raw.log",
+      "sha256": "d9e7f97ca3a9e84646d5a33d56729dc35aaf99789250ac68a22ae4e5ac70e363",
+      "size": 6346,
+      "blob": "blobs/d9e7f97ca3a9e84646d5a33d56729dc35aaf99789250ac68a22ae4e5ac70e363.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/receipt.json",
+      "sha256": "4e767274f8c7af79638626b02ca050f210ab5275e2ac8adf19a599499d68a201",
+      "size": 1637,
+      "blob": "blobs/4e767274f8c7af79638626b02ca050f210ab5275e2ac8adf19a599499d68a201.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/resources.json",
+      "sha256": "9a9843586e590f0fa3dc9e3966c89d357620ffa178c43c3f3b664af7416f9e7c",
+      "size": 10830,
+      "blob": "blobs/9a9843586e590f0fa3dc9e3966c89d357620ffa178c43c3f3b664af7416f9e7c.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pair/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/pins.json",
+      "sha256": "105f7c90252086759e54e854510cffc439d36ab5949ec4f9fcf93f2e6668b1f8",
+      "size": 1543796,
+      "blob": "blobs/c74b699e28c516af4fa33d7dd48614d0c98a96f1d85215cc6c6b1d388e807842.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/proposal.json",
+      "sha256": "3a3509335d05d52742029a923ae3e7d36f4e2f672f6ec8a5ec756fe9654d4d7a",
+      "size": 2855,
+      "blob": "blobs/3a3509335d05d52742029a923ae3e7d36f4e2f672f6ec8a5ec756fe9654d4d7a.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/cleanup.json",
+      "sha256": "92628136f9a9d78017ec1b7be15b528320716b5bbfffb9c37f1b23d6b21591fc",
+      "size": 193,
+      "blob": "blobs/92628136f9a9d78017ec1b7be15b528320716b5bbfffb9c37f1b23d6b21591fc.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/freeze.json",
+      "sha256": "bfb573f85ecf8acf8a423d3372f54777fcc85a7eb0ae0a05a36f058ae166e0af",
+      "size": 1535313,
+      "blob": "blobs/703a5d27ea2986ebeff2fe4653e4fae103f44e67be50d93dac62ea5308bc57b9.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/inputs.json",
+      "sha256": "f9981e722785a44e22cdb93e93ac2dc1df8d5a6e8768f2fcbc293036dfd01c43",
+      "size": 3064624,
+      "blob": "blobs/f5d403423b5df37a9325dcda022a4e1f0cafdb4c4fd5bf89627e1dc290070e64.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/process.json",
+      "sha256": "487b18a13aff6d10b850f075d4db4e639b00881ac65857d86ba7d829ddb93420",
+      "size": 350,
+      "blob": "blobs/487b18a13aff6d10b850f075d4db4e639b00881ac65857d86ba7d829ddb93420.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/raw.log",
+      "sha256": "b2c1fd5b2a28e96aacd51b05f3d12e4d6f72b10d689b676212c0d29ca44702ed",
+      "size": 6129,
+      "blob": "blobs/b2c1fd5b2a28e96aacd51b05f3d12e4d6f72b10d689b676212c0d29ca44702ed.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/receipt.json",
+      "sha256": "92fcbd54dec21833b8f85aa6b310eed916cdfc48cee61e9a864ef707615069fe",
+      "size": 1645,
+      "blob": "blobs/92fcbd54dec21833b8f85aa6b310eed916cdfc48cee61e9a864ef707615069fe.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/resources.json",
+      "sha256": "776ffcfcbc47bd8e4010156862760fa96abf094f119ef9d453031a24960147f6",
+      "size": 331,
+      "blob": "blobs/776ffcfcbc47bd8e4010156862760fa96abf094f119ef9d453031a24960147f6.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/provider/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/run-batch.py",
+      "sha256": "09c12f5eb657242bcf794b11b6caa1e361a0e2ef9b4db93324e0f1ffa8884b00",
+      "size": 434,
+      "blob": "blobs/09c12f5eb657242bcf794b11b6caa1e361a0e2ef9b4db93324e0f1ffa8884b00.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/run.py",
+      "sha256": "3acf5ee9574b952db4e7e06d289817966dd97b354615e7f31d64b348175f56b1",
+      "size": 10233,
+      "blob": "blobs/3acf5ee9574b952db4e7e06d289817966dd97b354615e7f31d64b348175f56b1.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/source.patch",
+      "sha256": "aaa0dc9b00290bd91605cbac2b04c8bdf9dccb896b7b0e6a6549fdda8189ad82",
+      "size": 17385,
+      "blob": "blobs/aaa0dc9b00290bd91605cbac2b04c8bdf9dccb896b7b0e6a6549fdda8189ad82.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/capture-index.json",
+      "sha256": "d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121",
+      "size": 50,
+      "blob": "blobs/d89553dd651ca025aa09ef2c70ee65beb499339b06b3c71a84423b4ac8d53121.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/cleanup.json",
+      "sha256": "3a935ebb4b2672c97397d118bec4fe4a2e166dbe0e9fc06d5f1db4698cda4799",
+      "size": 193,
+      "blob": "blobs/3a935ebb4b2672c97397d118bec4fe4a2e166dbe0e9fc06d5f1db4698cda4799.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/freeze.json",
+      "sha256": "0926d70b248ca1aa420828a6cd0386ae0f46bd5fc165510bba77d4f2b1b4924d",
+      "size": 1535317,
+      "blob": "blobs/f2d92ca84093428c209f9471a7927f854b88b99dbf9bb2fc8ceee5c86cd96203.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/inputs.json",
+      "sha256": "f9981e722785a44e22cdb93e93ac2dc1df8d5a6e8768f2fcbc293036dfd01c43",
+      "size": 3064624,
+      "blob": "blobs/f5d403423b5df37a9325dcda022a4e1f0cafdb4c4fd5bf89627e1dc290070e64.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/process.json",
+      "sha256": "f50ed874a91a1fff36f51bde5c1e96f225cb77569312e509cfba23c0bcf96fbd",
+      "size": 356,
+      "blob": "blobs/f50ed874a91a1fff36f51bde5c1e96f225cb77569312e509cfba23c0bcf96fbd.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/raw.log",
+      "sha256": "5517954ab4d331a903301ab9d2d90d67690dfbab15e99792146bf170a9cb9dc0",
+      "size": 6136,
+      "blob": "blobs/5517954ab4d331a903301ab9d2d90d67690dfbab15e99792146bf170a9cb9dc0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/receipt.json",
+      "sha256": "1c7f7f3b61579a7832bd7b98b9519605f75366685a3707e29ee1ee8732ec592d",
+      "size": 1639,
+      "blob": "blobs/1c7f7f3b61579a7832bd7b98b9519605f75366685a3707e29ee1ee8732ec592d.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/resources.json",
+      "sha256": "46d4669d4370b5328f91d78cdb3a2c295cce9dbbad7fe862db73d372c73ea7fb",
+      "size": 331,
+      "blob": "blobs/46d4669d4370b5328f91d78cdb3a2c295cce9dbbad7fe862db73d372c73ea7fb.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/retained-evidence-after.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/state/retained-evidence-before.json",
+      "sha256": "153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b",
+      "size": 3651,
+      "blob": "blobs/153532e705a488ae7464063551094af7ec2f68f9a4ea7c2d6214e3c1b407954b.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/tested-source/docs/tasks/plans/checked-ffi-contract-carriers.md",
+      "sha256": "54163c2c455d4baabceee9298f2de0ddc522d92f4243938cc78efc9b4f333052",
+      "size": 71775,
+      "blob": "blobs/54163c2c455d4baabceee9298f2de0ddc522d92f4243938cc78efc9b4f333052.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/tested-source/src/elaborate/checked_owner_dependency_tests.rs",
+      "sha256": "48ff6eb15a9efc47d73b67fa183b4dc5fc25b71cf9641f82719a892f52af2d92",
+      "size": 21697,
+      "blob": "blobs/48ff6eb15a9efc47d73b67fa183b4dc5fc25b71cf9641f82719a892f52af2d92.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/tested-source/src/resolved/checked_dependency_wrapper_tests.rs",
+      "sha256": "c708b5e378e5d900171c07af760588417ced0581297be505c62c2d07f7a465b0",
+      "size": 10308,
+      "blob": "blobs/c708b5e378e5d900171c07af760588417ced0581297be505c62c2d07f7a465b0.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/tested-source/src/resolved/checked_hidden_provider_interface_tests.rs",
+      "sha256": "0d826b3b1b914d26df11ef7f91b04cf5089e26381f7ffff84c4558b0db6d75a7",
+      "size": 21848,
+      "blob": "blobs/0d826b3b1b914d26df11ef7f91b04cf5089e26381f7ffff84c4558b0db6d75a7.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-owner-dependencies/body-free-dependent-facade-final-02/tested-source/src/resolved.rs",
+      "sha256": "26d6d239f2c329025de0232ed95916fe18201eeb9b274b19a28aa76053d8a8d2",
+      "size": 1804996,
+      "blob": "blobs/26d6d239f2c329025de0232ed95916fe18201eeb9b274b19a28aa76053d8a8d2.gz",
+      "encoding": "raw"
+    },
+    {
+      "original_path": "/tmp/ash-f3-facade85830-independent-audit.json",
+      "sha256": "9b845a1e869489d1bf0262319665581fbeb8f5262426dab400db177d4f8507f1",
+      "size": 2376,
+      "blob": "blobs/9b845a1e869489d1bf0262319665581fbeb8f5262426dab400db177d4f8507f1.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/tmp/ash-f3-facade03-independent-review.json",
+      "sha256": "488d4db6fe697bb12f96de5e1ed3f4bb96da1adc13aa2d65f02f14da43010397",
+      "size": 1135,
+      "blob": "blobs/488d4db6fe697bb12f96de5e1ed3f4bb96da1adc13aa2d65f02f14da43010397.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/tmp/ash-f3-facade49479-independent-audit.json",
+      "sha256": "c2db6304f891e9e8ed766fb81e46fb15035cb98f08730f63d177455001503962",
+      "size": 3927,
+      "blob": "blobs/c2db6304f891e9e8ed766fb81e46fb15035cb98f08730f63d177455001503962.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/tmp/ash-f3-facade-final02-independent-review.json",
+      "sha256": "690be9ea44d329de81319befece721bc4b59f141a58cd6cbb2365d91893216ee",
+      "size": 1371,
+      "blob": "blobs/690be9ea44d329de81319befece721bc4b59f141a58cd6cbb2365d91893216ee.gz",
+      "encoding": "json-map-template"
+    },
+    {
+      "original_path": "/tmp/ash-f3-facade-final40997-independent-audit.json",
+      "sha256": "ce5f2bec06f3881bea5f59c04299f513a5394bb0f8914c24423ae03b7a006ffc",
+      "size": 10109,
+      "blob": "blobs/ce5f2bec06f3881bea5f59c04299f513a5394bb0f8914c24423ae03b7a006ffc.gz",
+      "encoding": "json-map-template"
+    }
+  ]
+}

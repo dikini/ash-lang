@@ -1,0 +1,54 @@
+{
+  "inputs": 589,
+  "aggregate_sha256": "a2607f6f21a3b1aad5f122f9b1860c0f59068bf49039617a73b80e89a8b51c39",
+  "aggregate_algorithm": "SHA256 of sorted-key compact JSON UTF-8 no newline",
+  "distinct_passes": 527,
+  "passing_lines": 562,
+  "buffer_startup": 318956,
+  "dependent_startup": 314948,
+  "startup_limit": 327680,
+  "historical_receipts": 19,
+  "commands": [
+    {
+      "name": "private",
+      "passed_lines": 218,
+      "log_sha256": "47b0cee764311b9c993ad9884f2f78f609031f1bf6ecf5981f403cff466a4608"
+    },
+    {
+      "name": "integration",
+      "passed_lines": 57,
+      "log_sha256": "fe34d3ca781288d1c2b217e8e763cb1ba31885592c47d23a99eadb1215b90857"
+    },
+    {
+      "name": "provider",
+      "passed_lines": 16,
+      "log_sha256": "d5549ebf43b4c6768cb3645068050568d80413d69c67f237302403f8e6bdb799"
+    },
+    {
+      "name": "resource",
+      "passed_lines": 30,
+      "log_sha256": "95283a827cc8e85129476964516d93d5d70ee6ae3257c7a46a02a8723874ca3e"
+    },
+    {
+      "name": "capture",
+      "passed_lines": 157,
+      "log_sha256": "5a3d2b16e62eff5985ab6473e42d50aaa630c914e97e47d04ddba06feb7b3847"
+    },
+    {
+      "name": "foreign",
+      "passed_lines": 68,
+      "log_sha256": "f3aa2a8c83f6e4dbccdcfeef2bd79f1c6e9c3cafa1df54ec8de8d66a945a0638"
+    },
+    {
+      "name": "images",
+      "passed_lines": 16,
+      "log_sha256": "cde3d35f08eea408498f2dde4fb17375d6d2468a8b723c0ee5ae0b570a5a22cd"
+    },
+    {
+      "name": "clippy",
+      "passed_lines": 0,
+      "log_sha256": "5894c2095246c6f4f259a35b5e7e47a370ff3b81de1be5f7f10fd310fab0bc7a"
+    }
+  ],
+  "scope": "Focused static delivery; no F-core or checked runtime/native execution"
+}

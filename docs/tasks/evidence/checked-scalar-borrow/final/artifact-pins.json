@@ -1,0 +1,16 @@
+{
+  "executed_test_binaries": {
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168": "089f9168788075a5a5b86b4618134ea17fc62697997884fdb44e11d027bdccf8",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_contracts-75a670a079bdf2f6": "49cbc9273523756bec97a6c4abf7d9d0e6ef57f1fcd3023e01378ab399592d29",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_host-411266a04b37db48": "605f3109acaa160b1d982ae56c94e2c6316a787abddfb5c8e06a02106d3a1a34",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_lifecycle-84ad89226c52295f": "1100c2786133f71a9d7fff4bd19bacc5d957138aa6b4336acd9581a953d65356",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_owners-0ae7b1c4bdbbd419": "18a8ab444046b3f675b662d281507c9f88832627ab0530e54cc85c61d7228f1b",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_scalar_borrow-160dea2bf4b538b4": "9ce7139ee20eb8cb141ae5598231a00023634e0baa72194b677e4bc6906b5b6f",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/checked_foreign_wrappers-d19b8ff85fbff406": "ce8c22de28b472c84974f3f3043da17b02c4b66225640e6766126c25159a3418"
+  },
+  "versions": {
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)"
+  },
+  "note": "External binaries are pinned for this run, not copied or approved for checked native execution."
+}

@@ -1,0 +1,13 @@
+{
+  "binary": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "sha256": "d9ac537fe6ef9d56fe235164e5e508858be24499e777daf14ecf5a913632f16b",
+  "same_as_before": true,
+  "scripts": {
+    "summary-owner-inventory.gdb": "7977d8c36a7051d7388f494ded9825398cab32c9c9e237f9054ff81fd99955b7",
+    "summary-owner-identity.gdb": "5153ea08f4d00ef9fa4f7c1be75a4ee3291d00a8c7bd1f312977414a9aee341e",
+    "summary-owner-step.gdb": "0904effe43be9f39b3c152b09e3f9df4a4a0842ebec0c92aac4fab9cf7cc7146",
+    "summary-auth-step.gdb": "69f01fef466d5ccb1db15bc7d0ef47c37092eba382fad2a8440e932d6008a815",
+    "summary-auth.gdb": "3abdfe4761bce993adccbe67e6c1dfe3af61afece2bd0d4c35951be802f2b6ea"
+  },
+  "scope": "Pinned Rust source-checking unit test only; GDB stopped inferiors or observed refusal. No Ash evaluator/native dispatch. Successful debugger command exit is not a passing source test."
+}

@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "/usr/bin/python3.14",
+    "-I",
+    "-S",
+    "-B",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+    "preparation-readback"
+  ],
+  "environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only"
+}

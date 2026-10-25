@@ -1,0 +1,21 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--test",
+    "program_build",
+    "pure_generated_host_restores_reexported_scalar_checks_without_native_links",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 27.697,
+  "source_configuration_before_after_equal": true,
+  "file_count": 520,
+  "source_configuration_tree_sha256": "0a042cd9ffceb29b394b8f92c8ab6c91c3abf35e21c8c7d15d1756596538b8c5",
+  "log_sha256": "cffe7922229def7873f995105155a7c090af984a413bf7d12a26f7cb70fbb171"
+}

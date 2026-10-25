@@ -1,0 +1,37 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 6 tests
+test parser::project::tests::checked_resource_projection_preserves_host_and_rechecks_optional_field_order ... ok
+test core::validate::source_declarations::resource_selectors::tests::checked_resource_selectors_reject_coordinated_same_kind_and_source_claims ... ok
+test core::validate::source_declarations::resource_selectors::tests::checked_resource_selectors_preserve_absent_legacy_host ... ok
+test core::validate::source_declarations::resource_selectors::tests::checked_resource_selectors_have_exact_prefix_spent_and_fresh_limits ... ok
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=false: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle original structure answer=true: Ok(())
+checked lifecycle header complete
+checked lifecycle header complete
+checked lifecycle association complete
+checked lifecycle association complete
+checked lifecycle entries complete
+checked lifecycle entries complete
+test resolved::checked_resource_kind_closure_tests::checked_resource_kind_closure_accepts_actual_kind_only_probe_family ... ok
+test resolved::checked_resource_kind_closure_tests::checked_resource_kind_closure_rejects_exact_missing_probe_kind ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2036 filtered out; finished in 0.24s
+

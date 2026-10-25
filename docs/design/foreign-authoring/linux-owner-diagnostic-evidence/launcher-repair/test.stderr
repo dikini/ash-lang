@@ -1,0 +1,7 @@
+test_missing_path_and_string_refuse (__main__.PinTests.test_missing_path_and_string_refuse) ... ok
+test_path_and_string_equivalent (__main__.PinTests.test_path_and_string_equivalent) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.001s
+
+OK

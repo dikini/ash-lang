@@ -1,0 +1,31 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+error[E0004]: non-exhaustive patterns: `scalar_preflight::ForeignScalarPreflightRole::CheckedByteRead`, `scalar_preflight::ForeignScalarPreflightRole::CheckedByteWrite`, `scalar_preflight::ForeignScalarPreflightRole::CheckedCopyBytes` and 1 more not covered
+    --> src/build/image.rs:6373:57
+     |
+6373 |                 image.scalar_preflights[0].role = match image.scalar_preflights[0].role {
+     |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ patterns `scalar_preflight::ForeignScalarPreflightRole::CheckedByteRead`, `scalar_preflight::ForeignScalarPreflightRole::CheckedByteWrite`, `scalar_preflight::ForeignScalarPreflightRole::CheckedCopyBytes` and 1 more not covered
+     |
+note: `scalar_preflight::ForeignScalarPreflightRole` defined here
+    --> src/foreign/scalar_preflight.rs:17:17
+     |
+  17 | pub(crate) enum ForeignScalarPreflightRole {
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  28 |     CheckedByteRead,
+     |     --------------- not covered
+  29 |     CheckedByteWrite,
+     |     ---------------- not covered
+  30 |     CheckedCopyBytes,
+     |     ---------------- not covered
+  31 |     CheckedCopyNul,
+     |     -------------- not covered
+     = note: the matched value is of type `scalar_preflight::ForeignScalarPreflightRole`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern as shown, or multiple match arms
+     |
+6383 ~                     | Role::ExtentValue => Role::I64,
+6384 ~                     _ => todo!(),
+     |
+
+For more information about this error, try `rustc --explain E0004`.
+error: could not compile `ash` (lib test) due to 1 previous error

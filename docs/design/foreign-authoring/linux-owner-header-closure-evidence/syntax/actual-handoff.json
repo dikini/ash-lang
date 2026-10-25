@@ -1,0 +1,107 @@
+{
+  "status": "SUCCESS_HEADER_SYNTAX_ONLY_CONDITIONAL_CHECK",
+  "phase_exits": [
+    {
+      "name": "before-syntax",
+      "exit": 0
+    },
+    {
+      "name": "syntax-only",
+      "exit": 0
+    },
+    {
+      "name": "after-syntax",
+      "exit": 0
+    },
+    {
+      "name": "collect-syntax",
+      "exit": 0
+    }
+  ],
+  "execution_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/execution-manifest.json",
+    "size": 10065,
+    "sha256": "0df52ace5e11c6c6384edf6807bde3534568cedb78187bf6fa1e9a4dfe05c150"
+  },
+  "readback": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/execution-readback.json",
+    "size": 6258,
+    "sha256": "4f4a5517009cc5e73bbd92d4f17c28829f3e51a779e37c913387ec7919ef1bee"
+  },
+  "receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+    "size": 2941,
+    "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+  },
+  "syntax_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-manifest.json",
+    "size": 9467,
+    "sha256": "ac39a7983404cb285cfe7c3e2a663db23789c41c93adb0eec43feea2db717ab3"
+  },
+  "frozen_input_count_including_source": 28,
+  "frozen_input_bytes": 181397,
+  "raw_dependency": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/native-build.log",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/native-build.log",
+    "size": 1368,
+    "sha256": "13a4483867656718f402bbc9d6262ce070cef48e10dc2e67ed028414358d41fa",
+    "device": 66309,
+    "inode": 49555332,
+    "mtime_ns": 1792667220689869530
+  },
+  "monitor_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn/receipt.json",
+    "size": 19520,
+    "sha256": "24c5748e63f44ad86624925a1b133ab0592cca000b86d86f2fc497b11f142d2b"
+  },
+  "monitor_cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 6,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "monitor_reason": "exit",
+  "monitor_child_exit": 0,
+  "known_before": {
+    "phase": "before-syntax",
+    "known_pins_equal": true,
+    "known_pin_count": 48,
+    "frozen_dependency_count": 28,
+    "all_frozen_headers_equal": true,
+    "syntax_run_by_verifier": false
+  },
+  "known_after": {
+    "phase": "after-syntax",
+    "known_pins_equal": true,
+    "known_pin_count": 48,
+    "frozen_dependency_count": 28,
+    "all_frozen_headers_equal": true,
+    "syntax_run_by_verifier": false
+  },
+  "limits": {
+    "deadline_seconds": 1200,
+    "output_bytes": 16777216,
+    "sidefile_bytes": 16777216,
+    "map_bytes": 67108864
+  },
+  "claim": "Exact conditional x86-64 GNU installed-header source assertions for C byte/size_t/pointer/target/malloc/free prototypes passed.28frozen source/header path set+hash equal before/after and exact emitted dependencies; rawbytes tied to settled producer observation.",
+  "not_proven": [
+    "libc implementation correctness",
+    "complete arbitrary ABI/native/loader closure",
+    "checked owner runtime/O/K/group behavior",
+    "ownerful architecture/startup permission",
+    "retrospective byte history of original discovery"
+  ],
+  "object_link_image_or_native_startup": false
+}

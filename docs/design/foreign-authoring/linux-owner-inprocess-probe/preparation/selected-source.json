@@ -1,0 +1,122 @@
+{
+  "status": "PREPARATION_ONLY_NO_BUILD_OR_STARTUP_APPROVAL",
+  "commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "tree": "e4ab5e35b50d64326e548fc54cf264a4af170832",
+  "archive": {
+    "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source.tar",
+    "resolved": "/tmp/ash-owner-build-snapshot-1a8ecef0/source.tar",
+    "size": 98672640,
+    "sha256": "bc9a64b1956df0d7b777809b1311184cd04996d4e2f5476a811fbe85d94dceb4"
+  },
+  "archive_manifest": {
+    "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+    "resolved": "/tmp/ash-owner-build-snapshot-1a8ecef0/archive-manifest.json",
+    "size": 814765,
+    "sha256": "a17ca66398d6cb9d4f46d2cf2fa82b0197682b8b5c76dd9624995c2733c1160b"
+  },
+  "all_git_blob_bytes_and_archive_paths_reverified": true,
+  "git_blob_count": 2784,
+  "runtime_content_count": 177,
+  "source_root": "/tmp/ash-owner-build-snapshot-1a8ecef0/source",
+  "compiler_source_files_over_experiment_record_1MiB": [
+    {
+      "relative_path": "src/core/validate.rs",
+      "size": 1688770,
+      "sha256": "777cd3f2a8c8c3c6da2effa501e1f3b92ba09429afc58942557c7cc443112fc6"
+    },
+    {
+      "relative_path": "src/elaborate.rs",
+      "size": 1779136,
+      "sha256": "c111554d56fbb8acb9c27d667aca70e039d0219d5c3a2d3333f722c620582ef7"
+    },
+    {
+      "relative_path": "src/resolved.rs",
+      "size": 1793508,
+      "sha256": "96e2f8e2e6f41aa83768b3d696327a00fbe170f86beaac2318a5e315f48e27ed"
+    }
+  ],
+  "input_adaptation": {
+    "original": {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/tests/fixtures/source-owner/owner.ash",
+      "resolved": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/tests/fixtures/source-owner/owner.ash",
+      "size": 2695,
+      "sha256": "d17c2107b80f28c14f15a9b5c867572becc39975dc54809efdfefde8869e6130"
+    },
+    "adapted": {
+      "path": "/tmp/ash-owner-packaging-1a8ecef0/owner.ash",
+      "resolved": "/tmp/ash-owner-packaging-1a8ecef0/owner.ash",
+      "size": 2671,
+      "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde"
+    },
+    "only_delta": [
+      "ash_owner_acquire -> malloc",
+      "ash_owner_release -> free"
+    ]
+  },
+  "entry": {
+    "path": "/tmp/ash-owner-packaging-1a8ecef0/entry.ash",
+    "resolved": "/tmp/ash-owner-packaging-1a8ecef0/entry.ash",
+    "size": 148,
+    "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878"
+  },
+  "producer_input_vs_record_bound_note": "PROPOSED prospective distinction only; current retained row does not yet define it. Explicit contract amendment and exact assignment required before build. Preserve all2784 blobs and three over-1MiB implementation files, not just177 runtime inputs.",
+  "all_snapshot_blobs_over_1MiB": [
+    {
+      "path": "docs/design/direct-effects/one-shot/KERNEL.md",
+      "git_mode": "100644",
+      "git_blob": "e2958c586dc41e83aee6b15dc9e7e7e71ebd5a63",
+      "size": 1674762,
+      "sha256": "e09a253cf5a87d4e4b03a4b5f4616789ac79964c966a520bc97a97c380984b2d"
+    },
+    {
+      "path": "docs/design/direct-effects/one-shot/SourceScheduledCleanupInterfaces.lean",
+      "git_mode": "100644",
+      "git_blob": "b1d29dca3c8c146de5043ebe950cd3600f9ca07d",
+      "size": 3001334,
+      "sha256": "9c9f30893722bf9f06b75f4c0d9068413df2bd00de2ae8a059f86f1c6a49b109"
+    },
+    {
+      "path": "docs/design/provider-experiments/resource-calibration/build-and-source.tar.gz",
+      "git_mode": "100644",
+      "git_blob": "be59b92bcb516f61b53289c0f1f4362631c042e2",
+      "size": 2617276,
+      "sha256": "dd0f3b20af53a933b10ca4726ddbf81d98966ba8f87f5ebbfd77ad282cc86de5"
+    },
+    {
+      "path": "docs/tasks/evidence/checked-owner-lifecycle/diagnostics/lifecycle-postattempt-syntax-corrected-red.log",
+      "git_mode": "100644",
+      "git_blob": "c92d614c39febc3818cc99710109c866bda2c9f2",
+      "size": 1479865,
+      "sha256": "9ea45da22fe8bf42474a28d8d30786b1fb3d931be9ab2f93d43f4bb2de8e5ef6"
+    },
+    {
+      "path": "docs/tasks/evidence/checked-owner-lifecycle/diagnostics/lifecycle-public-codec-semantic-controls.log",
+      "git_mode": "100644",
+      "git_blob": "fddb181aec10d9f7291ad3a386b5efbcfda4a3b9",
+      "size": 1515703,
+      "sha256": "00d948870340f36a33b2e49cde103148f9f898ba97892147b96b18436d6d14b1"
+    },
+    {
+      "path": "src/core/validate.rs",
+      "git_mode": "100644",
+      "git_blob": "b3b1c5a9797d665d72ec74720cb5086439c22df1",
+      "size": 1688770,
+      "sha256": "777cd3f2a8c8c3c6da2effa501e1f3b92ba09429afc58942557c7cc443112fc6"
+    },
+    {
+      "path": "src/elaborate.rs",
+      "git_mode": "100644",
+      "git_blob": "0ab511a86377ae8b063a4d98fe9e723de93f71ed",
+      "size": 1779136,
+      "sha256": "c111554d56fbb8acb9c27d667aca70e039d0219d5c3a2d3333f722c620582ef7"
+    },
+    {
+      "path": "src/resolved.rs",
+      "git_mode": "100644",
+      "git_blob": "95ea212a70c2c3e8264be0ed2b7ae96080b4b38d",
+      "size": 1793508,
+      "sha256": "96e2f8e2e6f41aa83768b3d696327a00fbe170f86beaac2318a5e315f48e27ed"
+    }
+  ],
+  "all_snapshot_bytes": 96452672
+}

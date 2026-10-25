@@ -1,0 +1,593 @@
+{
+  "schema": 2,
+  "kind": "trusted-build-tool-observation",
+  "config_sha256": "badcd7aec2613202ae9be80fe6b07dc31399a3034ce73be6a3cf2af2be94ac1f",
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size_before": 20745,
+    "size_after": 20745,
+    "hashed_bytes": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+    "hash_is_prefix": false,
+    "device": 47,
+    "inode": 55540
+  },
+  "run_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn",
+  "output_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn/output.log",
+  "argv": [
+    "/usr/bin/x86_64-linux-gnu-gcc-15",
+    "-B/usr/libexec/gcc/x86_64-linux-gnu/15/",
+    "-m64",
+    "-std=c11",
+    "-fno-builtin",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-pedantic-errors",
+    "-nostdinc",
+    "-isystem",
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include",
+    "-isystem",
+    "/usr/include/x86_64-linux-gnu",
+    "-isystem",
+    "/usr/include",
+    "-v",
+    "-fsyntax-only",
+    "-MD",
+    "-MF",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/native-build.log",
+    "-MT",
+    "owner_header_abi",
+    "-x",
+    "c",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c"
+  ],
+  "child_pid": 6,
+  "child_exit": 0,
+  "reason": "exit",
+  "error": null,
+  "sample_interval_seconds": 0.01,
+  "hard_storage_containment": false,
+  "observed_output_bytes": 4648,
+  "retained_output_bytes": 4648,
+  "output_truncated": false,
+  "watched_files": [
+    {
+      "relative_path": "native-build.log",
+      "observed_peak_bytes": 1368,
+      "file_class": "sidefile_log",
+      "limit_bytes": 16777216,
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/native-build.log",
+      "size_before": 1368,
+      "size_after": 1368,
+      "hashed_bytes": 1368,
+      "sha256": "13a4483867656718f402bbc9d6262ce070cef48e10dc2e67ed028414358d41fa",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555332,
+      "retained_path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn/watched-0.log"
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1",
+      "size_before": 37475472,
+      "size_after": 37475472,
+      "hashed_bytes": 37475472,
+      "sha256": "30510b346885152c4fce41d2b501751c95d3690b1c34eaa04ebb970e70eae620",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 27002737
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size_before": 20745,
+      "size_after": 20745,
+      "hashed_bytes": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 55540
+    },
+    {
+      "path": "/usr/bin/python3.14",
+      "size_before": 7477160,
+      "size_after": 7477160,
+      "hashed_bytes": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26347805
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+      "size_before": 686,
+      "size_after": 686,
+      "hashed_bytes": 686,
+      "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555309
+    },
+    {
+      "path": "/usr/include/stdlib.h",
+      "size_before": 42963,
+      "size_after": 42963,
+      "hashed_bytes": 42963,
+      "sha256": "936ffcdf6161aa702d9fe433879e59b039731effebea7a9c02506da183a99d02",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26354024
+    },
+    {
+      "path": "/usr/include/stdc-predef.h",
+      "size_before": 2462,
+      "size_after": 2462,
+      "hashed_bytes": 2462,
+      "sha256": "383ff8bd7dcc87deefedd062637f4afe28f85f8be443beda8b41d15e45ef1679",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26353975
+    },
+    {
+      "path": "/usr/include/features.h",
+      "size_before": 19773,
+      "size_after": 19773,
+      "hashed_bytes": 19773,
+      "sha256": "f6d015d0248056a3091de489abcbadbbd93d7aaf95753d7426f779765f067118",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26349520
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "size_before": 4286,
+      "size_after": 4286,
+      "hashed_bytes": 4286,
+      "sha256": "9ec1af1a58b5d6431708a7ca71ef65944622921ca6fce878ae2ab486f3145296",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26354798
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+      "size_before": 14134,
+      "size_after": 14134,
+      "hashed_bytes": 14134,
+      "sha256": "472a84e536689fc48e861b2415b229742e133d09bbf1c8fd8e0fe89ab5712f04",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 27006702
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+      "size_before": 443,
+      "size_after": 443,
+      "hashed_bytes": 443,
+      "sha256": "64ab730bb09eba38f01a62174fb8371ef281778ac33f141a6fa4217a9b39466a",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 27006705
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+      "size_before": 6507,
+      "size_after": 6507,
+      "hashed_bytes": 6507,
+      "sha256": "c1db59d8d8a54dbc7e7dbc5ce2f25fd0451f8e01794e7964a15a3e6cc17566d3",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 27006661
+    },
+    {
+      "path": "/usr/share/man/man1/x86_64-linux-gnu-gcc-15.1.gz",
+      "size_before": 423730,
+      "size_after": 423730,
+      "hashed_bytes": 423730,
+      "sha256": "42759d4899154564579b875744b85f429c2985ae201b42ec0ddf8c7582a8b310",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26876437
+    },
+    {
+      "path": "/var/lib/dpkg/info/cpp-15-x86-64-linux-gnu.list",
+      "size_before": 442,
+      "size_after": 442,
+      "hashed_bytes": 442,
+      "sha256": "071efc4a0b823c3f6a533cb7d6e3be5b1833888a40d863d85ec88edf867c363d",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26219363
+    },
+    {
+      "path": "/var/lib/dpkg/info/gcc-15-x86-64-linux-gnu.list",
+      "size_before": 1993,
+      "size_after": 1993,
+      "hashed_bytes": 1993,
+      "sha256": "af1ee388e97182d45f6f30c20c32b8b511b582c0429ca57702473b287b498288",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26223412
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size_before": 2809,
+      "size_after": 2809,
+      "hashed_bytes": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40788
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size_before": 2248,
+      "size_after": 2248,
+      "hashed_bytes": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40795
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size_before": 4399,
+      "size_after": 4399,
+      "hashed_bytes": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40592
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size_before": 12369,
+      "size_after": 12369,
+      "hashed_bytes": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301",
+      "hash_is_prefix": false,
+      "device": 47,
+      "inode": 40594
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "size_before": 6238972,
+      "size_after": 6238972,
+      "hashed_bytes": 6238972,
+      "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26363793
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/manual-evidence.json",
+      "size_before": 1125,
+      "size_after": 1125,
+      "hashed_bytes": 1125,
+      "sha256": "ce7fd39c9d38570ce97a5a2e47720fdf3edd9b1b0ab12fb8ad242a97b5ccdf49",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555310
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+      "size_before": 20440,
+      "size_after": 20440,
+      "hashed_bytes": 20440,
+      "sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555214
+    },
+    {
+      "path": "/usr/include/features-time64.h",
+      "size_before": 1532,
+      "size_after": 1532,
+      "hashed_bytes": 1532,
+      "sha256": "c7c33cddd4ffbbca1eb0de042131a51201a42f29139820d0a36c1e1dd0d16ba5",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26349519
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+      "size_before": 398,
+      "size_after": 398,
+      "hashed_bytes": 398,
+      "sha256": "948177c0fc84c4746588f62252029880ec4c6f88b743ba55d952f980303ebfbb",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26363643
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+      "size_before": 1109,
+      "size_after": 1109,
+      "hashed_bytes": 1109,
+      "sha256": "9d075412fa9c84e68a59e22944daad36905cb2eb19c3a7613d652b85ece4f207",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26355313
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+      "size_before": 35168,
+      "size_after": 35168,
+      "hashed_bytes": 35168,
+      "sha256": "a5a71b01109709190529d0c3532751869d05db6a5e8ce01c8c73229b797cfb83",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26363669
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+      "size_before": 970,
+      "size_after": 970,
+      "hashed_bytes": 970,
+      "sha256": "9b3fe370666b72e74d2c19c9fa44bd18a72f671e5ca24fbf4cca6a29b114459d",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26354804
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+      "size_before": 384,
+      "size_after": 384,
+      "hashed_bytes": 384,
+      "sha256": "ef444295a0a9e8f5c40918399a00cc91ba0bd79774110cdf6e652baa6cfadb2e",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26363659
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+      "size_before": 481,
+      "size_after": 481,
+      "hashed_bytes": 481,
+      "sha256": "0b6ab3e2ed3ba79b30fe6ba81a68fc41f57965b8d56662763633431b703c9289",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26363655
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+      "size_before": 4929,
+      "size_after": 4929,
+      "hashed_bytes": 4929,
+      "sha256": "00524c02db9c4aa6dce6cdee90183bfca40fb254a93f0ea22a397f3355711d1f",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26354778
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+      "size_before": 10325,
+      "size_after": 10325,
+      "hashed_bytes": 10325,
+      "sha256": "8d5c5517e58c6d7ac4c915037f3af518fadc41ceb47999ee3387e4fb91cb4eaa",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26354777
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+      "size_before": 1115,
+      "size_after": 1115,
+      "hashed_bytes": 1115,
+      "sha256": "8900ab8d754778a6df25a040202726097d29f65954c4525de4542abef79c0c01",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26355048
+    },
+    {
+      "path": "/usr/include/stdint.h",
+      "size_before": 8268,
+      "size_after": 8268,
+      "hashed_bytes": 8268,
+      "sha256": "fbd21c7a64b876eddd4e179172fb58a4921fd616d103b8107a28a54cf687289b",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26353976
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/types.h",
+      "size_before": 8806,
+      "size_after": 8806,
+      "hashed_bytes": 8806,
+      "sha256": "3fcf066dbf9fac9c5a15ff6327ca6a437e955e9aa571de1c3347cd0f4da4f93d",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26362572
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+      "size_before": 3737,
+      "size_after": 3737,
+      "hashed_bytes": 3737,
+      "sha256": "a52fb9d6cca3d305618b036183fe11fbb1789afea64f5436197bbb058e5edf0f",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26362590
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+      "size_before": 1340,
+      "size_after": 1340,
+      "hashed_bytes": 1340,
+      "sha256": "c502af2b2d265699b53ccb52e7a20521ab3ec4d346deb1366f494d1e22354ff9",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26355311
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+      "size_before": 1906,
+      "size_after": 1906,
+      "hashed_bytes": 1906,
+      "sha256": "9a3e6e246753da1e142227f6a81a9d0064cbb3189073c367263a491b4044373f",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26363634
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+      "size_before": 1037,
+      "size_after": 1037,
+      "hashed_bytes": 1037,
+      "sha256": "ed15fd5be7a39b8145b2beb08fd4a316bb72f0bd5ebca707399b4f5b0c0bf304",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26355026
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+      "size_before": 1049,
+      "size_after": 1049,
+      "hashed_bytes": 1049,
+      "sha256": "f0d1ad8c0effab436bebd7a4c177a28a567f0faaae69877e9ccbe3d631a7cd68",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26355041
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+      "size_before": 1305,
+      "size_after": 1305,
+      "hashed_bytes": 1305,
+      "sha256": "24c527a005947517a1d3032fdf161577e5a62184f4419066a2112a79ab2da788",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26355038
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+      "size_before": 445,
+      "size_after": 445,
+      "hashed_bytes": 445,
+      "sha256": "9409a59233daef9339a757c58b3dd1cee980a65f1ef2590040fe5e106222a4bc",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 27006707
+    },
+    {
+      "path": "/usr/include/limits.h",
+      "size_before": 5839,
+      "size_after": 5839,
+      "hashed_bytes": 5839,
+      "sha256": "7505220f742ab30ef635baa0849f26e1dfdb4fb22f2b506f4f2b0f4879f82dfb",
+      "hash_is_prefix": false,
+      "device": 66306,
+      "inode": 26349573
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+      "size_before": 9529,
+      "size_after": 9529,
+      "hashed_bytes": 9529,
+      "sha256": "9b73bbf5f051cbf2c78d00ed8aaacc07072bfdef57c45ae1eae2a644baad5dcb",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555304
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json",
+      "size_before": 2976,
+      "size_after": 2976,
+      "hashed_bytes": 2976,
+      "sha256": "b89b81b854765f86df14d82cbd3d73a87fbb97b6b81d0413df4689fb1e0d5b03",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555302
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/execution-manifest.json",
+      "size_before": 10259,
+      "size_after": 10259,
+      "hashed_bytes": 10259,
+      "sha256": "5bf5d522f30ed34ebbd9346e5fb434bf2f3c74a750405462e583301790089139",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555305
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+      "size_before": 2388,
+      "size_after": 2388,
+      "hashed_bytes": 2388,
+      "sha256": "35e4d224be4d5f208e631ee48f2d37bacaa681fea0618437bdffbef6661b13c9",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555311
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+      "size_before": 7721,
+      "size_after": 7721,
+      "hashed_bytes": 7721,
+      "sha256": "2446f36f2b7a63d245436ba6b5058ea255f337b5a554785252e609e4f45a9edd",
+      "hash_is_prefix": false,
+      "device": 66309,
+      "inode": 49555312
+    }
+  ],
+  "artifacts": [],
+  "cleanup": {
+    "all_children_reaped": true,
+    "remaining_children": [],
+    "reaped": [
+      {
+        "pid": 6,
+        "wait_status": 0,
+        "exit_code": 0
+      }
+    ],
+    "reaped_count": 1,
+    "reaped_records_truncated": false,
+    "group_sigkill_sent": true,
+    "escaped_group_detected": false,
+    "reaping_pending": false,
+    "pending_observed": false
+  },
+  "map_relative_path": null,
+  "limits": {
+    "deadline_seconds": 1200,
+    "output_bytes": 16777216,
+    "sidefile_bytes": 16777216,
+    "map_bytes": 67108864
+  },
+  "environment_keys": [
+    "LANG",
+    "LC_ALL",
+    "PATH"
+  ],
+  "executable": {
+    "path": "/usr/bin/x86_64-linux-gnu-gcc-15",
+    "size_before": 1305304,
+    "size_after": 1305304,
+    "hashed_bytes": 1305304,
+    "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88",
+    "hash_is_prefix": false,
+    "device": 66306,
+    "inode": 26347117
+  },
+  "subreaper": {
+    "enabled": true,
+    "process_local": true,
+    "initial_children": []
+  },
+  "child_pgid": 6,
+  "child_session": 6,
+  "final_limit_failures": [],
+  "elapsed_seconds": 0.06405388900020625,
+  "observed_output_sha256": "a5325612b0080e311861a6b64e676dc93777cce01a5014040f92ed424f04eac6",
+  "output_file": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/build-run-knemvgvn/output.log",
+    "size_before": 4648,
+    "size_after": 4648,
+    "hashed_bytes": 4648,
+    "sha256": "a5325612b0080e311861a6b64e676dc93777cce01a5014040f92ed424f04eac6",
+    "hash_is_prefix": false,
+    "device": 66309,
+    "inode": 49555327
+  }
+}

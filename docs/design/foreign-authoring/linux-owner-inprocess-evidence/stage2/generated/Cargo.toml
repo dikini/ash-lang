@@ -1,0 +1,14 @@
+[package]
+name = "ash-host-6-0"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+ash = { path = "/tmp/ash-owner-build-snapshot-1a8ecef0/source", features = [] }
+
+[workspace]
+
+[profile.dev]
+opt-level = 0
+panic = "unwind"
+debug-assertions = true

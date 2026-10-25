@@ -1,0 +1,14 @@
+{
+  "base": "fb73289",
+  "inputs": 576,
+  "all_expected_source_bytes_reconstructed": true,
+  "changed_overlay_paths": [
+    "src/core/source_resource.rs",
+    "src/core/validate.rs",
+    "src/elaborate.rs",
+    "src/elaborate/checked_owner_lifecycle_tests.rs",
+    "src/resolved.rs",
+    "tests/checked_foreign_lifecycle.rs"
+  ],
+  "patch_sha256": "1f60d49b9ce964fedb85084df24391510a8f3d04f663655d03b03cfd21032670"
+}

@@ -1,0 +1,119 @@
+{
+  "approval_sha256": "35bb4b2e53c1114d6becf715698926ddf5431e3cf20e7f22867a362e97e004e0",
+  "elf": {
+    "machine": "EM_X86_64",
+    "program_headers": 10,
+    "pt_dynamic": false,
+    "pt_interp": false,
+    "pt_needed": false,
+    "type": "ET_EXEC"
+  },
+  "memfd_policy": {
+    "create_flags": 19,
+    "flag_names": [
+      "MFD_CLOEXEC",
+      "MFD_ALLOW_SEALING",
+      "MFD_EXEC"
+    ],
+    "mfd_noexec_seal_requested": false,
+    "vm.memfd_noexec": "0"
+  },
+  "observations": {
+    "changed_image": {
+      "refused": "final immutable digest mismatch",
+      "reporter_started": false
+    },
+    "changed_receipt": {
+      "refused": "receipt not approved",
+      "reporter_started": false
+    },
+    "missing_approval": {
+      "refused": "explicit exact receipt approval absent",
+      "reporter_started": false
+    },
+    "nonexecuted_elf_parser_negatives": {
+      "dynamic_elf": {
+        "refused": "interpreter or dynamic section",
+        "reporter_started": false
+      },
+      "script": {
+        "refused": "short ELF",
+        "reporter_started": false
+      },
+      "wrong_machine": {
+        "refused": "unsupported ELF/ABI",
+        "reporter_started": false
+      }
+    },
+    "path_replacement": {
+      "candidate_now_sha256": "c338f484f853f1f8706ace538269a68c51cd5625c6cfc189f36211e534b76798",
+      "execution": {
+        "executed_via": "os.execve(fd), no filename reopened",
+        "exit_code": 0,
+        "output": "trusted-reporter-A uid=1000 gid=1000 groups=4,24,27,30,46,114,122,986,987,1000\n",
+        "reaped": true
+      },
+      "stage": "execve_fd after sealing/final verification"
+    },
+    "replacement_before_pin": {
+      "refused": "final immutable digest mismatch",
+      "reporter_started": false
+    },
+    "sealed_mutation_refusals": {
+      "add_seal": {
+        "errno": 1,
+        "name": "EPERM"
+      },
+      "grow": {
+        "errno": 1,
+        "name": "EPERM"
+      },
+      "pwrite": {
+        "errno": 1,
+        "name": "EPERM"
+      },
+      "shared_write_map": {
+        "errno": 1,
+        "name": "EPERM"
+      },
+      "shrink": {
+        "errno": 1,
+        "name": "EPERM"
+      }
+    },
+    "unsupported_receipt": {
+      "refused": "unsupported receipt version",
+      "reporter_started": false
+    }
+  },
+  "parent": {
+    "gid": 1000,
+    "groups": [
+      4,
+      24,
+      27,
+      30,
+      46,
+      114,
+      122,
+      986,
+      987,
+      1000
+    ],
+    "status": {
+      "NoNewPrivs": "0",
+      "Seccomp": "0",
+      "Seccomp_filters": "0"
+    },
+    "uid": 1000
+  },
+  "pinned_execution_observed": true,
+  "receipt_sha256": "a380fb87183305c4f31e5f5b15ce3f91dee88b6b78906a5752d633550e424c8b",
+  "scope": "trusted self-authored reporter only; in-process host authority, no isolation",
+  "sealed_fd": {
+    "mode_octal": "0o500",
+    "seals": 15,
+    "sha256": "4fa38655bf249a6e9a10c37da914f00ca391160261cf8eaa3c7b6f407e3eb248",
+    "size": 821296
+  }
+}

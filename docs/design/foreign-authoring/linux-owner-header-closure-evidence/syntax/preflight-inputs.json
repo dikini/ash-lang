@@ -1,0 +1,575 @@
+{
+  "status": "FROZEN_DISCOVERED_HEADER_CLOSURE_SYNTAX_ONLY_PREPARATION",
+  "outer_environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "pins": [
+    {
+      "path": "/usr/bin/x86_64-linux-gnu-gcc-15",
+      "resolved": "/usr/bin/x86_64-linux-gnu-gcc-15",
+      "size": 1305304,
+      "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88"
+    },
+    {
+      "path": "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1",
+      "resolved": "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1",
+      "size": 37475472,
+      "sha256": "30510b346885152c4fce41d2b501751c95d3690b1c34eaa04ebb970e70eae620"
+    },
+    {
+      "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "resolved": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+      "size": 20745,
+      "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+    },
+    {
+      "path": "/usr/bin/python3.14",
+      "resolved": "/usr/bin/python3.14",
+      "size": 7477160,
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+      "size": 686,
+      "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694"
+    },
+    {
+      "path": "/usr/include/stdlib.h",
+      "resolved": "/usr/include/stdlib.h",
+      "size": 42963,
+      "sha256": "936ffcdf6161aa702d9fe433879e59b039731effebea7a9c02506da183a99d02"
+    },
+    {
+      "path": "/usr/include/stdc-predef.h",
+      "resolved": "/usr/include/stdc-predef.h",
+      "size": 2462,
+      "sha256": "383ff8bd7dcc87deefedd062637f4afe28f85f8be443beda8b41d15e45ef1679"
+    },
+    {
+      "path": "/usr/include/features.h",
+      "resolved": "/usr/include/features.h",
+      "size": 19773,
+      "sha256": "f6d015d0248056a3091de489abcbadbbd93d7aaf95753d7426f779765f067118"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "size": 4286,
+      "sha256": "9ec1af1a58b5d6431708a7ca71ef65944622921ca6fce878ae2ab486f3145296"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+      "size": 14134,
+      "sha256": "472a84e536689fc48e861b2415b229742e133d09bbf1c8fd8e0fe89ab5712f04"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+      "size": 443,
+      "sha256": "64ab730bb09eba38f01a62174fb8371ef281778ac33f141a6fa4217a9b39466a"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+      "size": 6507,
+      "sha256": "c1db59d8d8a54dbc7e7dbc5ce2f25fd0451f8e01794e7964a15a3e6cc17566d3"
+    },
+    {
+      "path": "/usr/share/man/man1/x86_64-linux-gnu-gcc-15.1.gz",
+      "resolved": "/usr/share/man/man1/x86_64-linux-gnu-gcc-15.1.gz",
+      "size": 423730,
+      "sha256": "42759d4899154564579b875744b85f429c2985ae201b42ec0ddf8c7582a8b310"
+    },
+    {
+      "path": "/var/lib/dpkg/info/cpp-15-x86-64-linux-gnu.list",
+      "resolved": "/var/lib/dpkg/info/cpp-15-x86-64-linux-gnu.list",
+      "size": 442,
+      "sha256": "071efc4a0b823c3f6a533cb7d6e3be5b1833888a40d863d85ec88edf867c363d"
+    },
+    {
+      "path": "/var/lib/dpkg/info/gcc-15-x86-64-linux-gnu.list",
+      "resolved": "/var/lib/dpkg/info/gcc-15-x86-64-linux-gnu.list",
+      "size": 1993,
+      "sha256": "af1ee388e97182d45f6f30c20c32b8b511b582c0429ca57702473b287b498288"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "resolved": "/tmp/ash-owner-generation-stage2/generation-receipt.json",
+      "size": 2809,
+      "sha256": "dd3b112c8325251d24611318f2474c83693486365b5a0bee8dc1f169c072ed9b"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "resolved": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+      "size": 2248,
+      "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "size": 4399,
+      "sha256": "1691119e37842747136ca778fc22d6e141aea40cafeab40a5ee68aadc3d219bd"
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "resolved": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/expected-facts.bin",
+      "size": 12369,
+      "sha256": "cba868b6608f89a2acb60ddbcdb9d8d45360bb09ab02a9bdafd4589f7c0e8301"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "size": 6238972,
+      "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/manual-evidence.json",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/manual-evidence.json",
+      "size": 1125,
+      "sha256": "ce7fd39c9d38570ce97a5a2e47720fdf3edd9b1b0ab12fb8ad242a97b5ccdf49"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/experiment-contract.md",
+      "size": 20440,
+      "sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd"
+    },
+    {
+      "path": "/usr/include/features-time64.h",
+      "resolved": "/usr/include/features-time64.h",
+      "size": 1532,
+      "sha256": "c7c33cddd4ffbbca1eb0de042131a51201a42f29139820d0a36c1e1dd0d16ba5"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+      "size": 398,
+      "sha256": "948177c0fc84c4746588f62252029880ec4c6f88b743ba55d952f980303ebfbb"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+      "size": 1109,
+      "sha256": "9d075412fa9c84e68a59e22944daad36905cb2eb19c3a7613d652b85ece4f207"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+      "size": 35168,
+      "sha256": "a5a71b01109709190529d0c3532751869d05db6a5e8ce01c8c73229b797cfb83"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+      "size": 970,
+      "sha256": "9b3fe370666b72e74d2c19c9fa44bd18a72f671e5ca24fbf4cca6a29b114459d"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+      "size": 384,
+      "sha256": "ef444295a0a9e8f5c40918399a00cc91ba0bd79774110cdf6e652baa6cfadb2e"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+      "size": 481,
+      "sha256": "0b6ab3e2ed3ba79b30fe6ba81a68fc41f57965b8d56662763633431b703c9289"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+      "size": 4929,
+      "sha256": "00524c02db9c4aa6dce6cdee90183bfca40fb254a93f0ea22a397f3355711d1f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+      "size": 10325,
+      "sha256": "8d5c5517e58c6d7ac4c915037f3af518fadc41ceb47999ee3387e4fb91cb4eaa"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+      "size": 1115,
+      "sha256": "8900ab8d754778a6df25a040202726097d29f65954c4525de4542abef79c0c01"
+    },
+    {
+      "path": "/usr/include/stdint.h",
+      "resolved": "/usr/include/stdint.h",
+      "size": 8268,
+      "sha256": "fbd21c7a64b876eddd4e179172fb58a4921fd616d103b8107a28a54cf687289b"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/types.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/types.h",
+      "size": 8806,
+      "sha256": "3fcf066dbf9fac9c5a15ff6327ca6a437e955e9aa571de1c3347cd0f4da4f93d"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+      "size": 3737,
+      "sha256": "a52fb9d6cca3d305618b036183fe11fbb1789afea64f5436197bbb058e5edf0f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+      "size": 1340,
+      "sha256": "c502af2b2d265699b53ccb52e7a20521ab3ec4d346deb1366f494d1e22354ff9"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+      "size": 1906,
+      "sha256": "9a3e6e246753da1e142227f6a81a9d0064cbb3189073c367263a491b4044373f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+      "size": 1037,
+      "sha256": "ed15fd5be7a39b8145b2beb08fd4a316bb72f0bd5ebca707399b4f5b0c0bf304"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+      "size": 1049,
+      "sha256": "f0d1ad8c0effab436bebd7a4c177a28a567f0faaae69877e9ccbe3d631a7cd68"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+      "size": 1305,
+      "sha256": "24c527a005947517a1d3032fdf161577e5a62184f4419066a2112a79ab2da788"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+      "size": 445,
+      "sha256": "9409a59233daef9339a757c58b3dd1cee980a65f1ef2590040fe5e106222a4bc"
+    },
+    {
+      "path": "/usr/include/limits.h",
+      "resolved": "/usr/include/limits.h",
+      "size": 5839,
+      "sha256": "7505220f742ab30ef635baa0849f26e1dfdb4fb22f2b506f4f2b0f4879f82dfb"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+      "size": 9529,
+      "sha256": "9b73bbf5f051cbf2c78d00ed8aaacc07072bfdef57c45ae1eae2a644baad5dcb"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovery-receipt.json",
+      "size": 2976,
+      "sha256": "b89b81b854765f86df14d82cbd3d73a87fbb97b6b81d0413df4689fb1e0d5b03"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/execution-manifest.json",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/execution-manifest.json",
+      "size": 10259,
+      "sha256": "5bf5d522f30ed34ebbd9346e5fb434bf2f3c74a750405462e583301790089139"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+      "size": 2388,
+      "sha256": "35e4d224be4d5f208e631ee48f2d37bacaa681fea0618437bdffbef6661b13c9"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+      "size": 7721,
+      "sha256": "2446f36f2b7a63d245436ba6b5058ea255f337b5a554785252e609e4f45a9edd"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json",
+      "size": 10313,
+      "sha256": "badcd7aec2613202ae9be80fe6b07dc31399a3034ce73be6a3cf2af2be94ac1f"
+    }
+  ],
+  "absence_paths": [
+    "/usr/lib/gcc/x86_64-linux-gnu/15/specs",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/specs",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/include",
+    "/usr/x86_64-linux-gnu/lib/specs",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/x86_64-linux-gnu/15/cc1",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/x86_64-linux-gnu/15.2.0/cc1"
+  ],
+  "directories": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "device": 66309,
+      "inode": 49555308,
+      "uid": 1000,
+      "private": true
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include",
+      "device": 66306,
+      "inode": 27026973,
+      "uid": 65534,
+      "private": false
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu",
+      "resolved": "/usr/include/x86_64-linux-gnu",
+      "device": 66306,
+      "inode": 26345772,
+      "uid": 65534,
+      "private": false
+    },
+    {
+      "path": "/usr/include",
+      "resolved": "/usr/include",
+      "device": 66306,
+      "inode": 26345476,
+      "uid": 65534,
+      "private": false
+    },
+    {
+      "path": "/usr/libexec/gcc/x86_64-linux-gnu/15",
+      "resolved": "/usr/libexec/gcc/x86_64-linux-gnu/15",
+      "device": 66306,
+      "inode": 27026964,
+      "uid": 65534,
+      "private": false
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging",
+      "device": 66309,
+      "inode": 49554020,
+      "uid": 1000,
+      "private": true
+    }
+  ],
+  "include_roots": [
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include",
+    "/usr/include/x86_64-linux-gnu",
+    "/usr/include"
+  ],
+  "source": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+  "cc1": "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1",
+  "monitor": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+  "known_header_pins_are_incomplete_seeds": false,
+  "transitive_headers": "FROZEN_POST_QUERY_28_INPUT_SET_FOR_SEPARATE_SYNTAX_GATE",
+  "raw_dependency_bytes": 1048576,
+  "raw_command_output_bytes": 16777216,
+  "closure_records": 4096,
+  "closure_manifest_bytes": 4194304,
+  "producer_receipt_bytes": 262144,
+  "qualification": "Query snapshot was post-query, not retrospective byte-use proof. This separate syntax gate must match all28 frozen source/header byte pins before and after and exact emitted dependency set; ordinary trusted tool/source correspondence, not hostile-writer containment or libc implementation proof.",
+  "contract_commit": "5cb93a9fd03d963377b0a79bc2e18404c54c2c47",
+  "contract_sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd",
+  "limits_note": "No map selected. Same reviewed64 monitor, stdout/other sidefiles16MiB, admitted dependency1MiB,1200s; no object/link/image startup.",
+  "frozen_dependency_paths": [
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+    "/usr/include/stdlib.h",
+    "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+    "/usr/include/features.h",
+    "/usr/include/features-time64.h",
+    "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+    "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+    "/usr/include/stdc-predef.h",
+    "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+    "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+    "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+    "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+    "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+    "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+    "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+    "/usr/include/stdint.h",
+    "/usr/include/x86_64-linux-gnu/bits/types.h",
+    "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+    "/usr/include/x86_64-linux-gnu/bits/time64.h",
+    "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+    "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+    "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+    "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+    "/usr/include/limits.h"
+  ],
+  "frozen_dependencies": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+      "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c",
+      "size": 686,
+      "sha256": "cb40449f280a807d12016d3b69e63b81445477c41768a4dc794de8d6cc274694"
+    },
+    {
+      "path": "/usr/include/stdlib.h",
+      "resolved": "/usr/include/stdlib.h",
+      "size": 42963,
+      "sha256": "936ffcdf6161aa702d9fe433879e59b039731effebea7a9c02506da183a99d02"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/libc-header-start.h",
+      "size": 4286,
+      "sha256": "9ec1af1a58b5d6431708a7ca71ef65944622921ca6fce878ae2ab486f3145296"
+    },
+    {
+      "path": "/usr/include/features.h",
+      "resolved": "/usr/include/features.h",
+      "size": 19773,
+      "sha256": "f6d015d0248056a3091de489abcbadbbd93d7aaf95753d7426f779765f067118"
+    },
+    {
+      "path": "/usr/include/features-time64.h",
+      "resolved": "/usr/include/features-time64.h",
+      "size": 1532,
+      "sha256": "c7c33cddd4ffbbca1eb0de042131a51201a42f29139820d0a36c1e1dd0d16ba5"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/wordsize.h",
+      "size": 398,
+      "sha256": "948177c0fc84c4746588f62252029880ec4c6f88b743ba55d952f980303ebfbb"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/timesize.h",
+      "size": 1109,
+      "sha256": "9d075412fa9c84e68a59e22944daad36905cb2eb19c3a7613d652b85ece4f207"
+    },
+    {
+      "path": "/usr/include/stdc-predef.h",
+      "resolved": "/usr/include/stdc-predef.h",
+      "size": 2462,
+      "sha256": "383ff8bd7dcc87deefedd062637f4afe28f85f8be443beda8b41d15e45ef1679"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/sys/cdefs.h",
+      "size": 35168,
+      "sha256": "a5a71b01109709190529d0c3532751869d05db6a5e8ce01c8c73229b797cfb83"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/long-double.h",
+      "size": 970,
+      "sha256": "9b3fe370666b72e74d2c19c9fa44bd18a72f671e5ca24fbf4cca6a29b114459d"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/gnu/stubs.h",
+      "size": 384,
+      "sha256": "ef444295a0a9e8f5c40918399a00cc91ba0bd79774110cdf6e652baa6cfadb2e"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/gnu/stubs-64.h",
+      "size": 481,
+      "sha256": "0b6ab3e2ed3ba79b30fe6ba81a68fc41f57965b8d56662763633431b703c9289"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stddef.h",
+      "size": 14134,
+      "sha256": "472a84e536689fc48e861b2415b229742e133d09bbf1c8fd8e0fe89ab5712f04"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/floatn.h",
+      "size": 4929,
+      "sha256": "00524c02db9c4aa6dce6cdee90183bfca40fb254a93f0ea22a397f3355711d1f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/floatn-common.h",
+      "size": 10325,
+      "sha256": "8d5c5517e58c6d7ac4c915037f3af518fadc41ceb47999ee3387e4fb91cb4eaa"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdlib-float.h",
+      "size": 1115,
+      "sha256": "8900ab8d754778a6df25a040202726097d29f65954c4525de4542abef79c0c01"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/stdint.h",
+      "size": 443,
+      "sha256": "64ab730bb09eba38f01a62174fb8371ef281778ac33f141a6fa4217a9b39466a"
+    },
+    {
+      "path": "/usr/include/stdint.h",
+      "resolved": "/usr/include/stdint.h",
+      "size": 8268,
+      "sha256": "fbd21c7a64b876eddd4e179172fb58a4921fd616d103b8107a28a54cf687289b"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/types.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/types.h",
+      "size": 8806,
+      "sha256": "3fcf066dbf9fac9c5a15ff6327ca6a437e955e9aa571de1c3347cd0f4da4f93d"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/typesizes.h",
+      "size": 3737,
+      "sha256": "a52fb9d6cca3d305618b036183fe11fbb1789afea64f5436197bbb058e5edf0f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/time64.h",
+      "size": 1340,
+      "sha256": "c502af2b2d265699b53ccb52e7a20521ab3ec4d346deb1366f494d1e22354ff9"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/wchar.h",
+      "size": 1906,
+      "sha256": "9a3e6e246753da1e142227f6a81a9d0064cbb3189073c367263a491b4044373f"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-intn.h",
+      "size": 1037,
+      "sha256": "ed15fd5be7a39b8145b2beb08fd4a316bb72f0bd5ebca707399b4f5b0c0bf304"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h",
+      "size": 1049,
+      "sha256": "f0d1ad8c0effab436bebd7a4c177a28a567f0faaae69877e9ccbe3d631a7cd68"
+    },
+    {
+      "path": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+      "resolved": "/usr/include/x86_64-linux-gnu/bits/stdint-least.h",
+      "size": 1305,
+      "sha256": "24c527a005947517a1d3032fdf161577e5a62184f4419066a2112a79ab2da788"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/limits.h",
+      "size": 6507,
+      "sha256": "c1db59d8d8a54dbc7e7dbc5ce2f25fd0451f8e01794e7964a15a3e6cc17566d3"
+    },
+    {
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+      "resolved": "/usr/lib/gcc/x86_64-linux-gnu/15/include/syslimits.h",
+      "size": 445,
+      "sha256": "9409a59233daef9339a757c58b3dd1cee980a65f1ef2590040fe5e106222a4bc"
+    },
+    {
+      "path": "/usr/include/limits.h",
+      "resolved": "/usr/include/limits.h",
+      "size": 5839,
+      "sha256": "7505220f742ab30ef635baa0849f26e1dfdb4fb22f2b506f4f2b0f4879f82dfb"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "scope": "Rejected tool request only, not host execution",
+  "files": [
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-tool-approval-rejection.json",
+      "size": 1949,
+      "sha256": "3b6dac7764dfa20585767d1690c9195a3e8fb48aca8e87c2bb9a93c9425b2ba3"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launch-proposal.json",
+      "size": 5607,
+      "sha256": "57fff96d43acbefdbe95c4a6fe27a0478e9d944e62d274f1f8f441599146e449"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-preparation-readback.json",
+      "size": 696,
+      "sha256": "baa9dc9e1a16016d333c8fa9b3eebf41d4bf08b7bf48ca260a52684d28145086"
+    }
+  ]
+}

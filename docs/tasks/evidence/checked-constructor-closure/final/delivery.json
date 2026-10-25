@@ -1,0 +1,185 @@
+{
+  "commands": [
+    {
+      "name": "constructors",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "constructor",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 90,
+      "seconds": 56.708
+    },
+    {
+      "name": "images",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "source_resource_image",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 16,
+      "seconds": 3.336
+    },
+    {
+      "name": "kind",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "kind::tests",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 31,
+      "seconds": 1.37
+    },
+    {
+      "name": "carriers",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "resolved::checked_",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 40,
+      "seconds": 0.47
+    },
+    {
+      "name": "imports",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "imported_",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 34,
+      "seconds": 2.217
+    },
+    {
+      "name": "owners",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "source_owner_post_record",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 10,
+      "seconds": 1.369
+    },
+    {
+      "name": "capture",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "core::capture::tests",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 36,
+      "seconds": 0.405
+    },
+    {
+      "name": "integrations",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "ash",
+        "--locked",
+        "--test",
+        "checked_foreign_wrappers",
+        "--test",
+        "module_newtypes",
+        "--test",
+        "library_imports",
+        "--test",
+        "data_and_adts",
+        "--",
+        "--nocapture"
+      ],
+      "pass_lines": 89,
+      "seconds": 121.023
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "ash",
+        "--locked",
+        "--lib",
+        "--tests",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "pass_lines": 0,
+      "seconds": 107.925
+    }
+  ],
+  "input_count": 562,
+  "input_aggregate_sha256": "cc9718c67151303d8274ad3019226bfe932b22a24bd88515ba6acf8de656721b",
+  "all_before_after_and_current_pins_equal": true,
+  "distinct_passing_test_names": 331,
+  "clippy_exit_code": 0,
+  "base": "2d04de76463febaaf36e082e7bccd8f6e85dc26b",
+  "tested_source_commit": "f7d50dca3a90f98a40da7fe46fb4bf5cb5c4ff8e",
+  "changed_source_spec_configuration_sha256": {
+    "spec/name-resolution.md": "5745b9c877c36cd1771a2af3ff5bf3268d47ad94573ec31149f1a5457cbc6800",
+    "src/core/validate/declaration_closure_tests.rs": "3e142e0622a6c6c436b895633d5a6ab2c6487bd1cd8a2cee72fbbf352def5d01",
+    "src/elaborate.rs": "90db61ebc8f747f80f3165debf58802a9b7a0bafe18ef1e796335aaf03b78127",
+    "src/evidence_validation.rs": "cafb1df8caea357fd262ae5c8c71ca0de7f1c0b0d26d848f1d43aa55280d5afa",
+    "src/kind.rs": "4aee31a6eb900b739ff8a1a9418191a10fc6ab62e5a0286f762738e52d744b66",
+    "src/resolve.rs": "c353007276fff61edce68f200b39e1b7e620acc3d8b9d30e098c18f85cc1d484",
+    "src/resolve/module_tests.rs": "58793a5839224d4889d66697aa80c61058b5a8aa4fc40fb78c96990e9e29f813",
+    "src/resolved.rs": "c81f8933eba07efe9828c88cfb997bad6aa7bc92b1335a12d4821ca1f71fa700",
+    "src/resolved/checked_constructor_closure_tests.rs": "3d8aeb2dc342027ccb9283dbbd0c6dec0484d3c9a9b13c583e6b0e2678ecedd2",
+    "src/resolved/constructor_original.rs": "a59823c0d81335f4e0bb2d09fafa8c5db48b60f68fdb84074c2dd1207224d055",
+    "src/resolved/constructor_original_route_tests.rs": "24da32367a59d44540022d91143c0a7707772fd9a10a6ab8c2c64ecdfca2d382",
+    "tests/checked_foreign_wrappers.rs": "95532928a2f6ed64b065aa1a8eb1df5769d3a28b98557c36d7cd349eb1e42098",
+    "tests/fixtures/checked-constructor-closure/producer.ash": "78021f2cacf1d439afa93c906a5fbf2756c85be7c5a66d8710b9c270e5f56ad4"
+  },
+  "scope": "Constructor-payload correspondence and fused latent-row exactness; partial F3 only; no F-core/runtime/Main acceptance",
+  "standalone_image_limit": 327680,
+  "unit_binary": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+    "size": 842976048,
+    "sha256": "8e6a4a3637ed24407759d0b98b814c073ddd682ef93d9720ca84b27981b3c958",
+    "note": "Volatile shared-cache artifact; inspect hash before any direct reproduction. No binary retained in repository."
+  }
+}

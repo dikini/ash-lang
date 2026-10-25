@@ -1,0 +1,64 @@
+{
+  "status": "INFORMATIVE_CONFIG_AND_RECEIPT_SCOPE_NOT_EXECUTION_APPROVAL",
+  "receipt_schema": 2,
+  "config": {
+    "optional_map_relative_path": {
+      "type": "string",
+      "required_basename": "whole-static.map",
+      "relative_to": "watch_root/output_parent",
+      "exact_single_path": true,
+      "reject": [
+        "null/nonstring/empty",
+        "absolute",
+        "parent traversal",
+        "noncanonical separators",
+        "backslash",
+        "glob characters",
+        "control characters",
+        "length over4096characters"
+      ]
+    },
+    "production_caps_bytes": {
+      "combined_output": 16777216,
+      "other_watched_files": 16777216,
+      "exact_selected_map": 67108864
+    },
+    "watched_basenames": [
+      "native-build.log",
+      "whole-static.map"
+    ],
+    "self_test_limits": {
+      "required_if_present": [
+        "deadline_seconds",
+        "output_bytes",
+        "sidefile_bytes"
+      ],
+      "optional": [
+        "map_bytes"
+      ],
+      "map_bytes_requires_selected_path": true,
+      "only_tightening": true,
+      "unknown_keys_refuse": true
+    }
+  },
+  "watched_receipt_fields": [
+    "relative_path",
+    "file_class",
+    "limit_bytes",
+    "observed_peak_bytes",
+    "size_before",
+    "size_after",
+    "hashed_bytes",
+    "sha256",
+    "hash_is_prefix",
+    "retained_path"
+  ],
+  "unchanged_limits": {
+    "watch_current_and_cumulative_entries": 4096,
+    "config_bytes": 262144,
+    "receipt_bytes": 4194304,
+    "deadline_seconds": 1200,
+    "artifact_bytes": 134217728
+  },
+  "measurement_scope": "Sampled sizes only, not unobserved peak/quota; no guarantee arbitrary filenames are watched; expected map presence/full framing and native associations remain collector obligations."
+}

@@ -1,0 +1,25 @@
+   Compiling ash v0.0.0 (/tmp/ash-pr97-deep-base-eihfwm0m)
+   Compiling ash-foreign-adapter v0.0.0 (/tmp/ash-pr97-deep-base-eihfwm0m/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 50s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+
+thread 'freeze-missing-local-hidden-nominal' (915) panicked at src/resolved.rs:39386:17:
+assertion `left == right` failed: missing local authority must reject before any parameter clone cell
+  left: 16
+ right: 6
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters' (914) panicked at src/resolved.rs:39396:14:
+rejected deep hidden authority must tear down iteratively: Any { .. }
+test resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters ... FAILED
+
+failures:
+
+failures:
+    resolved::tests::freeze_rejects_missing_local_hidden_nominal_before_cloning_deep_parameters
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2032 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p ash --lib`

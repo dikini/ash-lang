@@ -1,0 +1,28 @@
+{
+  "base": "036c366834c839e4f0a503cf63e9db46448bb486",
+  "status": "focused final verification passed; independent review and integration pending",
+  "distinct_passing_tests": 141,
+  "commands": 9,
+  "input_files": 558,
+  "input_aggregate_sha256": "b05b0907a01c2aa605d5cc0e889165ff7ddc2351efc79873abd28927b8066fdd",
+  "aggregate_algorithm": "SHA256 of JSON object sorted keys, compact separators (comma,colon), UTF-8, no final newline",
+  "changed_source_spec_config_sha256": {
+    "spec/name-resolution.md": "e3c38052e99c030b602bc1bc81f03dab91859bd7ffed7877a2c28744990b2502",
+    "src/core/validate.rs": "777cd3f2a8c8c3c6da2effa501e1f3b92ba09429afc58942557c7cc443112fc6",
+    "src/core/validate/declaration_closure_tests.rs": "512146502928e997f017ffa6f373fba5b6f30ef3577e4656209b93839b2a82f7",
+    "src/resolved.rs": "c3be4d64d0d28e761dd5bf30729353728efd6b53d6e862f8221ee289dba46953",
+    "src/resolved/checked_declaration_closure_tests.rs": "00d971ed7ad73295b324176a7c6a00d3239ff57c904d91576f9febce64dd8333",
+    "src/resolved/checked_resource_kind_closure_tests.rs": "4a4e92eb203d9a75be8f9e75bce12126f78be4fed6a08afb5b1fa98c9bed68e0",
+    "src/resolved/checked_selected_declaration_closure_tests.rs": "cf5e4f4b5cc75d219d6d02fa9440125ec5484782e212552fae4fdc573343f871",
+    "src/resolved/checked_wrapper_tests.rs": "23b31ea0b45eb0f04efa6e201e46dacbbaaff98a576ce193749dabb2af6a1d78",
+    "tests/checked_foreign_wrappers.rs": "3983ef11f466e3a76b703f540a7c2225710b5d6b1033b30b5cbfd6b88c2e6cc0",
+    "tests/fixtures/checked-declaration-closure/global.ash": "1b7ff828d61eefc4154d1c974806b2b664cda507f3d4878fd38c2e0088a38963",
+    "tests/fixtures/checked-declaration-closure/selected.ash": "e1faf4f4100e80253f0af1d7f7e23fd8825ef34491b06e4848a9c73f7bba511a"
+  },
+  "ordinary_feature_policy": "Cargo default feature selection; no --features or --all-features; unchanged Cargo/config/toolchain files",
+  "image_tests": "16/16 passed",
+  "standalone_image_allowance": 327680,
+  "original_buffer_startup_used": 318827,
+  "dependent_discard_startup_used": 314696,
+  "remaining": "broader declaration/resource closure, whole F3, F-core, checked runtime and Main integration"
+}

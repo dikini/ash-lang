@@ -1,0 +1,834 @@
+{
+  "Cargo_root_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0#0.0.0",
+    "manifest_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.toml",
+    "target": {
+      "kind": [
+        "bin"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "ash-host-6-0",
+      "src_path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/src/main.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "0",
+      "debuginfo": 2,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "features": [],
+    "filenames": [
+      "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/ash-host-6-0"
+    ],
+    "executable": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/ash-host-6-0",
+    "fresh": false
+  },
+  "candidate": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+    "size": 71022184,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+  },
+  "linked_root": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/ash-host-6-0",
+    "size": 71022184,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+  },
+  "entry": 4222496,
+  "program_headers": [
+    {
+      "type": 1,
+      "flags": 4,
+      "offset": 0,
+      "virtual_address": 4194304,
+      "file_bytes": 1520,
+      "memory_bytes": 1520,
+      "alignment": 4096
+    },
+    {
+      "type": 1,
+      "flags": 5,
+      "offset": 4096,
+      "virtual_address": 4198400,
+      "file_bytes": 35804017,
+      "memory_bytes": 35804017,
+      "alignment": 4096
+    },
+    {
+      "type": 1,
+      "flags": 4,
+      "offset": 35811328,
+      "virtual_address": 40005632,
+      "file_bytes": 4457584,
+      "memory_bytes": 4457584,
+      "alignment": 4096
+    },
+    {
+      "type": 1,
+      "flags": 6,
+      "offset": 40269992,
+      "virtual_address": 44468392,
+      "file_bytes": 768704,
+      "memory_bytes": 792384,
+      "alignment": 4096
+    },
+    {
+      "type": 4,
+      "flags": 4,
+      "offset": 736,
+      "virtual_address": 4195040,
+      "file_bytes": 36,
+      "memory_bytes": 36,
+      "alignment": 4
+    },
+    {
+      "type": 4,
+      "flags": 4,
+      "offset": 40268848,
+      "virtual_address": 44463152,
+      "file_bytes": 32,
+      "memory_bytes": 32,
+      "alignment": 8
+    },
+    {
+      "type": 4,
+      "flags": 4,
+      "offset": 40268880,
+      "virtual_address": 44463184,
+      "file_bytes": 32,
+      "memory_bytes": 32,
+      "alignment": 4
+    },
+    {
+      "type": 7,
+      "flags": 4,
+      "offset": 40269992,
+      "virtual_address": 44468392,
+      "file_bytes": 144,
+      "memory_bytes": 248,
+      "alignment": 8
+    },
+    {
+      "type": 1685382483,
+      "flags": 4,
+      "offset": 40268848,
+      "virtual_address": 44463152,
+      "file_bytes": 32,
+      "memory_bytes": 32,
+      "alignment": 8
+    },
+    {
+      "type": 1685382480,
+      "flags": 4,
+      "offset": 36181248,
+      "virtual_address": 40375552,
+      "file_bytes": 776780,
+      "memory_bytes": 776780,
+      "alignment": 4
+    },
+    {
+      "type": 1685382481,
+      "flags": 6,
+      "offset": 0,
+      "virtual_address": 0,
+      "file_bytes": 0,
+      "memory_bytes": 0,
+      "alignment": 16
+    },
+    {
+      "type": 1685382482,
+      "flags": 4,
+      "offset": 40269992,
+      "virtual_address": 44468392,
+      "file_bytes": 759640,
+      "memory_bytes": 759640,
+      "alignment": 1
+    }
+  ],
+  "link_map": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/whole-static.map",
+    "size": 100345205,
+    "sha256": "43348533a205d18534436b7c9bb932d6b86e733c3ec3162b8b86703f2fb4997b"
+  },
+  "map_policy": {
+    "exact_relative_path": "whole-static.map",
+    "map_bytes": 134217728,
+    "other_watched_log_bytes": 16777216,
+    "discarded_section_diagnostics_suppressed": true,
+    "symbol_name_rendering": "mangled (--no-demangle); no additional active-map record removal",
+    "observed_peak_bytes": 100345205,
+    "sampling_not_quota": true
+  },
+  "LOAD_records": [
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crt1.o",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crt1.o",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crt1.o",
+        "size": 1792,
+        "sha256": "7b5004088b875754a5cd83f92fa7149c95f807c6d4663330828970c4c84e660e"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crti.o",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crti.o",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crti.o",
+        "size": 1192,
+        "sha256": "077ccb6c68db1794da3ee262c4a16a3c6f8e902845dd0829110ad4b7065e5aa3"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/crtbeginT.o",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/crtbeginT.o",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/crtbeginT.o",
+        "size": 2944,
+        "sha256": "089358d91a597f00c262502678b0c15fcd0784880f9c90f1c5a06086ea9ce1ac"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/rustchms3my/symbols.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/rustchms3my/symbols.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.192a5sefl3yuyijcnuf004yd4.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.192a5sefl3yuyijcnuf004yd4.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.2tqcr9kxyi137krbypwvjq950.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.2tqcr9kxyi137krbypwvjq950.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.6ofmy1l3fgk1pyq1u4vsu83ov.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.6ofmy1l3fgk1pyq1u4vsu83ov.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.72rxedew88uyt0a55n96qmofq.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.72rxedew88uyt0a55n96qmofq.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.a0a5wumeea6mp8n5ayz84f0ga.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.a0a5wumeea6mp8n5ayz84f0ga.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.b503wuz3tdr9qkwvia0fjnndi.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.b503wuz3tdr9qkwvia0fjnndi.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.d1y7fxs1bdhosojsr0q5j5qty.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.d1y7fxs1bdhosojsr0q5j5qty.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.elz1q72eoft1rw7oo890zo6zh.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.elz1q72eoft1rw7oo890zo6zh.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.alg0nzdkfsbq31guxnpty7fw2.1385msp.rcgu.o",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/ash_host_6_0-b4d1323598d91970.alg0nzdkfsbq31guxnpty7fw2.1385msp.rcgu.o",
+      "unavailable": "Linker temporary/missing/nonregular input; correspondence remains a producer/build-trust premise, not a fully hashed closure claim."
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libash-0aa39cb4094423a4.rlib",
+        "size": 1167797390,
+        "sha256": "23df11807107853abcc21cc9b181d0076c833681da1104ad6d36f455b8a50a0e"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunicode_width-8a65be0313c95e0a.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunicode_width-8a65be0313c95e0a.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunicode_width-8a65be0313c95e0a.rlib",
+        "size": 948204,
+        "sha256": "72bb226bfeb83033c97ffb6e26ed0c390d405b59a4a7dd471acf05c0ba653c3f"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_bigint-dd9abfe41fdf57c2.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_bigint-dd9abfe41fdf57c2.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_bigint-dd9abfe41fdf57c2.rlib",
+        "size": 4656012,
+        "sha256": "ca1890939b2bccc356ab03cc5b7cf635d63e39e7c478709a325b21c19892b571"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_integer-dda5578a7738cebb.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_integer-dda5578a7738cebb.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_integer-dda5578a7738cebb.rlib",
+        "size": 633830,
+        "sha256": "5a406c74e41d421e35193b38e5b722d4f605ce8003ad07f7e01e3db6c388bd33"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_traits-be421091d714ec20.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_traits-be421091d714ec20.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libnum_traits-be421091d714ec20.rlib",
+        "size": 1965114,
+        "sha256": "0e5de33c62f89fbb2bea6c6512710cc960e417f05ff518807756e66f37c1327e"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde_json-d549f6c80a2ed3e2.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde_json-d549f6c80a2ed3e2.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde_json-d549f6c80a2ed3e2.rlib",
+        "size": 4479408,
+        "sha256": "6b07b4b4764137717b19476514e89dd9f96d18d5c5499eaa59e39c69427628a0"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libitoa-acdc3eed9770e6e8.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libitoa-acdc3eed9770e6e8.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libitoa-acdc3eed9770e6e8.rlib",
+        "size": 204676,
+        "sha256": "ff42c03c874a21640619c081ef43249b4909f6baa8b710b329789179b42ed614"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libzmij-1a519a67bca05fed.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libzmij-1a519a67bca05fed.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libzmij-1a519a67bca05fed.rlib",
+        "size": 666842,
+        "sha256": "7818b79e511107412d5510a85fe25844266c32e1d8dfdbef8e0d659ced4f120c"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_bundle-a4aa4317be828d5b.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_bundle-a4aa4317be828d5b.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_bundle-a4aa4317be828d5b.rlib",
+        "size": 3352868,
+        "sha256": "9340da7ff33c35057ca43839c9d26e65f18056cf99656fd05ad3fb598c49159c"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libsmallvec-377301e51e8fb6d2.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libsmallvec-377301e51e8fb6d2.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libsmallvec-377301e51e8fb6d2.rlib",
+        "size": 289850,
+        "sha256": "aa0b18a79d203c98e789037f59f214b5251d4bbcc947ec0f7fa7376872ffc071"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_langneg-2e56b567f59c942a.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_langneg-2e56b567f59c942a.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_langneg-2e56b567f59c942a.rlib",
+        "size": 405458,
+        "sha256": "d2850c34bd4604af3ff739b9c65df9239144199e276f9ebfa64b03422545035a"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libintl_pluralrules-f87d7b1aec22d9af.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libintl_pluralrules-f87d7b1aec22d9af.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libintl_pluralrules-f87d7b1aec22d9af.rlib",
+        "size": 1705144,
+        "sha256": "6fa95f57e0e9d8e20ad39060122b63220b38d4c7a81339641d7daef43bd9ec07"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libself_cell-64c57d7fec2c632f.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libself_cell-64c57d7fec2c632f.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libself_cell-64c57d7fec2c632f.rlib",
+        "size": 90800,
+        "sha256": "18f0b10195ed5a7f0a60c2dba1d4550f2f7537588569ba2a90a8b3f8e1bc3b4f"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libintl_memoizer-768e607d3fca840e.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libintl_memoizer-768e607d3fca840e.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libintl_memoizer-768e607d3fca840e.rlib",
+        "size": 534802,
+        "sha256": "c9340e1b541981b17971ba6918e8b0db387a097868f0182b088e113abe3a5ac2"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtype_map-2df62364258bd56e.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtype_map-2df62364258bd56e.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtype_map-2df62364258bd56e.rlib",
+        "size": 552300,
+        "sha256": "de97f73fcf3f806e998166f09501dcacf92191684e4904e1bb5ce1c68a2b4a8a"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunic_langid-72a73463121d3f63.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunic_langid-72a73463121d3f63.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunic_langid-72a73463121d3f63.rlib",
+        "size": 10132,
+        "sha256": "e79d921ee5708603e7ecf4b039dc542d43d255fa1dbc05b44cb94af38f7e26fe"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunic_langid_impl-2a3b820ae96bfa61.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunic_langid_impl-2a3b820ae96bfa61.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libunic_langid_impl-2a3b820ae96bfa61.rlib",
+        "size": 1119940,
+        "sha256": "b2e9a5f6a62b5db84b421cf5d6bbf70f17297b463e1e60de749efcd5fc9b6dcc"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtinystr-5e0b6584a7387f81.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtinystr-5e0b6584a7387f81.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtinystr-5e0b6584a7387f81.rlib",
+        "size": 401246,
+        "sha256": "17a86735fe38cfb83bec895b4f82451b7cad1130e6d71a41264896499ee4b59a"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_syntax-35335556dec1c33d.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_syntax-35335556dec1c33d.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libfluent_syntax-35335556dec1c33d.rlib",
+        "size": 722132,
+        "sha256": "3047d17dab5db90b1323b653a35042a5e8252f321ef6a95d4404ca9784098533"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libmemchr-da7a7a52eb130d2d.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libmemchr-da7a7a52eb130d2d.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libmemchr-da7a7a52eb130d2d.rlib",
+        "size": 2566064,
+        "sha256": "35c49ac403c3200728f438ae086bd91a1f280c141fd3b468c728ce1b5401ca31"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libthiserror-532343872cefa050.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libthiserror-532343872cefa050.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libthiserror-532343872cefa050.rlib",
+        "size": 32912,
+        "sha256": "c45345783139093822891e90cabcc26d69d3aa4df2a697c8f9d9418f777b9dd1"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/librustc_hash-49d4ae1946d283bb.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/librustc_hash-49d4ae1946d283bb.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/librustc_hash-49d4ae1946d283bb.rlib",
+        "size": 36586,
+        "sha256": "fd1596b2a02ce2330febb98bb0df46e65b13d4a757c252c93b01f05dfce17f4e"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libsha2-c27d5f65fb656633.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libsha2-c27d5f65fb656633.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libsha2-c27d5f65fb656633.rlib",
+        "size": 1197754,
+        "sha256": "a48623efe1f71dd2eef20bc80ed1689e14e1a0b547cfede77e7ad228103f41db"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcpufeatures-6dae273e536b9f80.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcpufeatures-6dae273e536b9f80.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcpufeatures-6dae273e536b9f80.rlib",
+        "size": 41562,
+        "sha256": "b945433698c8873c0c4d9f888abe26e65a9c799d8bd64042b200d348704553d0"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcfg_if-f1d160339642a134.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcfg_if-f1d160339642a134.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcfg_if-f1d160339642a134.rlib",
+        "size": 8074,
+        "sha256": "83f18c0ff3f0eac7e6c5dab63ae7768a781f6d40b5d12f35db06df5d88676d99"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libdigest-550c4fb8c0c4fe31.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libdigest-550c4fb8c0c4fe31.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libdigest-550c4fb8c0c4fe31.rlib",
+        "size": 179624,
+        "sha256": "092eb6f0b715242e761abc586eea3062865879e582f2940529e8308e073aea96"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libblock_buffer-78d1272476a72361.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libblock_buffer-78d1272476a72361.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libblock_buffer-78d1272476a72361.rlib",
+        "size": 57126,
+        "sha256": "cebd9b55b0d33c6d91877865fc02eb5e7f9b9b851af527a3290bf99d9d135fc1"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcrypto_common-1eff7587e34c5557.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcrypto_common-1eff7587e34c5557.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libcrypto_common-1eff7587e34c5557.rlib",
+        "size": 34498,
+        "sha256": "78fa36af2dab930e993c133c6035c37ade1d483f635cedb7dd0fc2bb65cf7e1f"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libgeneric_array-365c2de22775ffef.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libgeneric_array-365c2de22775ffef.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libgeneric_array-365c2de22775ffef.rlib",
+        "size": 822000,
+        "sha256": "0f0225d9b194356e03036f55ceb43cc72bed6e4d6b3726e8ec713140b3570410"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtypenum-2d226d2daf29559b.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtypenum-2d226d2daf29559b.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libtypenum-2d226d2daf29559b.rlib",
+        "size": 2749958,
+        "sha256": "8998dc1852d5167f48ab009cdd449ffdd0d61a1e1aaf62d464446dfc1224d245"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde-b57b9f1bc50854c4.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde-b57b9f1bc50854c4.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde-b57b9f1bc50854c4.rlib",
+        "size": 1180506,
+        "sha256": "05b36dcca8a5336cb4dae463a2b44e05bbd8f242779d693054ac5d4b3a10b4db"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde_core-1e754977ee4bca3d.rlib",
+      "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde_core-1e754977ee4bca3d.rlib",
+      "observed": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/x86_64-unknown-linux-gnu/debug/deps/libserde_core-1e754977ee4bca3d.rlib",
+        "size": 5272560,
+        "sha256": "932ae384130f3de6087365a87a6f514b79bb0be8a70ac637eff89c43857ca432"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-c64e6e11aa24fc43.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-c64e6e11aa24fc43.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-c64e6e11aa24fc43.rlib",
+        "size": 11667026,
+        "sha256": "96c3ac946bdb5c09c8eb7036e495e89d2d773b30b2606b6c0323944cd9e858fe"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_unwind-e8f3c569ec017ae8.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_unwind-e8f3c569ec017ae8.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_unwind-e8f3c569ec017ae8.rlib",
+        "size": 35758,
+        "sha256": "cc89591bdd7f70faa334894e4831762269ec499668e2f11f7d78774f431e6840"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libobject-f810d9e1ec7b3602.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libobject-f810d9e1ec7b3602.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libobject-f810d9e1ec7b3602.rlib",
+        "size": 167128,
+        "sha256": "efecab8f5f4a48f9a8c4358c1197e91be51a6f5471b474917bf143c7f59ac99e"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libmemchr-5338843b9da46083.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libmemchr-5338843b9da46083.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libmemchr-5338843b9da46083.rlib",
+        "size": 414714,
+        "sha256": "77b9dfa839cd3f70f8eede6a7af83b633a66647f8c8f94d6522f419be8dfa222"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libaddr2line-02954dcf5cbc5891.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libaddr2line-02954dcf5cbc5891.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libaddr2line-02954dcf5cbc5891.rlib",
+        "size": 28252,
+        "sha256": "8c9b38cc4cf5161a11d8f66fc5c4a9e22b84288cc2cac1b4a30b79a95f221650"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libgimli-34f31eace0d7245f.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libgimli-34f31eace0d7245f.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libgimli-34f31eace0d7245f.rlib",
+        "size": 915838,
+        "sha256": "121c083cc392bb0daed0e221bbbf3bec42ddff3935200a2f0e854b04bea8a0e3"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcfg_if-c966e4159bd8bc70.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcfg_if-c966e4159bd8bc70.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcfg_if-c966e4159bd8bc70.rlib",
+        "size": 4874,
+        "sha256": "f6c755e93016036697067fc5b5453c03ad57c6682650d7b659182ed820bc42fa"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_demangle-73bcb43673848f30.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_demangle-73bcb43673848f30.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_demangle-73bcb43673848f30.rlib",
+        "size": 228822,
+        "sha256": "13645075852f0fc60069e7c982c1848cda0479bd365ff3841fdb91772e86343b"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd_detect-64da8f7c5e658436.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd_detect-64da8f7c5e658436.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd_detect-64da8f7c5e658436.rlib",
+        "size": 63266,
+        "sha256": "2cc5d406b95565a3c039c0a325c1f15b416d7aa88f3c9805fee038cbe4253151"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libhashbrown-51d9ae21a16391ba.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libhashbrown-51d9ae21a16391ba.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libhashbrown-51d9ae21a16391ba.rlib",
+        "size": 40344,
+        "sha256": "6ded49787ce9f0aee847ea9954edc2323e7bcc55571a8c741cd7c1b5975f01d5"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_alloc-99955b4d3549c390.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_alloc-99955b4d3549c390.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_alloc-99955b4d3549c390.rlib",
+        "size": 5136,
+        "sha256": "0fd5d99756acd3a57eeefb8533d9060924ae6290e634c2ea2ac821f4b7fd9e7f"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libminiz_oxide-24b69c27fbe9064f.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libminiz_oxide-24b69c27fbe9064f.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libminiz_oxide-24b69c27fbe9064f.rlib",
+        "size": 102168,
+        "sha256": "d832111ec96490710b54a436f77110429e1fb2d05f83d8d6303a8b20140ca30a"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libadler2-57de982d9269a3a4.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libadler2-57de982d9269a3a4.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libadler2-57de982d9269a3a4.rlib",
+        "size": 10004,
+        "sha256": "5b66e8e0f27c68d2468ea7d4cf7127231d25be2793f21bb07910bcf81f8f5762"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libunwind-d90fb703b61b002d.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libunwind-d90fb703b61b002d.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libunwind-d90fb703b61b002d.rlib",
+        "size": 4938,
+        "sha256": "32d7150aa50999d3b556fcb26fc747f8e2d67f8d76d11d885f6d842ec3c92232"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liblibc-8da72b3f3dca3868.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liblibc-8da72b3f3dca3868.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liblibc-8da72b3f3dca3868.rlib",
+        "size": 30882,
+        "sha256": "1c6bd7db07f6e552b87752b6113012d3338080b8c78219c99edb86056a0bce9a"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libutil.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libutil.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libutil.a",
+        "size": 8,
+        "sha256": "f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/librt.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/librt.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/librt.a",
+        "size": 8,
+        "sha256": "f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libpthread.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libpthread.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libpthread.a",
+        "size": 8,
+        "sha256": "f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libm.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libm.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libm.a",
+        "size": 132,
+        "sha256": "a3e037975e7fb816d8a1d69f4a8aec71071700539aa2eb8743b805a905179e7a"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/x86_64-linux-gnu/libm-2.43.a",
+      "path": "/usr/lib/x86_64-linux-gnu/libm-2.43.a",
+      "observed": {
+        "path": "/usr/lib/x86_64-linux-gnu/libm-2.43.a",
+        "size": 3112678,
+        "sha256": "6517ee333d7410b77f8a36b3841a7d95510c8643d50f6a50f8afbf361a428cff"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/x86_64-linux-gnu/libmvec.a",
+      "path": "/usr/lib/x86_64-linux-gnu/libmvec.a",
+      "observed": {
+        "path": "/usr/lib/x86_64-linux-gnu/libmvec.a",
+        "size": 1828348,
+        "sha256": "85ac05390efeaf0bdf59b1ce61e70d09c8e8c716e30b722127a7a7c8d145c757"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libdl.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libdl.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libdl.a",
+        "size": 8,
+        "sha256": "f0a17a43c74d2fe5474fa2fd29c8f14799e777d7d75a2cc4d11c20a6e7b161c5"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a",
+        "size": 6238972,
+        "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/libgcc_eh.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc_eh.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc_eh.a",
+        "size": 71426,
+        "sha256": "050160c9613ecf99b449bb34743fb8b2f4aafb3ae03a38a63e69a6926f956140"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/libgcc.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc.a",
+        "size": 3237076,
+        "sha256": "d9c2e7a0c0f3dbfc0ff2dec153b0d044cf49d66d64d736b5d1db8ae25ca9c75e"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/libc.a",
+        "size": 6238972,
+        "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_core-79f73bde78643b0a.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_core-79f73bde78643b0a.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_core-79f73bde78643b0a.rlib",
+        "size": 5126,
+        "sha256": "1b9c9c155c8c2852af222702ad2053dddd1db4482fb46774a69d6f37a93d42ae"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liballoc-e17b81f57125c74c.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liballoc-e17b81f57125c74c.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liballoc-e17b81f57125c74c.rlib",
+        "size": 914792,
+        "sha256": "a40df9f590570169a49952c4fec4e73fb4eac1fcab56812200890909b0635b56"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcore-b5d59729c8525f07.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcore-b5d59729c8525f07.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcore-b5d59729c8525f07.rlib",
+        "size": 2929948,
+        "sha256": "0139c4bb042efa63cbb7feb77805379d0bdc352977b648714eef8424536e9316"
+      }
+    },
+    {
+      "load_line": "LOAD /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-085f534a869f02d5.rlib",
+      "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-085f534a869f02d5.rlib",
+      "observed": {
+        "path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-085f534a869f02d5.rlib",
+        "size": 4462044,
+        "sha256": "802c0bb4823da7ee34c87cd1690e1daa8e13bf63d4399b0e24a2cd5cbaaad03c"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/x86_64-linux-gnu/libc.a",
+      "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+      "observed": {
+        "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+        "size": 6238972,
+        "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/crtend.o",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/crtend.o",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/crtend.o",
+        "size": 1160,
+        "sha256": "b4b7d9001893f0baf4ebfbe12df8d5cf0dd7f69643a5caae04d956d1a443b246"
+      }
+    },
+    {
+      "load_line": "LOAD /usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crtn.o",
+      "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crtn.o",
+      "observed": {
+        "path": "/usr/lib/gcc/x86_64-linux-gnu/15/../../../x86_64-linux-gnu/crtn.o",
+        "size": 760,
+        "sha256": "a2266079f95b84ccc2162ebbf279bcd78858a748aa1882e0bdb912316c76a58f"
+      }
+    }
+  ],
+  "qualification": "Structural static ELF facts plus recorded existing LOAD inputs. Retained or absent runtime loader routes, linker temporaries, producer/native correctness and no-loading premises require separate source review. No ownerful architecture or startup acceptance."
+}

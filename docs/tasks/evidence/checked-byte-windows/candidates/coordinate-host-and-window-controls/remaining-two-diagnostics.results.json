@@ -1,0 +1,65 @@
+{
+  "two-owner": {
+    "rows": 130,
+    "issues": [],
+    "flags": [
+      {
+        "caller": "ash::build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+        "diagnostic_limit": 655360,
+        "meter": 140737349930024,
+        "original_limit": 327680,
+        "used": 56675
+      }
+    ],
+    "structural_restore": [
+      {
+        "after": 334428,
+        "before": 56675,
+        "caller": "ash::build::image::source_resource_image::tests::imported_buffer_two_owner_discard_has_normal_startup_budget",
+        "inclusive": 277753,
+        "kind": "budget",
+        "label": "restore",
+        "limit": 655360,
+        "meter": 140737349930024,
+        "sequence": 130
+      }
+    ],
+    "complete_initial_total": 334428,
+    "deficit": 6748
+  },
+  "dependent": {
+    "rows": 216,
+    "issues": [],
+    "flags": [
+      {
+        "caller": "ash::build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work::{closure#0}",
+        "diagnostic_limit": 655360,
+        "meter": 140737349925656,
+        "original_limit": 327680,
+        "used": 65975
+      },
+      {
+        "caller": "ash::build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work::{closure#0}",
+        "limit": 655360,
+        "meter": 140737349925656,
+        "scope": "decode+expected facts+structural restore+static library correspondence; first initial closure only",
+        "used": 338123
+      }
+    ],
+    "structural_restore": [
+      {
+        "after": 336123,
+        "before": 65975,
+        "caller": "ash::build::image::source_resource_image::tests::dependent_discard_image_checks_original_facts_under_normal_cumulative_work::{closure#0}",
+        "inclusive": 270148,
+        "kind": "budget",
+        "label": "restore",
+        "limit": 655360,
+        "meter": 140737349925656,
+        "sequence": 216
+      }
+    ],
+    "complete_initial_total": 338123,
+    "deficit": 10443
+  }
+}

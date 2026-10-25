@@ -1,0 +1,54 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/foreign_source_admission.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/foreign_source_admission-2317286854e9be51)
+
+running 13 tests
+test foreign_and_ordinary_effect_names_share_the_collision_boundary ... ok
+test checked_library_is_rejected_before_legacy_module_admission ... ok
+test libraries_require_disjoint_member_spellings_including_abi_only_members ... ok
+test checked_foreign_literal_constants_publish_through_imported_aliases ... ok
+test declared_literal_constant_ranges_and_term_visibility_remain_exact ... ok
+test source_native_declarations_are_passive_and_check_complete_parameter_vectors ... ok
+test interleaved_foreign_libraries_and_ordinary_effects_preserve_source_declaration_order ... ok
+test same_named_result_types_and_incorrect_codomains_grant_no_native_authority ... ok
+test a_public_signature_does_not_publish_private_native_member_names ... ok
+test noncallable_sentinels_never_publish_ordinary_values_or_callable_symbols ... ok
+test published_native_effects_keep_their_complete_kinds_through_imports ... ok
+test opaque_non_abi_domain_leaves_keep_their_canonical_kinds_through_imports ... ok
+test native_descriptors_follow_selected_and_reexported_effect_facts ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/foreign_source_contracts.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/foreign_source_contracts-ae384ce5b54dfaa3)
+
+running 12 tests
+test prepares_scalar_abi_without_granting_resolved_operation_authority ... ok
+test interleaved_rows_preserve_complete_parameter_order_and_type_projection ... ok
+test duplicate_members_and_unsupported_pointer_contracts_do_not_partially_admit ... ok
+test void_abi_result_prepares_with_empty_outcome_facts ... ok
+test zero_argument_scalar_symbols_have_no_fabricated_unit_abi_operand ... ok
+test finite_outcomes_are_total_disjoint_and_always_read_scalar_results ... ok
+test nested_product_paths_and_full_unsigned_literals_preserve_the_authored_mapping ... ok
+test checked_library_cannot_enter_legacy_abi_preparation ... ok
+test rejects_incomplete_mapping_invalid_source_paths_and_scalar_null ... ok
+test rejects_target_width_and_literal_range_before_bridge_planning ... ok
+test prepares_sqlite_open_input_and_initialized_owner_output_contract ... ok
+test sqlite_owner_output_contract_rejects_incomplete_or_mismatched_roles ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running tests/foreign_source_syntax.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/foreign_source_syntax-f37e8c9c6a75a9cc)
+
+running 10 tests
+test foreign_declaration_does_not_admit_negative_ordinary_expressions ... ok
+test checked_remains_an_ordinary_identifier_outside_library_prefixes ... ok
+test foreign_scalar_library_parses_and_projects_with_ordinary_declarations ... ok
+test foreign_words_remain_ordinary_identifiers_outside_declarations ... ok
+test zero_operand_void_call_and_adjacent_final_braces_parse ... ok
+test projected_contract_retains_member_order_kinds_positions_and_spans ... ok
+test copying_contract_roles_use_explicit_paths_and_qualified_references ... ok
+test checked_library_prefix_parses_without_changing_legacy_declaration_words ... ok
+test owner_access_symbols_and_outcomes_parse_through_shared_type_grammar ... ok
+test malformed_foreign_contract_syntax_cannot_project ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

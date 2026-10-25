@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 7 tests
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_prepares_initialized_state_and_actual_view_extent_contracts ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_default_profile_refuses ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_checked_primitive_inventory_resolves ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_initialized_owner_binding_after_name_isolation ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_all_four_primitives_check_actual_source_and_summary ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_body_free_consumer_core_and_transforms ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_body_free_facade_core_and_transforms ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2105 filtered out; finished in 0.68s
+

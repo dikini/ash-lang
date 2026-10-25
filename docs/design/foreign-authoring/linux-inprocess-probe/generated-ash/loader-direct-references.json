@@ -1,0 +1,71 @@
+{
+  "inspection": "objdump static disassembly; symbolic direct references only. Indirect calls/data references and runtime reachability are not proved absent.",
+  "lines_scanned": 6753786,
+  "references": [
+    {
+      "caller": "dlsym_doit",
+      "target": "_dl_sym",
+      "instruction": "255860b:\tcall   2583480 <_dl_sym>"
+    },
+    {
+      "caller": "_dl_map_new_object",
+      "target": "_dl_map_object_from_fd.constprop.0",
+      "instruction": "257d21b:\tcall   257b6d0 <_dl_map_object_from_fd.constprop.0>"
+    },
+    {
+      "caller": "dl_open_worker",
+      "target": "dl_open_worker_begin",
+      "instruction": "25ba78b:\tlea    0x77e(%rip),%rsi        # 25baf10 <dl_open_worker_begin>"
+    },
+    {
+      "caller": "_dl_open",
+      "target": "dl_open_worker",
+      "instruction": "25babfe:\tlea    -0x4a5(%rip),%rsi        # 25ba760 <dl_open_worker>"
+    },
+    {
+      "caller": "dl_open_worker_begin",
+      "target": "_dl_map_object_deps",
+      "instruction": "25bafb3:\tcall   25f1f50 <_dl_map_object_deps>"
+    },
+    {
+      "caller": "do_dlopen",
+      "target": "_dl_open",
+      "instruction": "25c0135:\tcall   25baaa0 <_dl_open>"
+    },
+    {
+      "caller": "__libc_dlopen_mode",
+      "target": "do_dlopen",
+      "instruction": "25c0295:\tlea    -0x19c(%rip),%rcx        # 25c0100 <do_dlopen>"
+    },
+    {
+      "caller": "__gconv_find_shlib",
+      "target": "__libc_dlopen_mode",
+      "instruction": "25cca2e:\tcall   25c0290 <__libc_dlopen_mode>"
+    },
+    {
+      "caller": "dlmopen_doit",
+      "target": "_dl_open",
+      "instruction": "25e66bf:\tcall   25baaa0 <_dl_open>"
+    },
+    {
+      "caller": "dlopen_doit",
+      "target": "_dl_open",
+      "instruction": "25e6820:\tcall   25baaa0 <_dl_open>"
+    },
+    {
+      "caller": "__dlopen",
+      "target": "dlopen_doit",
+      "instruction": "25e6880:\tlea    -0xb7(%rip),%rdi        # 25e67d0 <dlopen_doit>"
+    },
+    {
+      "caller": "___dlopen",
+      "target": "dlopen_doit",
+      "instruction": "25e68e4:\tlea    -0x11b(%rip),%rdi        # 25e67d0 <dlopen_doit>"
+    },
+    {
+      "caller": "openaux",
+      "target": "_dl_map_object",
+      "instruction": "25f1f38:\tcall   257dd90 <_dl_map_object>"
+    }
+  ]
+}

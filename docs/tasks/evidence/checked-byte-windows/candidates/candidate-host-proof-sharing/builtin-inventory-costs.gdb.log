@@ -1,0 +1,38 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 562956)]
+INVENTORY TABLE {'table': 1, 'registry': 140737220713744, 'proofs': [{'caller': 'ash::foreign::checked_source::authenticate_codec', 'registry': 140737220713744, 'module': 'ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 2}', 'source': 'ash::source::Span {source: ash::source::SourceId (2), range: ash::source::ByteRange {start: 0, end: 3045}}', 'cost': 436}], 'total': 1004}
+INVENTORY TABLE {'table': 2, 'registry': 140737220674432, 'proofs': [{'caller': 'ash::foreign::checked_source::authenticate_codec', 'registry': 140737220674432, 'module': 'ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 2}', 'source': 'ash::source::Span {source: ash::source::SourceId (2), range: ash::source::ByteRange {start: 0, end: 3045}}', 'cost': 454}], 'total': 1037}
+INVENTORY TABLE {'table': 3, 'registry': 140737220674432, 'proofs': [{'caller': 'ash::foreign::checked_source::authenticate_codec', 'registry': 140737220674432, 'module': 'ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 1, value: 2}', 'source': 'ash::source::Span {source: ash::source::SourceId (2), range: ash::source::ByteRange {start: 0, end: 3045}}', 'cost': 454}], 'total': 1037}
+buffer nested cleanup startup decoded: 43211
+buffer nested cleanup startup authenticated facts: 59531
+INVENTORY TABLE {'table': 4, 'registry': 140737349804944, 'proofs': [{'caller': 'ash::foreign::checked_source::authenticate_codec', 'registry': 140737349804944, 'module': 'ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 2, value: 4}', 'source': 'ash::source::Span {source: ash::source::SourceId (4), range: ash::source::ByteRange {start: 0, end: 3045}}', 'cost': 454}], 'total': 1715}
+INVENTORY TABLE {'table': 5, 'registry': 140737220140784, 'proofs': [{'caller': 'ash::foreign::checked_source::authenticate_codec', 'registry': 140737220140784, 'module': 'ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 2, value: 4}', 'source': 'ash::source::Span {source: ash::source::SourceId (4), range: ash::source::ByteRange {start: 0, end: 3045}}', 'cost': 436}], 'total': 1685}
+INVENTORY TABLE {'table': 6, 'registry': 140737220181824, 'proofs': [{'caller': 'ash::foreign::checked_source::authenticate_codec', 'registry': 140737220181824, 'module': 'ash::module::ModuleId {namespace: ash::module::ModuleIdNamespace::BuiltinForeign, graph: 2, value: 4}', 'source': 'ash::source::Span {source: ash::source::SourceId (4), range: ash::source::ByteRange {start: 0, end: 3045}}', 'cost': 454}], 'total': 1715}
+buffer nested cleanup startup total: 327674
+
+thread 'build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget' (562956) panicked at src/build/source_resource_image.rs:3023:16:
+called `Result::unwrap()` on an `Err` value: Validation(ValidationError { reason: Resource, node: None, cause: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget ... FAILED
+[Thread 0x7ffff7bff6c0 (LWP 562956) exited]
+
+failures:
+
+failures:
+    build::image::source_resource_image::tests::buffer_acquisition_inside_discard_cleanup_has_normal_startup_budget
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2112 filtered out; finished in 0.89s
+
+[Inferior 1 (process 562851) exited with code 0145]

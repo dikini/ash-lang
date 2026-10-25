@@ -1,0 +1,33 @@
+[
+  {
+    "unix": 1792728028.172331,
+    "available_memory_bytes": 10041536512,
+    "project_free_bytes": 188847439872,
+    "tmp_free_bytes": 12371017728,
+    "owned_group_rss_sum_bytes": 0,
+    "processes": []
+  },
+  {
+    "unix": 1792728028.1789496,
+    "available_memory_bytes": 10041290752,
+    "project_free_bytes": 188846641152,
+    "tmp_free_bytes": 12371017728,
+    "owned_group_rss_sum_bytes": 1298432,
+    "processes": [
+      {
+        "pid": 1463,
+        "comm": "cargo",
+        "pgid": 1463,
+        "rss_bytes": 1298432
+      }
+    ]
+  },
+  {
+    "unix": 1792728029.1471405,
+    "available_memory_bytes": 9916391424,
+    "project_free_bytes": 188846592000,
+    "tmp_free_bytes": 12371017728,
+    "owned_group_rss_sum_bytes": 0,
+    "processes": []
+  }
+]

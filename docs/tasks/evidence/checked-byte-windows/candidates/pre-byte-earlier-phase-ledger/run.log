@@ -1,0 +1,16 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_method_evidence_authority" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_envelopes" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_graph" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::collect_binders" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::collect_type_binders" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_method_evidence_type_owners" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_node_types" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_scopes" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::validate_type_scopes" not defined.
+Function "ash::core::validate::Validator<ash::core::effect::EffectOperationFamily>::generic_cell_computations" not defined.
+warning: Could not trace the inferior process.
+warning: ptrace: Operation not permitted
+During startup program exited with code 127.

@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "core::validate::selected_evidence_tests::checked_selected_host_single_module_authenticates_each_core_phase",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "exit": 101,
+  "elapsed_seconds": 0.327,
+  "source_configuration_before_after_equal": true,
+  "file_count": 522,
+  "source_configuration_tree_sha256": "42c273b459539cc6491e483cb7b36b2fcfe06d20a22210efe1ba3939b4496bf6",
+  "log_sha256": "83b1d09d3ec7403b694c3b5f292a0ec53cdb8c50ad37e32728018875cc344a4e"
+}

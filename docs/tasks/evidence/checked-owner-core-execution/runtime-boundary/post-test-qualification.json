@@ -1,0 +1,20 @@
+{
+  "tested_base": "c51089c8b6de76384361283f671d1f2dbf3ad58e",
+  "tested_files": 4868,
+  "tested_map_sha256": "ec4105aca76b8a7409584fe285d9960f41dc77866742602b12624ab719b3e12e",
+  "production_and_test_inputs_equal": true,
+  "changed_after_tests": [
+    "docs/tasks/TASK-0053-checked-owner-core-execution.md",
+    "docs/tasks/plans/checked-owner-core-execution.md"
+  ],
+  "added_or_updated_after_tests": [
+    "docs/tasks/evidence/checked-owner-core-execution/runtime-boundary/"
+  ],
+  "scope": "only qualified task/plan and compact evidence changes after final unit/native batches",
+  "remaining": [
+    "final published-head review",
+    "complete checked producer/policy/native closure",
+    "protected approval/context and immutable same-fd launch",
+    "deployed checked acquisition/copy/free/authored Trace/F-core acceptance"
+  ]
+}

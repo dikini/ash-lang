@@ -1,0 +1,26 @@
+{
+  "status": "VERIFIED_DERIVED_BOUNDED_PREFIX_CONTENT_ONLY",
+  "compare_originals": true,
+  "manifest_sha256": "01918ea054207bfb7c02551be6e1b88c00c74c95ad64caeaa429c96cf645cac1",
+  "records": [
+    {
+      "container": "third-prefix64MiB.gz",
+      "compressed_size": 2253271,
+      "compressed_sha256": "c6a891b5550ed019597d2661a403037b2432e56b432693e71a21ed8f2cc108b7",
+      "decoded_size": 67108864,
+      "decoded_sha256": "0e62a016e6bca947d2ce30ae523a0ff1e429eb45bffa7f85b477a1275dad94ab",
+      "streaming_original_equal": true,
+      "decoded_file_written": false
+    },
+    {
+      "container": "fourth-prefix64MiB.gz",
+      "compressed_size": 2058994,
+      "compressed_sha256": "4c73ab13eac44f6825cf464da148324cf6ad8d937eb85b12b4086ded646630fb",
+      "decoded_size": 67108864,
+      "decoded_sha256": "af27c6e1f59f1d26c56d996989500bab10274e839702d0a3e9af0f11aca6d1d5",
+      "streaming_original_equal": true,
+      "decoded_file_written": false
+    }
+  ],
+  "full_maps_verified": false
+}

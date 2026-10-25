@@ -1,0 +1,88 @@
+{
+  "status": "PROSPECTIVE_THIRD_STAGE3_MAP64_REVIEW_NOT_ASSIGNED",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 5691,
+      "sha256": "a81c9687c6d549650ddeda912df14ce7332f63ad98de2b1e58b0f827bdc8b40e"
+    },
+    {
+      "path": "default-linker-inputs.json",
+      "size": 4096,
+      "sha256": "7a0e5cf91bc1fa74681d832a45983fd94773331cc39f038fb7253f831bd0291b"
+    },
+    {
+      "path": "experiment-contract.md",
+      "size": 18813,
+      "sha256": "7e81587b5598f1d7184ce268725e2a1296341c8e84415a44de7cc180d65527ef"
+    },
+    {
+      "path": "finalize_static.py",
+      "size": 7918,
+      "sha256": "58eb632eabf1d2c3691547adb5b5c5cbdb16b424ad7662873f5a8714af2912e0"
+    },
+    {
+      "path": "inspection.monitor.json",
+      "size": 1495,
+      "sha256": "6e032621873a169efe25bb231867b64fff9b0a9990f197d6a04298a81486c86f"
+    },
+    {
+      "path": "map-detail-evidence.json",
+      "size": 2815,
+      "sha256": "55eb1d6930b24a2e6ee4f2b54c2c257bb42f879a8fb7f754d5e4ca4a1bdba838"
+    },
+    {
+      "path": "preflight-inputs.json",
+      "size": 19049,
+      "sha256": "e9a977e0d583e8b0555f83c445afaae29f8a0b5a009587ecb93af1826b58144e"
+    },
+    {
+      "path": "preparation-readback.json",
+      "size": 430,
+      "sha256": "f8d81e0aa222c9ba60dc46275cddef5678db64cbb5b3db158f7802fdc7f413a1"
+    },
+    {
+      "path": "preparation-readback.stderr",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "prepare_candidate.py",
+      "size": 5781,
+      "sha256": "bb7fc46163204bfe6072b1cb37852a2621825de8bd187bd270a3984d5f01d394"
+    },
+    {
+      "path": "prepare_tuple.py",
+      "size": 11113,
+      "sha256": "ed383b0aa8eb3fb54de365d8f0b97a925e662fa9399af9c608c54f963ff0da5b"
+    },
+    {
+      "path": "provenance.json",
+      "size": 5591,
+      "sha256": "af0e2413fcc16419b33d86bc96cf7da8ae595b0b447e6256db50f9df33b2294c"
+    },
+    {
+      "path": "readonly-check-command.json",
+      "size": 444,
+      "sha256": "8c0ecf3e43d6d637dafe22cd9823501cce21d852f104e1579dcfbb33f3dd8c0a"
+    },
+    {
+      "path": "relink.monitor.json",
+      "size": 6322,
+      "sha256": "7ba77af3e27516707c17e83e2c474bd878745ce94a8f75c13ed1e179319cefec"
+    },
+    {
+      "path": "tuple.json",
+      "size": 13911,
+      "sha256": "a58a8f3e648ccbf92ae2c46508b19d8d6726542fce18addbdf193adc8f4908f2"
+    },
+    {
+      "path": "verify_inputs.py",
+      "size": 4399,
+      "sha256": "693c4f2707baa5c4d7a6f7a8ebf2f9b84fce27f2a5ec52e42c8f2f58a2846b36"
+    }
+  ],
+  "six_commands_not_executed": true,
+  "readonly_verifier_exit": 0,
+  "original_source_semantic_native_argv_unchanged": true
+}

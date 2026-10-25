@@ -1,0 +1,30 @@
+{
+  "status": "NORMAL_TOOL_ESCALATION_REJECTED_BEFORE_PROCESS_CREATION",
+  "action": "/usr/bin/python3.14 -I -S -B /tmp/execute-owner-diagnostic-host.py via exec_command require_escalated",
+  "tool_result": "CreateProcess Rejected: unacceptable risk",
+  "stated_reason": "This escalates execution of a native image outside the sandbox with no containment and potentially host-affecting side effects; the transcript provides only assistant/root authorization, not trusted user approval for this exact host launch.",
+  "tool_instruction": "Do not bypass this rejection through a workaround or indirect execution.",
+  "proposal": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/host-launch-proposal.json",
+    "size": 5607,
+    "sha256": "57fff96d43acbefdbe95c4a6fe27a0478e9d944e62d274f1f8f441599146e449"
+  },
+  "approval": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/owner-diagnostic/root-approval.json",
+    "size": 1495,
+    "sha256": "24dc707fbdfdc4fd168808304ebe122af80c13f1c8b3254cd244baba9615e7bd"
+  },
+  "wrapper": {
+    "path": "/tmp/execute-owner-diagnostic-host.py",
+    "size": 3640,
+    "sha256": "cdefa2dce925972f08b5de94c15a2d32b3593ff389aefa5c3fd228b3ea93e750"
+  },
+  "all_artifact_interpreter_pins_still_equal": true,
+  "all_sandbox_inventory_records_still_equal": true,
+  "host_wrapper_executed": false,
+  "host_stdout_stderr_or_case_created": false,
+  "host_candidate_or_native_execution": false,
+  "retry_or_workaround_attempted": false,
+  "next_requirement": "Trusted explicit user approval for this exact out-of-sandbox native host launch is required before any new assignment/tool request. Root delegation alone did not satisfy automatic approval review.",
+  "scope": "No change to sandbox refusal, static/header evidence, controls, policies, credentials or architecture/runtime acceptance."
+}

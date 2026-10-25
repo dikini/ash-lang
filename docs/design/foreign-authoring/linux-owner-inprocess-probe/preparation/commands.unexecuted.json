@@ -1,0 +1,138 @@
+{
+  "status": "UNEXECUTED_PENDING_PROSPECTIVE_CONTRACT_AMENDMENT_AND_EXACT_BUILD_ASSIGNMENT",
+  "required_unresolved": {
+    "fresh_compiler_size_sha256": "POST_SUCCESSFUL_SELECTED_SNAPSHOT_BUILD (no cached Borrow binary reuse)",
+    "generated_project": "POST_ORDINARY_BUILD_DISCOVERY_AND_INPUT_FREEZE",
+    "generated_binary_name": "POST_ORDINARY_BUILD_CARGO_TOML",
+    "generated_payload_map_and_image_hashes": "POST_BUILD_ONLY",
+    "owner_startup": "NOT_AUTHORIZED_BY_THIS_PLAN",
+    "accepted_record_scope_amendment": "MUST reference separately accepted/retained amendment and its exact SHA before assignment; current .proposed.md is not authority"
+  },
+  "environment": {
+    "exact": {
+      "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+      "CARGO_HOME": "/home/dikini/.cargo",
+      "RUSTC": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+      "RUSTDOC": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustdoc",
+      "CARGO_BUILD_JOBS": "1",
+      "RUSTC_WRAPPER": "",
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "LANG": "C",
+      "LC_ALL": "C"
+    },
+    "no_inherited_environment": true,
+    "global_static_RUSTFLAGS": "absent"
+  },
+  "commands": [
+    {
+      "gate": "compiler-build (sole operator assignment required)",
+      "cwd": "/tmp/ash-owner-build-snapshot-1a8ecef0/source",
+      "argv": [
+        "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+        "build",
+        "-p",
+        "ash",
+        "--locked",
+        "--offline",
+        "--jobs",
+        "1",
+        "--bin",
+        "ash",
+        "--target-dir",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target"
+      ],
+      "monitor_config": "/tmp/ash-owner-packaging-1a8ecef0/compiler-build.monitor.json"
+    },
+    {
+      "gate": "ordinary-legacy-build (no candidate execution)",
+      "cwd": "/tmp/ash-owner-packaging-1a8ecef0",
+      "argv": [
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/ash",
+        "build",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--cargo-target-dir",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+        "--native-static",
+        "/usr/lib/x86_64-linux-gnu/libc.a",
+        "--output",
+        "/tmp/ash-owner-packaging-1a8ecef0/ordinary-host",
+        "/tmp/ash-owner-packaging-1a8ecef0/entry.ash"
+      ]
+    },
+    {
+      "gate": "whole-static-root-relink (must freeze observed generated project/name first)",
+      "cwd": "<OBSERVED_AS_H_BUILD_PROJECT_AFTER_ORDINARY_BUILD>",
+      "argv": [
+        "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/cargo",
+        "rustc",
+        "--offline",
+        "--locked",
+        "--jobs",
+        "1",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--target-dir",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target",
+        "--bin",
+        "<OBSERVED_PACKAGE_NAME>",
+        "-vv",
+        "--",
+        "-C",
+        "target-feature=+crt-static",
+        "-C",
+        "relocation-model=static",
+        "-C",
+        "linker=/usr/bin/cc",
+        "-C",
+        "link-arg=-fuse-ld=bfd",
+        "-C",
+        "link-arg=-static",
+        "-C",
+        "link-arg=-no-pie",
+        "-C",
+        "strip=debuginfo",
+        "-C",
+        "link-arg=-v",
+        "-C",
+        "link-arg=/usr/lib/x86_64-linux-gnu/libc.a",
+        "-C",
+        "link-arg=-Wl,-Map,/tmp/ash-owner-packaging-1a8ecef0/whole-static.map"
+      ]
+    },
+    {
+      "gate": "bounded structural inspection only",
+      "argv": [
+        "/usr/bin/readelf",
+        "-W",
+        "-h",
+        "-l",
+        "-d",
+        "/tmp/ash-owner-packaging-1a8ecef0/static-host"
+      ]
+    },
+    {
+      "gate": "bounded retained-symbol inspection only",
+      "argv": [
+        "/usr/bin/nm",
+        "-A",
+        "/tmp/ash-owner-packaging-1a8ecef0/static-host"
+      ]
+    },
+    {
+      "gate": "bounded disassembly inspection only if assigned",
+      "argv": [
+        "/usr/bin/objdump",
+        "-dr",
+        "--disassemble=malloc",
+        "/tmp/ash-owner-packaging-1a8ecef0/static-host"
+      ],
+      "qualification": "optional targeted static code observation only; no all-runtime reachability proof"
+    }
+  ],
+  "proposed_record_scope_amendment": {
+    "path": "/tmp/ash-owner-packaging-1a8ecef0/linux-owner-inprocess-experiment.proposed.md",
+    "sha256": "d448eee197e11028ff0088c8a73b6455a49ce9a307bbd4ef78cd5f84e204bc22",
+    "status": "PROPOSED_NOT_YET_ACCEPTED"
+  }
+}

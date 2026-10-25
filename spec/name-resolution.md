@@ -79,25 +79,10 @@ local `with` declarations cannot introduce the exact builtin `Provider`
 relation. Acquisition introduces its authenticated lexical evidence; ordinary
 name resolution or copied signatures cannot grant that authority.
 
-### Ordinary native-buffer library
-
-`libraries/native_buffer.ash` is an ordinary passive source module. A configured
-root may expose it as `@ffi.native_buffer`; the root name and file basename grant
-no compiler authority. Imports, renaming and public re-exports preserve its
-original resource family, sealed provider and ordinary result identities.
-`resource Buffer.Buffer<R> b = length { body }` resolves that declared family
-through the imported alias. A facade may re-export the original declaration;
-no direct builtin import is required. Copied API names or equal function shapes
-do not supply the original resource header or provider.
-
-The former `@builtin.native_buffer` path is unknown. The lowercase
-`resource native_buffer` designator is no longer a builtin resource form.
-
 ### Independent byte and string modules
 
 `String` and `Bytes` are primitive value types. `String` contains validated UTF-8;
-`Bytes` contains independent immutable bytes. Neither is a foreign address,
-view or State token. They have no source constructor or byte-array literal.
+`Bytes` contains independent immutable bytes. Neither is a foreign address. They have no source constructor or byte-array literal.
 Ordinary string literals use the shared quoted-string syntax.
 
 `@builtin.bytes` and `@builtin.string` are passive canonical modules. Imports,
@@ -123,75 +108,31 @@ range; negative, unrepresentable or out-of-range indices return `InvalidIndex`,
 and every index into empty bytes is invalid. Invalid UTF-8 returns `InvalidUtf8`
 without replacement decoding. Lookup, traversal and complete result storage
 are paid before publication; work/storage exhaustion is terminal. These APIs
-grant no native call, State, ownership or access permission.
+grant no native call or ownership permission.
 
-### Compiler-owned foreign result module
+### Compiler-owned foreign module
 
-`@builtin.foreign` is admitted once per compilation graph and has no runtime
-initialization. Its public `ConversionError` is an opaque ordinary nominal
-type with no source-accessible constructors. Its other public declarations
-are ordinary transparent data types with one kind-`Type` parameter each:
-
-| Type | Constructors |
-| --- | --- |
-| `Call<T>` | `Returned(T)` and `ConversionFailed(ConversionError)` |
-| `Output<T>` | `Unreadable` and `Readable(T)` |
-| `Nullable<T>` | `Null` and `NonNull(T)` |
-| `Disposition<T>` | `Consumed(T)`, `Retained(T)` and `BlockedDependent` |
-
-Complete and targeted imports, aliases and re-exports preserve those nominal
-and constructor identities. Ordinary same-spelled declarations do not supply
-the canonical native result codec. Constructing an ordinary result grants no
-native interpreter, ownership or access permission.
-
-`Extent<V>` is a separate opaque builtin type with no accessible constructor.
-Its exact descriptor-witnessed view parameter and runtime origin are checked by
-the [copy primitives](static-semantics.md#source-foreign-declarations); its
-ordinary spelling or a compatible type cannot create extent evidence.
+`@builtin.foreign` is admitted once per compilation graph without runtime
+initialization. It exports the opaque nominal type `Address`, of kind `Type`,
+and pure `null : Unit -> Address`, `is_null : Address -> Bool` and
+`equal : (Address, Address) -> Bool`. It exports no constructor or integer
+conversion. Complete and targeted imports, aliases and public re-exports preserve
+the original nominal and function identities. A same-spelled ordinary declaration
+does not select builtin execution or become the canonical ABI Address type.
 
 ### Source foreign-library identities
 
-A foreign library introduces a defining native-library identity without a
-nested source namespace. Each admitted symbol introduces a module-owned native
-effect with one `call` operation. Symbols share the ordinary effect spelling
-namespace and inherit the library's publication mode. Foreign representations
-occupy an ABI namespace and introduce no ordinary Ash type. An owner member
-introduces a constructor-free nominal state family in the ordinary type
-namespace. Its original ordered formal records, explicit owned position,
-representation and teardown reference remain associated with the defining
-library. Libraries in one module require disjoint member spellings.
+A foreign library introduces a defining library identity without a nested source
+namespace. Each symbol introduces a module-owned effect with one `call` operation.
+Symbols share the ordinary effect spelling namespace and inherit the library's
+publication mode. The profile and C link name are declaration data, not term
+binders or executable values. Symbols have no type or row parameters.
 
-Imports and re-exports preserve the original effect, operation, library and
-contract identities. Summaries retain descriptors only with selected or
-signature-referenced effect facts. A private native effect referenced by a
-public signature remains a hidden checking fact; it does not become an
-exported source spelling. Display aliases do not replace defining provenance
-or result-codec authority.
-
-### Source resource families
-
-A source resource declaration introduces a family in the type namespace. Its
-identity is distinct from every instance identity and from a foreign owner
-state family. The complete written parameter vector scopes over the header,
-acquire and finish clauses, and handler clauses. `owned` must select one of
-those parameters with kind `Type`; its position need not be first. The single
-parameter introduced by `result ... for <Answer>` scopes over that result type
-only. Lifecycle and handler patterns retain their ordinary binding behavior.
-
-Public imports and targeted re-exports retain the original family identity,
-complete parameter vector and body-free header, including all exact native
-interpretations and defining provenance. A display alias cannot change the
-owned position, argument tags or native symbol identity. Source resource code
-travels as the original checked defining code through compiler preparation;
-an export summary neither contains that code nor grants execution permission.
-Private header dependencies retain checking identity without becoming public
-source names.
-
-The current publication checkpoint requires a provider interface declared
-beside a public source resource to be public. Its shared-interface closure can
-retain imported hidden interface facts, but cannot yet retain a same-module
-private provider interface. This is an implementation limitation, not a new
-visibility rule for resource declarations.
+Imports and re-exports preserve the defining effect, operation, library and
+signature identities. Body-free summaries retain selected or signature-referenced
+facts. A private effect referenced by a public signature remains a hidden checking
+fact without exposing its source name. Aliases do not replace defining provenance.
+A passive import performs no native call or initialization.
 
 ## Imports and namespaces
 
@@ -298,13 +239,38 @@ authorization routes, and hidden kind, identity, interface-shape, or
 effect-signature facts required to close those public facts. The compiler
 produces this source-body-free summary only after
 checking the complete module; Ash source does not declare it. It contains no
-dependency source body, implementation source body, forwarding declaration,
-or mutable dependency scope. Importing a scheme does not infer or generalize
-it again.
+dependency executable body, implementation executable body, forwarding
+declaration, or mutable dependency scope. Importing a scheme does not infer or
+generalize it again. Immutable resident source snapshots may accompany provenance.
+They authenticate original declaration syntax, coordinates and ordinary/native
+classification; they do not supply callable requirements, introduce dependency
+names, elaborate dependency bodies or provide executable code.
 Exported function values also retain compiler-inferred control summaries for
 capture checking. These summaries describe possible calls, requests and handler
 control; they do not import dependency source bodies. Admission authenticates
 their defining function identity and retained type and effect identities.
+Nonlexical nominal references in global or selected-method callable type metadata
+must retain authenticated nominal identity and kind facts even when the outward
+scheme omits them. This hidden metadata grants no constructor access; lexical
+type identities remain local to their callable graph.
+Each exported ordinary global view retains the same completed defining fact
+through imports and re-exports. Admission compares its binder, scheme, provenance
+and callable summary against that original. It authenticates effect identities
+referenced by callable controls and nested Type/Row metadata. Erasing symbol
+correspondence or a callable graph cannot turn a required native symbol effect
+into an ordinary pure dependency.
+Resident declaration provenance distinguishes native operations from ordinary
+effects even when both have the same apparent signature.
+
+Each exported ordinary implementation view retains its completed defining
+implementation fact through imports and re-exports. Admission compares the
+original implementation and method identities, method binders, complete head,
+head-parameter boundary, prerequisite applications, method schemes, provenance
+and callable summaries. Alternate import routes retain the same original;
+route authorization alone does not establish completed method facts. Independent
+module checking authenticates retained imported implementations again before
+using them as checked evidence. These facts do not supply executable methods;
+linking and Core still authenticate producer correspondence separately.
 
 Summary admission authenticates every retained type-variable identity against
 one defining kinded binder record and derives each nominal constructor kind
@@ -331,6 +297,14 @@ This hidden closure creates no source binding, cannot be qualified or targeted
 through the summary, and does not export a hidden spelling or constructor.
 Privacy and opacity therefore remain properties of source access even when a
 public scheme or implementation route carries the hidden identity.
+
+A transparent constructor projection preserves the defining checked constructor
+meaning: owner, declaration kind, ordered parameter identities and kinds,
+effective payload, constructor scheme and provenance. Admission authenticates
+that correspondence independently of the projected payload's kind. Imports and
+re-exports preserve the same defining fact, and body checking re-authenticates
+retained imported projections. The defining reference supplies no missing
+projected kind metadata, hidden source name or constructor access.
 
 For a `newtype`, that authenticated closure also retains the declaration kind,
 owner, ordered parameter identities and kinds, sole same-spelled constructor,
@@ -490,12 +464,7 @@ declaration and cannot have kind `EffectRow`. An interface has a nonempty
 ordered written parameter vector. A kind annotation fixes its binder's kind;
 an omitted annotation fixes it at `Type`.
 
-Native symbol and source resource parameters retain their complete written
-Type/Row vector, including parameters with no ABI operand. An owner state
-family retains its own ordered `Type`/`EffectRow` parameters and their original
-binding coordinates. Its explicit owned selector names a `Type` formal; inherited
-Rows remain Rows. These distinct inventories are not
-collapsed into a Type-only vector for source effect identity.
+Native symbols introduce no type or row parameter binders.
 
 For an interface declaration, binder encounter order starts with the interface
 parameters in written order, then visits methods in declaration order and each

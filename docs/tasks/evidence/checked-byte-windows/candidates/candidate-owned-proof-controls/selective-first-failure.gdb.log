@@ -1,0 +1,42 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+Breakpoint 1 at 0x893f3be: file src/resolved.rs, line 4659.
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+running 1 test
+[New Thread 0x7ffff7bff6c0 (LWP 599023)]
+[Switching to Thread 0x7ffff7bff6c0 (LWP 599023)]
+
+Thread 2 "elaborate::chec" hit Breakpoint 1, ash::resolved::scalar_preflight_failure (failure=...) at src/resolved.rs:4659
+4659	    if failure.is_resource_exhaustion() {
+#0  ash::resolved::scalar_preflight_failure (failure=...) at src/resolved.rs:4659
+#1  0x000055555a43f2e7 in core::ops::function::FnOnce::call_once<fn(ash::foreign::checked_source::ForeignAdmissionError) -> ash::resolved::ResolvedBuildFailure, (ash::foreign::checked_source::ForeignAdmissionError)> () at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#2  0x0000555556ec395d in core::result::Result<ash::resolved::ResolvedRegistry, ash::foreign::checked_source::ForeignAdmissionError>::map_err<ash::resolved::ResolvedRegistry, ash::foreign::checked_source::ForeignAdmissionError, ash::resolved::ResolvedBuildFailure, fn(ash::foreign::checked_source::ForeignAdmissionError) -> ash::resolved::ResolvedBuildFailure> (self=..., op=0x55555ae7ad3d00) at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:968
+#3  0x000055555ae7ad3d in ash::resolved::ResolvedRegistry::with_scalar_preflights<core::iter::adapters::filter_map::FilterMap<core::iter::adapters::filter_map::FilterMap<core::slice::iter::Iter<ash::resolved::BinderId>, ash::resolved::{impl#27}::globals::{closure_env#0}>, ash::resolved::{impl#105}::checker_view_retaining_registered_originals::{closure_env#93}>> (self=..., facts=..., work=0x7ffff7bfa390) at src/resolved.rs:21601
+#4  0x000055555ddfec62 in ash::resolved::ResolvedRegistry::checker_view_retaining_registered_originals (self=0x7ffff0035c10, imported=0x7ffff7bf9240, retain_registered_originals=false, budget=0x7ffff7bfa390) at src/resolved.rs:23345
+#5  0x000055555ddcf225 in ash::resolved::ResolvedRegistry::checker_view (self=0x7ffff0035c10, imported=0x7ffff7bf9240, budget=0x7ffff7bfa390) at src/resolved.rs:22575
+#6  0x000055555c03f65c in ash::elaborate::check_module_with_budget_family<ash::core::effect::EffectOperationFamily> (resolved=..., provider_codes=0x7ffff7bfa380, type_work=0x7ffff7bfa390, coverage_work=0x7ffff7bfa3d8, constraint_work=0x7ffff7bfa3e0, rewrite_work=..., source_capture_observer=...) at src/elaborate.rs:22611
+#7  0x000055555bba3965 in ash::elaborate::check_module_with_budget_and_provider_codes_and_rewrite_work (resolved=..., provider_codes=0x7ffff7bfa380, type_work=0x7ffff7bfa390, coverage_work=0x7ffff7bfa3d8, constraint_work=0x7ffff7bfa3e0, rewrite_work=...) at src/elaborate.rs:22523
+#8  0x000055555bfbe727 in ash::elaborate::checked_owner_lifecycle_tests::check_graph (graph=0x7ffff7bfdfc0) at src/elaborate/checked_owner_lifecycle_tests.rs:87
+#9  0x000055555adad6be in ash::elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_selective_nonanchor_preflights_preserve_import_and_reexport () at src/elaborate/checked_byte_window_tests.rs:494
+#10 0x000055555b2e6f57 in ash::elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_selective_nonanchor_preflights_preserve_import_and_reexport::{closure#0} () at src/elaborate/checked_byte_window_tests.rs:489
+#11 0x000055555a434486 in core::ops::function::FnOnce::call_once<ash::elaborate::checked_owner_lifecycle_tests::checked_byte_window_tests::checked_byte_window_selective_nonanchor_preflights_preserve_import_and_reexport::{closure_env#0}, ()> () at /home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#12 0x000055555e1471fb in core::ops::function::FnOnce::call_once<fn() -> core::result::Result<(), alloc::string::String>, ()> () at library/core/src/ops/function.rs:250
+#13 test::__rust_begin_short_backtrace<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>> () at library/test/src/lib.rs:724
+#14 0x000055555e154a75 in test::run_test_in_process::{closure#0} () at library/test/src/lib.rs:747
+#15 core::panic::unwind_safe::{impl#23}::call_once<core::result::Result<(), alloc::string::String>, test::run_test_in_process::{closure_env#0}> () at library/core/src/panic/unwind_safe.rs:275
+#16 std::panicking::catch_unwind::do_call<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure_env#0}>, core::result::Result<(), alloc::string::String>> () at library/std/src/panicking.rs:581
+#17 std::panicking::catch_unwind<core::result::Result<(), alloc::string::String>, core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure_env#0}>> () at library/std/src/panicking.rs:544
+#18 std::panic::catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure_env#0}>, core::result::Result<(), alloc::string::String>> () at library/std/src/panic.rs:359
+#19 test::run_test_in_process () at library/test/src/lib.rs:747
+#20 test::run_test::{closure#0} () at library/test/src/lib.rs:668
+#21 0x000055555e14e384 in test::run_test::{closure#1} () at library/test/src/lib.rs:698
+failure = ash::foreign::checked_source::ForeignAdmissionError {reason: ash::foreign::checked_source::ForeignAdmissionReason::InvalidCodec, span: ash::source::Span {source: ash::source::SourceId (11), range: ash::source::ByteRange {start: 0, end: 3045}}}

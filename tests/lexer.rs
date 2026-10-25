@@ -573,26 +573,21 @@ fn eof_directly_after_a_token_uses_the_source_end() {
 }
 
 #[test]
-fn lone_minus_is_a_token_and_slash_remains_an_unknown_character() {
-    let source =
-        SourceFile::new("unknown.ash", "- /").expect("the unknown-character source should fit");
-    let lexed = lex(&source).expect("the source should remain representable while lexing");
-
-    assert_eq!(
-        lexed
-            .diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.reason)
-            .collect::<Vec<_>>(),
-        vec![LexReason::UnknownCharacter]
-    );
-    assert_eq!(lexed.diagnostics[0].found.as_deref(), Some("/"));
-    assert_eq!(lexed.diagnostics[0].primary.span().range().start(), 2);
-    assert_eq!(lexed.diagnostics[0].primary.span().range().end(), 3);
-    assert_eq!(lexed.tokens.len(), 2);
-    assert_eq!(lexed.tokens[0].kind, TokenKind::Minus);
-    assert_range(&lexed.tokens[0], 0, 1);
-    assert_range(&lexed.tokens[1], 3, 3);
+fn minus_and_slash_remain_unknown_characters() {
+    let source = SourceFile::new("operators.ash", "- /").unwrap();
+    let lexed = lex(&source).unwrap();
+    assert_eq!(lexed.diagnostics.len(), 2);
+    for (diagnostic, spelling, start) in [
+        (&lexed.diagnostics[0], "-", 0),
+        (&lexed.diagnostics[1], "/", 2),
+    ] {
+        assert_eq!(diagnostic.reason, LexReason::UnknownCharacter);
+        assert_eq!(diagnostic.found.as_deref(), Some(spelling));
+        assert_eq!(diagnostic.primary.span().range().start(), start);
+        assert_eq!(diagnostic.primary.span().range().end(), start + 1);
+    }
+    assert_eq!(lexed.tokens.len(), 1);
+    assert_range(&lexed.tokens[0], 3, 3);
 }
 
 #[test]
@@ -639,17 +634,16 @@ fn syntax_work_budget_stops_token_retention_before_the_next_allocation() {
 }
 
 #[test]
-fn a_foreign_literal_sign_remains_separate_from_its_unsigned_integer_token() {
+fn rejected_negative_sign_keeps_the_following_unsigned_integer() {
     let source = SourceFile::new("sign.ash", "-42").unwrap();
     let lexed = lex(&source).unwrap();
-    assert!(lexed.diagnostics.is_empty());
-    assert_eq!(lexed.tokens[0].kind, TokenKind::Minus);
+    assert_eq!(lexed.diagnostics.len(), 1);
+    assert_eq!(lexed.diagnostics[0].reason, LexReason::UnknownCharacter);
+    assert_eq!(lexed.diagnostics[0].found.as_deref(), Some("-"));
     assert_eq!(
-        lexed.tokens[1].kind,
+        lexed.tokens[0].kind,
         TokenKind::Integer(Integer::parse_decimal("42").unwrap())
     );
-    assert_eq!(lexed.tokens[0].span.range().start(), 0);
-    assert_eq!(lexed.tokens[0].span.range().end(), 1);
-    assert_eq!(lexed.tokens[1].span.range().start(), 1);
-    assert_eq!(lexed.tokens[1].span.range().end(), 3);
+    assert_range(&lexed.tokens[0], 1, 3);
+    assert_range(&lexed.tokens[1], 3, 3);
 }

@@ -1,0 +1,69 @@
+{
+  "kind": "existing-profile-owner-packaging-generation-only",
+  "selected_source_commit": "1a8ecef0b03ddc75a45254543bd8f6f0bb10969c",
+  "contract_retained_commit": "2ac8c393846715249de5a475a65e47bf1309bb54",
+  "contract_sha256": "27430b69ee44dcbcb835a83dc38ff2b034826b81dddae40b7bb9ba7b4377cc3e",
+  "compiler": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/ash",
+    "size": 589364584,
+    "sha256": "5dca1b624bf206c44c6c4d3037675193800516eb936a0cf6420e67394e998d3e",
+    "device": 66309,
+    "inode": 49481419
+  },
+  "runtime_fingerprint": "6ed612090a3fadfbcc982c0cf41b210cb02e2d01af7db5a5958e63a6fc527a47",
+  "generated_manifest": {
+    "path": "/tmp/ash-owner-generation-stage2/generated-manifest.json",
+    "size": 2248,
+    "sha256": "627a6732fe81aff2e9698f54522c692f5d9ce7efaddecf2cdeb0a392c8306859",
+    "device": 47,
+    "inode": 40795
+  },
+  "monitor_receipt": {
+    "path": "/tmp/ash-owner-generation-stage2/experiment/build-run-ptuhtbd7/receipt.json",
+    "size": 10082,
+    "sha256": "0ae04f338662d973fd0461cd16e8c591b2cd55347746d757f28ad4328a00de1d",
+    "device": 47,
+    "inode": 40784
+  },
+  "lock_seed": {
+    "path": "/tmp/ash-owner-generation-stage2/selected-Cargo.lock.seed",
+    "size": 10251,
+    "sha256": "26be4499e4330e8146d024cfbf6950f6e711edc5909c9a700ec0f2ed58749e08",
+    "device": 47,
+    "inode": 34661
+  },
+  "lock_seed_qualification": "Pinned selected compiler embedded-write input, NOT an independently captured generated pre-Cargo lock. Generated lock is observed post-resolution only.",
+  "post_resolution_lock": {
+    "path": "/tmp/ash-owner-generation-stage2/experiment/.ash-build/ash-host-6-0/Cargo.lock",
+    "size": 10121,
+    "sha256": "c1eb4441f3a039e3757d67e9f05012c4b1f199d3c90ea1f7694e6f0086a9590e",
+    "device": 47,
+    "inode": 40597
+  },
+  "source_inputs": [
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/owner.ash",
+      "size": 2671,
+      "sha256": "0a6591f22d7fb2969ffb324c42b13f38a646f45005ba959563f2fb2d5cf65cde",
+      "device": 47,
+      "inode": 31798
+    },
+    {
+      "path": "/tmp/ash-owner-generation-stage2/experiment/entry.ash",
+      "size": 148,
+      "sha256": "5af46617bd593b30991d74c95a188b1d291b1d231fdf3615af9c9e1c2bc3f878",
+      "device": 47,
+      "inode": 31799
+    }
+  ],
+  "native_archive": {
+    "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+    "size": 6238972,
+    "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2",
+    "device": 66306,
+    "inode": 26363793
+  },
+  "whole_static_candidate": false,
+  "owner_image_executed": false,
+  "remaining": "Bridge/private payload/source mapping still needs independent inspection; no checked runtime/O-K/copy or ownerful architecture/startup approval. Stop before separately assigned static relink."
+}

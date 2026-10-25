@@ -11,6 +11,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         root.join("Cargo.toml"),
         root.join("Cargo.lock"),
         root.join("rust-toolchain.toml"),
+        root.join("locales/en-US.ftl"),
+        root.join("locales/bg.ftl"),
     ];
     let mut pending = vec![root.join("src")];
     while let Some(directory) = pending.pop() {

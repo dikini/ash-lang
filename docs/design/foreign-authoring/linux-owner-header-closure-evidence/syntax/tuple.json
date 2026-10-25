@@ -1,0 +1,176 @@
+{
+  "status": "SYNTAX_ONLY_PREPARATION_NOT_ASSIGNED",
+  "working_directory": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+  "outer_environment": {
+    "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "sequence": [
+    {
+      "name": "before-syntax",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+        "before-syntax"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-before.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-before.json.stderr"
+    },
+    {
+      "name": "syntax-only",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-response.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-response.json.stderr"
+    },
+    {
+      "name": "after-syntax",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+        "after-syntax"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-after.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/frozen-after.json.stderr"
+    },
+    {
+      "name": "collect-syntax",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+        "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only",
+      "retain_stdout": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+      "retain_stderr": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json.stderr"
+    }
+  ],
+  "actual_GCC_child_argv": [
+    "/usr/bin/x86_64-linux-gnu-gcc-15",
+    "-B/usr/libexec/gcc/x86_64-linux-gnu/15/",
+    "-m64",
+    "-std=c11",
+    "-fno-builtin",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-pedantic-errors",
+    "-nostdinc",
+    "-isystem",
+    "/usr/lib/gcc/x86_64-linux-gnu/15/include",
+    "-isystem",
+    "/usr/include/x86_64-linux-gnu",
+    "-isystem",
+    "/usr/include",
+    "-v",
+    "-fsyntax-only",
+    "-MD",
+    "-MF",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/native-build.log",
+    "-MT",
+    "owner_header_abi",
+    "-x",
+    "c",
+    "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/owner-header-abi.c"
+  ],
+  "actual_GCC_child_environment": {
+    "PATH": "/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "contract_commit": "5cb93a9fd03d963377b0a79bc2e18404c54c2c47",
+  "contract_sha256": "c4aaeab72ca1d32971d4d12939828f6d56c69c600005ca57f586329e200f95bd",
+  "discovery_actual_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-dependency-query/discovered-headers.json",
+    "size": 9529,
+    "sha256": "9b73bbf5f051cbf2c78d00ed8aaacc07072bfdef57c45ae1eae2a644baad5dcb"
+  },
+  "config": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax.monitor.json",
+    "size": 10313,
+    "sha256": "badcd7aec2613202ae9be80fe6b07dc31399a3034ce73be6a3cf2af2be94ac1f"
+  },
+  "preflight": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/preflight-inputs.json",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/preflight-inputs.json",
+    "size": 25115,
+    "sha256": "127b3898510f29a61371bd8a8e333972fccc43d8a817e01ef37e0e0cf573eb17"
+  },
+  "verifier": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/verify_inputs.py",
+    "size": 2388,
+    "sha256": "35e4d224be4d5f208e631ee48f2d37bacaa681fea0618437bdffbef6661b13c9"
+  },
+  "collector": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+    "resolved": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/collect_syntax.py",
+    "size": 7721,
+    "sha256": "2446f36f2b7a63d245436ba6b5058ea255f337b5a554785252e609e4f45a9edd"
+  },
+  "interpreter": {
+    "path": "/usr/bin/python3.14",
+    "resolved": "/usr/bin/python3.14",
+    "size": 7477160,
+    "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "monitor": {
+    "path": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "resolved": "/tmp/ash-owner-map-class-monitor/build_monitor.py",
+    "size": 20745,
+    "sha256": "b36fbefca8bdec200da79d01c36dc0c90039f948e6e0ca26c5d3d5cab17606a0"
+  },
+  "frozen_dependency_count": 28,
+  "limits": {
+    "seconds": 1200,
+    "sampled_stdout_other_watched_sidefile_bytes": 16777216,
+    "admitted_raw_dependency_bytes": 1048576,
+    "dependency_records": 4096,
+    "manifest_bytes": 4194304,
+    "receipt_bytes": 262144
+  },
+  "success": "All4exactphases0, clean/reaped monitor, all known+frozen source/header pins before/after equal, exact cc1 syntax-only and explicit include roots, complete settled dependency bytes/object bound before decode/finalreceipt, exact28dependency pathset+hash equality. Stop mismatch/unknown format/no retry.",
+  "operator_anchor": "Independent external tuple/config/manifest/source/interpreter/monitor hashes before spawn; exact isolated env/no inherited state/no shell. Separate root assignment required.",
+  "claim": "Conditional fixed x86-64 GNU installed-header malloc/free prototypes, size_t/pointer/CHAR_BIT/target static asserts only; discovery remains historical post-query evidence. No object/link/native/image execution/libc implementation/whole ABI/ownerful architecture/runtime acceptance."
+}

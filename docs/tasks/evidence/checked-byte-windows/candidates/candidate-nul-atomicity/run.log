@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 1 test
+test eval::machine::tests::nul_preflight_reports_are_atomic_and_retryable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2110 filtered out; finished in 0.05s
+

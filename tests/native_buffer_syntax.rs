@@ -34,13 +34,13 @@ fn native_buffer_remains_contextual_and_cell_is_unchanged() {
 }
 
 #[test]
-fn projection_retains_the_selected_resource_kind() {
+fn projection_retains_cell_and_named_generic_cell_carriers() {
     use ash::surface::{SurfaceDefinitionKind, SurfaceExprKind, SurfaceResourceKind};
 
-    for designator in ["cell", "Buffer.Buffer"] {
+    for (designator, arguments) in [("cell", "R"), ("Cell.Cell", "R, Int")] {
         let source = SourceFile::new(
             "resource-kind.ash",
-            format!("main : Unit -> Int\nmain () = resource {designator}<R> b = 4 {{\n42\n}}\n"),
+            format!("main : Unit -> Int\nmain () = resource {designator}<{arguments}> b = 4 {{\n42\n}}\n"),
         )
         .unwrap();
         let tree = parse(lex(&source).unwrap());
@@ -55,12 +55,12 @@ fn projection_retains_the_selected_resource_kind() {
                     resource.initializer.span.range().end() < resource.body.span.range().start()
                 );
             }
-            SurfaceExprKind::ProviderResource(resource) if designator == "Buffer.Buffer" => {
+            SurfaceExprKind::ProviderResource(resource) if designator == "Cell.Cell" => {
                 assert!(
                     resource.initializer.span.range().end() < resource.body.span.range().start()
                 );
             }
-            _ => panic!("expected the exact cell/source carrier"),
+            _ => panic!("expected the exact integer/generic cell carrier"),
         }
     }
 }

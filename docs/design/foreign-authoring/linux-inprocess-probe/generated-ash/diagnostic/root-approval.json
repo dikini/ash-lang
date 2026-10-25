@@ -1,0 +1,13 @@
+{
+  "authorized": true,
+  "harness_sha256": "7e16e3104ed86acd2eb162bf054d3dce7df51300a43a67145ed9e6884cf6c77f",
+  "image_sha256": "45417a6db6fc41bd17b372b47423e06c57ecf55973a0a848c51a14f456537405",
+  "image_size_bytes": 70880176,
+  "kind": "trusted-generated-static-diagnostic",
+  "known_runtime_loading_premise_accepted": true,
+  "policy_sha256": "b39884904664be89ca29f756b8bf6f39558e81603a3a3a45d2901676795f8976",
+  "receipt_sha256": "4de5fe79b42c88fd3dc269a1438a0d5c24f190f199021c76ea3337178ff77d4c",
+  "replacement_sha256": "c338f484f853f1f8706ace538269a68c51cd5625c6cfc189f36211e534b76798",
+  "status": "Root approves these exact reviewed artifacts under the user's autonomous recommended-choice delegation for the bounded trusted diagnostic in the sandbox and, if refused, through normal host-tool approval. Root independently inspected the generated abs bridge and verified image, receipt, harness and policy hashes. Known libc localization/gconv runtime-loading paths and host authority are accepted only as diagnostic premises. This does not satisfy the strict no-loading profile, accept an architecture, provision an approval store or grant checked-runtime authority. No arbitrary candidate execution, host policy changes or fingerprint bypass is authorized.",
+  "version": 1
+}

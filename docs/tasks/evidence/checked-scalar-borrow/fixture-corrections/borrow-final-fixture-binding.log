@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 5 tests
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_has_exact_prefixed_spent_and_fresh_work ... ok
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_wrong_host_and_owned_signature_actuals ... ok
+test foreign::checked_source::checked_borrow_tests::checked_borrow_binding_rejects_parameter_operation_and_origin_substitution ... ok
+test foreign::checked_source::checked_borrow_tests::checked_borrow_nested_current_domain_prepares_but_does_not_bind ... ok
+test foreign::checked_source::checked_borrow_tests::checked_borrow_extra_scalar_operand_prepares_but_does_not_bind ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2094 filtered out; finished in 0.13s
+

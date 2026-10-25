@@ -1,0 +1,50 @@
+{
+  "status": "PARSER_ONLY_NO_LINK_READelf_OR_NATIVE_EXECUTION",
+  "finalizer_sha256": "9b18c5e65126cebb3a47cca6ecc7177f3ef3fb835c204caea00a33d749d1389c",
+  "actual_functions_extracted_via_ast": [
+    "digest",
+    "map_load_lines",
+    "need",
+    "require_explicit_libc"
+  ],
+  "full_prior_map_available": false,
+  "retained_compact_map_input": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/docs/design/foreign-authoring/linux-inprocess-probe/link-map-inputs.txt",
+  "fixture_utf8": "Memory Configuration\n\nLinker script and memory map\nLOAD /usr/lib/x86_64-linux-gnu/libc.a\nOUTPUT(candidate elf64-x86-64)\n",
+  "results": [
+    {
+      "case": "empty map",
+      "result": "refused",
+      "reason": "unrecognized GNU/BFD map framing"
+    },
+    {
+      "case": "unknown map with superficially valid LOAD",
+      "result": "refused",
+      "reason": "unrecognized GNU/BFD map framing"
+    },
+    {
+      "case": "recognized framing but no LOAD",
+      "result": "refused",
+      "reason": "empty GNU/BFD LOAD set"
+    },
+    {
+      "case": "synthetic GNU/BFD framing plus libc LOAD and actual pinned archive bytes",
+      "result": "accepted",
+      "scope": "parser/component only; no actual new or prior full-map/closure proof",
+      "archive": {
+        "path": "/usr/lib/x86_64-linux-gnu/libc.a",
+        "size": 6238972,
+        "sha256": "2a277b999268f100c5f838689704b7432e9b1fdac76bf0cbda83cdbbaecc89e2"
+      }
+    },
+    {
+      "case": "explicit libc LOAD absent",
+      "result": "refused",
+      "reason": "explicit pinned libc.a LOAD missing"
+    },
+    {
+      "case": "libc LOAD wrong size/hash",
+      "result": "refused",
+      "reason": "explicit libc.a LOAD size/hash differs"
+    }
+  ]
+}

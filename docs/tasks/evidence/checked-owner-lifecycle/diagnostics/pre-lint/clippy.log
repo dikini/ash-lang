@@ -1,0 +1,105 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+    Checking ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:280:18
+    |
+280 |                   .err()
+    |  __________________^
+281 | |                 .expect("independent whole Core rejects the hostile copied scope");
+    | |_______________________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+    = note: `-D clippy::err-expect` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::err_expect)]`
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:293:14
+    |
+293 |               .err()
+    |  ______________^
+294 | |             .expect(
+    | |___________________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:316:10
+    |
+316 |           .err()
+    |  __________^
+317 | |         .expect("changed checked finish must be rejected");
+    | |_______________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:413:10
+    |
+413 |           .err()
+    |  __________^
+414 | |         .expect("changed retained teardown finish must be rejected");
+    | |_______________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:603:10
+    |
+603 |           .err()
+    |  __________^
+604 | |         .expect("required post-finish source continuation cannot be abandoned");
+    | |_______________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:627:10
+    |
+627 |           .err()
+    |  __________^
+628 | |         .expect("mutated connected lifecycle source must be rejected");
+    | |_______________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:867:10
+    |
+867 |           .err()
+    |  __________^
+868 | |         .expect("arbitrary unknown row is not eligible pending state");
+    | |_______________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:934:18
+    |
+934 |                   .err()
+    |  __________________^
+935 | |                 .expect("publication finalizer must reject the late same-H residual");
+    | |_______________________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:960:10
+    |
+960 |           .err()
+    |  __________^
+961 | |         .expect("ordinary clauses cannot install the original native Free interpreter");
+    | |_______________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+   --> src/elaborate/checked_owner_lifecycle_tests.rs:986:10
+    |
+986 |           .err()
+    |  __________^
+987 | |         .expect("constructed CheckedCall data cannot supply a native finish-attempt witness");
+    | |_______________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#err_expect
+
+error: could not compile `ash` (lib test) due to 10 previous errors

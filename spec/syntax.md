@@ -24,7 +24,6 @@ module_declaration ::=
   | implementation_declaration
   | effect_declaration
   | foreign_library_declaration
-  | resource_declaration
   | global_definition ;
 
 import_declaration ::=
@@ -68,90 +67,11 @@ foreign_library_declaration ::=
   [ "pub" ] "foreign" "library" upper_identifier
   "{" line_end foreign_member
   { line_end foreign_member } [ line_end ] "}" ;
-foreign_member ::=
-    "profile" string_literal
-  | "repr" upper_identifier "=" foreign_representation
-  | foreign_constant
-  | foreign_sentinel
-  | foreign_owner
-  | foreign_access
-  | foreign_symbol ;
-foreign_constant ::=
-  "const" upper_identifier ":" foreign_reference "=" foreign_integer ;
-foreign_sentinel ::=
-  "sentinel" upper_identifier ":" foreign_reference "=" "all_bits_one" ;
-foreign_integer ::= [ "-" ] integer ;
-foreign_reference ::= upper_identifier [ "." upper_identifier ] ;
-foreign_representation ::=
-    "signed" "(" foreign_integer ")"
-  | "unsigned" "(" foreign_integer ")"
-  | "size_t" | "opaque" | "bytes" | "function_address" ;
-foreign_owner ::=
-  "owner" upper_identifier type_parameters
-  "{" line_end "representation" foreign_reference line_end
-  "owned" upper_identifier line_end
-  [ "retains" upper_identifier { "," upper_identifier } line_end ]
-  "teardown" foreign_reference [ line_end ] "}" ;
-foreign_access ::=
-  "access" upper_identifier type_parameters
-  "{" line_end "window" upper_identifier line_end
-  "owner" type line_end "extent" ("bytes" | "nul") line_end
-  "preserves" foreign_reference { "," foreign_reference }
-  [ line_end ] "}" ;
+foreign_member ::= "profile" string_literal | foreign_symbol ;
 foreign_symbol ::=
-  "symbol" upper_identifier [ type_parameters ] ":" type
-  "{" line_end "name" string_literal line_end
-  "abi" "(" [ abi_operand { "," abi_operand } ] ")"
-  "->" abi_representation line_end
-  foreign_call_contract { line_end foreign_call_contract }
-  [ line_end ] "}" ;
-abi_operand ::= abi_representation | "out" "(" abi_representation ")" ;
-abi_representation ::=
-    foreign_reference | "pointer" "(" foreign_reference ")" | "void" ;
-foreign_call_contract ::=
-    "operand" native_position "from" source_position foreign_operand_role
-  | "operand" native_position "from" "constant" foreign_reference
-  | "operand" native_position "from" "null"
-  | "destruction_operand" native_position "from" source_position "scalar"
-  | "output" native_position "as" foreign_output_role
-  | "outcome" outcome_test "{" [ outcome_fact { "," outcome_fact } ] "}"
-  | "retained_dependents" "block" ;
-outcome_test ::=
-    outcome_atom { "and" outcome_atom }
-  | "otherwise" ;
-outcome_atom ::= native_position ("null" | "nonnull" | "==" foreign_reference) ;
-outcome_fact ::=
-    ("readable" | "unreadable") native_position
-  | ("consumed" | "retained") source_position
-  | "initialized_bytes" native_position "from" source_position ;
-foreign_operand_role ::=
-    "scalar" | "current" | "enclosing" | "view" | "sentinel"
-  | "bytes" "(" source_position ")" foreign_input_discipline
-  | "nul" foreign_input_discipline ;
-foreign_input_discipline ::= "call_borrow" | "copy" ;
-foreign_output_role ::=
-    "scalar" | "owner" "(" type ")"
-  | "view" "(" type { "," source_position } ")"
-  | "extent_of" "(" source_position { "," source_position } ")"
-  | "offset_into" "(" source_position ")" ;
-native_position ::= "result" | foreign_integer ;
-source_position ::= foreign_integer { "." foreign_integer } ;
+  "symbol" upper_identifier ":" type
+  "{" [ line_end ] "name" string_literal [ line_end ] "}" ;
 string_literal ::= /double-quoted-UTF-8-with-defined-escapes/ ;
-
-resource_declaration ::=
-  [ "pub" ] "resource" upper_identifier type_parameters
-  "{" line_end "owned" upper_identifier line_end
-  "input" type line_end "state" type line_end "data" type line_end
-  "acquisition" type line_end "completion" type line_end
-  "result" type "for" type_parameters line_end "codec" report_codec line_end
-  "provider" type line_end "effect" effect_instance line_end
-  "interpret" effect_instance { "," effect_instance } line_end
-  "acquire" pattern "=>" expression line_end
-  "finish" pattern "=>" expression line_end
-  "handlers" pattern "{" line_end
-  handler_clause { line_end handler_clause } [ line_end ] "}"
-  [ line_end ] "}" ;
-report_codec ::= "scope" | "acquired_only" ;
 
 interface_declaration ::=
   [ "pub" ] "interface" upper_identifier interface_parameters
@@ -232,9 +152,6 @@ resource_expression ::=
   | "resource" nominal_type_reference type_arguments identifier
       "=" primary_expression block ;
 hook_expression ::= "hook" effect_instance block ;
-copy_window_expression ::=
-  "copy_window" nominal_type_reference type_arguments
-  "from" primary_expression block ;
 registration_expression ::=
   "register" effect_instance primary_expression block ;
 cleanup_expression ::= "cleanup" expression block ;
@@ -246,7 +163,6 @@ expression ::=
   | handler_expression
   | resume_expression
   | resource_expression
-  | copy_window_expression
   | equality_expression ;
 equality_expression ::= additive_expression [ "==" additive_expression ] ;
 additive_expression ::=
@@ -332,28 +248,12 @@ be empty. A private import may be complete or targeted. A public import must be
 targeted. A targeted import list contains at least one item. Neither a module
 nor a block uses a trailing semicolon.
 
-The foreign productions describe scalar declarations, fixed non-callable
-sentinels, owner contracts and finite access families. `source_position`
-selects a zero-based leaf of the source
-argument product. Quoted declaration strings follow [lexical
-structure](lexical-structure.md#tokens). [Static
-semantics](static-semantics.md#source-foreign-declarations) requires exact ABI
-coverage, owner/access roles and result shape. Parsed positions and widths must
-be nonnegative; `void` is legal only as a result. Pointer representations require
-an admitted input, output, owner or access role. Owner status alternatives may reference checked
-literal facts in the original library. A passive `const` has a mathematical
-integer literal with an optional minus sign, not a value expression. Its checked
-scalar value introduces an ordinary `Int` term binder and may supply an exact
-declared native operand. Scalar-result alternatives declare that bare result
-readable.
-An `out` ABI operand is an initialized private output slot, not a source pointer.
-`copy_window` binds its family's fresh window identity only in its body;
-[static semantics](static-semantics.md#source-foreign-declarations) restricts its
-original family, direct provider phase and exact owner. A byte owner requires an
-explicit `initialized_bytes` fact for execution through an admitted resource
-scope; preparing its contract alone grants no activation or byte access. Effect arguments
-retain their written order; the declaring effect determines each argument's
-required kind.
+A foreign library contains exactly one profile and zero or more symbols. The
+profile and symbol link names use the quoted-string lexical form. Each symbol
+has a closed source function signature and a `name` clause; there are no library
+or symbol type parameters. [Static semantics](static-semantics.md#source-foreign-declarations)
+defines the supported pointer/Bytes/void mapping. Effect arguments elsewhere
+retain their written order and the kinds required by their declarations.
 
 A relative module path contains one or more lowercase path segments. An
 absolute path starts with `@`, contains a lowercase root name, and has at least
@@ -393,7 +293,7 @@ members, as in `List.Option` and `List.Some`. Qualification has exactly these
 two components; it does not repeat the dependency's path.
 
 An unmodified declaration is private. On a declaration, `pub` marks a global,
-nominal data type, `newtype`, interface, effect, foreign library, resource family,
+nominal data type, `newtype`, interface, effect, foreign library,
 or implementation as public.
 On an import, `pub` re-exports the selected channels. `pub opaque type` exports
 the nominal name without exporting its constructors; `pub opaque newtype`
@@ -432,10 +332,9 @@ publish a partial method binder list.
 
 Every declaration-level type binder uses `type_parameter`. Its optional kind
 annotation contains `Type`, `EffectRow`, a function kind, or a parenthesized
-kind. Static semantics admits `EffectRow` in complete global, eligible
-generalized-local, native symbol, resource and foreign Owner binders. It forbids
-`EffectRow` within a written function-kind annotation. An Owner's explicitly
-owned formal has kind `Type`.
+kind. Static semantics admits `EffectRow` in complete global and eligible
+generalized-local binders. It forbids `EffectRow` within a written function-kind
+annotation. A resource acquisition identity binder has kind `Type`.
 The spellings
 `Type` and `EffectRow` are contextual: they denote kinds only inside a kind
 annotation and remain ordinary `upper_identifier` spellings elsewhere. For
@@ -513,33 +412,20 @@ name, one pattern, and one expression body. `resume` consumes one expression;
 `discard` is a nullary primary expression. Name resolution and static semantics
 restrict both completion forms to their owning operation clause.
 
-A builtin resource expression selects `cell` and writes one
-uppercase identity binder. A source resource expression names a declared family,
-possibly qualified by a module alias, and writes its complete argument vector.
-The family's explicit `owned` position contains the fresh uppercase binder;
-every other position contains an ordinary Type or Row actual. Both forms write
-one ordinary value binder, one primary-expression initializer and a block body.
-The value binder is not a pattern or wildcard. A non-primary initializer, such
-as `40 + 1` or `make ()`, must be parenthesized. The initializer precedes the
-identity and value binders' scope; both binders are visible only in the body.
-The builtin designator remains an ordinary identifier outside this position.
-The compiler-owned generic cell also uses the named form:
-`resource Cell.Cell<R, T> c = initializer { body }`, with owned position zero.
-It requires the complete two-argument application and no new grammar production.
-Its dependency admission rules are described in
-[static semantics](static-semantics.md#generic-cell-foundation).
+A builtin resource expression selects `cell` and writes one fresh uppercase
+identity binder. The named form supports the canonical generic cell family,
+including through imports and re-exports:
+`resource Cell.Cell<R, T> c = initializer { body }`. It requires the complete
+two-argument application, with fresh identity R in position zero and ordinary
+Type actual T in position one. Nonbuiltin provider instantiation is unsupported.
 
-The ordinary buffer library uses the source form, for example
-`resource Buffer.Buffer<R> b = length { body }` after an explicit import.
-
-A source resource declaration retains its complete header and the patterns for
-acquisition, completion and handlers. `result` introduces one body-result
-parameter for that type only. `codec` selects declared library ADT roles;
-[static semantics](static-semantics.md#source-resource-declarations) defines
-their admission. Declaration alone performs no acquisition and introduces no
-first-class acquisition function. This checkpoint executes both `scope` and
-`acquired_only` codecs for the admitted owner lifecycle, including declared
-dependencies and unconditional consumed or retained `void` contracts.
+Both forms write one ordinary value binder, one primary-expression initializer
+and a block body. The value binder is not a pattern or wildcard. A non-primary
+initializer, such as `40 + 1` or `make ()`, must be parenthesized. The initializer
+and T use the preceding scope; the fresh identity and value binder are visible
+only in the body. The builtin designator remains an ordinary identifier outside
+this position. [Static semantics](static-semantics.md#generic-cell-foundation)
+defines dependency admission.
 
 A hook expression names an exact effect instance followed by a block. A
 registration expression names an exact effect instance, one primary-expression

@@ -1088,8 +1088,6 @@ runtime-allocator-refused = Разпределителят на памет на 
 runtime-storage-reservation-failed = Заделянето на памет на хоста е неуспешно; първопричината не е определена.
 runtime-resource-admission-refused = Заявката за ресурс е отказана; първопричината не е определена.
 runtime-resource-packed-bytes = пакетирани байтове
-runtime-resource-foreign-admission = приемане на външна операция
-runtime-resource-foreign-codec-storage = памет за външно кодиране и декодиране
 runtime-work-budget-exhausted = Бюджетът за работа на средата за изпълнение не допуска заявената работа.
 runtime-phase-acquisition = придобиване на ресурс
 runtime-phase-capture = прихващане или възстановяване на продължение
@@ -1129,7 +1127,7 @@ runtime-label-requested = Заявени допълнителни единици
 runtime-label-available = Налични допълнителни единици
 runtime-label-teardown = Първа грешка при освобождаване
 runtime-label-cleanup = Състояние на почистването
-invocation-usage = Очаква се: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>, или ash build --output FILE [--target TARGET] [--cargo-target-dir PATH] [--native-static PATH]... [--native-shared PATH]... [--root name=path]... <entry-file>, или ash check-ffi --header FILE... --mapping FILE --compiler FILE --output DIR [--target TARGET] [--root name=path]... <entry-file>. Опциите трябва да са преди входния файл и могат да бъдат зададени само по веднъж, с изключение на корените, нативните входове и заглавните файлове за check-ffi.
+invocation-usage = Очаква се: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>, или ash build --output FILE [--target TARGET] [--cargo-target-dir PATH] [--native-static PATH]... [--native-shared PATH]... [--root name=path]... <entry-file>. Опциите трябва да са преди входния файл и могат да бъдат зададени само по веднъж, с изключение на корените и нативните входове.
 build-failure = Ash не можа да изгради нативната програма: { $detail }.
 check-ffi-failure = Ash не можа да провери C хедърите: { $detail }.
 output-write = Ash не можа да запише резултата от програмата на стандартния изход.

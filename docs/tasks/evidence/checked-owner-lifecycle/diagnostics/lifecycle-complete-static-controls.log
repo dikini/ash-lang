@@ -1,0 +1,47 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi)
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/checked-ffi/foreign-adapter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 41s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 24 tests
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_canonical_source_retains_originals ... ok
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_finish_rejects_duplicate_free_attempts' (737) panicked at src/elaborate/checked_owner_lifecycle_tests.rs:26:37:
+called `Result::unwrap()` on an `Err` value: Os { code: 17, kind: AlreadyExists, message: "File exists" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_finish_rejects_duplicate_free_attempts ... FAILED
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_coherent_state_vector_swap_is_not_authority ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_default_profile_refuses_the_same_source ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_same_shape_scope_is_not_canonical_codec ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_same_shape_finish_is_not_canonical_codec ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_acquisition_requires_exact_host_actual ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_free_requires_exact_host_actual ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_boundary_failure_cannot_claim_retention ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_constructed_boundary_record_cannot_replace_request_witness ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_boundary_failure_cannot_claim_consumption ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_boundary_failure_cannot_borrow_retained_native_outcome ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_boundary_data_can_be_inspected_while_forwarding_original ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_required_trace_survives_resource_and_host_boundaries ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_retained_void_teardown_has_a_genuine_canonical_source ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_finish_requires_a_free_attempt ... ok
+
+thread 'elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_host_pending_rows_do_not_hide_unknown_or_late_native' (744) panicked at src/elaborate/checked_owner_lifecycle_tests.rs:749:10:
+called `Option::unwrap()` on a `None` value
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_host_pending_rows_do_not_hide_unknown_or_late_native ... FAILED
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_boundary_failure_retires_ordinary_state_access ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_retained_native_outcome_cannot_claim_consumption ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_inspected_boundary_fields_cannot_reconstruct_witness ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_every_returning_branch_requires_attempt ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_required_postrequest_source_continuation_cannot_be_discarded ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_body_free_consumer_links_core_and_transforms ... ok
+test elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_latest_completion_e_retains_only_the_outer_owner ... ok
+
+failures:
+
+failures:
+    elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_connected_finish_rejects_duplicate_free_attempts
+    elaborate::checked_owner_lifecycle_tests::checked_owner_lifecycle_host_pending_rows_do_not_hide_unknown_or_late_native
+
+test result: FAILED. 22 passed; 2 failed; 0 ignored; 0 measured; 2055 filtered out; finished in 0.76s
+
+error: test failed, to rerun pass `--lib`

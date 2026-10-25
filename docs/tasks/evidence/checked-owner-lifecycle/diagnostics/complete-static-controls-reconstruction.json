@@ -1,0 +1,25 @@
+{
+  "base": "fb73289",
+  "inputs": 583,
+  "all_expected_source_bytes_reconstructed": true,
+  "changed_overlay_paths": [
+    "src/core/capture.rs",
+    "src/core/capture/value.rs",
+    "src/core/capture/value/host_request_tests.rs",
+    "src/core/source_resource.rs",
+    "src/core/source_resource/checked_lifecycle_core_tests.rs",
+    "src/elaborate.rs",
+    "src/elaborate/checked_owner_lifecycle_tests.rs",
+    "src/elaborate/foreign_host.rs",
+    "src/resolve.rs",
+    "src/resolved.rs",
+    "src/resolved/checked_codec_category_tests.rs",
+    "src/resolved/checked_hidden_provider_interface_tests.rs",
+    "tests/checked_foreign_lifecycle.rs",
+    "tests/fixtures/checked-owner-lifecycle/latest_payload_escape.ash",
+    "tests/fixtures/checked-owner-lifecycle/latest_payload_producer.ash",
+    "tests/fixtures/checked-owner-lifecycle/latest_payload_within.ash",
+    "tests/fixtures/checked-owner-lifecycle/owner.ash"
+  ],
+  "patch_sha256": "a0f6c912e68682c6f46086d02c238f8e8c83a409dca43b665f2cf5ce9672dce9"
+}

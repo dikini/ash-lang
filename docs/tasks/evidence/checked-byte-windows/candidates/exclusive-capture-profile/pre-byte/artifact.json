@@ -1,0 +1,11 @@
+{
+  "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168",
+  "size": 846137992,
+  "sha256": "7af01d12db95d8bcad4559c2baca2ecd8ae57dfc6166da0404be5a5c338a6ed0",
+  "association": [
+    "pre-byte-capture-exclusive-restore-profile",
+    "pre-byte-capture-observer-off",
+    "pre-byte-capture-observer-on-repeat",
+    "pre-byte-earlier-phase-ledger2"
+  ]
+}

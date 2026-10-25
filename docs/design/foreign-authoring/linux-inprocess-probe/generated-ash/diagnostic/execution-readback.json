@@ -1,0 +1,61 @@
+{
+  "architecture_accepted": false,
+  "command": "/usr/bin/python3 /tmp/ash-generated-scalar-diagnostic/diagnostic.py --approval /tmp/ash-generated-scalar-diagnostic/root-approval.json",
+  "files": {
+    "case-dt3d_fje/lifecycle.json": {
+      "sha256": "5d5c2c644379a01bded8cfb13c12f672399102d260f5aad1437b4177aa8768da",
+      "size_bytes": 242
+    },
+    "case-dt3d_fje/result.json": {
+      "sha256": "df4ad2e61b3844c7b7d7dec7e0b5421a5b619013c27bb0134bdf966203bce46e",
+      "size_bytes": 2896
+    },
+    "case-mncv4m00/lifecycle.json": {
+      "sha256": "7b5cec70901ca012b710518872bb74dfe076ce845c63bc474546745f35e27037",
+      "size_bytes": 214
+    },
+    "case-mncv4m00/result.json": {
+      "sha256": "bdd63cd7ad10f5c12f683b912e59223a8e7365d42832c929d3f30a7f1009d71c",
+      "size_bytes": 2867
+    },
+    "host-observation.json": {
+      "sha256": "6c91797cee41e46fb4ca203be79561fbfa99e7a600c3dda1a4dbce2c35f57050",
+      "size_bytes": 2931
+    },
+    "root-approval.json": {
+      "sha256": "ba8df9e905b149784dd6e50b574c48f0d55ecb001a253b34846e6a37e1973f20",
+      "size_bytes": 1288
+    },
+    "sandbox-observation.json": {
+      "sha256": "8e144d8c4fe7646ed27afd9a538ac918b8ca374d579e141948dcb67f67d40bc3",
+      "size_bytes": 2960
+    }
+  },
+  "isolated_worker_evidence": false,
+  "kind": "trusted-generated-static-diagnostic-execution-readback",
+  "limitations": [
+    "Known libc localization/gconv runtime-loading paths remain trusted diagnostic premises; no strict whole-closure result.",
+    "Host authority is retained; no isolation, arbitrary-code containment, product checked runtime or protected approval-store enforcement.",
+    "Deadline/output-overflow/post-fork failure cleanup has mocked tests, not actual fault-injected generated-image observations."
+  ],
+  "preparation_manifest_sha256": "a3f9187282781ba0b5e53fdcaceaabc139131881b4bc7e4c0187d5848a68023f",
+  "private_candidate_files_removed_by_harness": true,
+  "runs": {
+    "host_normal_tool_escalation": {
+      "child_exit_code": 0,
+      "output_utf8": "Returned(7)\n",
+      "reaped": true,
+      "tool_exit_code": 0
+    },
+    "sandbox": {
+      "child_errno": 13,
+      "child_exit_code": 125,
+      "reaped": true,
+      "tool_exit_code": 78
+    }
+  },
+  "seven_preexecution_refusals_each_run": true,
+  "strict_profile_success": false,
+  "three_sealed_mutation_EPERM_each_run": true,
+  "version": 1
+}

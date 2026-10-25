@@ -1,0 +1,108 @@
+{
+  "status": "PREPARATION_ONLY_NOT_APPROVED_NOT_ASSIGNED",
+  "purpose": "observe-fixed-legacy-owner-acquire-stored-read-teardown-report",
+  "context": "trusted-operator-host-authority-empty-env-fixed-fd-v1",
+  "mode": "in-process",
+  "harness": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/diagnostic.py",
+    "size": 22555,
+    "sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a"
+  },
+  "policy": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/policy.json",
+    "size": 3172,
+    "sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5"
+  },
+  "tests": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/test_diagnostic.py",
+    "size": 11826,
+    "sha256": "7afdb884a5412f6bbedfe30eca489741258fbd413e883838feeeccfb6dec6113"
+  },
+  "safe_result": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/safe-receipt.json",
+    "size": 3964,
+    "sha256": "7d76b750c3ffad82f2ad6c607b741b3d3936a4415e05c45e91ac7ccfb7c54795"
+  },
+  "old_reviewed_originals": {
+    "diagnostic.py": {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/docs/design/foreign-authoring/linux-inprocess-probe/generated-ash/diagnostic/diagnostic.py",
+      "size": 21331,
+      "sha256": "7e16e3104ed86acd2eb162bf054d3dce7df51300a43a67145ed9e6884cf6c77f"
+    },
+    "policy.json": {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/docs/design/foreign-authoring/linux-inprocess-probe/generated-ash/diagnostic/policy.json",
+      "size": 2302,
+      "sha256": "b39884904664be89ca29f756b8bf6f39558e81603a3a3a45d2901676795f8976"
+    },
+    "test_diagnostic.py": {
+      "path": "/tmp/ash-owner-build-snapshot-1a8ecef0/source/docs/design/foreign-authoring/linux-inprocess-probe/generated-ash/diagnostic/test_diagnostic.py",
+      "size": 8140,
+      "sha256": "7b7e746bd9cd2ce0f2f6dcee89d48d99afe9effa3b48ee91351f04387d950424"
+    }
+  },
+  "source_delta": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/scalar-to-owner.patch",
+    "size": 25424,
+    "sha256": "e85ae6ddfb9ebed64f1516bdd489eedc0a294c80bc61a45d98608faabfaea23d"
+  },
+  "exact_image": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-host",
+    "size": 71022184,
+    "sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65"
+  },
+  "exact_static_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-receipt.json",
+    "size": 1946,
+    "sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69"
+  },
+  "exact_proposed_premise": {
+    "path": "/tmp/ash-owner-header-closure-delivery/payload/docs/design/foreign-authoring/linux-owner-header-closure-evidence/ownerful-premise.proposed.json",
+    "size": 23612,
+    "sha256": "9e4ca3f8f46d61e8a8e8c5a0508d10dfd5cf5c6948ceacc61ade558e8aee882e"
+  },
+  "static_manifest": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/stage3-map128/static-manifest.json",
+    "size": 48307,
+    "sha256": "b591bb4dc8357a35ca36b5d0909788ba451a305b97273c8c01e95b9ca0611ec6"
+  },
+  "syntax_receipt": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-ffi-owner-packaging/header-syntax-only/syntax-receipt.json",
+    "size": 2941,
+    "sha256": "dcb4402ef828d6be447e6a0c82a3308705bc8b342753698c5de3101cd3b08a81"
+  },
+  "expected_rendering": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/expected-rendering.json",
+    "size": 2792,
+    "sha256": "6c82aa4a7a196ea1a7b95ec268c50fb80fdeb2a74616f79d00139c3b062c63e6"
+  },
+  "root_assumption_readback": {
+    "path": "/tmp/ash-owner-diagnostic-preparation/root-premise-readback.json",
+    "size": 1185,
+    "sha256": "5766090504c86a0e6bc9c0cccd44cf2bbd2a2152832fb815dfdd8d2a17f6cafe"
+  },
+  "required_approval_fields": {
+    "version": 1,
+    "authorized": "Must be true only in a separately root-created approved record; no such record is produced here.",
+    "kind": "trusted-existing-profile-owner-diagnostic",
+    "policy_sha256": "97ea31891bb8f199680784edb09a80bcfc06847510b21065d00d1e6f7c526de5",
+    "harness_sha256": "a164d9b468b5dda24fb0be7cc46b9522bbf7aa76fd6172dab533ba51500b612a",
+    "receipt_sha256": "1d8f540c3e99ac791f1f83cf41d8356e80e3b5eb981a68bf63207091142cbf69",
+    "image_sha256": "52f09983205ecb2b524a3572fba267e79e28057c933f6408f7fde0f3ac42bc65",
+    "image_size_bytes": 71022184,
+    "premise_sha256": "9e4ca3f8f46d61e8a8e8c5a0508d10dfd5cf5c6948ceacc61ade558e8aee882e",
+    "purpose": "observe-fixed-legacy-owner-acquire-stored-read-teardown-report",
+    "context": "trusted-operator-host-authority-empty-env-fixed-fd-v1",
+    "mode": "in-process",
+    "known_runtime_loading_premise_accepted": "Must be explicitly true from root, diagnostic only",
+    "ownerful_native_runtime_premises_accepted": "Must be explicitly true from root",
+    "host_loss_and_no_containment_accepted": "Must be explicitly true from root"
+  },
+  "future_command": "No command assigned. After review, root must supply independent exact approval and freeze exact isolated interpreter/cwd/argv/outerenv/approval pin for sandbox attempt. Host escalation is separate normal-tool approval of same exact artifacts/context, preserving sandbox outcome; no fallback by harness.",
+  "unresolved": [
+    "Independent harness/policy review and final exact approval/context/launch tuple/assignment absent.",
+    "Manual trusted-root session/context association is experiment authority only, not a provisioned F6 protected store or administrator deployment proof.",
+    "No old reporter replacement is available/used. Harness tampers only private copied candidate path and proves pin rejects changed bytes; same-fd original remains immutable. This is not a separately approved executable replacement test.",
+    "No candidate execution/reaping has occurred under new harness. Lifecycle/output/deadline controls use fully mocked fork/exec/kill/waitpid; actual seals test uses synthetic 120-byte ELF-shaped data, never executed.",
+    "Ten absent linker temporary inputs, installed libc/precompiled runtime provenance and loading uncertainty remain trusted limits, not strict closure success."
+  ]
+}

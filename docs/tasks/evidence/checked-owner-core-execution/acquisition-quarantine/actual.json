@@ -1,0 +1,444 @@
+{
+  "session": 67812,
+  "head": "e9672914d57d4500b6609f10f55be1eb3be9d197",
+  "commands": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "module::foreign_host::tests::checked_foreign_coordinates_preserve_all_canonical_formal_locals",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 97.357,
+      "selected": 1,
+      "passed_names": [
+        "module::foreign_host::tests::checked_foreign_coordinates_preserve_all_canonical_formal_locals"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-01.log",
+        "bytes": 58463,
+        "sha256": "c4c3fcc685d8124e2620e12edd9f75423c846cf3f030f0ef7442638632193707"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_quarantine_requires_declared_enclosing_state_and_exact_host",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 3.215,
+      "selected": 1,
+      "passed_names": [
+        "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_quarantine_requires_declared_enclosing_state_and_exact_host"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-02.log",
+        "bytes": 58389,
+        "sha256": "a48e3037ce26efe6f566c4dc3ec6f9aa3dc997bac7e7ccc056be095ed37659f4"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "eval::machine::source_violation_phases::tests::",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 2.268,
+      "selected": 2,
+      "passed_names": [
+        "eval::machine::source_violation_phases::tests::checked_violation_dispatch_preserves_native_facts_and_never_mints_finish",
+        "eval::machine::source_violation_phases::tests::checked_violation_report_exhaustion_preserves_installed_denial"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-03.log",
+        "bytes": 58418,
+        "sha256": "279b260ff7e1fe88d17aa10f1aceeca3aede38b58e6882b19510d85b47a10ef6"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "foreign::source_bindings::boundary_tests::checked_violation_request_and_null_observation_identity_are_exact",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 2.264,
+      "selected": 1,
+      "passed_names": [
+        "foreign::source_bindings::boundary_tests::checked_violation_request_and_null_observation_identity_are_exact"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-04.log",
+        "bytes": 58283,
+        "sha256": "c67529be9ffd67d88d70c05f82613e5d7e9685543aefd83dafb2b5f07969aa8b"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--keep-going",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "--tests",
+        "--",
+        "-D",
+        "clippy::all"
+      ],
+      "seconds": 88.161,
+      "selected": 0,
+      "passed_names": [],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-05.log",
+        "bytes": 158794,
+        "sha256": "10ea2978d15ee33edfee4c6d0c6131f3bb96d9d90b263d0feb46a0bb5189c79a"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "eval::machine::source_window_phases::checked_copy_boundary_tests::checked_copy_real_phase_admission_observation_and_output_failure",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 4.369,
+      "selected": 1,
+      "passed_names": [
+        "eval::machine::source_window_phases::checked_copy_boundary_tests::checked_copy_real_phase_admission_observation_and_output_failure"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-06.log",
+        "bytes": 58306,
+        "sha256": "49b4104977d8da8deea1ef50ec9fdf4d877c3d7ee6fcc7a2047b1abb120c5bd0"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "foreign::source_runtime::owner::tests::checked_group_denial_preserves_siblings_backing_and_skips_all_destructors",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 1.616,
+      "selected": 1,
+      "passed_names": [
+        "foreign::source_runtime::owner::tests::checked_group_denial_preserves_siblings_backing_and_skips_all_destructors"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-07.log",
+        "bytes": 58288,
+        "sha256": "2f40c672aa94748b9cd464c66324f86e7a5b6a7b1d0e0ab82cb7ce0bb7d920ca"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "build::image::checked_violation_image_tests::original_violation_roles_roundtrip_and_role_donors_refuse",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 1.809,
+      "selected": 1,
+      "passed_names": [
+        "build::image::checked_violation_image_tests::original_violation_roles_roundtrip_and_role_donors_refuse"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-08.log",
+        "bytes": 58278,
+        "sha256": "b6be66f2b4306b62adbbd5f5fe5e7ef373f444e28eff1cb54b50bc524725f944"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "module::foreign_host::tests::checked_foreign_inventory_appends_without_changing_legacy_ordinals",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 1.471,
+      "selected": 1,
+      "passed_names": [
+        "module::foreign_host::tests::checked_foreign_inventory_appends_without_changing_legacy_ordinals"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-09.log",
+        "bytes": 58271,
+        "sha256": "1234c6a8f7878b671e8081a65a854d53e4829f0bf474376bff4b5c5503565c14"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "foreign::source_bindings::boundary_tests::checked_owner_local_finish_never_becomes_native_readiness",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 1.615,
+      "selected": 1,
+      "passed_names": [
+        "foreign::source_bindings::boundary_tests::checked_owner_local_finish_never_becomes_native_readiness"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-10.log",
+        "bytes": 58275,
+        "sha256": "060bac2bf9ba097a640e854a1cb24b5fcb9b1fa90473354899c522eb5a836332"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "foreign::source_runtime::owner::tests::injected_owner_dependencies_preserve_exact_work_affinity_quarantine_and_once_only_order",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 1.572,
+      "selected": 1,
+      "passed_names": [
+        "foreign::source_runtime::owner::tests::injected_owner_dependencies_preserve_exact_work_affinity_quarantine_and_once_only_order"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-11.log",
+        "bytes": 58302,
+        "sha256": "6f2d060613934e4a7a820a6e13809f130a282f3b6b2a181ed65d998793a6691c"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "foreign::source_bindings::boundary_tests::checked_owner_boundary_reservation_is_exact_short_spent_and_fresh",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 1.618,
+      "selected": 1,
+      "passed_names": [
+        "foreign::source_bindings::boundary_tests::checked_owner_boundary_reservation_is_exact_short_spent_and_fresh"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-12.log",
+        "bytes": 58283,
+        "sha256": "220e20897a71adc4865b77307397714ac00a40419a98a9693f37d92f96c48f39"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "foreign::source_bindings::boundary_tests::checked_leaf_full_slot_query_copy_and_native_finish_record_before_output_failure",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "seconds": 1.723,
+      "selected": 1,
+      "passed_names": [
+        "foreign::source_bindings::boundary_tests::checked_leaf_full_slot_query_copy_and_native_finish_record_before_output_failure"
+      ],
+      "log": {
+        "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/checked-acquisition-quarantine-14/phase-13.log",
+        "bytes": 58298,
+        "sha256": "7376dc92dce9502d09d3af99384c0c80d53e94739819237ab20854873c62f2c6"
+      },
+      "cleanup": {
+        "child_reaped": true,
+        "owned_group_known_empty": true,
+        "probe_errors": [],
+        "descendants_after_leader": false,
+        "cleanup_seconds": 0.0
+      }
+    }
+  ],
+  "passed_distinct_test_names": [
+    "module::foreign_host::tests::checked_foreign_coordinates_preserve_all_canonical_formal_locals",
+    "elaborate::checked_owner_lifecycle_tests::checked_owner_dependency_tests::checked_quarantine_requires_declared_enclosing_state_and_exact_host",
+    "eval::machine::source_violation_phases::tests::checked_violation_dispatch_preserves_native_facts_and_never_mints_finish",
+    "eval::machine::source_violation_phases::tests::checked_violation_report_exhaustion_preserves_installed_denial",
+    "foreign::source_bindings::boundary_tests::checked_violation_request_and_null_observation_identity_are_exact",
+    "eval::machine::source_window_phases::checked_copy_boundary_tests::checked_copy_real_phase_admission_observation_and_output_failure",
+    "foreign::source_runtime::owner::tests::checked_group_denial_preserves_siblings_backing_and_skips_all_destructors",
+    "build::image::checked_violation_image_tests::original_violation_roles_roundtrip_and_role_donors_refuse",
+    "module::foreign_host::tests::checked_foreign_inventory_appends_without_changing_legacy_ordinals",
+    "foreign::source_bindings::boundary_tests::checked_owner_local_finish_never_becomes_native_readiness",
+    "foreign::source_runtime::owner::tests::injected_owner_dependencies_preserve_exact_work_affinity_quarantine_and_once_only_order",
+    "foreign::source_bindings::boundary_tests::checked_owner_boundary_reservation_is_exact_short_spent_and_fresh",
+    "foreign::source_bindings::boundary_tests::checked_leaf_full_slot_query_copy_and_native_finish_record_before_output_failure"
+  ],
+  "passed_distinct_test_count": 13,
+  "clippy_commands": 1,
+  "artifact": {
+    "path": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-22af73f736e026cd",
+    "bytes": 642763840,
+    "sha256": "b70839dfdd976d3a5edc91996f5062ee9bb06b7f19407f37a89368918df45619"
+  },
+  "source_inputs": 9089,
+  "qualification": "Focused ordinary Rust only; no generated/native/startup/full-library acceptance. All selected names are actual raw executed tests, not inferred planned counts."
+}

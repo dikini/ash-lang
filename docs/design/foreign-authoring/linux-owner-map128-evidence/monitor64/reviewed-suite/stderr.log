@@ -1,0 +1,26 @@
+test_bad_map_path_or_schema_never_spawns (__main__.MonitorTests.test_bad_map_path_or_schema_never_spawns) ... ok
+test_config_read_is_bounded_before_decode (__main__.MonitorTests.test_config_read_is_bounded_before_decode) ... ok
+test_cumulative_watch_records_are_bounded (__main__.MonitorTests.test_cumulative_watch_records_are_bounded) ... ok
+test_direct_sidefile_bound_observes_overshoot (__main__.MonitorTests.test_direct_sidefile_bound_observes_overshoot) ... ok
+test_exact_map_above_log_cap_is_allowed (__main__.MonitorTests.test_exact_map_above_log_cap_is_allowed) ... ok
+test_exact_map_above_map_cap_refuses (__main__.MonitorTests.test_exact_map_above_map_cap_refuses) ... ok
+test_late_log_keeps_cap_in_final_post_reap_sample (__main__.MonitorTests.test_late_log_keeps_cap_in_final_post_reap_sample) ... ok
+test_late_output_after_last_sample_is_refused (__main__.MonitorTests.test_late_output_after_last_sample_is_refused) ... ok
+test_late_sidefile_after_last_sample_is_refused (__main__.MonitorTests.test_late_sidefile_after_last_sample_is_refused) ... ok
+test_nonmap_log_keeps_lower_cap (__main__.MonitorTests.test_nonmap_log_keeps_lower_cap) ... ok
+test_normal_and_nonzero_exit (__main__.MonitorTests.test_normal_and_nonzero_exit) ... ok
+test_other_map_does_not_inherit_exact_path_cap (__main__.MonitorTests.test_other_map_does_not_inherit_exact_path_cap) ... ok
+test_output_bound (__main__.MonitorTests.test_output_bound) ... ok
+test_owned_escaped_descendant_is_refused_and_reaped (__main__.MonitorTests.test_owned_escaped_descendant_is_refused_and_reaped) ... ok
+test_postspawn_setup_failure_reaps (__main__.MonitorTests.test_postspawn_setup_failure_reaps) ... ok
+test_setup_refusal_starts_no_child (__main__.MonitorTests.test_setup_refusal_starts_no_child) ... ok
+test_successful_leader_cannot_leave_descendants (__main__.MonitorTests.test_successful_leader_cannot_leave_descendants) ... ok
+test_timeout_reaps_descendant (__main__.MonitorTests.test_timeout_reaps_descendant) ... ok
+test_unrelated_owned_control_group_is_not_signalled (__main__.MonitorTests.test_unrelated_owned_control_group_is_not_signalled) ... ok
+test_unsupported_subreaper_refuses_before_spawn (__main__.MonitorTests.test_unsupported_subreaper_refuses_before_spawn) ... ok
+test_wrong_tool_pin_refuses_before_spawn (__main__.MonitorTests.test_wrong_tool_pin_refuses_before_spawn) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 3.918s
+
+OK

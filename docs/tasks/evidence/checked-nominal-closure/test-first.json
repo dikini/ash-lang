@@ -1,0 +1,38 @@
+{
+  "status": "test-first checkpoint; required hidden-kind erasure reproduces summary admission gap; product repair pending",
+  "source_input_manifest": "vector-source-pins.json",
+  "source_input_manifest_algorithm": "SHA256 per sorted relative path; aggregate SHA256 of path + NUL + lowercase hash + newline",
+  "source_input_file_count": 529,
+  "source_input_aggregate_sha256": "e75190ff28ce380d70e0b5fa0d77292df6c63c9a7c38d0985720d5046ca59839",
+  "environment": {
+    "RUSTC_WRAPPER": "",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_TARGET_DIR": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target"
+  },
+  "commands": [
+    {
+      "command": "cargo test --locked --lib resolved::checked_declaration_closure_tests::checked_declaration_closure_global_capture_only_control -- --exact --nocapture",
+      "exit_code": 0,
+      "raw_log": "vector-positive.log",
+      "raw_sha256": "b3bb32388304be86410370e5ae9d1ee36253365c0cdba0156bd96974a467a0fb"
+    },
+    {
+      "command": "cargo test --locked --lib resolved::checked_declaration_closure_tests::checked_declaration_closure_global_rejects_required_hidden_metadata_erasure -- --exact --nocapture",
+      "exit_code": 101,
+      "raw_log": "vector-erasure-red.log",
+      "raw_sha256": "53edb190f208e681b2ec1e878daf2a1126726589c989ec079d8584dc64e6c4ab"
+    },
+    {
+      "command": "cargo test --locked --lib resolved::checked_declaration_closure_tests::checked_declaration_closure_unreferenced_private_spare_is_not_required -- --exact --nocapture",
+      "exit_code": 0,
+      "raw_log": "vector-spare.log",
+      "raw_sha256": "a009c298f9eff0afd2633b07283378ed59556e0eaddbe92d9f9ba5b01b8a988a"
+    },
+    {
+      "command": "cargo test --locked --test checked_foreign_wrappers checked_capture_only_private_nominal_survives_body_free_consumer_and_core -- --exact --nocapture",
+      "exit_code": 0,
+      "raw_log": "vector-connected-positive.log",
+      "raw_sha256": "3d96324d5a05c58fffc0d4d02a42b789d3febdf713da93ebe3b5cf094ff14567"
+    }
+  ]
+}

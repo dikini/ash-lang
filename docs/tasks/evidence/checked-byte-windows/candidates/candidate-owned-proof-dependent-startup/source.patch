@@ -1,0 +1,434 @@
+diff --git a/src/build/image.rs b/src/build/image.rs
+index 14b02fcf..e24a492a 100644
+--- a/src/build/image.rs
++++ b/src/build/image.rs
+@@ -12015,11 +12015,12 @@ impl Decoder<'_> {
+             push(&mut scalar_preflights, Arc::new(fact), self.work)?;
+         }
+         drop(contexts);
+-        for fact in scalar_preflights {
+-            registry
+-                .retain_scalar_preflight(fact, self.work)
+-                .map_err(|_| ImageFailure::RegistryAdmission)?;
+-        }
++        registry = registry
++            .with_scalar_preflights(
++                scalar_preflights.iter().map(|fact| (fact.function(), fact)),
++                self.work,
++            )
++            .map_err(|_| ImageFailure::RegistryAdmission)?;
+         charge(
+             self.work,
+             self.image
+diff --git a/src/core/validate.rs b/src/core/validate.rs
+index 300d1891..c986fa10 100644
+--- a/src/core/validate.rs
++++ b/src/core/validate.rs
+@@ -9029,23 +9029,21 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
+             {
+                 return Err(ValidationError::new(ValidationReason::Registry, None));
+             }
+-            let mut work = TypeWorkBudget::with_limit(
+-                self.type_work_limit.saturating_sub(self.type_work.get()),
+-            );
+-            let result = fact.authenticate(registry, &mut work);
+-            self.charge_type_work(work.used())?;
+-            result.map_err(|failure| {
+-                ValidationError::new(
+-                    if failure.is_resource_exhaustion() {
+-                        ValidationReason::Resource
+-                    } else {
+-                        ValidationReason::Registry
+-                    },
+-                    None,
+-                )
+-            })?;
+         }
+-        Ok(())
++        let mut work =
++            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
++        let result = registry.authenticate_scalar_preflights(&mut work);
++        self.charge_type_work(work.used())?;
++        result.map_err(|failure| {
++            ValidationError::new(
++                if failure == crate::resolved::ResolvedBuildFailure::TypeResource {
++                    ValidationReason::Resource
++                } else {
++                    ValidationReason::Registry
++                },
++                None,
++            )
++        })
+     }
+ 
+     fn validate_global_parameter_rows(
+diff --git a/src/elaborate/checked_byte_window_tests.rs b/src/elaborate/checked_byte_window_tests.rs
+index 78bbc30f..4a1ec622 100644
+--- a/src/elaborate/checked_byte_window_tests.rs
++++ b/src/elaborate/checked_byte_window_tests.rs
+@@ -484,3 +484,18 @@ fn checked_byte_window_body_free_facade_core_and_transforms() {
+             .unwrap();
+     assert_connected_byte_core(&graph);
+ }
++
++#[test]
++fn checked_byte_window_selective_nonanchor_preflights_preserve_import_and_reexport() {
++    for name in ["checked_size_t", "byte_read", "checked_copy_nul"] {
++        let direct = format!(
++            "import @builtin.foreign ({name} as selected)\nmain : Unit -> Int\nmain () = 42\n"
++        );
++        check_graph(&graph_with_entry(&direct, None))
++            .expect("a genuine selected non-anchor preflight remains independently checkable");
++        let facade = format!("pub import @builtin.foreign ({name} as selected)\n");
++        let entry = "import producer (selected as forwarded)\nmain : Unit -> Int\nmain () = 42\n";
++        check_graph(&graph_with_entry(&facade, Some(entry)))
++            .expect("a body-free selected non-anchor reexport keeps exact checking facts without adding other global names");
++    }
++}
+diff --git a/src/foreign/scalar_preflight.rs b/src/foreign/scalar_preflight.rs
+index 0b4af6fb..49aef104 100644
+--- a/src/foreign/scalar_preflight.rs
++++ b/src/foreign/scalar_preflight.rs
+@@ -840,4 +840,53 @@ pub(crate) fn authenticate_registry_families(
+     Ok(())
+ }
+ 
++/// Pointwise admission for an owned, possibly selective projection. Unlike the
++/// complete-table entry, this does not certify anchor/family continuity. Each
++/// literal codec allocation receives its own fresh proof in this target.
++pub(crate) fn admit_projected_preflights(
++    registry: ResolvedRegistry,
++    work: &mut TypeWorkBudget,
++) -> Result<ResolvedRegistry, ForeignAdmissionError> {
++    let mut proved = Vec::<&Arc<CheckedForeignCallCodec>>::new();
++    for (function, fact) in registry.scalar_preflights() {
++        charge(work, 1, fact.source)?;
++        if function != fact.function() {
++            return Err(failure(
++                ForeignAdmissionReason::InvalidSignature,
++                fact.source,
++            ));
++        }
++        fact.authenticate_original(work)?;
++        let scan = proved
++            .len()
++            .checked_mul(3)
++            .ok_or_else(|| failure(ForeignAdmissionReason::WorkExhausted, fact.source))?;
++        charge(work, scan, fact.source)?;
++        let fresh = !proved.iter().any(|codec| {
++            codec.module() == fact.module()
++                && codec.source() == fact.source
++                && Arc::ptr_eq(codec, fact.call_codec())
++        });
++        if fresh {
++            CheckedForeignCallCodec::authenticate(
++                fact.module(),
++                fact.source,
++                fact.call_codec.ids(),
++                &registry,
++                work,
++            )?;
++        }
++        fact.authenticate_registry_projection(&registry, work)?;
++        if fresh {
++            charge(work, 1, fact.source)?;
++            proved
++                .try_reserve(1)
++                .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
++            proved.push(fact.call_codec());
++        }
++    }
++    drop(proved);
++    Ok(registry)
++}
++
+ mod checked_memory;
+diff --git a/src/resolved.rs b/src/resolved.rs
+index 969fc74b..4069fa94 100644
+--- a/src/resolved.rs
++++ b/src/resolved.rs
+@@ -21566,6 +21566,41 @@ impl ResolvedRegistry {
+         Ok(())
+     }
+ 
++    /// Finish pointwise admission of one owned selective projection. Complete
++    /// anchor/family continuity remains a separate independent table check.
++    /// Failure drops the stage; no unauthenticated mutable interface escapes.
++    pub(crate) fn with_scalar_preflights<'a>(
++        mut self,
++        facts: impl IntoIterator<
++            Item = (
++                BinderId,
++                &'a Arc<crate::foreign::scalar_preflight::CheckedForeignScalarPreflight>,
++            ),
++        >,
++        work: &mut TypeWorkBudget,
++    ) -> Result<Self, ResolvedBuildFailure> {
++        for (function, fact) in facts {
++            work.charge(2)
++                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
++            if function != fact.function() {
++                return Err(ResolvedBuildFailure::InvalidState);
++            }
++            self.scalar_preflights
++                .try_reserve(1)
++                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
++            match self.scalar_preflights.entry(function) {
++                std::collections::hash_map::Entry::Vacant(entry) => {
++                    entry.insert(Arc::clone(fact));
++                }
++                std::collections::hash_map::Entry::Occupied(entry)
++                    if Arc::ptr_eq(entry.get(), fact) => {}
++                _ => return Err(ResolvedBuildFailure::InvalidState),
++            }
++        }
++        crate::foreign::scalar_preflight::admit_projected_preflights(self, work)
++            .map_err(scalar_preflight_failure)
++    }
++
+     pub(crate) fn authenticate_scalar_preflights(
+         &self,
+         work: &mut TypeWorkBudget,
+@@ -23304,14 +23339,18 @@ impl ResolvedRegistry {
+             &self.scalar_preflights,
+             budget,
+         )?;
+-        for global in imported.globals() {
+-            budget
+-                .charge(1)
+-                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+-            if let Some(fact) = &global.scalar_preflight {
+-                registry.retain_scalar_preflight(Arc::clone(fact), budget)?;
+-            }
+-        }
++        budget
++            .charge(imported.global_order.len())
++            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
++        registry = registry.with_scalar_preflights(
++            imported.globals().filter_map(|global| {
++                global
++                    .scalar_preflight
++                    .as_ref()
++                    .map(|fact| (fact.function(), fact))
++            }),
++            budget,
++        )?;
+         retain_native_symbols(&mut registry.native_symbols, &self.native_symbols, budget)?;
+         retain_native_symbols(
+             &mut registry.native_symbols,
+diff --git a/src/resolved/checked_codec_category_tests.rs b/src/resolved/checked_codec_category_tests.rs
+index d237a27d..a3cf28e5 100644
+--- a/src/resolved/checked_codec_category_tests.rs
++++ b/src/resolved/checked_codec_category_tests.rs
+@@ -453,3 +453,181 @@ fn checked_memory_family_proofs_are_distinct_across_genuine_builtin_graphs() {
+     view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
+         .unwrap();
+ }
++
++#[test]
++fn checked_memory_owned_projection_authenticates_before_publication_and_refuses_collisions() {
++    let view = original_view();
++    view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
++        .unwrap();
++    let empty = || {
++        let mut candidate = view.clone();
++        candidate.scalar_preflights.clear();
++        candidate
++    };
++    let mut measured = TypeWorkBudget::default();
++    let admitted = empty()
++        .with_scalar_preflights(view.scalar_preflights(), &mut measured)
++        .expect("the complete genuine projected table authenticates before publication");
++    for (id, fact) in view.scalar_preflights() {
++        assert!(Arc::ptr_eq(admitted.scalar_preflight(id).unwrap(), fact));
++    }
++    let cost = measured.used();
++    for prefix in [0, 7] {
++        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        empty()
++            .with_scalar_preflights(view.scalar_preflights(), &mut exact)
++            .unwrap();
++        assert_eq!(exact.used(), prefix + cost);
++        assert!(matches!(
++            empty().with_scalar_preflights(view.scalar_preflights(), &mut exact),
++            Err(ResolvedBuildFailure::TypeResource)
++        ));
++        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert!(matches!(
++            empty().with_scalar_preflights(view.scalar_preflights(), &mut short),
++            Err(ResolvedBuildFailure::TypeResource)
++        ));
++        let mut fresh = TypeWorkBudget::with_limit(cost);
++        empty()
++            .with_scalar_preflights(view.scalar_preflights(), &mut fresh)
++            .unwrap();
++        assert_eq!(fresh.used(), cost);
++    }
++    let (function, fact) = view
++        .scalar_preflights()
++        .find(|(id, _)| id.local() == 14)
++        .unwrap();
++    let repeated = [(function, fact), (function, fact)];
++    let retained = admitted
++        .with_scalar_preflights(repeated, &mut TypeWorkBudget::default())
++        .unwrap();
++    assert!(Arc::ptr_eq(
++        retained.scalar_preflight(function).unwrap(),
++        fact
++    ));
++    let duplicate = crate::foreign::scalar_preflight::CheckedForeignScalarPreflight::from_original(
++        fact.role(),
++        fact.source(),
++        fact.origin(),
++        fact.annotation(),
++        Arc::clone(fact.call_codec()),
++        &mut TypeWorkBudget::default(),
++    )
++    .unwrap();
++    duplicate
++        .authenticate(&view, &mut TypeWorkBudget::default())
++        .unwrap();
++    let duplicate = Arc::new(duplicate);
++    assert!(matches!(
++        view.clone()
++            .with_scalar_preflights([(function, &duplicate)], &mut TypeWorkBudget::default()),
++        Err(ResolvedBuildFailure::InvalidState)
++    ));
++    assert!(matches!(
++        empty().with_scalar_preflights(
++            [(BinderId::resolved(fact.module(), 999), fact)],
++            &mut TypeWorkBudget::default()
++        ),
++        Err(ResolvedBuildFailure::InvalidState)
++    ));
++    for missing in [0, 11] {
++        let partial = || {
++            view.scalar_preflights()
++                .filter(|(id, _)| id.local() != missing)
++        };
++        let mut standalone = empty();
++        for (_, fact) in partial() {
++            standalone
++                .retain_scalar_preflight(Arc::clone(fact), &mut TypeWorkBudget::default())
++                .expect("the existing standalone path permits selective non-anchor facts");
++        }
++        let projected = empty()
++            .with_scalar_preflights(partial(), &mut TypeWorkBudget::default())
++            .expect("pointwise projection does not invent an unselected family anchor");
++        assert!(
++            projected
++                .scalar_preflight(BinderId::resolved(fact.module(), missing))
++                .is_none()
++        );
++        assert_eq!(
++            projected.scalar_preflights().count(),
++            standalone.scalar_preflights().count()
++        );
++        assert_eq!(
++            projected.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
++            Err(ResolvedBuildFailure::InvalidState)
++        );
++    }
++    let codec = crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
++        fact.module(),
++        fact.source(),
++        fact.call_codec().ids(),
++        &view,
++        &mut TypeWorkBudget::default(),
++    )
++    .unwrap();
++    let reminted = Arc::new(
++        crate::foreign::scalar_preflight::CheckedForeignScalarPreflight::from_original(
++            fact.role(),
++            fact.source(),
++            fact.origin(),
++            fact.annotation(),
++            Arc::new(codec),
++            &mut TypeWorkBudget::default(),
++        )
++        .unwrap(),
++    );
++    reminted
++        .authenticate(&view, &mut TypeWorkBudget::default())
++        .unwrap();
++    let mut codec_work = TypeWorkBudget::default();
++    crate::foreign::checked_source::CheckedForeignCallCodec::authenticate(
++        fact.module(),
++        fact.source(),
++        fact.call_codec().ids(),
++        &view,
++        &mut codec_work,
++    )
++    .unwrap();
++    let mut distinct_work = TypeWorkBudget::default();
++    let projected = empty()
++        .with_scalar_preflights(
++            view.scalar_preflights()
++                .map(|(id, original)| (id, if id == function { &reminted } else { original })),
++            &mut distinct_work,
++        )
++        .expect("a distinct independently valid codec gets its own pointwise proof");
++    assert!(
++        distinct_work.used() >= cost + codec_work.used(),
++        "a second literal codec allocation must pay its own full proof"
++    );
++    assert_eq!(
++        projected.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
++        Err(ResolvedBuildFailure::InvalidState)
++    );
++    let mut malformed_target = empty();
++    malformed_target
++        .constructors
++        .iter_mut()
++        .find(|constructor| {
++            constructor.id
++                == crate::types::ConstructorId::new(
++                    crate::types::NominalTypeId::new(fact.module(), 12),
++                    2,
++                )
++        })
++        .unwrap()
++        .payload = Some(Type::Int);
++    assert!(matches!(
++        malformed_target
++            .with_scalar_preflights(view.scalar_preflights(), &mut TypeWorkBudget::default()),
++        Err(ResolvedBuildFailure::InvalidState)
++    ));
++    empty()
++        .with_scalar_preflights(view.scalar_preflights(), &mut TypeWorkBudget::default())
++        .unwrap();
++    view.authenticate_scalar_preflights(&mut TypeWorkBudget::default())
++        .unwrap();
++}
+diff --git a/src/resolved/image_registry.rs b/src/resolved/image_registry.rs
+index 5ae40313..17dbbc32 100644
+--- a/src/resolved/image_registry.rs
++++ b/src/resolved/image_registry.rs
+@@ -362,6 +362,7 @@ impl ResolvedRegistry {
+         // never infer one category from a module's presence in the main view.
+         selected.abstract_nominal_names.clear();
+         selected.abstract_nominal_kinds.clear();
++        let mut preflights = Vec::new();
+         for item in items {
+             paid(work.charge(1))?;
+             match *item {
+@@ -432,13 +433,15 @@ impl ResolvedRegistry {
+                     Arc::clone(self.native_symbols.get(&id).ok_or_else(invalid)?),
+                     work,
+                 )?,
+-                Preflight(id) => selected.retain_scalar_preflight(
+-                    Arc::clone(self.scalar_preflights.get(&id).ok_or_else(invalid)?),
++                Preflight(id) => push(
++                    &mut preflights,
++                    (id, self.scalar_preflights.get(&id).ok_or_else(invalid)?),
+                     work,
+                 )?,
+                 _ => {}
+             }
+         }
++        selected = selected.with_scalar_preflights(preflights, work)?;
+         if !names.is_empty() {
+             return Err(invalid());
+         }

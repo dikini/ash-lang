@@ -1,0 +1,70 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/debug/deps/ash-7d3b3208691ff168)
+
+running 63 tests
+test eval::machine::foreign::integer_codec_tests::generic_codec_preserves_integers_beyond_native_range ... ok
+test eval::machine::foreign::integer_codec_tests::integer_codec_copy_work_refuses_before_native_range_conversion ... ok
+test eval::machine::foreign::integer_codec_tests::codec_budget_refusal_retains_phase_and_erased_clone_cause ... ok
+test foreign::checked_source::tests::binds_zero_operand_void_result_to_canonical_call_unit ... ok
+test foreign::checked_source::tests::a_same_shaped_effect_copy_is_not_the_original_registry_operation ... ok
+test foreign::checked_source::tests::binds_original_scalar_operation_and_retains_preparation_and_complete_binders ... ok
+test foreign::checked_source::tests::independent_authentication_accepts_a_fresh_context_and_rejects_altered_sealed_facts ... ok
+test foreign::checked_source::tests::independent_core_native_membership_lookup_is_paid_for_source_contracts ... ok
+test foreign::checked_source::tests::independent_authentication_has_an_exact_budget_and_fresh_retry ... ok
+test foreign::runtime::packed_codec_tests::repeated_integer_edges_cannot_expand_beyond_codec_copy_work ... ok
+test foreign::runtime::packed_codec_tests::packed_codec_rejects_single_and_cumulative_excess_payload_work ... ok
+test foreign::checked_source::tests::imported_opaque_error_and_display_aliases_preserve_canonical_call_authority ... ok
+test foreign::checked_source::tests::checked_profile_preparation_does_not_authenticate_a_legacy_operation ... ok
+test foreign::checked_source::tests::independent_authentication_rejects_a_changed_unused_domain_and_registry_context_mismatch ... ok
+test foreign::source_contract::access_contract::tests::access_preparation_keeps_original_window_owner_and_preserving_coordinates ... ok
+test foreign::checked_source::tests::shared_context_authenticates_once_and_exact_binding_budgets_retry_fresh ... ok
+test foreign::checked_source::tests::refuses_same_shaped_donor_modules_and_corrupt_common_codec_roles ... ok
+test foreign::source_contract::checked_profile::tests::checked_profile_assumption_description_copy_uses_the_same_work_meter ... ok
+test foreign::source_contract::access_contract::tests::view_and_extent_results_keep_full_family_arguments_and_scalar_key_paths ... ok
+test foreign::source_contract::checked_profile::tests::checked_profile_preparation_charges_exact_cumulative_work_and_refuses_one_short ... ok
+test foreign::source_contract::access_contract::tests::access_preparation_exact_short_prefix_and_fresh_retry_do_not_publish_partial_facts ... ok
+test foreign::source_contract::checked_profile::tests::checked_profile_metadata_cannot_be_erased_by_legacy_private_reconstruction ... ok
+test foreign::checked_source::tests::refuses_resolved_source_disagreement_and_unsupported_domain_forms ... ok
+test foreign::source_contract::checked_profile::tests::checked_profile_charges_assumption_reference_cardinality_before_selection ... ok
+test foreign::source_contract::access_image::tests::access_image_parts_keep_all_roles_and_refuse_changed_coordinates_at_exact_work ... ok
+test foreign::source_contract::access_contract::tests::access_preparation_rejects_window_owner_aliases_and_unrelated_preservation ... ok
+test foreign::source_contract::owner_normalization_tests::opaque_acquisition_requires_no_byte_extent_and_restores_without_authority ... ok
+test foreign::source_contract::owner_normalization_tests::restore_rejects_wrong_phase_coordinate_argument_tag_and_missing_extent ... ok
+test foreign::source_contract::owner_normalization_tests::sentinel_original_tables_have_exact_short_prefix_retry_and_donor_correspondence ... ok
+test foreign::source_contract::tests::exhausted_preparation_cannot_publish_a_partial_library ... ok
+test foreign::checked_builtins::tests::checked_builtin_display_aliases_preserve_roles_but_not_forged_declarations ... ok
+test foreign::source_contract::owner_normalization_tests::unconditional_retained_teardown_prepares_and_restores_passive_disposition ... ok
+test foreign::source_contract::tests::long_shared_names_and_late_nul_refuse_before_their_byte_scans ... ok
+test foreign::source_contract::tests::exact_preparation_budget_one_short_partial_refusal_and_fresh_retry ... ok
+test foreign::source_contract::owner_normalization_tests::status_owner_original_branches_restore_with_exact_budgets_and_reject_forged_outcomes ... ok
+test foreign::source_contract::owner_normalization_tests::owner_source_preparation_restore_and_correspondence_are_bounded_and_do_not_resolve_identity ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_binding_preserves_original_and_exact_prefixed_work ... ok
+test foreign::source_contract::owner_normalization_tests::sentinel_role_rejects_scalar_null_source_pointer_result_and_wrong_representation ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_preparation_rejects_host_selected_as_owned_identity ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_binding_rejects_parameter_order_identity_kind_and_origins ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_binding_and_legacy_binding_do_not_cross_profiles ... ok
+test foreign::source_contract::owner_normalization_tests::incomplete_initialization_self_dependency_and_invalid_teardown_refuse ... ok
+test foreign::source_runtime::declared_constant_tests::declared_constant_narrowing_has_atomic_exact_short_prefix_and_fresh_retry ... ok
+test foreign::source_runtime::declared_constant_tests::sentinel_transport_is_fixed_noncallable_and_preadmitted_with_atomic_budget ... ok
+test foreign::source_owner::checked_binding_tests::checked_owner_binding_rejects_donor_library_nominal_registry_and_index ... ok
+test foreign::checked_builtins::tests::checked_builtin_full_original_inventory_authenticates_at_exact_work ... ok
+test foreign::source_runtime::owner::tests::raw_guard_destroys_only_nonnull_storage_and_consumption_cannot_replay ... ok
+test foreign::source_owner::tests::owner_admission_preserves_original_member_and_nonfirst_owned_position ... ok
+test parser::grammar::foreign::tests::foreign_grammar_uses_the_shared_exact_syntax_budget_and_fresh_retry ... ok
+test foreign::source_contract::owner_normalization_tests::destruction_capture_preparation_and_original_facts_keep_complete_paid_correspondence ... ok
+test foreign::source_owner::tests::owner_admission_rejects_wrong_nominal_and_substituted_formal_origin ... ok
+test foreign::source_owner::tests::checked_profile_does_not_authenticate_a_legacy_owner ... ok
+test parser::project::foreign::tests::projection_rejects_foreign_cst_role_transplants_with_complete_token_coverage ... ok
+test resolve::foreign::checked_metadata_tests::checked_assumptions_do_not_publish_or_reserve_module_member_names ... ok
+test foreign::source_contract::tests::wide_scalar_mapping_work_grows_with_slots_and_contracts ... ok
+test foreign::source_owner::tests::inherited_row_owner_kind_authority_preserves_exact_formals_tags_and_work ... ok
+test foreign::source_contract::owner_normalization_tests::status_owner_outcomes_require_total_unambiguous_original_result_facts ... ok
+test foreign::source_contract::owner_normalization_tests::temporary_bytes_preserve_source_extent_discipline_and_exact_preparation_budget ... ok
+test foreign::checked_builtins::tests::checked_builtin_reconstruction_rejects_donor_payload_origin_and_formals ... ok
+test foreign::source_contract::access_contract::tests::view_result_preparation_refuses_unlisted_roles_wrong_owner_and_noninteger_keys ... ok
+test foreign::source_contract::output_contract::tests::opaque_output_preparation_has_exact_short_prefix_and_fresh_retries ... ok
+test foreign::storage_tests::final_shared_foreign_fact_disposes_recursive_metadata_iteratively ... ok
+test foreign::source_runtime::owner::tests::injected_owner_dependencies_preserve_exact_work_affinity_quarantine_and_once_only_order ... ok
+
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 2018 filtered out; finished in 0.08s
+

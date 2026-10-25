@@ -1,0 +1,19 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "ash",
+    "--locked",
+    "--lib",
+    "core::validate::foreign_host_tests",
+    "--",
+    "--nocapture"
+  ],
+  "exit": 0,
+  "elapsed_seconds": 0.244,
+  "source_configuration_before_after_equal": true,
+  "file_count": 525,
+  "source_configuration_tree_sha256": "5f91396538c4ea690e4d10d3e24d2188cff7e36e9516556cd91468d0dfdc779d",
+  "log_sha256": "8a46c5d9cbab621a950d478fc0fd54429938f6417b13808ddc3a02aa590a4cd0"
+}

@@ -1,50 +1,59 @@
-/* Ordinary native library fixture, not a runtime shim or header checker. */
-#include <stdint.h>
+/* Ordinary pointer fixture; no shim around another library. */
 #include <stdio.h>
 #include <stdlib.h>
 
+static void *owned;
+
 static void record_call(int tag) {
     const char *path = getenv("ASH_NATIVE_COUNTER_TRACE");
-    if (path == NULL) {
-        abort();
-    }
+    if (path == NULL) abort();
     FILE *trace = fopen(path, "ab");
-    if (trace == NULL) {
-        abort();
-    }
+    if (trace == NULL) abort();
     int written = fputc(tag, trace);
     int closed = fclose(trace);
-    if (written == EOF || closed != 0) {
-        abort();
-    }
+    if (written == EOF || closed != 0) abort();
 }
 
-int8_t ash_counter_echo_i8(int8_t value) {
-    record_call('i');
-    return value;
+void *fixture_make(void) {
+    record_call('m');
+    if (owned != NULL) abort();
+    unsigned char *allocation = malloc(3);
+    if (allocation == NULL) abort();
+    allocation[0] = 'a';
+    allocation[1] = 'b';
+    allocation[2] = 'c';
+    owned = allocation;
+    return allocation;
 }
 
-uint64_t ash_counter_max_u64(void) {
-    record_call('u');
-    return UINT64_MAX;
+void *fixture_fail(void) {
+    record_call('f');
+    return NULL;
 }
 
-void ash_counter_void(void) {
-    record_call('v');
+void *fixture_echo(void *address) {
+    record_call('e');
+    return address;
 }
 
-uint64_t ash_counter_echo_u64(uint64_t value) {
-    record_call('w');
-    return value;
+void fixture_release(void *address) {
+    record_call('r');
+    if (address == NULL || address != owned) abort();
+    free(owned);
+    owned = NULL;
 }
 
-/* Inspect the declared non-callable bit pattern; never invoke it. This checks
-   the bounded GNU64 function-address ABI assumption against the real C type. */
-#include <string.h>
-int32_t ash_counter_noncallable_sentinel(void (*sentinel)(void *)) {
-    uintptr_t bits = 0;
-    _Static_assert(sizeof(sentinel) == sizeof(bits), "GNU64 function-address width");
-    memcpy(&bits, &sentinel, sizeof(bits));
-    record_call('s');
-    return bits == UINTPTR_MAX ? 7 : -1;
+/* Caller promises exactly three readable bytes. Do not retain, mutate or free. */
+const void *fixture_echo_bytes(const unsigned char *bytes) {
+    record_call('b');
+    return bytes[0] == 'a' && bytes[1] == 'b' && bytes[2] == 'c'
+        ? bytes : NULL;
+}
+
+/* Flat tuple order is observable: Address first, ordinary readonly Bytes second. */
+void *fixture_pair(void *address, const unsigned char *bytes) {
+    record_call('p');
+    if (address != owned || address == NULL) abort();
+    return bytes[0] == 'a' && bytes[1] == 'b' && bytes[2] == 'c'
+        ? address : NULL;
 }

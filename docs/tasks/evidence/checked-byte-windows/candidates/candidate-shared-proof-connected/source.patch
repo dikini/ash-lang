@@ -1,0 +1,274 @@
+diff --git a/src/build/image.rs b/src/build/image.rs
+index 655d0a84..ac072359 100644
+--- a/src/build/image.rs
++++ b/src/build/image.rs
+@@ -6424,10 +6424,29 @@ main () = {
+                 .iter()
+                 .find(|fact| fact.role == Role::DataOf)
+                 .unwrap();
+-            match image.types[usize::try_from(fact.annotation.ty).unwrap()].tag {
+-                TypeTag::Forall { parameters } if parameters.len == 2 => parameters.start as usize,
+-                _ => panic!("canonical Data declaration has both ordered formals"),
++            let BinderIdentity::Resolved { module, local } = fact.function else {
++                panic!("canonical DataOf binder")
++            };
++            let intrinsic = image.nodes.iter().find(|node| matches!(node.tag,
++                NodeTag::ScalarPreflight { function: BinderIdentity::Resolved { module: m, local: l }, role: Role::DataOf, module: defining }
++                    if m == module && l == local && defining == module)).unwrap();
++            let TypeTag::Forall { parameters } =
++                image.types[usize::try_from(intrinsic.ty).unwrap()].tag
++            else {
++                panic!("DataOf intrinsic has its quantified core signature")
++            };
++            let formals = parameters.get(&image.quantifiers).unwrap();
++            assert_eq!(formals.len(), 2);
++            for (formal, expected) in formals.iter().zip([7, 8]) {
++                assert!(
++                    matches!(formal.id, TypeVariableIdentity::Resolved { module: m, local: l } if m == module && l == expected)
++                );
++                assert!(matches!(
++                    image.kinds[usize::try_from(formal.kind).unwrap()],
++                    KindRecord::Type
++                ));
+             }
++            parameters.start as usize
+         }
+         let mutations: &[fn(&mut PureImage)] = &[
+             |image| {
+diff --git a/src/foreign/scalar_preflight.rs b/src/foreign/scalar_preflight.rs
+index 90bed66c..56cd0ead 100644
+--- a/src/foreign/scalar_preflight.rs
++++ b/src/foreign/scalar_preflight.rs
+@@ -721,6 +721,16 @@ impl CheckedForeignScalarPreflight {
+             registry,
+             work,
+         )?;
++        self.authenticate_registry_projection(registry, work)
++    }
++
++    // Only the whole-table entry below shares a codec proof. Standalone fact
++    // admission above always reconstructs that proof in the actual registry.
++    fn authenticate_registry_projection(
++        &self,
++        registry: &ResolvedRegistry,
++        work: &mut TypeWorkBudget,
++    ) -> Result<(), ForeignAdmissionError> {
+         if self.role.host_parameter(self.module()).is_some() {
+             charge(work, 1, self.source)?;
+             let host = registry
+@@ -761,4 +771,63 @@ impl CheckedForeignScalarPreflight {
+     }
+ }
+ 
++/// Authenticate this immutable registry table, sharing only identical codec
++/// reconstruction within this call. No completed proof escapes the operation.
++pub(crate) fn authenticate_registry_families(
++    registry: &ResolvedRegistry,
++    work: &mut TypeWorkBudget,
++) -> Result<(), ForeignAdmissionError> {
++    let mut proved = Vec::<BinderId>::new();
++    for (function, fact) in registry.scalar_preflights() {
++        charge(work, 1, fact.source)?;
++        if function != fact.function() {
++            return Err(failure(
++                ForeignAdmissionReason::InvalidSignature,
++                fact.source,
++            ));
++        }
++        fact.authenticate_original(work)?;
++        let anchor = BinderId::resolved(
++            fact.module(),
++            if fact.role.host_parameter(fact.module()).is_some() {
++                11
++            } else {
++                0
++            },
++        );
++        charge(work, 1, fact.source)?;
++        let common = registry
++            .scalar_preflight(anchor)
++            .ok_or_else(|| failure(ForeignAdmissionReason::InvalidSignature, fact.source))?;
++        if common.function() != anchor || !Arc::ptr_eq(common.call_codec(), fact.call_codec()) {
++            return Err(failure(
++                ForeignAdmissionReason::InvalidSignature,
++                fact.source,
++            ));
++        }
++        charge(work, proved.len(), fact.source)?;
++        let fresh = !proved.contains(&anchor);
++        if fresh {
++            CheckedForeignCallCodec::authenticate(
++                fact.module(),
++                fact.source,
++                fact.call_codec.ids(),
++                registry,
++                work,
++            )?;
++        }
++        // Every row still authenticates its own Host and ConversionError
++        // projections; the common codec proof alone is shared.
++        fact.authenticate_registry_projection(registry, work)?;
++        if fresh {
++            charge(work, 1, fact.source)?;
++            proved
++                .try_reserve(1)
++                .map_err(|_| failure(ForeignAdmissionReason::StorageRefused, fact.source))?;
++            proved.push(anchor);
++        }
++    }
++    Ok(())
++}
++
+ mod checked_memory;
+diff --git a/src/resolved.rs b/src/resolved.rs
+index cf13c2af..969fc74b 100644
+--- a/src/resolved.rs
++++ b/src/resolved.rs
+@@ -21570,31 +21570,8 @@ impl ResolvedRegistry {
+         &self,
+         work: &mut TypeWorkBudget,
+     ) -> Result<(), ResolvedBuildFailure> {
+-        work.charge(self.scalar_preflights.len())
+-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+-        for (function, fact) in &self.scalar_preflights {
+-            if *function != fact.function() {
+-                return Err(ResolvedBuildFailure::InvalidState);
+-            }
+-            fact.authenticate(self, work)
+-                .map_err(scalar_preflight_failure)?;
+-            // Preserve the same original codec within each exact builtin
+-            // family. Legacy Call and checked memory CheckedCall are distinct;
+-            // neither may replace the other's original or remint a route copy.
+-            let anchor = if fact.role().host_parameter(fact.module()).is_some() {
+-                11
+-            } else {
+-                0
+-            };
+-            let common = self
+-                .scalar_preflights
+-                .get(&BinderId::resolved(fact.module(), anchor))
+-                .ok_or(ResolvedBuildFailure::InvalidState)?;
+-            if !Arc::ptr_eq(common.call_codec(), fact.call_codec()) {
+-                return Err(ResolvedBuildFailure::InvalidState);
+-            }
+-        }
+-        Ok(())
++        crate::foreign::scalar_preflight::authenticate_registry_families(self, work)
++            .map_err(scalar_preflight_failure)
+     }
+ 
+     // Insert in impl ResolvedRegistry. Call after new_with_budget,
+diff --git a/src/resolved/checked_codec_category_tests.rs b/src/resolved/checked_codec_category_tests.rs
+index 33e640ff..f4de82d7 100644
+--- a/src/resolved/checked_codec_category_tests.rs
++++ b/src/resolved/checked_codec_category_tests.rs
+@@ -290,3 +290,86 @@ fn checked_memory_scheme_kinds_require_exact_complete_original_formals() {
+         }
+     }
+ }
++
++#[test]
++fn checked_memory_family_authentication_rechecks_each_fresh_registry_and_budget() {
++    let view = original_view();
++    let mut measured = TypeWorkBudget::default();
++    view.authenticate_scalar_preflights(&mut measured).unwrap();
++    let cost = measured.used();
++    for prefix in [0, 7] {
++        let mut exact = TypeWorkBudget::with_limit(prefix + cost);
++        exact.charge(prefix).unwrap();
++        view.authenticate_scalar_preflights(&mut exact).unwrap();
++        assert_eq!(exact.used(), prefix + cost);
++        assert_eq!(
++            view.authenticate_scalar_preflights(&mut exact),
++            Err(ResolvedBuildFailure::TypeResource)
++        );
++        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
++        short.charge(prefix).unwrap();
++        assert_eq!(
++            view.authenticate_scalar_preflights(&mut short),
++            Err(ResolvedBuildFailure::TypeResource)
++        );
++    }
++    let module = view.scalar_preflights.values().next().unwrap().module();
++    for local in [0, 11] {
++        let mut changed = view.clone();
++        changed
++            .scalar_preflights
++            .remove(&BinderId::resolved(module, local))
++            .unwrap();
++        assert_eq!(
++            changed.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
++            Err(ResolvedBuildFailure::InvalidState)
++        );
++    }
++    for change in 0..3 {
++        let mut changed = view.clone();
++        if change == 0 {
++            changed
++                .effects
++                .iter_mut()
++                .find(|effect| {
++                    effect.id
++                        == crate::types::EffectId::new(
++                            module,
++                            crate::module::FOREIGN_NATIVE_HOST_LOCAL,
++                        )
++                })
++                .unwrap()
++                .public = false;
++        } else if change == 1 {
++            changed
++                .constructors
++                .iter_mut()
++                .find(|ctor| {
++                    ctor.id
++                        == crate::types::ConstructorId::new(
++                            crate::types::NominalTypeId::new(module, 12),
++                            2,
++                        )
++                })
++                .unwrap()
++                .payload = Some(Type::Int);
++        } else {
++            let fact = changed
++                .scalar_preflights
++                .remove(&BinderId::resolved(module, 14))
++                .unwrap();
++            changed
++                .scalar_preflights
++                .insert(BinderId::resolved(module, 999), fact);
++        }
++        for _ in 0..2 {
++            assert_eq!(
++                changed.authenticate_scalar_preflights(&mut TypeWorkBudget::default()),
++                Err(ResolvedBuildFailure::InvalidState)
++            );
++            let mut fresh = TypeWorkBudget::with_limit(cost);
++            view.authenticate_scalar_preflights(&mut fresh).unwrap();
++            assert_eq!(fresh.used(), cost);
++        }
++    }
++}
+diff --git a/src/resolved/image_subset_tests.rs b/src/resolved/image_subset_tests.rs
+index 373343b4..0069e024 100644
+--- a/src/resolved/image_subset_tests.rs
++++ b/src/resolved/image_subset_tests.rs
+@@ -43,15 +43,15 @@ fn foreign_registry() -> ResolvedRegistry {
+     }
+     let linked = crate::elaborate::link_modules(checked, graph.entry()).unwrap();
+     let registry = linked.registry().as_ref().clone();
+-    assert_eq!(registry.type_variables.len(), 23);
+-    assert_eq!(registry.global_parameter_rows.len(), 7);
++    assert_eq!(registry.type_variables.len(), 31);
++    assert_eq!(registry.global_parameter_rows.len(), 11);
+     assert_eq!(
+         registry
+             .global_parameter_rows
+             .iter()
+             .map(|row| row.parameters.len())
+             .sum::<usize>(),
+-        9
++        17
+     );
+     registry
+ }

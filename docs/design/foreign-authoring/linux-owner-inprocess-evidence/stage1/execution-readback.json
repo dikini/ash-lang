@@ -1,0 +1,114 @@
+{
+  "status": "Stage1_complete_stop",
+  "external_anchors_equal": true,
+  "anchors": {
+    "/tmp/ash-owner-compiler-stage1/tuple.json": "fdf23c99b4ba27290ce35b2afd8e49cd0f7b99feb8181f671a6f3191af61e287",
+    "/tmp/ash-owner-compiler-stage1/compiler-build.monitor.json": "d011fc6be127e51d05937a6bd7e560f22c4a818878fdb4ec587d930a2103883e",
+    "/tmp/ash-owner-compiler-stage1/manifest.json": "b5d50b34c2a42ceb1be5fe9ab0cfe4a97e37128b74dbe0337941162018a05558",
+    "/tmp/ash-owner-compiler-stage1/verify_inputs.py": "125630d0b56bf1faf455619056ea2c93648109aaf20b236212bff5731aab8dff",
+    "/tmp/ash-owner-compiler-stage1/observe_compiler.py": "6474128d18e3fcac780bf73d777859ba102028fe5fbadf87563bd85ade3a34db",
+    "/tmp/ash-owner-build-monitor/build_monitor.py": "14aae43130d74022568e849ca83b912aa63b9572fa971d0963a2a46c39347e60",
+    "/usr/bin/python3.14": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+  },
+  "steps": [
+    {
+      "name": "before",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-compiler-stage1/verify_inputs.py",
+        "before-compiler"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "pid": 4,
+      "started_unix": 1792653741.6255765,
+      "stdout": "/tmp/ash-owner-compiler-stage1/snapshot-before.json",
+      "stderr": "/tmp/ash-owner-compiler-stage1/snapshot-before.json.stderr",
+      "exit": 0,
+      "finished_unix": 1792653743.6891272,
+      "stdout_sha256": "f04feff45d692c26f6575ab2131cbe4e233073392ceef5195410520ee0b0917e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "compiler-build",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-build-monitor/build_monitor.py",
+        "/tmp/ash-owner-compiler-stage1/compiler-build.monitor.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "pid": 5,
+      "started_unix": 1792653743.6904855,
+      "stdout": "/tmp/ash-owner-compiler-stage1/monitor-response.json",
+      "stderr": "/tmp/ash-owner-compiler-stage1/monitor-stderr.log",
+      "exit": 0,
+      "finished_unix": 1792653930.0526936,
+      "stdout_sha256": "44c8cd5ec49d74b49fca604ae2ad29b2c9dde11b9d0ec81d28eaccce94cd91ce",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": "/tmp/ash-owner-compiler-stage1/run-output/build-run-u53y25_2/receipt.json",
+      "receipt_sha256": "7a966dc83527d35c64dc296d05fa059a513d21bea5d66c5480f16172169e9215"
+    },
+    {
+      "name": "after",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-compiler-stage1/verify_inputs.py",
+        "after-compiler"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "pid": 543,
+      "started_unix": 1792653930.0542078,
+      "stdout": "/tmp/ash-owner-compiler-stage1/snapshot-after.json",
+      "stderr": "/tmp/ash-owner-compiler-stage1/snapshot-after.json.stderr",
+      "exit": 0,
+      "finished_unix": 1792653931.0093257,
+      "stdout_sha256": "b58a1ff4d07ca852cd383253e248080cc81e424918d4fa901da766174132c1ae",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "observe-compiler-only-after-success",
+      "argv": [
+        "/usr/bin/python3.14",
+        "-I",
+        "-S",
+        "-B",
+        "/tmp/ash-owner-compiler-stage1/observe_compiler.py",
+        "/tmp/ash-owner-compiler-stage1/monitor-response.json"
+      ],
+      "environment": {
+        "PATH": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "pid": 544,
+      "started_unix": 1792653931.0104017,
+      "stdout": "/tmp/ash-owner-compiler-stage1/observed-compiler.json",
+      "stderr": "/tmp/ash-owner-compiler-stage1/observed-compiler.json.stderr",
+      "exit": 0,
+      "finished_unix": 1792653931.5554256,
+      "stdout_sha256": "779bbf0a2dee656572331845e65c0749a215da08912203d1e80bab584e833a48",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "scope": "Stage1 compiler only; no host generation/relink/image execution"
+}
