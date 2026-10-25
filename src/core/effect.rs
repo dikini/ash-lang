@@ -854,6 +854,7 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|_| super::BuildError::TypeWorkExceeded)?;
                         fields.extend_from_slice(&tuple.fields);
                         Equation::RegionTuple(super::region::RegionTupleNode {
+                            constructor: tuple.constructor,
                             api: tuple.api,
                             context: tuple.context,
                             storage: tuple.storage,

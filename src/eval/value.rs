@@ -80,10 +80,26 @@ pub(crate) enum HeapCell {
 }
 
 impl HeapCell {
-    pub(crate) fn tuple_fields(&self) -> Option<&[Value]> {
+    pub(super) fn stored_fields(&self) -> Option<&[Value]> {
         match self {
             Self::Tuple(fields) => Some(fields),
             Self::NativeTuple(fields) => Some((fields.adapter.fields)(fields)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn tuple_fields(&self) -> Option<&[Value]> {
+        let fields = self.stored_fields()?;
+        (!matches!(fields.first(), Some(Value::ConstructorTag(_)))).then_some(fields)
+    }
+
+    pub(crate) fn constructor_fields(&self) -> Option<(ConstructorId, Option<&Value>)> {
+        if let Self::Constructor(id, payload) = self {
+            return Some((*id, payload.as_ref()));
+        }
+        match self.stored_fields()? {
+            [Value::ConstructorTag(id)] => Some((*id, None)),
+            [Value::ConstructorTag(id), payload] => Some((*id, Some(payload))),
             _ => None,
         }
     }
@@ -223,6 +239,7 @@ impl ObservedValue {
                     Value::Function(_)
                     | Value::Polymorphic { .. }
                     | Value::ConstructorFunction(_) => output.push_str("<function>"),
+                    Value::ConstructorTag(_) => output.push_str("<private-constructor-tag>"),
                     Value::Location(location) => tasks.push(Task::Location(location)),
                     Value::Data(value) => output.push_str(&value.render()),
                 },
@@ -247,7 +264,7 @@ impl ObservedValue {
                                 }
                                 tasks.push(Task::Exit(location));
                                 match cell {
-                                    HeapCell::Tuple(_) | HeapCell::NativeTuple(_) => {
+                                    cell if cell.tuple_fields().is_some() => {
                                         let elements = cell.tuple_fields().expect("tuple fields");
                                         output.push('(');
                                         tasks.push(Task::Text(")"));
@@ -258,11 +275,13 @@ impl ObservedValue {
                                             }
                                         }
                                     }
-                                    HeapCell::Constructor(id, payload) => {
+                                    cell if cell.constructor_fields().is_some() => {
+                                        let (id, payload) =
+                                            cell.constructor_fields().expect("constructor fields");
                                         output.push_str(
                                             self.heap
                                                 .registry
-                                                .constructor(*id)
+                                                .constructor(id)
                                                 .map_or("<foreign-constructor>", |constructor| {
                                                     constructor.spelling.as_str()
                                                 }),
@@ -290,7 +309,7 @@ impl ObservedValue {
                                             }
                                         }
                                     }
-                                    HeapCell::Uninitialized | HeapCell::Alias(_) => unreachable!(),
+                                    _ => unreachable!("validated record shape"),
                                 }
                                 break;
                             }
@@ -450,6 +469,8 @@ pub enum Value {
     },
     /// A payload constructor awaiting its one ordinary argument.
     ConstructorFunction(ConstructorId),
+    /// Private discriminant stored in region-backed nominal records.
+    ConstructorTag(ConstructorId),
     /// An internal heap location used while the machine is running.
     Location(Location),
     /// A completed heap-backed structural observation.
@@ -486,6 +507,7 @@ impl fmt::Display for Value {
             Self::Function(_) => formatter.write_str("<function>"),
             Self::Polymorphic { .. } => formatter.write_str("<function>"),
             Self::ConstructorFunction(_) => formatter.write_str("<function>"),
+            Self::ConstructorTag(_) => formatter.write_str("<private-constructor-tag>"),
             Self::Location(_) => formatter.write_str("<location>"),
             Self::Data(value) => value.fmt(formatter),
         }

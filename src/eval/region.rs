@@ -76,7 +76,7 @@ impl Machine<'_> {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             context = Some(owner);
-            tuple.fields.first().copied()
+            tuple.fields.first().copied().or(Some(tuple.storage))
         } else if next <= tuple.fields.len() {
             fields.push(value);
             Some(tuple.fields.get(next).copied().unwrap_or(tuple.storage))
@@ -86,6 +86,9 @@ impl Machine<'_> {
             };
             if Some(storage.invocation.owner) != context {
                 return Err(RuntimeFailure::InvalidControlState);
+            }
+            if let Some(constructor) = tuple.constructor {
+                fields.insert(0, Value::ConstructorTag(constructor));
             }
             let initialized = self.initialize_region_tuple(storage, fields)?;
             self.control = Some(Control::Return(initialized));
@@ -130,7 +133,10 @@ impl Machine<'_> {
             return Ok(true);
         }
         if let Some(tuple) = self.region_tuple(node) {
-            let (context, count) = (tuple.context, tuple.fields.len());
+            let (context, count) = (
+                tuple.context,
+                tuple.fields.len() + usize::from(tuple.constructor.is_some()),
+            );
             let mut fields = Vec::new();
             reserve_control(&mut fields, count, RuntimeResource::HeapCells, true)?;
             reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
@@ -553,7 +559,7 @@ impl Machine<'_> {
             let fields = record
                 .location
                 .and_then(|location| self.heap.get(location))
-                .and_then(HeapCell::tuple_fields)
+                .and_then(HeapCell::stored_fields)
                 .ok_or(RuntimeFailure::InvalidControlState)?;
             cells = cells
                 .checked_add(fields.len())

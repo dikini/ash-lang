@@ -3648,10 +3648,12 @@ fn matches_pattern_with_work(
                 } else {
                     resolve_location(heap, location)?
                 };
-                let Some(HeapCell::Constructor(found, found_payload)) = heap.get(location) else {
+                let Some((found, found_payload)) =
+                    heap.get(location).and_then(HeapCell::constructor_fields)
+                else {
                     return Ok(false);
                 };
-                if found != constructor {
+                if &found != constructor {
                     return Ok(false);
                 }
                 match (payload.as_deref(), found_payload) {

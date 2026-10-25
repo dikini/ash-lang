@@ -92,10 +92,23 @@ void region_release(void *opaque) {
 
 #[test]
 fn custom_region_initializes_and_reads_its_native_backing_before_paired_release() {
-    let directory = std::env::temp_dir().join(format!("ash-region-native-{}", std::process::id()));
+    run_native("tuple", ENTRY, b"mar");
+}
+
+#[test]
+fn custom_region_stores_nullary_and_payload_nominal_records_in_supplied_backing() {
+    let source = ENTRY
+        .replace("provider<R> :", "type Item =\nEmpty\n| Full(Int)\nprovider<R> :")
+        .replace("match (20, 22) {\n            (left, right) => left + right", "let empty = Empty\n        match Full 42 {\n            Full(value) => value\n            Empty => 0");
+    run_native("nominal", &source, b"maar");
+}
+
+fn run_native(name: &str, entry: &str, expected_trace: &[u8]) {
+    let directory =
+        std::env::temp_dir().join(format!("ash-region-native-{name}-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
     fs::write(directory.join("native.ash"), NATIVE).unwrap();
-    fs::write(directory.join("entry.ash"), ENTRY).unwrap();
+    fs::write(directory.join("entry.ash"), entry).unwrap();
     fs::write(directory.join("region.c"), C).unwrap();
     let compiled = compile_path(RunConfiguration {
         entry: directory.join("entry.ash"),
@@ -149,6 +162,6 @@ fn custom_region_initializes_and_reads_its_native_backing_before_paired_release(
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "42");
-    assert_eq!(fs::read(trace).unwrap(), b"mar");
+    assert_eq!(fs::read(trace).unwrap(), expected_trace);
     fs::remove_dir_all(directory).unwrap();
 }

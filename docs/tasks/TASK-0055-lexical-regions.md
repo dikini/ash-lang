@@ -67,8 +67,8 @@ cleared the bounded evidence; root accepted CP-0025's matched semantic content.
 Exact-head review, GitHub milestone retention and retained verification completed
 through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`; R1 #65 and R2 #66 are closed after independent acceptance readback.
 
-The active [R3 draft PR #147](https://github.com/dikini/ash-lang/pull/147)
-connects source tuple construction to explicit context/operand bindings, a typed
+The retained partial [R3 PR #147](https://github.com/dikini/ash-lang/pull/147),
+at `ac340a31df1d383afce25c7aef3ee08d2e83614d`, connects source tuple construction to explicit context/operand bindings, a typed
 request, owner-targeted allocation and initialization into the same supplied host
 array. Ordinary owner close retires those arrays; outer selection survives an
 inner close. Whole-record residency is separate from projectable field facts.
@@ -83,8 +83,21 @@ responsibility for freeing backing. This adds no Ash finalizer or object graph
 walk. These Rust representation details do not define Ash memory management or
 exempt buffers and captures from region-backed construction.
 
-Nominal records, owned buffers, closure capture storage and recursive slots
-remain pending. The host root retains its
+The next ordinary nominal-record candidate reuses the supplied Value-slot
+storage and the same native adapter. A private discriminant distinguishes a
+nominal record from a tuple containing a constructor function. Ordinary
+constructor functions use explicit allocation effects and operands at their
+caller's selection, including aliases and higher-order calls. Existing guarded
+recursive slots, source-order initialization and aliases remain in use; the
+independent guard rejects transporting an unfinished payload before storage.
+Source and native cases have passed; exact-head review and retention are pending.
+
+Owned buffers, closure capture storage and the remaining recursive
+initialization/capture/abandonment evidence remain pending. Intrinsic nominal
+replies from `BytesAt`, `StringFromUtf8` and `BytesAppendByte` still use their
+legacy result construction; route these with the forthcoming buffer-storage
+work before R-core. This candidate does not complete ordinary-construction
+acceptance. The host root retains its
 backing through the existing observed heap, but observation-before-root-release
 ordering remains pending. Target-specific discharge, full close/composition,
 connected R-core and all R3–R5 acceptance remain pending. Existing issues
@@ -121,6 +134,16 @@ support. Slim FFI establishes ABI calls, not native memory validity or region
 ownership. Ordinary Ash binding contracts carry those assumptions. Required
 supplied storage must back actual objects, buffers and closures; quota-only
 accounting is insufficient.
+
+The constructor-focused sweep also exposed 22 dependency-setup and four
+positional-inventory fixtures that assume implicit builtin modules are absent.
+Their migration remains R-core work; the partial nominal delivery does not
+establish a clean full suite. The 8,000-member, 256 KiB recursion stress test now
+uses the existing driver test seam with one continuous constraint ledger under
+the original four-call aggregate allowance. Its evidence stage uses 272,442
+units, within the original one-call allowance; the normal driver's separate
+327,680 graph-wide limit still refuses that full input. No production allowance
+or budget policy changed.
 
 ## Deviations
 

@@ -71,10 +71,12 @@ pub struct RegionValueRequestNode {
     pub(crate) fields: usize,
 }
 
-/// Local initialization into the pending storage supplied by an allocation.
+/// Tuple or nominal initialization into supplied pending storage.
 /// Evaluate context, original fields in order, then explicit storage; initialize locally.
+/// Nominal storage includes its private discriminant before the optional payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegionTupleNode {
+    pub(crate) constructor: Option<crate::types::ConstructorId>,
     pub(crate) api: ModuleId,
     pub(crate) context: NodeId,
     pub(crate) storage: NodeId,
