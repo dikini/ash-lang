@@ -2,7 +2,7 @@
 
 use crate::{
     module::ModuleId,
-    types::{ConstructorId, Type},
+    types::{ConstructorId, Type, TypeVariableId},
 };
 use std::sync::Arc;
 
@@ -25,6 +25,25 @@ impl StringNode {
 /// Closed set of compiler-owned pure operations admitted by this experiment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Intrinsic {
+    /// Inspect a bound immediate request using ordinary Ash integer values.
+    RegionRequestBytes,
+    /// Inspect the requested alignment.
+    RegionRequestAlignment,
+    /// Check and register returned backing for the bound request's owner.
+    RegionFromBacking {
+        owner: TypeVariableId,
+        address_module: ModuleId,
+    },
+    /// The host leaf of the fixed pair for an explicit prospective owner.
+    RegionHostAllocate {
+        owner: TypeVariableId,
+        configuration: super::region::HostRegionConfiguration,
+    },
+    /// The paired host release leaf, fixed to that same owner/configuration.
+    RegionHostRelease {
+        owner: TypeVariableId,
+        configuration: super::region::HostRegionConfiguration,
+    },
     /// Constructs the null C data pointer, without a memory access.
     AddressNull,
     /// Tests a C data pointer for null.
@@ -84,6 +103,39 @@ impl IntrinsicNode {
     #[must_use]
     pub fn expected_type(self) -> Type {
         let (input, output) = match self.operation {
+            Intrinsic::RegionRequestBytes | Intrinsic::RegionRequestAlignment => (
+                Type::Nominal(crate::types::NominalTypeId::new(self.module, 0)),
+                Type::Int,
+            ),
+            Intrinsic::RegionFromBacking {
+                owner,
+                address_module,
+            } => (
+                Type::Tuple(Box::new([
+                    Type::Nominal(crate::types::NominalTypeId::new(self.module, 0)),
+                    Type::Nominal(crate::types::NominalTypeId::new(address_module, 0)),
+                    Type::Int,
+                    Type::Int,
+                ])),
+                Type::Application(
+                    Box::new(Type::Nominal(crate::types::NominalTypeId::new(
+                        self.module,
+                        1,
+                    ))),
+                    Box::new(Type::Variable(owner)),
+                ),
+            ),
+            Intrinsic::RegionHostAllocate { owner, .. } => (
+                Type::Nominal(crate::types::NominalTypeId::new(self.module, 0)),
+                Type::Application(
+                    Box::new(Type::Nominal(crate::types::NominalTypeId::new(
+                        self.module,
+                        1,
+                    ))),
+                    Box::new(Type::Variable(owner)),
+                ),
+            ),
+            Intrinsic::RegionHostRelease { .. } => (Type::Unit, Type::Unit),
             Intrinsic::AddressNull => (
                 Type::Unit,
                 Type::Nominal(crate::types::NominalTypeId::new(self.module, 0)),
@@ -124,10 +176,37 @@ impl IntrinsicNode {
                 Type::Bool,
             ),
         };
-        Type::Function(Box::new(input), Box::new(output))
+        if matches!(
+            self.operation,
+            Intrinsic::RegionRequestBytes
+                | Intrinsic::RegionRequestAlignment
+                | Intrinsic::RegionFromBacking { .. }
+        ) {
+            Type::function_computation(
+                input,
+                crate::types::ComputationType::new(
+                    output,
+                    crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                        crate::types::EffectId::new(self.module, 0),
+                        Box::new([]),
+                    )),
+                ),
+            )
+        } else {
+            Type::Function(Box::new(input), Box::new(output))
+        }
     }
     pub(crate) fn authentic_module(self) -> bool {
         match self.operation {
+            Intrinsic::RegionFromBacking { address_module, .. } => {
+                self.module.is_builtin_region() && address_module.is_builtin_foreign()
+            }
+            Intrinsic::RegionRequestBytes | Intrinsic::RegionRequestAlignment => {
+                self.module.is_builtin_region()
+            }
+            Intrinsic::RegionHostAllocate { .. } | Intrinsic::RegionHostRelease { .. } => {
+                self.module.is_builtin_region()
+            }
             Intrinsic::AddressNull | Intrinsic::AddressIsNull | Intrinsic::AddressEqual => {
                 self.module.is_builtin_foreign()
             }

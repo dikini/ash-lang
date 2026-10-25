@@ -1383,6 +1383,20 @@ impl Graph {
                 action: index(scope.action),
             },
             Some(EffectOperation::Registration(scope)) => Expr::Forward(index(scope.body)),
+            Some(EffectOperation::Region(scope)) => Expr::Resource {
+                success: None,
+                failure: None,
+                failure_payload: None,
+                handle: self.symbol(symbols, scope.access.id(), source, budget)?,
+                identity: self.symbol(types, scope.identity, source, budget)?,
+                initializer: index(scope.provider),
+                body: index(scope.body),
+                source,
+            },
+            Some(EffectOperation::RegionAllocate(allocation)) => Expr::Request {
+                operand: index(allocation.context),
+                scalar: false,
+            },
             Some(EffectOperation::Resource(resource)) => {
                 resource.acquisition.api().ok_or(Failure::Invalid)?;
                 Expr::Resource {

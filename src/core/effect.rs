@@ -428,6 +428,8 @@ pub enum EffectOperation {
     Cleanup(CleanupScopeNode),
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
+    Region(Box<super::region::RegionScopeNode>),
+    RegionAllocate(super::region::RegionAllocateNode),
 
     Request(RequestNode),
     Handler(HandlerNode),
@@ -489,6 +491,9 @@ impl CoreOperationFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             visit(&resource.handle);
         }
+        if let EffectExprKind::Operation(EffectOperation::Region(region)) = kind {
+            visit(&region.access);
+        }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
             _ => return,
@@ -523,6 +528,13 @@ impl CoreOperationFamily for EffectOperationFamily {
                 ));
                 None
             }
+            EffectOperation::Region(region) => {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    region.access.ty(),
+                ));
+                None
+            }
+            EffectOperation::RegionAllocate(_) => None,
             EffectOperation::Request(request) => Some(&request.effect),
             EffectOperation::Handler(handler) => {
                 if let Some(registration) = &handler.hook_registration {
@@ -577,6 +589,11 @@ impl CoreOperationFamily for EffectOperationFamily {
                 resource.handle.rewrite_type(&mut |ty| rewrite(ty))?;
                 return Ok(());
             }
+            EffectExprKind::Operation(EffectOperation::Region(region)) => {
+                charge(1)?;
+                region.access.rewrite_type(&mut |ty| rewrite(ty))?;
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Request(request)) => &mut request.effect,
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                 if let Some(registration) = &mut handler.hook_registration {
@@ -613,6 +630,8 @@ impl CoreOperationFamily for EffectOperationFamily {
 
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::Region(_)) => 3,
+            EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => 2,
 
             EffectExprKind::Operation(
                 EffectOperation::NativeInterpret(_)
@@ -647,6 +666,17 @@ impl CoreOperationFamily for EffectOperationFamily {
                 1 => Some(resource.body),
                 _ => None,
             },
+            EffectExprKind::Operation(EffectOperation::Region(region)) => match index {
+                0 => Some(region.preceding),
+                1 => Some(region.provider),
+                2 => Some(region.body),
+                _ => None,
+            },
+            EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => match index {
+                0 => Some(allocation.context),
+                1 => Some(allocation.request),
+                _ => None,
+            },
             EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
                 (index == 0).then_some(boundary.body)
@@ -677,6 +707,8 @@ impl CoreOperationFamily for EffectOperationFamily {
                 EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
+            EffectExprKind::Operation(EffectOperation::Region(region)) => drop(region),
+            EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => {}
 
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
@@ -705,6 +737,15 @@ pub type UnvalidatedEffectProgram = UnvalidatedCoreProgram<EffectOperationFamily
 pub type ValidatedEffectProgram = ValidatedCoreProgram<EffectOperationFamily>;
 
 impl CoreBuilder<EffectOperationFamily> {
+    pub(crate) fn region_operation(
+        &mut self,
+        operation: EffectOperation,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, operation)
+    }
     pub(crate) fn resource_scope(
         &mut self,
         resource: Box<ResourceScopeNode>,
@@ -738,6 +779,8 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<(), super::BuildError> {
         self.invalidate_settled_zonk_range(range.clone())?;
         enum Equation {
+            Region(super::region::RegionScopeNode),
+            RegionAllocate(super::region::RegionAllocateNode),
             Registration(NodeId),
             Cleanup(NodeId, NodeId),
             Pure,
@@ -761,6 +804,12 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::Region(scope)) => {
+                        Equation::Region((**scope).clone())
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => {
+                        Equation::RegionAllocate(allocation.clone())
+                    }
                     EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
                         Equation::Cleanup(scope.body, scope.action)
                     }
@@ -822,6 +871,46 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                 };
                 let effects = match equation {
+                    Equation::Region(scope) => {
+                        let preceding = self
+                            .nodes
+                            .get(scope.preceding.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        let provider = self
+                            .nodes
+                            .get(scope.provider.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        let body = self
+                            .nodes
+                            .get(scope.body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        super::region::owner_effects(
+                            &scope,
+                            &provider.ty,
+                            &preceding.effects,
+                            &provider.effects,
+                            &body.effects,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::RegionAllocate(allocation) => {
+                        let context = self
+                            .nodes
+                            .get(allocation.context.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        let request = self
+                            .nodes
+                            .get(allocation.request.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        super::region::allocation_effects(
+                            &allocation,
+                            &context.effects,
+                            &request.effects,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| super::BuildError::InvalidPayload)?
+                    }
                     Equation::Cleanup(body, action) => {
                         let body = clone_effect_row_with_budget(
                             &self

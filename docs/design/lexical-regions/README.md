@@ -4,17 +4,16 @@ This bounded sequential model supplies R1 evidence for accepted
 [CP-0025](../../proposals/CP-0025-lexical-region-construction.md), under
 [TASK-0055](../../tasks/TASK-0055-lexical-regions.md) and its
 [execution plan](../../tasks/plans/lexical-regions.md). It defines no current Ash
-semantics. The contract is accepted for transition; current-head review,
-milestone retention, retained verification and R1/R2 issue acceptance remain
-pending. Product R3 is held until the accepted contract and matched proof are
-retained and verified.
+semantics. The accepted contract and proof are retained through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`;
+independent review, retained verification and R1/R2 acceptance are complete.
+R3 is active and partial; this proof is not product implementation evidence.
 
 The reviewed eight-module candidate passed the frozen
 [AD-0012](../../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
 integration gate with 195 axiom reports. All eight modules used independently
 validated cached artifacts; no module was freshly compiled in that gate.
 The exact reviewed sources and generated registrations have been transferred
-here. [Evidence](evidence.md) records the pins and pending retention boundary.
+here. [Evidence](evidence.md) records the pins and completed R1/R2 retention boundary.
 
 ## Modules and invariant
 

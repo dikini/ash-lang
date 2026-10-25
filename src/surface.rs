@@ -403,6 +403,10 @@ pub enum SurfaceExprKind {
     Resume(Box<SurfaceExpr>),
     /// A parsed acquisition, pending resource identity and lifetime checking.
     Resource(Box<SurfaceResourceExpr>),
+    /// A lexical region whose identity is available during provider preparation.
+    Region(Box<SurfaceRegionExpr>),
+    /// Selection of an existing region for fresh construction only.
+    RegionSelection(Box<SurfaceRegionSelectionExpr>),
 
     /// A lexical fresh-window scope rooted in authenticated native state.
 
@@ -437,6 +441,28 @@ pub struct SurfaceResourceExpr {
     /// The primary initializer evaluated in the preceding scope.
     pub initializer: SurfaceExpr,
     /// The block owned by this acquisition.
+    pub body: SurfaceBlock,
+}
+
+/// Source ownership of one lexical region declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceRegionExpr {
+    /// The uppercase prospective region identity, scoped over provider and body.
+    pub identity: SurfaceName,
+    /// The live access binder, scoped only over the body.
+    pub handle: SurfaceName,
+    /// The optional explicit allocator pair, evaluated under the preceding selection.
+    pub provider: Option<SurfaceExpr>,
+    /// The block owned by this region.
+    pub body: SurfaceBlock,
+}
+
+/// Source ownership of one allocation selection and its restoration boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceRegionSelectionExpr {
+    /// The primary operand naming existing live region access.
+    pub region: SurfaceExpr,
+    /// The block evaluated with the selected allocation default.
     pub body: SurfaceBlock,
 }
 

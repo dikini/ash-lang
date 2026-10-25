@@ -1685,7 +1685,10 @@ fn resolve_module_names_with_budget(
                 "builtin source-candidate traversal exceeded its type-work budget",
             )
         })?;
-        if !owner.is_builtin_foreign() {
+        if !owner.is_builtin_foreign()
+            && !owner.is_builtin_region()
+            && !owner.is_builtin_region_facade()
+        {
             return Ok(());
         }
         type_work
@@ -1697,11 +1700,18 @@ fn resolve_module_names_with_budget(
                     "builtin source authentication exceeded its type-work budget",
                 )
             })?;
-        if source.text() != crate::module::foreign_builtin_source_text() {
+        let canonical = if owner.is_builtin_region_facade() {
+            crate::module::region_facade_builtin_source_text()
+        } else if owner.is_builtin_region() {
+            crate::module::region_builtin_source_text()
+        } else {
+            crate::module::foreign_builtin_source_text()
+        };
+        if source.text() != canonical {
             return Err(error(
                 ResolveReason::ImportConflict,
                 surface.span,
-                "reserved Foreign identity requires the immutable builtin source",
+                "reserved builtin identity requires its immutable compiler source",
             ));
         }
         Ok(())
@@ -1714,16 +1724,36 @@ fn resolve_module_names_with_budget(
     }
     reject_duplicate_module_aliases(surface)?;
     if dependencies.len() != loaded.dependencies().len()
-        || surface.imports.len() != loaded.dependencies().len()
+        || surface.imports.len()
+            != loaded
+                .dependencies()
+                .iter()
+                .filter(|edge| !edge.is_region_service())
+                .count()
         || dependencies
             .iter()
             .zip(loaded.dependencies())
-            .zip(&surface.imports)
-            .any(|((dependency, loaded_edge), import)| {
+            .any(|(dependency, loaded_edge)| {
                 dependency.edge != loaded_edge
-                    || loaded_edge.import_span() != import.span
                     || dependency.edge.target() != dependency.summary.module()
             })
+        || loaded
+            .dependencies()
+            .iter()
+            .filter(|edge| !edge.is_region_service())
+            .zip(&surface.imports)
+            .any(|(edge, import)| edge.import_span() != import.span)
+        || loaded
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.is_region_service())
+            .any(|edge| !edge.target().is_builtin_region() || edge.import_span() != surface.span)
+        || loaded
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.is_region_service())
+            .count()
+            > 1
     {
         return Err(error(
             ResolveReason::InternalState,
@@ -2337,6 +2367,7 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
 struct Resolver {
     module: ModuleId,
     builtin_cell: Option<ModuleId>,
+    builtin_region: Option<ModuleId>,
     resource_families: HashMap<NominalTypeId, crate::resolved::ResourceDefinitionId>,
     source_foreign_libraries: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
     row_resource_families: HashSet<NominalTypeId>,
@@ -2751,6 +2782,7 @@ impl Resolver {
             resource_origins: HashMap::new(),
             next_binder: 0,
             builtin_cell: None,
+            builtin_region: None,
             next_type_variable: 0,
             next_lexical_nominal: 0,
             next_lexical_evidence: 0,
@@ -3416,8 +3448,9 @@ impl Resolver {
                         operation.span,
                         "effect operation spelling could not be retained",
                     )?;
-                    let annotation =
-                        ResolvedTypeOccurrenceOwner::new(self.resolve_type(operation.annotation)?);
+                    let annotation = ResolvedTypeOccurrenceOwner::new(
+                        self.resolve_type_mode(operation.annotation, true)?,
+                    );
                     let shape = annotation
                         .0
                         .as_ref()
@@ -3838,8 +3871,33 @@ impl Resolver {
         surface: &SurfaceModule,
         dependencies: &[DependencyExports<'_>],
     ) -> Result<(), ResolveError> {
-        for (dependency_summary_order, (import, dependency)) in
-            surface.imports.iter().zip(dependencies).enumerate()
+        if let Some(dependency) = dependencies
+            .iter()
+            .find(|dependency| dependency.edge.is_region_service())
+        {
+            let module = dependency.edge.target();
+            if crate::resolved::RegionApi::for_module(module).is_none() {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    surface.span,
+                    "private region dependency has no authenticated region identity",
+                ));
+            }
+            self.retain_dependency_interface_facts(dependency.summary, module, surface.span)?;
+            let mut visits = CaptureGraphVisits::default();
+            // Retain canonical facts without installing a source alias or names.
+            let _ = self.clone_summary_namespaces(dependency.summary, surface.span, &mut visits)?;
+            self.builtin_region = Some(module);
+        }
+        for (dependency_summary_order, (import, dependency)) in surface
+            .imports
+            .iter()
+            .zip(
+                dependencies
+                    .iter()
+                    .filter(|dependency| !dependency.edge.is_region_service()),
+            )
+            .enumerate()
         {
             let mut retained_constructor_owners = HashSet::new();
             let mut capture_graph_visits = CaptureGraphVisits::default();
@@ -4544,7 +4602,19 @@ impl Resolver {
     fn retain_imported_effect(
         &mut self,
         exported: &ResolvedEffectDeclaration,
-        _summary: &ExportSummary,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.retain_imported_effect_fact(exported, span)?;
+        for operation in &exported.operations {
+            self.retain_type_nominals(&operation.annotation.ty, summary, span)?;
+        }
+        Ok(())
+    }
+
+    fn retain_imported_effect_fact(
+        &mut self,
+        exported: &ResolvedEffectDeclaration,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         let retained =
@@ -4579,7 +4649,8 @@ impl Resolver {
                     span,
                     "imported effect storage exceeded its type-work budget",
                 )
-            })
+            })?;
+        Ok(())
     }
 
     fn retain_dependency_interface_facts(
@@ -5826,6 +5897,7 @@ impl Resolver {
             )
         })?;
         let type_cells = self.type_work.used().saturating_sub(type_work_start);
+        let mut frontier_bound = type_cells;
         let mut pending = Vec::new();
         pending.try_reserve(type_cells).map_err(|_| {
             error(
@@ -5899,6 +5971,43 @@ impl Resolver {
                                 )
                             })?;
                             seen_effects.push(identity);
+                            let declaration = summary.effect_by_id(identity).ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    span,
+                                    "an exported scheme references missing effect metadata",
+                                )
+                            })?;
+                            // Memoize the canonical fact before following operation rows.
+                            // Keep transitive signatures on this iterative type frontier.
+                            self.retain_imported_effect_fact(declaration, span)?;
+                            for operation in &declaration.operations {
+                                let start = self.type_work.used();
+                                charge_type_cells(&operation.annotation.ty, &mut self.type_work)
+                                    .map_err(|()| error(ResolveReason::TypeResourceExhausted, span,
+                                        "imported effect signature closure exceeded its work budget"))?;
+                                let cells = self.type_work.used().saturating_sub(start);
+                                frontier_bound = frontier_bound.checked_add(cells).ok_or_else(|| {
+                                    error(ResolveReason::TypeResourceExhausted, span,
+                                        "imported effect signature frontier exceeded its storage bound")
+                                })?;
+                                pending.try_reserve(frontier_bound.saturating_sub(pending.len())).map_err(|_| error(
+                                    ResolveReason::TypeResourceExhausted, span,
+                                    "imported effect signature frontier could not reserve storage"))?;
+                                seen.try_reserve(frontier_bound.saturating_sub(seen.len())).map_err(|_| error(
+                                    ResolveReason::TypeResourceExhausted, span,
+                                    "imported effect nominal ordering could not reserve storage"))?;
+                                seen_effects
+                                    .try_reserve(frontier_bound.saturating_sub(seen_effects.len()))
+                                    .map_err(|_| {
+                                        error(
+                                            ResolveReason::TypeResourceExhausted,
+                                            span,
+                                            "imported effect ordering could not reserve storage",
+                                        )
+                                    })?;
+                                pending.push(Task::Type(&operation.annotation.ty));
+                            }
                         }
                         pending.extend(instance.arguments().iter().map(Task::Argument));
                     }
@@ -6023,20 +6132,6 @@ impl Resolver {
             }
             let exported = Self::scheme_nominal_fact(summary, id, span)?;
             self.retain_scheme_nominal_fact(exported, span)?;
-        }
-        for id in seen_effects {
-            let exported = summary.effect_by_id(id).ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "an exported scheme references missing effect metadata",
-                )
-                .with_context(ResolveContext::WorkState {
-                    part: "export-scheme-effect",
-                    problem: "missing",
-                })
-            })?;
-            self.retain_imported_effect(exported, summary, span)?;
         }
         Ok(())
     }
@@ -9229,7 +9324,15 @@ impl Resolver {
     }
 
     fn resolve_type(&mut self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
-        let argument = self.resolve_owner_argument(surface)?;
+        self.resolve_type_mode(surface, false)
+    }
+
+    fn resolve_type_mode(
+        &mut self,
+        surface: &SurfaceType,
+        operation_outer: bool,
+    ) -> Result<ResolvedType, ResolveError> {
+        let argument = self.resolve_owner_argument_mode(surface, operation_outer)?;
         match argument.ty {
             crate::types::KindedArgument::TypeArg(ty) => Ok(ResolvedType {
                 ty,
@@ -9252,6 +9355,14 @@ impl Resolver {
         &mut self,
         surface: &SurfaceType,
     ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
+        self.resolve_owner_argument_mode(surface, false)
+    }
+
+    fn resolve_owner_argument_mode(
+        &mut self,
+        surface: &SurfaceType,
+        operation_outer: bool,
+    ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
         enum ApplicationHead {
             Nominal(NominalTypeId),
             Variable(TypeVariableId),
@@ -9266,6 +9377,7 @@ impl Resolver {
                 crate::source::Span,
                 Option<&'a crate::surface::SurfaceEffectRow>,
                 usize,
+                bool,
             ),
             EffectInstances(std::slice::Iter<'a, crate::surface::SurfaceEffectInstance>),
             EffectArguments(std::slice::Iter<'a, SurfaceType>),
@@ -9411,6 +9523,8 @@ impl Resolver {
                                 current.span,
                                 function.effects.as_ref(),
                                 effect_argument_count,
+                                self.builtin_region.is_some()
+                                    && !(operation_outer && std::ptr::eq(current, surface)),
                             ));
                             if let Some(effects) = &function.effects {
                                 tasks.push(Task::EffectInstances(effects.effects.iter()));
@@ -9477,7 +9591,7 @@ impl Resolver {
                         provenance.len() - 1,
                     ));
                 }
-                Task::Function(span, effects, effect_argument_count) => {
+                Task::Function(span, effects, effect_argument_count, expand_default) => {
                     let mut effect_arguments = completed.split_off(
                         completed
                             .len()
@@ -9610,6 +9724,44 @@ impl Resolver {
                             ));
                         }
                         written.reverse();
+                        if expand_default {
+                            let api = self
+                                .builtin_region
+                                .and_then(crate::resolved::RegionApi::for_module)
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        span,
+                                        "default allocation API is missing",
+                                    )
+                                })?;
+                            self.type_work
+                                .charge(written.len().saturating_add(1))
+                                .map_err(|()| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        span,
+                                        "default effect expansion exceeded its budget",
+                                    )
+                                })?;
+                            if !written
+                                .iter()
+                                .any(|(instance, _, _)| instance.effect() == api.default_alloc())
+                            {
+                                written.try_reserve(1).map_err(|_| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        span,
+                                        "default effect expansion could not be reserved",
+                                    )
+                                })?;
+                                written.push((
+                                    EffectInstance::new(api.default_alloc(), Box::new([])),
+                                    span,
+                                    Box::new([]),
+                                ));
+                            }
+                        }
                         if !effect_arguments.is_empty() {
                             return Err(error(
                                 ResolveReason::InternalState,
@@ -9666,10 +9818,35 @@ impl Resolver {
                                 problem: "extra",
                             }));
                         }
+                        let row = if expand_default {
+                            let api = self
+                                .builtin_region
+                                .and_then(crate::resolved::RegionApi::for_module)
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        span,
+                                        "default allocation API is missing",
+                                    )
+                                })?;
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "default effect expansion exceeded its budget",
+                                )
+                            })?;
+                            EffectRow::singleton(EffectInstance::new(
+                                api.default_alloc(),
+                                Box::new([]),
+                            ))
+                        } else {
+                            EffectRow::empty()
+                        };
                         (
-                            Type::Function(
-                                Box::new(domain.into_inner()),
-                                Box::new(codomain.into_inner()),
+                            Type::function_computation(
+                                domain.into_inner(),
+                                ComputationType::new(codomain.into_inner(), row),
                             ),
                             Vec::<usize>::new().into_boxed_slice(),
                         )
@@ -11108,6 +11285,103 @@ impl Resolver {
                 })?;
                 expressions.push(self.finish_cleanup(span, initializer, body)?);
             }
+            ResolveTask::RegionProvider {
+                source,
+                identity,
+                handle,
+                scope_checkpoint,
+                type_scope_checkpoint,
+                span,
+            } => {
+                let provider = if source.provider.is_some() {
+                    Some(Box::new(expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "region provider is missing",
+                        )
+                    })?))
+                } else {
+                    None
+                };
+                let mut terms = HashMap::new();
+                terms.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region access scope could not be reserved",
+                    )
+                })?;
+                terms.insert(
+                    handle.spelling.clone(),
+                    ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+                );
+                self.scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region scope could not be reserved",
+                    )
+                })?;
+                self.scopes.push(terms);
+                tasks.push(ResolveTask::FinishRegion {
+                    identity,
+                    handle,
+                    provider,
+                    scope_checkpoint,
+                    type_scope_checkpoint,
+                    span,
+                });
+                tasks.push(ResolveTask::VisitBlock(&source.body));
+            }
+            ResolveTask::FinishRegion {
+                identity,
+                handle,
+                provider,
+                scope_checkpoint,
+                type_scope_checkpoint,
+                span,
+            } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(ResolveReason::InternalState, span, "region body is missing")
+                })?;
+                self.scopes.truncate(scope_checkpoint);
+                self.type_scopes.truncate(type_scope_checkpoint);
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Region(Box::new(crate::resolved::ResolvedRegionExpr {
+                        identity,
+                        handle,
+                        provider: provider.map(|expression| Box::new(expression.into_inner())),
+                        body: Box::new(body.into_inner()),
+                    })),
+                    span,
+                });
+            }
+            ResolveTask::FinishRegionSelection { span } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "selected region body is missing",
+                    )
+                })?;
+                let region = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "selected region operand is missing",
+                    )
+                })?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::RegionSelection(Box::new(
+                        crate::resolved::ResolvedRegionSelectionExpr {
+                            region: Box::new(region.into_inner()),
+                            body: Box::new(body.into_inner()),
+                        },
+                    )),
+                    span,
+                });
+            }
             ResolveTask::VisitBlock(block) => {
                 let scope_checkpoint = self.scopes.len();
                 let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
@@ -12073,6 +12347,92 @@ impl Resolver {
                     "resource acquisition requires a compiler-owned cell family",
                 ));
             }
+            SurfaceExprKind::Region(source) => {
+                let span = expression.span;
+                let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
+                let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+                self.type_work.charge(8).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region resolution exceeded its budget",
+                    )
+                })?;
+                self.lexical_method_parameters
+                    .0
+                    .try_reserve(1)
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "region identity retention could not be reserved",
+                        )
+                    })?;
+                let retained = self.clone_type_variable_for_retention(
+                    &identity,
+                    span,
+                    "region identity retention exceeded its budget",
+                )?;
+                self.lexical_method_parameters.push(retained);
+                let scope_checkpoint = self.scopes.len();
+                let type_scope_checkpoint = self.type_scopes.len();
+                let mut types = HashMap::new();
+                types.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region type scope could not be reserved",
+                    )
+                })?;
+                types.insert(identity.spelling.clone(), identity.id);
+                self.type_scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region type scopes could not be reserved",
+                    )
+                })?;
+                self.type_scopes.push(types);
+                tasks.0.try_reserve(3).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region tasks could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::RegionProvider {
+                    source,
+                    identity,
+                    handle,
+                    scope_checkpoint,
+                    type_scope_checkpoint,
+                    span,
+                });
+                if let Some(provider) = &source.provider {
+                    tasks.push(ResolveTask::VisitExpr(provider));
+                }
+            }
+            SurfaceExprKind::RegionSelection(selection) => {
+                self.type_work.charge(3).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "region selection exceeded its budget",
+                    )
+                })?;
+                tasks.0.try_reserve(3).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "region selection tasks could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::FinishRegionSelection {
+                    span: expression.span,
+                });
+                tasks.push(ResolveTask::VisitBlock(&selection.body));
+                tasks.push(ResolveTask::VisitExpr(&selection.region));
+            }
             SurfaceExprKind::Resource(source) if self.resource_builtin(source.kind).is_none() => {
                 let (builtin, message) = match source.kind {
                     crate::surface::SurfaceResourceKind::Cell => (
@@ -12463,6 +12823,25 @@ enum ResolveTask<'a> {
     FinishCleanup {
         span: Span,
     },
+    RegionProvider {
+        source: &'a crate::surface::SurfaceRegionExpr,
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
+    FinishRegion {
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        provider: Option<Box<ResolvedExpressionOwner>>,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
+    FinishRegionSelection {
+        span: Span,
+    },
     VisitExpr(&'a SurfaceExpr),
     FinishRegistration {
         effect: ResolvedEffectInstance,
@@ -12572,6 +12951,9 @@ impl ResolveTask<'_> {
             | Self::FinishPerform { span, .. }
             | Self::FinishResume { span, .. }
             | Self::FinishCleanup { span }
+            | Self::RegionProvider { span, .. }
+            | Self::FinishRegion { span, .. }
+            | Self::FinishRegionSelection { span }
             | Self::FinishHook { span, .. }
             | Self::FinishRegistration { span, .. }
             | Self::GenericResourceInitializer { span, .. }

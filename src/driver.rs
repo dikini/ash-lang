@@ -1278,6 +1278,27 @@ where
         // Reuse the checked graph's defining-module index. The entry's local
         // registry excludes imported symbols; rebuilding a checker view would
         // repeat completed preparation and copy its immutable contracts.
+        // The generated root supplies only the authenticated private default
+        // service. Every other entry effect still needs its native contract.
+        let mut entry_row = crate::types::clone_effect_row_with_budget(
+            computation.effects(),
+            &mut checking_type_work,
+        )
+        .map_err(|()| internal_file_failure())?;
+        for instance in computation.effects().known() {
+            checking_type_work
+                .charge(1)
+                .map_err(|()| internal_file_failure())?;
+            if crate::resolved::RegionApi::for_module(instance.effect().module())
+                .is_some_and(|api| api.default_alloc() == instance.effect())
+                && instance.arguments().is_empty()
+            {
+                entry_row = entry_row
+                    .remove_exact_with_budget(instance, &mut checking_type_work)
+                    .map_err(|()| internal_file_failure())?
+                    .map_err(|_| internal_file_failure())?;
+            }
+        }
         let native_entry = select_effect_core
             && crate::core::effect::owner_free_native_entry_row(
                 |effect| {
@@ -1287,7 +1308,7 @@ where
                         .filter(|module| module.module() == effect.module())
                         .map(|module| module.registry().as_ref())
                 },
-                computation.effects(),
+                &entry_row,
                 &mut checking_type_work,
             )
             .map_err(|()| {

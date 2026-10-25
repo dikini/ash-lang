@@ -7578,6 +7578,7 @@ fn check_expression_annotations<'a>(
 #[derive(Clone, Copy)]
 enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
+    RegionBody(&'a crate::resolved::ResolvedRegionExpr),
     ResourceBody(&'a crate::resolved::ResolvedResourceExpr),
     ResourceExit(&'a crate::resolved::ResolvedTypeVariable),
     Declaration(&'a ResolvedLocalDeclaration),
@@ -7666,6 +7667,32 @@ fn check_expression_work<'a>(
                     budget,
                 )?;
             }
+            BodyWork::RegionBody(region) => {
+                let parameters = std::slice::from_ref(&region.identity);
+                authenticate_owner_parameters(registry, parameters, budget)?;
+                if region.identity.kind != Kind::Type {
+                    return Err(KindFailure::internal_cause(
+                        span,
+                        KindInternalCause::ResourceIdentityKind,
+                    ));
+                }
+                environments.extend_owner_parameters(parameters, budget)?;
+                push_body_work(
+                    &mut work,
+                    BodyWork::ResourceExit(&region.identity),
+                    span,
+                    budget,
+                )?;
+                push_body_work(&mut work, BodyWork::Expression(&region.body), span, budget)?;
+                if let Some(provider) = &region.provider {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(provider),
+                        provider.span,
+                        budget,
+                    )?;
+                }
+            }
             BodyWork::ResourceBody(resource) => {
                 let parameters = std::slice::from_ref(&resource.identity);
                 authenticate_owner_parameters(registry, parameters, budget)?;
@@ -7693,6 +7720,28 @@ fn check_expression_work<'a>(
                 environments.remove_owner_parameter_extension(std::slice::from_ref(identity));
             }
             BodyWork::Expression(expression) => match &expression.kind {
+                ResolvedExprKind::Region(region) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::RegionBody(region),
+                        expression.span,
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::RegionSelection(selection) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&selection.body),
+                        selection.body.span,
+                        budget,
+                    )?;
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&selection.region),
+                        selection.region.span,
+                        budget,
+                    )?;
+                }
                 ResolvedExprKind::Cleanup(cleanup) => {
                     push_body_work(
                         &mut work,
@@ -7976,6 +8025,7 @@ fn local_declaration_span(declaration: &ResolvedLocalDeclaration) -> Span {
 fn body_work_span(item: BodyWork<'_>) -> Span {
     match item {
         BodyWork::Expression(expression) => expression.span,
+        BodyWork::RegionBody(region) => region.identity.origin.primary_span(),
         BodyWork::ResourceBody(resource) => resource.acquisition.span,
         BodyWork::ResourceExit(identity) => identity.origin.primary_span(),
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),

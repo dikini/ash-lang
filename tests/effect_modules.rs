@@ -544,7 +544,10 @@ fn hidden_effect_signature_closure_survives_facade_and_diamond_routes() {
     let hidden = EffectId::new(base.id(), 0);
     for module in &checked {
         assert!(module.exports().effect("Hidden").is_none());
-        if module.module() != entry.id() {
+        if ["base.ash", "facade.ash", "left.ash", "right.ash"]
+            .iter()
+            .any(|name| module.module() == module_named(&graph, name).id())
+        {
             assert_eq!(
                 module
                     .exports()
@@ -568,4 +571,57 @@ fn hidden_effect_signature_closure_survives_facade_and_diamond_routes() {
             .id,
         hidden
     );
+}
+
+#[test]
+fn selected_global_retains_hidden_effect_operation_nominals() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        "import facade as Facade\nmain : Unit -> Unit\nmain () = ()\n",
+    );
+    tree.write(
+        "base.ash",
+        concat!(
+            "type Payload = PayloadValue\n",
+            "effect Hidden {\nget : Unit -> Payload\n}\n",
+            "pub f : Unit -> Unit ! {Hidden}\nf () = ()\n",
+        ),
+    );
+    tree.write("facade.ash", "pub import base (f)\n");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    let checked = check_graph(&graph);
+    for module in &checked {
+        assert!(module.exports().effect("Hidden").is_none());
+    }
+    tree.write("entry.ash", "import facade as Facade\nprobe : Facade.Payload -> Unit\nprobe value = ()\nmain : Unit -> Unit\nmain () = ()\n");
+    let failure = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    assert!(format!("{failure:?}").contains("Resolve"), "{failure:?}");
+}
+
+#[test]
+fn selected_global_retains_a_chain_of_hidden_effect_signatures() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        "import facade as Facade\nmain : Unit -> Unit\nmain () = ()\n",
+    );
+    let mut base = String::from("type Payload = PayloadValue\n");
+    for index in 0..64 {
+        base.push_str(&format!(
+            "effect E{index} {{\nget : Unit -> (Unit -> Unit ! {{E{}}})\n}}\n",
+            index + 1
+        ));
+    }
+    base.push_str(
+        "effect E64 {\nget : Unit -> Payload\n}\npub f : Unit -> Unit ! {E0}\nf () = ()\n",
+    );
+    tree.write("base.ash", &base);
+    tree.write("facade.ash", "pub import base (f)\n");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    check_graph(&graph);
 }

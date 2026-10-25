@@ -308,6 +308,31 @@ struct RecursiveMemberRecord {
 
 #[derive(Clone, Copy, Debug)]
 enum NodeTag {
+    RegionBinding {
+        module: u32,
+        operation: u8,
+        owner: Option<TypeVariableIdentity>,
+        address_module: Option<u32>,
+    },
+    Region {
+        entry: bool,
+        api: u32,
+        identity: TypeVariableIdentity,
+        access: u32,
+        preceding: u32,
+        provider: u32,
+        body: u32,
+    },
+    RegionAllocate {
+        api: u32,
+        context: u32,
+        request: u32,
+    },
+    RegionHost {
+        module: u32,
+        owner: TypeVariableIdentity,
+        release: bool,
+    },
     CellScope {
         acquisition: CellAcquisitionRecord,
         handle: u32,
@@ -762,6 +787,10 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
             SourceRecord {
                 role: if module.is_builtin_foreign() {
                     ModuleRoleRecord::BuiltinForeign
+                } else if module.is_builtin_region_facade() {
+                    ModuleRoleRecord::BuiltinRegionFacade
+                } else if module.is_builtin_region() {
+                    ModuleRoleRecord::BuiltinRegion
                 } else if module.is_builtin_generic_cell() {
                     ModuleRoleRecord::BuiltinGenericCell
                 } else if module.is_builtin_cell() {
@@ -1198,107 +1227,162 @@ impl Encoder<'_> {
 
     fn encode_node(&mut self, kind: &PureExprKind) -> Result<NodeTag, ImageFailure> {
         Ok(match kind {
-            PureExprKind::Value(value) => {
-                match value {
-                    PureValue::Integer(value) => {
-                        if let Some(value) = value.value().to_i64() {
-                            NodeTag::Integer(value)
-                        } else {
-                            NodeTag::UnsignedInteger(value.value().to_u64().ok_or(
-                                ImageFailure::Unsupported(Unsupported::LargeIntegerLiteral),
-                            )?)
-                        }
-                    }
-                    PureValue::Boolean(value) => NodeTag::Bool(value.value()),
-                    PureValue::Unit(_) => NodeTag::Unit,
-                    PureValue::String(value) => {
-                        NodeTag::String(append(&mut self.image.bytes, value.bytes(), self.work)?)
-                    }
-                    PureValue::Constructor(value) => {
-                        NodeTag::Constructor(self.constructor(value.constructor())?)
-                    }
-                    PureValue::Function(function) => NodeTag::Function {
-                        parameter: self.encode_binder(function.parameter())?,
-                        body: self.node(function.body())?,
-                    },
-                    PureValue::Intrinsic(value) => {
-                        use crate::core::packed::Intrinsic;
-
-                        let bytes = match value.operation() {
-                            Intrinsic::BytesEmpty => Some(0),
-                            Intrinsic::BytesAppendByte { appended, invalid } => {
-                                let owner = NominalTypeId::new(value.module(), 0);
-                                if appended != ConstructorId::new(owner, 0)
-                                    || invalid != ConstructorId::new(owner, 1)
-                                {
-                                    return Err(ImageFailure::InvalidRecord);
-                                }
-                                Some(1)
-                            }
-                            Intrinsic::BytesLength => Some(2),
-                            Intrinsic::BytesEqual => Some(3),
-                            Intrinsic::BytesAt { found, invalid } => {
-                                let owner = NominalTypeId::new(value.module(), 1);
-                                if found != ConstructorId::new(owner, 0)
-                                    || invalid != ConstructorId::new(owner, 1)
-                                {
-                                    return Err(ImageFailure::InvalidRecord);
-                                }
-                                Some(4)
-                            }
-                            _ => None,
-                        };
-                        let string = match value.operation() {
-                            Intrinsic::StringByteLength => Some(0),
-                            Intrinsic::StringToUtf8 => Some(1),
-                            Intrinsic::StringEqual => Some(2),
-                            Intrinsic::StringFromUtf8 { decoded, invalid } => {
-                                let nominal = NominalTypeId::new(value.module(), 0);
-                                if decoded != ConstructorId::new(nominal, 0)
-                                    || invalid != ConstructorId::new(nominal, 1)
-                                {
-                                    return Err(ImageFailure::InvalidRecord);
-                                }
-                                Some(3)
-                            }
-                            _ => None,
-                        };
-                        let address = match value.operation() {
-                            Intrinsic::AddressNull => Some(0),
-                            Intrinsic::AddressIsNull => Some(1),
-                            Intrinsic::AddressEqual => Some(2),
-                            _ => None,
-                        };
-                        if let Some(operation) = address {
-                            if !value.module().is_builtin_foreign() {
-                                return Err(ImageFailure::InvalidRecord);
-                            }
-                            NodeTag::AddressIntrinsic {
-                                module: self.module(value.module())?,
-                                operation,
-                            }
-                        } else if let Some(operation) = bytes {
-                            if !value.module().is_builtin_bytes() {
-                                return Err(ImageFailure::InvalidRecord);
-                            }
-                            NodeTag::BytesIntrinsic {
-                                module: self.module(value.module())?,
-                                operation,
-                            }
-                        } else if let Some(operation) = string {
-                            if !value.module().is_builtin_string() {
-                                return Err(ImageFailure::InvalidRecord);
-                            }
-                            NodeTag::StringIntrinsic {
-                                module: self.module(value.module())?,
-                                operation,
-                            }
-                        } else {
-                            return Err(ImageFailure::Unsupported(Unsupported::Intrinsic));
-                        }
+            PureExprKind::Value(value) => match value {
+                PureValue::Integer(value) => {
+                    if let Some(value) = value.value().to_i64() {
+                        NodeTag::Integer(value)
+                    } else {
+                        NodeTag::UnsignedInteger(
+                            value.value().to_u64().ok_or(ImageFailure::Unsupported(
+                                Unsupported::LargeIntegerLiteral,
+                            ))?,
+                        )
                     }
                 }
-            }
+                PureValue::Boolean(value) => NodeTag::Bool(value.value()),
+                PureValue::Unit(_) => NodeTag::Unit,
+                PureValue::String(value) => {
+                    NodeTag::String(append(&mut self.image.bytes, value.bytes(), self.work)?)
+                }
+                PureValue::Constructor(value) => {
+                    NodeTag::Constructor(self.constructor(value.constructor())?)
+                }
+                PureValue::Function(function) => NodeTag::Function {
+                    parameter: self.encode_binder(function.parameter())?,
+                    body: self.node(function.body())?,
+                },
+                PureValue::Intrinsic(value) => {
+                    use crate::core::packed::Intrinsic;
+
+                    let bytes = match value.operation() {
+                        Intrinsic::BytesEmpty => Some(0),
+                        Intrinsic::BytesAppendByte { appended, invalid } => {
+                            let owner = NominalTypeId::new(value.module(), 0);
+                            if appended != ConstructorId::new(owner, 0)
+                                || invalid != ConstructorId::new(owner, 1)
+                            {
+                                return Err(ImageFailure::InvalidRecord);
+                            }
+                            Some(1)
+                        }
+                        Intrinsic::BytesLength => Some(2),
+                        Intrinsic::BytesEqual => Some(3),
+                        Intrinsic::BytesAt { found, invalid } => {
+                            let owner = NominalTypeId::new(value.module(), 1);
+                            if found != ConstructorId::new(owner, 0)
+                                || invalid != ConstructorId::new(owner, 1)
+                            {
+                                return Err(ImageFailure::InvalidRecord);
+                            }
+                            Some(4)
+                        }
+                        _ => None,
+                    };
+                    let string = match value.operation() {
+                        Intrinsic::StringByteLength => Some(0),
+                        Intrinsic::StringToUtf8 => Some(1),
+                        Intrinsic::StringEqual => Some(2),
+                        Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                            let nominal = NominalTypeId::new(value.module(), 0);
+                            if decoded != ConstructorId::new(nominal, 0)
+                                || invalid != ConstructorId::new(nominal, 1)
+                            {
+                                return Err(ImageFailure::InvalidRecord);
+                            }
+                            Some(3)
+                        }
+                        _ => None,
+                    };
+                    let address = match value.operation() {
+                        Intrinsic::AddressNull => Some(0),
+                        Intrinsic::AddressIsNull => Some(1),
+                        Intrinsic::AddressEqual => Some(2),
+                        _ => None,
+                    };
+                    if matches!(
+                        value.operation(),
+                        Intrinsic::RegionRequestBytes
+                            | Intrinsic::RegionRequestAlignment
+                            | Intrinsic::RegionFromBacking { .. }
+                    ) {
+                        if !value.module().is_builtin_region() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        let (operation, owner, address_module) = match value.operation() {
+                            Intrinsic::RegionRequestBytes => (0, None, None),
+                            Intrinsic::RegionRequestAlignment => (1, None, None),
+                            Intrinsic::RegionFromBacking {
+                                owner,
+                                address_module,
+                            } => {
+                                if !address_module.is_builtin_foreign() {
+                                    return Err(ImageFailure::InvalidRecord);
+                                }
+                                (
+                                    2,
+                                    Some(self.type_variable(owner)?),
+                                    Some(self.module(address_module)?),
+                                )
+                            }
+                            _ => return Err(ImageFailure::InvalidRecord),
+                        };
+                        NodeTag::RegionBinding {
+                            module: self.module(value.module())?,
+                            operation,
+                            owner,
+                            address_module,
+                        }
+                    } else if let Intrinsic::RegionHostAllocate {
+                        owner,
+                        configuration,
+                    }
+                    | Intrinsic::RegionHostRelease {
+                        owner,
+                        configuration,
+                    } = value.operation()
+                    {
+                        if !value.module().is_builtin_region()
+                            || configuration != crate::core::region::HostRegionConfiguration::System
+                        {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        NodeTag::RegionHost {
+                            module: self.module(value.module())?,
+                            owner: self.type_variable(owner)?,
+                            release: matches!(
+                                value.operation(),
+                                Intrinsic::RegionHostRelease { .. }
+                            ),
+                        }
+                    } else if let Some(operation) = address {
+                        if !value.module().is_builtin_foreign() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        NodeTag::AddressIntrinsic {
+                            module: self.module(value.module())?,
+                            operation,
+                        }
+                    } else if let Some(operation) = bytes {
+                        if !value.module().is_builtin_bytes() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        NodeTag::BytesIntrinsic {
+                            module: self.module(value.module())?,
+                            operation,
+                        }
+                    } else if let Some(operation) = string {
+                        if !value.module().is_builtin_string() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        NodeTag::StringIntrinsic {
+                            module: self.module(value.module())?,
+                            operation,
+                        }
+                    } else {
+                        return Err(ImageFailure::Unsupported(Unsupported::Intrinsic));
+                    }
+                }
+            },
             PureExprKind::Variable(variable) => {
                 NodeTag::Variable(self.binder_id(variable.binder())?)
             }
@@ -2025,6 +2109,56 @@ impl Wire for NodeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::RegionBinding {
+                module,
+                operation,
+                owner,
+                address_module,
+            } => {
+                33u8.write(writer)?;
+                module.write(writer)?;
+                operation.write(writer)?;
+                owner.write(writer)?;
+                address_module.write(writer)
+            }
+            Self::Region {
+                entry,
+                api,
+                identity,
+                access,
+                preceding,
+                provider,
+                body,
+            } => {
+                30u8.write(writer)?;
+                entry.write(writer)?;
+                api.write(writer)?;
+                identity.write(writer)?;
+                access.write(writer)?;
+                preceding.write(writer)?;
+                provider.write(writer)?;
+                body.write(writer)
+            }
+            Self::RegionAllocate {
+                api,
+                context,
+                request,
+            } => {
+                31u8.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                request.write(writer)
+            }
+            Self::RegionHost {
+                module,
+                owner,
+                release,
+            } => {
+                32u8.write(writer)?;
+                module.write(writer)?;
+                owner.write(writer)?;
+                release.write(writer)
+            }
             Self::AddressIntrinsic { module, operation } => {
                 29u8.write(writer)?;
                 module.write(writer)?;
@@ -2211,6 +2345,31 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            33 => Self::RegionBinding {
+                module: Wire::read(reader)?,
+                operation: Wire::read(reader)?,
+                owner: Wire::read(reader)?,
+                address_module: Wire::read(reader)?,
+            },
+            30 => Self::Region {
+                entry: Wire::read(reader)?,
+                api: Wire::read(reader)?,
+                identity: Wire::read(reader)?,
+                access: Wire::read(reader)?,
+                preceding: Wire::read(reader)?,
+                provider: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+            },
+            31 => Self::RegionAllocate {
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                request: Wire::read(reader)?,
+            },
+            32 => Self::RegionHost {
+                module: Wire::read(reader)?,
+                owner: Wire::read(reader)?,
+                release: Wire::read(reader)?,
+            },
             26 => Self::StringIntrinsic {
                 module: Wire::read(reader)?,
                 operation: Wire::read(reader)?,
@@ -2612,6 +2771,8 @@ impl PureImage {
         let mut seen_common = false;
         let mut seen_string = false;
         let mut seen_bytes = false;
+        let mut seen_region = false;
+        let mut seen_region_facade = false;
         for record in &self.sources {
             charge(decoder.work, 1)?;
             let path = decoder.text(record.path)?;
@@ -2620,6 +2781,18 @@ impl PureImage {
                 .map_err(|_| ImageFailure::SourceAdmission)?;
             let role = match record.role {
                 ModuleRoleRecord::Ordinary => crate::module::ImageModuleRole::Ordinary,
+                ModuleRoleRecord::BuiltinRegionFacade => {
+                    if std::mem::replace(&mut seen_region_facade, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRegionFacade
+                }
+                ModuleRoleRecord::BuiltinRegion => {
+                    if std::mem::replace(&mut seen_region, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRegion
+                }
                 ModuleRoleRecord::BuiltinString => {
                     if std::mem::replace(&mut seen_string, true) {
                         return Err(ImageFailure::InvalidRecord);
@@ -3052,7 +3225,9 @@ impl Decoder<'_> {
         origin: OriginOwner,
     ) -> Result<NodeId, ImageFailure> {
         let node = match record {
-            NodeTag::CellScope { .. }
+            NodeTag::Region { .. }
+            | NodeTag::RegionAllocate { .. }
+            | NodeTag::CellScope { .. }
             | NodeTag::Cleanup { .. }
             | NodeTag::Registration { .. }
             | NodeTag::Handler(_)
@@ -3065,6 +3240,60 @@ impl Decoder<'_> {
 
             NodeTag::TypeAbstraction { .. } | NodeTag::TypeApplication { .. } => {
                 return Err(ImageFailure::Unsupported(Unsupported::ErasedTypeOperation));
+            }
+            NodeTag::RegionBinding {
+                module,
+                operation,
+                owner,
+                address_module,
+            } => {
+                let module = *get(&self.modules, module)?;
+                if !module.is_builtin_region() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                use crate::core::packed::Intrinsic;
+                let operation = match (operation, owner, address_module) {
+                    (0, None, None) => Intrinsic::RegionRequestBytes,
+                    (1, None, None) => Intrinsic::RegionRequestAlignment,
+                    (2, Some(owner), Some(address_module)) => Intrinsic::RegionFromBacking {
+                        owner: self.type_variable(owner)?,
+                        address_module: *get(&self.modules, address_module)?,
+                    },
+                    _ => return Err(ImageFailure::InvalidRecord),
+                };
+                if matches!(operation, Intrinsic::RegionFromBacking { address_module, .. } if !address_module.is_builtin_foreign())
+                {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.intrinsic(operation, module, ty.into_inner(), origin.take())
+                })
+            }
+            NodeTag::RegionHost {
+                module,
+                owner,
+                release,
+            } => {
+                let module = *get(&self.modules, module)?;
+                if !module.is_builtin_region() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let owner = self.type_variable(owner)?;
+                let configuration = crate::core::region::HostRegionConfiguration::System;
+                let operation = if release {
+                    crate::core::packed::Intrinsic::RegionHostRelease {
+                        owner,
+                        configuration,
+                    }
+                } else {
+                    crate::core::packed::Intrinsic::RegionHostAllocate {
+                        owner,
+                        configuration,
+                    }
+                };
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.intrinsic(operation, module, ty.into_inner(), origin.take())
+                })
             }
             NodeTag::StringIntrinsic { module, operation } => {
                 let module = *get(&self.modules, module)?;
@@ -3280,24 +3509,52 @@ mod provenance_tests;
 mod tests {
 
     #[test]
-    fn foreign_free_default_compilation_keeps_pure_private_image() {
+    fn default_region_entry_image_restores_without_original_sources() {
         let tree = SourceTree::new();
-        tree.write("entry.ash", "main : Unit -> Int\nmain () = 42\n");
+        tree.write("entry.ash", concat!(
+            "import @builtin.regions as Region\n",
+            "main : Unit -> Int\nmain () = region<R> r {\nusing r {\nmatch (20, 22) {\n(a, b) => a + b\n}\n}\n}\n",
+        ));
         let compiled = compile_path(tree.configuration()).unwrap();
-        assert!(compiled.effect_build_input().is_none());
+        assert!(compiled.pure_build_input().is_none());
         let (program, provenance) = compiled
-            .pure_build_input()
-            .expect("no Foreign or effectful scheme selects ordinary Pure Core");
-        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
-        assert!(!image.effect_dialect);
-        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
-        drop(image);
+            .effect_build_input()
+            .expect("generated root/default uses explicit Effect Core");
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        for role in [
+            ModuleRoleRecord::BuiltinRegion,
+            ModuleRoleRecord::BuiltinRegionFacade,
+        ] {
+            assert!(build.image.sources.iter().any(|source| source.role == role));
+        }
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
         drop(compiled);
         drop(tree);
-        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        let restored = decoded.restore(&mut TypeWorkBudget::default()).unwrap();
+        let mut work = TypeWorkBudget::default();
+        let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        decoded
+            .admit_expected_native_facts(&expected, &mut work)
+            .unwrap();
+        let restored = decoded.restore_effect(&mut work).unwrap();
         assert_eq!(
-            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
             "42"
         );
     }
@@ -5232,9 +5489,11 @@ main () = {
 // WireWriter, push/append/get helpers and single caller TypeWorkBudget. They are
 // insertion fragments, not a second image format or a compiled implementation.
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModuleRoleRecord {
     Ordinary,
+    BuiltinRegion,
+    BuiltinRegionFacade,
     BuiltinForeign,
     BuiltinCell,
     BuiltinGenericCell,
@@ -5480,6 +5739,8 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinString => 3,
             Self::BuiltinBytes => 4,
             Self::BuiltinGenericCell => 5,
+            Self::BuiltinRegion => 6,
+            Self::BuiltinRegionFacade => 7,
         }
         .write(writer)
     }
@@ -5491,6 +5752,8 @@ impl Wire for ModuleRoleRecord {
             3 => Ok(Self::BuiltinString),
             4 => Ok(Self::BuiltinBytes),
             5 => Ok(Self::BuiltinGenericCell),
+            6 => Ok(Self::BuiltinRegion),
+            7 => Ok(Self::BuiltinRegionFacade),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -6976,8 +7239,8 @@ impl Encoder<'_> {
                 selected.insert(parameter.id, ());
             }
         }
-        // The supported inventory admits only actual Cell scope identities
-        // beyond declaration-owned variables. Preserve their original facts.
+        // Preserve actual source Cell and region scope identities beyond
+        // declaration-owned variables. The generated root owns no registry fact.
         let mut parameters = Vec::new();
         for parameter in registry.type_variables() {
             let key = self.type_variable(parameter.id)?;
@@ -7004,6 +7267,22 @@ impl Encoder<'_> {
         use crate::core::{EffectExprKind, EffectOperation};
         match kind {
             EffectExprKind::Pure(kind) => self.encode_node(kind),
+            EffectExprKind::Operation(EffectOperation::Region(scope)) => Ok(NodeTag::Region {
+                entry: scope.entry,
+                api: self.module(scope.api)?,
+                identity: self.type_variable(scope.identity)?,
+                access: self.encode_binder(&scope.access)?,
+                preceding: self.node(scope.preceding)?,
+                provider: self.node(scope.provider)?,
+                body: self.node(scope.body)?,
+            }),
+            EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => {
+                Ok(NodeTag::RegionAllocate {
+                    api: self.module(allocation.api)?,
+                    context: self.node(allocation.context)?,
+                    request: self.node(allocation.request)?,
+                })
+            }
             EffectExprKind::Operation(EffectOperation::Resource(scope)) => Ok(NodeTag::CellScope {
                 acquisition: self.encode_cell_acquisition(scope.acquisition)?,
                 handle: self.encode_binder(scope.handle())?,
@@ -7673,6 +7952,14 @@ impl Decoder<'_> {
                     self.cell_acquisition(acquisition)?.identity,
                     self.work,
                 )?;
+            } else if let NodeTag::Region {
+                identity,
+                entry: false,
+                ..
+            } = node.tag
+            {
+                let identity = self.type_variable(identity)?;
+                push(&mut identities, identity, self.work)?;
             }
         }
         if !registry
@@ -7747,6 +8034,8 @@ impl PureImage {
         let mut seen_common = false;
         let mut seen_cell = false;
         let mut seen_generic_cell = false;
+        let mut seen_region = false;
+        let mut seen_region_facade = false;
         let mut seen_string = false;
         let mut seen_bytes = false;
         for record in &self.sources {
@@ -7768,6 +8057,18 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
+                }
+                ModuleRoleRecord::BuiltinRegionFacade => {
+                    if std::mem::replace(&mut seen_region_facade, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRegionFacade
+                }
+                ModuleRoleRecord::BuiltinRegion => {
+                    if std::mem::replace(&mut seen_region, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRegion
                 }
                 ModuleRoleRecord::BuiltinGenericCell => {
                     if std::mem::replace(&mut seen_generic_cell, true) {
@@ -7957,6 +8258,66 @@ impl Decoder<'_> {
         origin: OriginOwner,
     ) -> Result<NodeId, ImageFailure> {
         let node = match tag {
+            NodeTag::Region {
+                entry,
+                api,
+                identity,
+                access,
+                preceding,
+                provider,
+                body,
+            } => {
+                let api = *get(&self.modules, api)?;
+                if !api.is_builtin_region() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let identity = self.type_variable(identity)?;
+                let access = self.binder(builder, access)?;
+                let scope = crate::core::region::RegionScopeNode {
+                    entry,
+                    api,
+                    identity,
+                    access,
+                    preceding: *get(nodes, preceding)?,
+                    provider: *get(nodes, provider)?,
+                    body: *get(nodes, body)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::Region(Box::new(scope)),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionAllocate {
+                api,
+                context,
+                request,
+            } => {
+                let api = *get(&self.modules, api)?;
+                if !api.is_builtin_region() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let allocation = crate::core::region::RegionAllocateNode {
+                    api,
+                    context: *get(nodes, context)?,
+                    request: *get(nodes, request)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionAllocate(allocation),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
             NodeTag::CellScope {
                 acquisition,
                 handle,
@@ -8376,6 +8737,13 @@ fn encode_native_preparation(
                 return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
             }
             push(&mut identities, scope.acquisition.identity, work)?;
+        } else if let crate::core::EffectExprKind::Operation(
+            crate::core::EffectOperation::Region(scope),
+        ) = &node.kind
+        {
+            if !scope.entry {
+                push(&mut identities, scope.identity(), work)?;
+            }
         }
     }
     if !program

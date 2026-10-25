@@ -7,6 +7,8 @@ mod effect_signature_borrow_tests;
 
 mod source_declarations;
 
+static REGION_OWNER_KIND: crate::types::Kind = crate::types::Kind::Type;
+
 pub(crate) use source_declarations::DeclarationCoordinateLoan;
 pub(crate) use source_declarations::DeclarationCoordinates;
 
@@ -3368,6 +3370,9 @@ struct ScopeRequirement {
 type ScopeRequirements = HashMap<ScopeRequirementKey, ScopeRequirement>;
 
 pub(super) trait ScopeFamily: CoreOperationFamily {
+    fn region_scope(_kind: &Self::Kind) -> Option<&super::region::RegionScopeNode> {
+        None
+    }
     fn resource_scope(_kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
         None
     }
@@ -3396,6 +3401,14 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
 impl ScopeFamily for PureOperationFamily {}
 
 impl ScopeFamily for super::effect::EffectOperationFamily {
+    fn region_scope(kind: &Self::Kind) -> Option<&super::region::RegionScopeNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Region(
+                scope,
+            )) => Some(scope),
+            _ => None,
+        }
+    }
     fn resource_scope(kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
         match kind {
             super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
@@ -3442,6 +3455,11 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         child: usize,
         visit: &mut dyn FnMut(BinderId),
     ) {
+        if child == 2
+            && let Some(scope) = Self::region_scope(kind)
+        {
+            visit(scope.access.id());
+        }
         if child == 1
             && let Some(resource) = Self::resource_scope(kind)
         {
@@ -9980,8 +9998,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         let mut consumed_rows = 0_usize;
         for (index, node) in self.program.nodes.iter().enumerate() {
-            if let Some(parameter) =
-                F::resource_scope(&node.kind).map(|resource| resource.acquisition.identity)
+            if let Some(parameter) = F::resource_scope(&node.kind)
+                .map(|resource| resource.acquisition.identity)
+                .or_else(|| F::region_scope(&node.kind).map(|scope| scope.identity))
             {
                 let id = node_id(self.program.arena, index)?;
                 self.charge_type_work(1)?;
@@ -9990,6 +10009,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .registry
                     .type_variable(parameter)
                     .map(|canonical| &canonical.kind)
+                    .or_else(|| {
+                        F::region_scope(&node.kind)
+                            .filter(|scope| {
+                                scope.entry
+                                    && matches!(
+                                        scope.identity,
+                                        crate::types::TypeVariableId::Generated(_)
+                                    )
+                            })
+                            .map(|_| &REGION_OWNER_KIND)
+                    })
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
                 if *kind != Kind::Type
                     || nominal_parameter_owners.contains_key(&parameter)
@@ -11494,6 +11524,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             child_free.remove(&resource.acquisition.identity);
                         }
 
+                        if child_index >= 1
+                            && let Some(scope) = F::region_scope(&node.kind)
+                        {
+                            child_free.remove(&scope.identity);
+                        }
                         self.merge_type_scope_requirements(&mut free, child_free)?;
                     }
                     match F::pure(&node.kind) {
@@ -11577,11 +11612,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             }
                             self.merge_type_scope_requirements(&mut free, captured)?;
                         }
+                        Some(PureExprKind::Value(PureValue::Intrinsic(leaf))) => {
+                            if let super::packed::Intrinsic::RegionHostAllocate { owner, .. }
+                            | super::packed::Intrinsic::RegionHostRelease { owner, .. } =
+                                leaf.operation()
+                            {
+                                self.charge_type_work(1)?;
+                                self.collect_free_type_variables(
+                                    &Type::Variable(owner),
+                                    &mut free,
+                                )?;
+                            }
+                        }
                         Some(
                             PureExprKind::Value(
                                 PureValue::Integer(_)
                                 | PureValue::String(_)
-                                | PureValue::Intrinsic(_)
                                 | PureValue::Boolean(_)
                                 | PureValue::Unit(_)
                                 | PureValue::Constructor(_),
@@ -13058,6 +13104,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 &node.kind,
                 super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Resource(_)
+                        | super::effect::EffectOperation::Region(_)
                         | super::effect::EffectOperation::Cleanup(_)
                         | super::effect::EffectOperation::Registration(_)
                 )
@@ -13521,6 +13568,143 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 self.validate_pure_effect_row(id, node, type_binders)?;
             }
             EffectExprKind::Pure(_) => self.validate_pure_effect_row(id, node, type_binders)?,
+            EffectExprKind::Operation(EffectOperation::Region(scope)) => {
+                let api = crate::resolved::RegionApi::for_module(scope.api)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+                let provider = self.node(scope.provider)?;
+                let preceding = self.node(scope.preceding)?;
+                let body = self.node(scope.body)?;
+                let view = Type::Nominal(api.region_view());
+                let Type::Tuple(members) = &provider.ty else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let [allocate, release] = members.as_ref() else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let allocate = allocate
+                    .function_view()
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+                let release = release
+                    .function_view()
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+                let storage = Type::Application(
+                    Box::new(Type::Nominal(api.storage())),
+                    Box::new(Type::Variable(scope.identity)),
+                );
+                let entry_position = id == self.program.root
+                    || matches!(&self.node(self.program.root)?.kind,
+                    EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) if boundary.body() == id);
+                if scope.entry {
+                    let PureExprKind::Computation(PureComputation::Tuple(pair)) =
+                        super::effect::EffectOperationFamily::pure(&provider.kind).ok_or_else(
+                            || ValidationError::new(ValidationReason::NodeType, Some(id)),
+                        )?
+                    else {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                    };
+                    let [allocate, release] = pair.elements() else {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                    };
+                    for (child, release_member) in [(*allocate, false), (*release, true)] {
+                        let Some(PureExprKind::Value(PureValue::Intrinsic(leaf))) =
+                            super::effect::EffectOperationFamily::pure(&self.node(child)?.kind)
+                        else {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        };
+                        let valid = match leaf.operation() {
+                            super::packed::Intrinsic::RegionHostAllocate {
+                                owner,
+                                configuration,
+                            } => {
+                                !release_member
+                                    && owner == scope.identity
+                                    && configuration
+                                        == super::region::HostRegionConfiguration::System
+                            }
+                            super::packed::Intrinsic::RegionHostRelease {
+                                owner,
+                                configuration,
+                            } => {
+                                release_member
+                                    && owner == scope.identity
+                                    && configuration
+                                        == super::region::HostRegionConfiguration::System
+                            }
+                            _ => false,
+                        };
+                        if !valid || leaf.module() != scope.api {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        }
+                    }
+                    if !matches!(
+                        super::effect::EffectOperationFamily::pure(&preceding.kind),
+                        Some(PureExprKind::Value(PureValue::Unit(_)))
+                    ) || !matches!(scope.access.id(), BinderId::Generated(_))
+                    {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                    }
+                }
+                if (scope.entry
+                    && (!entry_position
+                        || !matches!(scope.identity, crate::types::TypeVariableId::Generated(_))))
+                    || !self.same_type_charged(
+                        &preceding.ty,
+                        if scope.entry { &Type::Unit } else { &view },
+                    )?
+                    || !self.same_type_charged(scope.access.ty(), &view)?
+                    || !self.same_type_charged(&body.ty, &node.ty)?
+                    || !self.same_type_charged(allocate.domain(), &Type::Nominal(api.request()))?
+                    || !self.same_type_charged(allocate.value(), &storage)?
+                    || !self.same_type_charged(release.domain(), &Type::Unit)?
+                    || !self.same_type_charged(release.value(), &Type::Unit)?
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                let mut budget = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let expected = super::region::owner_effects(
+                    scope,
+                    &provider.ty,
+                    &preceding.effects,
+                    &provider.effects,
+                    &body.effects,
+                    &mut budget,
+                );
+                self.charge_type_work(budget.used())?;
+                let expected = expected
+                    .map_err(|()| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+                if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
+            EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => {
+                let api = crate::resolved::RegionApi::for_module(allocation.api)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+                let context = self.node(allocation.context)?;
+                let request = self.node(allocation.request)?;
+                if !self.same_type_charged(&context.ty, &Type::Nominal(api.region_view()))?
+                    || !self.same_type_charged(&request.ty, &Type::Nominal(api.request()))?
+                    || !self.same_type_charged(&node.ty, &Type::Nominal(api.storage_view()))?
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                let mut budget = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let expected = super::region::allocation_effects(
+                    allocation,
+                    &context.effects,
+                    &request.effects,
+                    &mut budget,
+                );
+                self.charge_type_work(budget.used())?;
+                let expected = expected
+                    .map_err(|()| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+                if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 self.validate_resource_node(id, node, resource)?;
             }
@@ -13599,6 +13783,92 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     ) -> Result<bool, ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation};
 
+        let mut host_owners = HashMap::new();
+        for stored in &self.program.nodes {
+            let EffectExprKind::Operation(EffectOperation::Region(scope)) = &stored.kind else {
+                continue;
+            };
+            let mut pending = Vec::new();
+            let mut seen = HashSet::new();
+            pending
+                .try_reserve(1)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            pending.push(scope.provider);
+            while let Some(candidate) = pending.pop() {
+                self.charge_type_work(1)?;
+                seen.try_reserve(1).map_err(|_| {
+                    ValidationError::new(ValidationReason::Resource, Some(candidate))
+                })?;
+                if !seen.insert(candidate) {
+                    continue;
+                }
+                let node = self.node(candidate)?;
+                if matches!(
+                    &node.kind,
+                    EffectExprKind::Operation(EffectOperation::Region(_))
+                ) {
+                    continue;
+                }
+                if let Some(PureExprKind::Value(PureValue::Intrinsic(leaf))) =
+                    super::effect::EffectOperationFamily::pure(&node.kind)
+                {
+                    let owner = match leaf.operation() {
+                        super::packed::Intrinsic::RegionHostAllocate { owner, .. }
+                        | super::packed::Intrinsic::RegionHostRelease { owner, .. } => Some(owner),
+                        _ => None,
+                    };
+                    if let Some(owner) = owner {
+                        if owner != scope.identity {
+                            return Err(ValidationError::new(
+                                ValidationReason::NodeType,
+                                Some(candidate),
+                            ));
+                        }
+                        host_owners.try_reserve(1).map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(candidate))
+                        })?;
+                        if host_owners
+                            .insert(candidate, owner)
+                            .is_some_and(|prior| prior != owner)
+                        {
+                            return Err(ValidationError::new(
+                                ValidationReason::NodeType,
+                                Some(candidate),
+                            ));
+                        }
+                    }
+                }
+                let count = super::effect::EffectOperationFamily::child_count(&node.kind);
+                self.charge_type_work(count)?;
+                pending.try_reserve(count).map_err(|_| {
+                    ValidationError::new(ValidationReason::Resource, Some(candidate))
+                })?;
+                for child in 0..count {
+                    pending.push(
+                        super::effect::EffectOperationFamily::child_at(&node.kind, child)
+                            .ok_or_else(|| {
+                                ValidationError::new(ValidationReason::NodeType, Some(candidate))
+                            })?,
+                    );
+                }
+            }
+        }
+        for (index, stored) in self.program.nodes.iter().enumerate() {
+            if let Some(PureExprKind::Value(PureValue::Intrinsic(leaf))) =
+                super::effect::EffectOperationFamily::pure(&stored.kind)
+                && matches!(
+                    leaf.operation(),
+                    super::packed::Intrinsic::RegionHostAllocate { .. }
+                        | super::packed::Intrinsic::RegionHostRelease { .. }
+                )
+                && !host_owners.contains_key(&node_id(self.program.arena, index)?)
+            {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(node_id(self.program.arena, index)?),
+                ));
+            }
+        }
         let mut handler_ids = HashSet::new();
         let mut clause_contracts = HashMap::new();
         let mut has_discard = false;
@@ -14169,6 +14439,38 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             }
                         },
 
+                        EffectExprKind::Operation(EffectOperation::Region(scope)) => {
+                            let mut budget = TypeWorkBudget::with_limit(
+                                self.type_work_limit.saturating_sub(self.type_work.get()),
+                            );
+                            let result = super::region::owner_effects(
+                                scope,
+                                &self.node(scope.provider)?.ty,
+                                child_row(scope.preceding)?,
+                                child_row(scope.provider)?,
+                                child_row(scope.body)?,
+                                &mut budget,
+                            );
+                            self.charge_type_work(budget.used())?;
+                            result.map_err(|()| {
+                                ValidationError::new(ValidationReason::NodeType, Some(id))
+                            })?
+                        }
+                        EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => {
+                            let mut budget = TypeWorkBudget::with_limit(
+                                self.type_work_limit.saturating_sub(self.type_work.get()),
+                            );
+                            let result = super::region::allocation_effects(
+                                allocation,
+                                child_row(allocation.context)?,
+                                child_row(allocation.request)?,
+                                &mut budget,
+                            );
+                            self.charge_type_work(budget.used())?;
+                            result.map_err(|()| {
+                                ValidationError::new(ValidationReason::NodeType, Some(id))
+                            })?
+                        }
                         EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                             let outward =
                                 self.resource_outward_row(child_row(resource.body)?, resource, id)?;
