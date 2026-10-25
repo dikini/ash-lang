@@ -3,7 +3,8 @@
 This standalone root belongs to [TASK-0055](../../tasks/TASK-0055-lexical-regions.md)
 and its [execution plan](../../tasks/plans/lexical-regions.md). The intended
 contract remains [DN-0054](../DN-0054-base-lexical-region-memory-contracts.md)
-and the forthcoming R2 proposal. It defines no current Ash semantics.
+and [CP-0025](../../proposals/CP-0025-lexical-region-construction.md), which
+remains proposed pending matched R1/R2 review and proof. It defines no current Ash semantics.
 
 The registration is initially empty: there are no integrated region proofs or
 reusable region artifacts. An explicitly labelled empty seed pins this baseline

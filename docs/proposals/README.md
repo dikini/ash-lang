@@ -19,7 +19,9 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed change is listed.
+[CP-0025: Lexical region construction and paired allocators](CP-0025-lexical-region-construction.md)
+is proposed for matched R1 modeling and R2 review. It does not authorize product
+implementation or claim a completed preservation proof.
 
 ## Accepted changes
 

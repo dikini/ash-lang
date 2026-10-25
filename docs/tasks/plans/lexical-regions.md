@@ -38,8 +38,9 @@ The source/Core candidate uses schematic lexical declaration and selection
 forms and monomorphic default-allocation forwarding to an exact region effect.
 A region-independent storage view must preserve actual residency and lifetime.
 These are proposed realizations, not selected grammar, a new raw-memory API or
-an accepted concrete layout. Astra's R2 proposal will record the exact contract;
-use its reviewed version rather than inferring semantics from this plan.
+an accepted concrete layout. [CP-0025](../../proposals/CP-0025-lexical-region-construction.md) records the
+proposed exact contract. It remains under matched model/proof review; use its
+reviewed version rather than inferring semantics from this plan.
 
 Ordinary construction on current Main does not yet carry the proposed allocation
 effect. R2 must state that semantic delta explicitly. Surface `! {}` would include

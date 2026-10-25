@@ -2,7 +2,8 @@
 
 - ID: `TASK-0055`
 - Status: active — R1/R2 design and proof preparation
-- Related: [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md),
+- Related: [CP-0025](../proposals/CP-0025-lexical-region-construction.md) (proposed),
+  [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md),
   [DN-0055](../design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md),
   [AD-0012](../decisions/AD-0012-proof-development-feedback-and-build-reuse.md),
   [M2 #53](https://github.com/dikini/ash-lang/issues/53)
@@ -44,6 +45,21 @@ standalone proof root with the same pinned Lean toolchain and an explicitly
 empty registration seed. A narrow existing-runner directory option preserves
 its checks rather than rebuilding or changing unrelated proofs. This is gate
 preparation, not a region theorem or accepted R2 contract.
+
+The standalone runner foundation is retained by
+[PR #145](https://github.com/dikini/ash-lang/pull/145) as
+`31fcfa5674f7cbd46ee583507f47a5c0cf21170e`. Its independent review and five
+focused tests cover only gate preparation, not region preservation.
+[CP-0025](../proposals/CP-0025-lexical-region-construction.md) now records the
+proposed R2 contract: prospective activation, canonical owner-targeted callback
+and one-shot return, actual backing registration, explicit default/cleanup
+operands and fixed paired allocation/release. It is not accepted.
+
+The finite model is in development. Current local checks do not establish the
+full model invariant or source/Core correspondence. Public cyclic-graph
+construction, captured/outside ownership and contexts, pending storage, ordered
+cleanup/close and counterexamples must all be covered by a matched source
+review and frozen integration gate before R1/R2 acceptance.
 
 R1/R2 deliverables and all R3–R5 acceptance remain pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
