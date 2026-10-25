@@ -47,7 +47,8 @@ existing request/supply/initialize/publication and dependency guards. Generic
 source/Core Scalar-to-Free lowering must not classify unknown Int as independent.
 Conservative arithmetic admission and faithful Cell/call/request summaries remain
 compiler correspondence obligations. The existing finite preservation result
-does not establish these classifications; this clarification adds no theorem,
+does not establish these classifications, private immediate-range agreement or
+arithmetic correctness; this clarification adds no theorem,
 proof module or changed transition premise.
 
 ## Admitted trace evidence
