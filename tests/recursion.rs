@@ -1,23 +1,11 @@
 mod support;
 
-use std::{
-    fs,
-    sync::atomic::{AtomicU64, Ordering},
-};
-
 use ash::{
-    core::validate_modules,
     driver::PipelineFailure,
-    elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
-    eval::{Evaluation, evaluate},
-    evidence_validation::validate_interface_evidence,
-    module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
+    elaborate::{TypeError, TypeReason},
     types::Type,
 };
 use support::run_module;
-
-static CORE_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 fn run(text: &str) -> ash::driver::Observation {
     run_module("recursion.ash", text).expect("fixture should run")
@@ -29,39 +17,6 @@ fn typing_error(text: &str) -> Box<ash::elaborate::TypeDiagnostic> {
         panic!("expected a source typing error, found {error:?}")
     };
     diagnostic
-}
-
-fn evaluate_module(text: &str) -> Evaluation {
-    let directory = loop {
-        let id = CORE_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("ash-recursive-core-{}-{id}", std::process::id()));
-        match fs::create_dir(&path) {
-            Ok(()) => break path,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => panic!("recursive fixture directory should be creatable: {error}"),
-        }
-    };
-    let entry_path = directory.join("recursion.ash");
-    fs::write(&entry_path, text).expect("recursive fixture should be writable");
-    let graph = load_module_graph(&entry_path, &ModuleRoots::empty())
-        .expect("recursive fixture should load");
-    let resolved = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
-    let checked = check_module(resolved).expect("fixture should check");
-    let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
-    let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
-    let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("binder namespace should fit");
-    let typed = elaborator
-        .synthesize_module_program(&linked)
-        .expect("fixture should elaborate");
-    let unchecked = elaborator.finish(typed.node).expect("root should finish");
-    let source = graph.modules()[0].source();
-    let validated = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-        .expect("Core should validate");
-    let evaluation = evaluate(&validated).expect("recursive chain should evaluate");
-    let _ = fs::remove_dir_all(directory);
-    evaluation
 }
 
 #[test]
@@ -167,43 +122,4 @@ fn recursive_members_are_checked_against_their_declared_monotypes() {
     assert_eq!(argument_error.reason, TypeReason::Argument);
     assert_eq!(argument_error.expected.as_deref(), Some("Unit"));
     assert_eq!(argument_error.found.as_deref(), Some("Int"));
-}
-
-#[test]
-fn deep_recursive_group_and_call_chain_use_explicit_work_stacks() {
-    const MEMBERS: usize = 8_000;
-    let worker = std::thread::Builder::new()
-        .name("deep-recursive-group".into())
-        .stack_size(256 * 1024)
-        .spawn(|| {
-            use std::fmt::Write as _;
-
-            let mut text = String::from("main : Unit -> Int\nmain () = {\n");
-            for index in 0..MEMBERS {
-                let introducer = if index == 0 { "let rec" } else { "and" };
-                if index + 1 == MEMBERS {
-                    writeln!(text, "{introducer} f{index} : Unit -> Int = fn(ignored) {{")
-                        .expect("String writing cannot fail");
-                    text.push_str("let retain : Unit -> Int = fn(value) {\nf0 value\n}\n1\n}\n");
-                } else {
-                    writeln!(
-                        text,
-                        "{introducer} f{index} : Unit -> Int = fn(ignored) {{\n1 + f{} ()\n}}",
-                        index + 1
-                    )
-                    .expect("String writing cannot fail");
-                }
-            }
-            text.push_str("f0 ()\n}\n");
-
-            let evaluation = evaluate_module(&text);
-
-            assert_eq!(evaluation.value.to_string(), MEMBERS.to_string());
-            assert!(evaluation.trace.len() > MEMBERS * 5);
-        })
-        .expect("depth-test thread should start");
-
-    worker
-        .join()
-        .expect("recursive pipeline and destruction should stay within the host stack budget");
 }

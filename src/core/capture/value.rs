@@ -49,6 +49,7 @@ enum Expr {
     Tuple(Vec<usize>),
     // Whole-record residency is independent of the exact projectable fields.
     ResidentTuple {
+        constructor: Option<ConstructorId>,
         fields: Vec<usize>,
         owner: usize,
     },
@@ -142,7 +143,12 @@ impl Expr {
             Self::Merge(values) => Self::Merge(ids(values, budget)?),
             Self::MetadataMerge(values) => Self::MetadataMerge(ids(values, budget)?),
             Self::Tuple(values) => Self::Tuple(ids(values, budget)?),
-            Self::ResidentTuple { fields, owner } => Self::ResidentTuple {
+            Self::ResidentTuple {
+                fields,
+                owner,
+                constructor,
+            } => Self::ResidentTuple {
+                constructor: *constructor,
                 fields: ids(fields, budget)?,
                 owner: owner + offset,
             },
@@ -451,7 +457,7 @@ impl Graph {
                     inputs.try_reserve(1).map_err(|_| Failure::Resource)?;
                     inputs.push(id);
                 }
-                Expr::ResidentTuple { fields, owner } => {
+                Expr::ResidentTuple { fields, owner, .. } => {
                     children = copy_slice(fields, budget)?;
                     charge(budget, 1)?;
                     children.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1407,6 +1413,7 @@ impl Graph {
                     .map_err(|_| Failure::Resource)?;
                 fields.extend(tuple.fields.iter().map(|field| index(*field)));
                 Expr::ResidentTuple {
+                    constructor: tuple.constructor,
                     fields,
                     owner: index(tuple.context),
                 }
@@ -3597,7 +3604,7 @@ impl<'a> Analysis<'a> {
                             | Expr::Call {
                                 arguments: fields, ..
                             } => fields.as_slice(),
-                            Expr::ResidentTuple { fields, owner } => {
+                            Expr::ResidentTuple { fields, owner, .. } => {
                                 charge(budget, 1)?;
                                 pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                                 if let Some(port) = self.indices.get(&(*owner, creation)).copied() {
@@ -4592,9 +4599,21 @@ impl<'a> Analysis<'a> {
                     match atom {
                         Atom::Aggregate(target, creation) => {
                             match &self.graph.expressions[target] {
-                                Expr::Tuple(fields) | Expr::ResidentTuple { fields, .. }
-                                    if constructor.is_none() =>
-                                {
+                                Expr::ResidentTuple {
+                                    fields,
+                                    constructor: Some(actual),
+                                    ..
+                                } if constructor == &Some(*actual) => {
+                                    if let Some(value) = fields.get(*field) {
+                                        P::link(self, slot, *value, creation, budget)?;
+                                    }
+                                }
+                                Expr::Tuple(fields)
+                                | Expr::ResidentTuple {
+                                    fields,
+                                    constructor: None,
+                                    ..
+                                } if constructor.is_none() => {
                                     if let Some(value) = fields.get(*field) {
                                         P::link(self, slot, *value, creation, budget)?;
                                     }
@@ -4918,7 +4937,7 @@ impl<'a> Analysis<'a> {
                         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                         pending.push(*value);
                     }
-                    Expr::ResidentTuple { fields, owner } => {
+                    Expr::ResidentTuple { fields, owner, .. } => {
                         charge(budget, fields.len() + 1)?;
                         pending
                             .try_reserve(fields.len() + 1)
@@ -5080,7 +5099,7 @@ impl<'a> Analysis<'a> {
                     }
                     Atom::Aggregate(target, context) => match &self.graph.expressions[target] {
                         Expr::Tuple(fields) => Some((fields.as_slice(), context)),
-                        Expr::ResidentTuple { fields, owner } => {
+                        Expr::ResidentTuple { fields, owner, .. } => {
                             charge(budget, 1)?;
                             pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                             if let Some(slot) = self.indices.get(&(*owner, context)) {

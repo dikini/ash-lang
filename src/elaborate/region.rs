@@ -31,12 +31,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         effects: &EffectRow,
         span: Span,
     ) -> Result<NodeId, TypeError> {
+        self.initialize_region_record(None, operands, ty, effects, span)
+    }
+
+    pub(super) fn initialize_region_record(
+        &mut self,
+        constructor: Option<crate::types::ConstructorId>,
+        operands: Vec<NodeId>,
+        ty: &Type,
+        effects: &EffectRow,
+        span: Span,
+    ) -> Result<NodeId, TypeError> {
         use crate::core::region::{RegionTupleNode, RegionValueRequestNode};
         let api = self.region_api_at(span)?;
-        let Type::Tuple(types) = ty else {
-            return Err(invalid_state());
-        };
-        if types.len() != operands.len() {
+        if constructor.is_none()
+            && !matches!(ty, Type::Tuple(types) if types.len() == operands.len())
+        {
             return Err(invalid_state());
         }
         self.type_work
@@ -70,7 +80,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(span),
             EffectOperation::RegionValueRequest(RegionValueRequestNode {
                 api: api.module(),
-                fields: operands.len(),
+                fields: operands.len() + usize::from(constructor.is_some()),
             }),
         )?;
         let allocate_row = self.core_effect_row(&default_row)?;
@@ -91,6 +101,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             initialized_effects,
             Origin::Source(span),
             EffectOperation::RegionTuple(RegionTupleNode {
+                constructor,
                 api: api.module(),
                 context: context_value,
                 storage: allocated,

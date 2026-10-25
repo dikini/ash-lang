@@ -5116,9 +5116,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(identity)
     }
 
-    fn lower_newtype_constructor_value(
+    fn lower_constructor_function(
         &mut self,
         owner: crate::types::NominalTypeId,
+        constructor: Option<crate::types::ConstructorId>,
         source_scheme: Type,
         origin: &Origin,
         span: Span,
@@ -5168,30 +5169,45 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
             );
-            let body = body.into_inner();
-            let Type::Function(domain, codomain) = body else {
-                discard_type_iteratively(body);
-                return Err(invalid_state());
+            let (domain, codomain, effects) = match body.into_inner() {
+                Type::Function(domain, codomain) => (*domain, *codomain, EffectRow::empty()),
+                Type::EffectfulFunction(domain, computation) => {
+                    (*domain, computation.value, computation.effects)
+                }
+                other => {
+                    discard_type_iteratively(other);
+                    return Err(invalid_state());
+                }
             };
-            let domain = IterativeTypeOwner::new(*domain);
-            let codomain = IterativeTypeOwner::new(*codomain);
+            let domain = IterativeTypeOwner::new(domain);
+            let codomain = IterativeTypeOwner::new(codomain);
             let parameter_type = self.clone_type(&domain)?;
             let parameter = self.builder.binder(parameter_type, origin.clone())?;
             let child_type = self.clone_type(&domain)?;
             let child = self
                 .builder
                 .variable(parameter.id(), child_type, origin.clone())?;
-            let conversion_type = self.clone_type(&codomain)?;
-            let conversion = self.builder.newtype_conversion(
-                owner,
-                NewtypeConversionDirection::Wrap,
-                child,
-                conversion_type,
-                origin.clone(),
-            )?;
-            let function_type = IterativeTypeOwner::new(Type::Function(
-                Box::new(domain.into_inner()),
-                Box::new(codomain.into_inner()),
+            let conversion = if let Some(constructor) = constructor {
+                self.initialize_region_record(
+                    Some(constructor),
+                    vec![child],
+                    &codomain,
+                    &effects,
+                    span,
+                )?
+            } else {
+                let conversion_type = self.clone_type(&codomain)?;
+                self.builder.newtype_conversion(
+                    owner,
+                    NewtypeConversionDirection::Wrap,
+                    child,
+                    conversion_type,
+                    origin.clone(),
+                )?
+            };
+            let function_type = IterativeTypeOwner::new(Type::function_computation(
+                domain.into_inner(),
+                ComputationType::new(codomain.into_inner(), effects),
             ));
             if generated_parameters.is_empty() {
                 return self
@@ -14180,8 +14196,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     );
                     Type::apply_arguments(Type::Nominal(constructor_owner), arguments)
                 };
+                let has_payload = payload.is_some();
+                let region_api = (!is_newtype)
+                    .then(|| {
+                        self.registry.effects().iter().find_map(|effect| {
+                            crate::resolved::RegionApi::for_module(effect.id.module())
+                        })
+                    })
+                    .flatten();
+                let allocation = region_api.map_or_else(EffectRow::empty, |api| {
+                    EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])))
+                });
                 let scheme = IterativeTypeOwner::new(if let Some(payload) = payload {
-                    Type::Function(Box::new(payload.into_inner()), Box::new(result))
+                    Type::function_computation(
+                        payload.into_inner(),
+                        crate::types::ComputationType::new(result, allocation.clone()),
+                    )
                 } else {
                     result
                 });
@@ -14212,21 +14242,34 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     })?;
                     Type::Forall(quantified, Box::new(fact_ty.into_inner()))
                 };
-                let mut node = if is_newtype {
-                    self.lower_newtype_constructor_value(
+                let mut node = if is_newtype || (F::EFFECTS && region_api.is_some() && has_payload)
+                {
+                    self.lower_constructor_function(
                         constructor_owner,
+                        (!is_newtype).then_some(occurrence.constructor),
                         core_scheme,
                         &occurrence.origin,
                         current.span,
                     )?
+                } else if F::EFFECTS && region_api.is_some() && !has_payload {
+                    discard_type_iteratively(core_scheme);
+                    self.initialize_region_record(
+                        Some(occurrence.constructor),
+                        Vec::new(),
+                        &ty,
+                        &allocation,
+                        current.span,
+                    )?
                 } else {
+                    let projected = self.pure_core_type(&core_scheme)?;
+                    discard_type_iteratively(core_scheme);
                     self.builder.constructor(
                         occurrence.constructor,
-                        core_scheme,
+                        projected,
                         occurrence.origin.clone(),
                     )?
                 };
-                if !arguments.is_empty() {
+                if !arguments.is_empty() && (has_payload || region_api.is_none() || !F::EFFECTS) {
                     let core_ty =
                         clone_type_with_budget(&ty, &mut self.type_work).map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -14241,7 +14284,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let provenance = self.at_span_provenance(&ty, declaration_span)?;
                 values.push(TypedNode {
                     node,
-                    effects: EffectRow::empty(),
+                    effects: if !has_payload && region_api.is_some() {
+                        allocation
+                    } else {
+                        EffectRow::empty()
+                    },
                     provenance,
                     ty: ty.into_inner(),
                 });
@@ -34288,7 +34335,7 @@ mod tests {
         elaborator.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
 
         assert_eq!(
-            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            elaborator.lower_constructor_function(owner, None, scheme.clone(), &origin, span),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             )),
@@ -34303,7 +34350,7 @@ mod tests {
 
         elaborator.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
         let root = elaborator
-            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .lower_constructor_function(owner, None, scheme, &origin, span)
             .expect("the exact fresh whole-constructor budget should retry");
         assert_eq!(elaborator.type_work.used(), EXACT_WORK);
         assert_eq!(elaborator.generated_type_variables.len(), PARAMETER_COUNT);
@@ -34361,7 +34408,7 @@ mod tests {
         elaborator.type_work = TypeWorkBudget::with_limit(ONE_SHORT_REGISTRATION);
 
         assert_eq!(
-            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            elaborator.lower_constructor_function(owner, None, scheme.clone(), &origin, span),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             ))
@@ -34371,7 +34418,7 @@ mod tests {
 
         elaborator.type_work = TypeWorkBudget::unbounded();
         elaborator
-            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .lower_constructor_function(owner, None, scheme, &origin, span)
             .expect("a fresh budget should retry the unpublished generated identity");
         let generated = TypeVariableId::generated(u32::MAX);
         assert_eq!(elaborator.generated_type_variables.len(), 1);
@@ -34414,7 +34461,7 @@ mod tests {
         elaborator.type_work = TypeWorkBudget::with_limit(LATE_FAILURE_WORK);
 
         assert_eq!(
-            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            elaborator.lower_constructor_function(owner, None, scheme.clone(), &origin, span),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             )),
@@ -34425,7 +34472,7 @@ mod tests {
 
         elaborator.type_work = TypeWorkBudget::unbounded();
         let root = elaborator
-            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .lower_constructor_function(owner, None, scheme, &origin, span)
             .expect("the same elaborator should retry after rolling back Core");
         assert_eq!(elaborator.generated_type_variables.len(), 1);
         assert_eq!(elaborator.next_generated_type_variable, u32::MAX - 1);

@@ -134,6 +134,7 @@ impl TransformFamily for EffectOperationFamily {
                 }
                 builder.region_operation(
                     EffectOperation::RegionTuple(super::region::RegionTupleNode {
+                        constructor: tuple.constructor,
                         api: tuple.api,
                         context: remap(remapped, tuple.context)?,
                         storage: remap(remapped, tuple.storage)?,

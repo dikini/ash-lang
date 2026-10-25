@@ -1935,6 +1935,79 @@ mod tests {
         types::{InferenceVariableId, NominalTypeId, TypeVariableId},
     };
 
+    #[test]
+    fn deep_recursive_group_and_call_chain_use_explicit_work_stacks() {
+        const MEMBERS: usize = 8_000;
+        let worker = std::thread::Builder::new()
+            .name("deep-recursive-group".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                use std::fmt::Write as _;
+
+                let mut text = String::from("main : Unit -> Int\nmain () = {\n");
+                for index in 0..MEMBERS {
+                    let introducer = if index == 0 { "let rec" } else { "and" };
+                    if index + 1 == MEMBERS {
+                        writeln!(text, "{introducer} f{index} : Unit -> Int = fn(ignored) {{")
+                            .expect("String writing cannot fail");
+                        text.push_str(
+                            "let retain : Unit -> Int = fn(value) {\nf0 value\n}\n1\n}\n",
+                        );
+                    } else {
+                        writeln!(
+                            text,
+                            "{introducer} f{index} : Unit -> Int = fn(ignored) {{\n1 + f{} ()\n}}",
+                            index + 1
+                        )
+                        .expect("String writing cannot fail");
+                    }
+                }
+                text.push_str("f0 ()\n}\n");
+
+                let fixture = TestSource::write(&text);
+                // The former integration harness used four separate public
+                // calls, each with its own constraint ledger. Preserve that
+                // aggregate stress envelope without changing driver admission
+                // or resetting its continuous ledger between phases.
+                const AGGREGATE: usize = 4 * crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT;
+                let mut constraints = InterfaceConstraintBudget::with_limit(AGGREGATE);
+                let evidence_entry = Cell::new(0);
+                let evidence_exit = Cell::new(0);
+                let compiled = compile_path_with_consumers_internal(
+                    fixture.configuration(),
+                    &mut constraints,
+                    |program, work, types| {
+                        evidence_entry.set(work.used());
+                        let result = validate_interface_evidence_with_budget(program, work, types);
+                        evidence_exit.set(work.used());
+                        result
+                    },
+                    validate_modular_core,
+                    true,
+                    ProvenanceRetention::Retain,
+                );
+                eprintln!("deep stress constraints: aggregate={AGGREGATE}, evidence_entry={}, evidence_exit={}, total={}",
+                    evidence_entry.get(), evidence_exit.get(), constraints.used());
+                let compiled = compiled.unwrap_or_else(|failure| panic!(
+                    "recursive stress compilation failed: {:?}", failure.pipeline_failure()));
+                assert!(evidence_entry.get() <= 3 * crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+                assert!(evidence_exit.get() - evidence_entry.get() <= crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+                let (program, _) = compiled
+                    .effect_build_input()
+                    .expect("explicit default root uses Effect Core");
+                let evaluation =
+                    crate::eval::evaluate_effect(program).expect("recursive chain should evaluate");
+
+                assert_eq!(evaluation.value.to_string(), MEMBERS.to_string());
+                assert!(evaluation.trace.len() > MEMBERS * 5);
+            })
+            .expect("depth-test thread should start");
+
+        worker
+            .join()
+            .expect("recursive pipeline and destruction should stay within the host stack budget");
+    }
+
     static TEST_SOURCE_IDS: AtomicU64 = AtomicU64::new(0);
 
     struct TestSource(PathBuf);

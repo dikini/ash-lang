@@ -139,6 +139,82 @@ fn generated_root_backing_survives_tuple_observation() {
 }
 
 #[test]
+fn nominal_records_cannot_escape_their_declared_region() {
+    for expression in ["Empty", "Full 42"] {
+        let source = format!(
+            "type Item =\nEmpty\n| Full(Int)\nmain : Unit -> Item\nmain () = region<R> owner {{\n{expression}\n}}\n"
+        );
+        let failure = run_result(&source).unwrap_err();
+        let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+            panic!("expected the source lifetime diagnostic, got {failure:?}");
+        };
+        let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+            diagnostic.failure()
+        else {
+            panic!("expected source resource escape, got {diagnostic:?}");
+        };
+        assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+    }
+}
+
+#[test]
+fn constructor_alias_uses_the_callers_selected_region() {
+    assert_eq!(
+        run(concat!(
+            "type Item = Full(Int)\nmain : Unit -> Int\nmain () = region<R> outer {\n",
+            "let construct = Full\nlet kept = region<S> inner {\nusing outer {\nconstruct 42\n}\n}\n",
+            "match kept {\nFull(value) => value\n}\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
+fn higher_order_constructor_uses_the_callers_selected_region() {
+    assert_eq!(
+        run(concat!(
+            "type Item = Full(Int)\napply : (Int -> Item, Int) -> Item\n",
+            "apply (construct, value) = construct value\nmain : Unit -> Int\n",
+            "main () = region<R> outer {\nlet kept = region<S> inner {\nusing outer {\napply (Full, 42)\n}\n}\n",
+            "match kept {\nFull(value) => value\n}\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
+fn nominal_tags_are_distinct_from_tuple_constructor_functions() {
+    assert_eq!(
+        run("type Item = Full(Int)\nmain : Unit -> (Int -> Item, Int)\nmain () = (Full, 42)\n"),
+        "(<function>, 42)"
+    );
+    assert_eq!(
+        run(
+            "type Tree =\nLeaf(Int)\n| Wrap(Tree)\nmain : Unit -> Tree\nmain () = Wrap (Leaf 42)\n"
+        ),
+        "Wrap(Leaf(42))"
+    );
+    assert_eq!(
+        run(
+            "type Tree =\nLeaf(Int)\n| Wrap(Tree)\nmain : Unit -> Int\nmain () = region<R> r {\nmatch Wrap (Leaf 42) {\nWrap(Leaf(value)) => value\n_ => 0\n}\n}\n"
+        ),
+        "42"
+    );
+}
+
+#[test]
+fn generic_nullary_and_payload_constructors_keep_their_instantiated_types() {
+    assert_eq!(
+        run(concat!(
+            "type Option<A> =\nNone\n| Some(A)\nmain : Unit -> Int\nmain () = region<R> r {\n",
+            "let empty : Option<Int> = None\nlet make = Some\nmatch (empty, make 42) {\n",
+            "(None, Some(value)) => value\n_ => 0\n}\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
 fn a_whole_tuple_cannot_escape_its_declared_region() {
     let failure = run_result("main : Unit -> (Int, Int)\nmain () = region<R> r {\n(20, 22)\n}\n")
         .unwrap_err();

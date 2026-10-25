@@ -69,14 +69,20 @@ exact source/registration transfer passed. Independent actual-gate audit has
 cleared this bounded result and root accepted CP-0025's matched semantic content.
 Exact-head review and retained verification completed through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`.
 R1 #65 and R2 #66 are closed after author/PM acceptance and independent readback.
-R3 is active in [draft PR #147](https://github.com/dikini/ash-lang/pull/147);
-no product criterion is complete. Its source tuple path now requests and
+R3's partial tuple delivery is retained through [PR #147](https://github.com/dikini/ash-lang/pull/147)
+at `ac340a31df1d383afce25c7aef3ee08d2e83614d`; no product criterion is complete. Its source tuple path now requests and
 initializes actual supplied host arrays and retires them on ordinary owner
 close. Outer-selected tuples survive an inner close. This extends the explicit
 owner/handler and default-entry control checkpoint. Custom tuples now use the
 supplied native address through one generated host adapter; Rust-owned fields
 in the current representation are released before the paired provider frees
-backing. Other required representations, target-specific discharge,
+backing. The next ordinary nominal-record candidate reuses those slots and the
+same adapter for a private discriminant and optional payload, with explicit
+caller-selected constructor functions and existing guarded recursive aliases.
+Its review and retention remain pending. Intrinsic nominal replies from
+`BytesAt`, `StringFromUtf8` and `BytesAppendByte` remain with the pending
+buffer-storage work. Buffers, closure storage, full recursive initialization
+and abandonment evidence, target-specific discharge,
 observation-before-root-release ordering and full completion remain pending, followed by the connected R-core
 gate. This changes no original criterion or required product evidence.
 

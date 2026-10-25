@@ -313,6 +313,7 @@ enum NodeTag {
         fields: u32,
     },
     RegionTuple {
+        constructor: Option<ConstructorIdentity>,
         api: u32,
         context: u32,
         storage: u32,
@@ -1629,7 +1630,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x14";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x15";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2125,12 +2126,14 @@ impl Wire for NodeTag {
                 fields.write(writer)
             }
             Self::RegionTuple {
+                constructor,
                 api,
                 context,
                 storage,
                 fields,
             } => {
                 35u8.write(writer)?;
+                constructor.write(writer)?;
                 api.write(writer)?;
                 context.write(writer)?;
                 storage.write(writer)?;
@@ -2377,6 +2380,7 @@ impl Wire for NodeTag {
                 fields: Wire::read(reader)?,
             },
             35 => Self::RegionTuple {
+                constructor: Wire::read(reader)?,
                 api: Wire::read(reader)?,
                 context: Wire::read(reader)?,
                 storage: Wire::read(reader)?,
@@ -3549,11 +3553,25 @@ mod tests {
 
     #[test]
     fn default_region_entry_image_restores_without_original_sources() {
-        let tree = SourceTree::new();
-        tree.write("entry.ash", concat!(
+        assert_region_image(concat!(
             "import @builtin.regions as Region\n",
             "main : Unit -> Int\nmain () = region<R> r {\nusing r {\nmatch (20, 22) {\n(a, b) => a + b\n}\n}\n}\n",
         ));
+    }
+
+    #[test]
+    fn nominal_region_image_preserves_constructor_identity_and_recursive_aliases() {
+        assert_region_image(concat!(
+            "import @builtin.regions as Region\n",
+            "type Stream = Next(Int, Stream)\nmain : Unit -> Int\nmain () = region<R> r {\n",
+            "let rec ones : Stream = Next(21, ones)\nmatch ones {\n",
+            "Next(first, rest) => match rest {\nNext(second, ignored) => first + second\n}\n}\n}\n",
+        ));
+    }
+
+    fn assert_region_image(source: &str) {
+        let tree = SourceTree::new();
+        tree.write("entry.ash", source);
         let compiled = compile_path(tree.configuration()).unwrap();
         assert!(compiled.pure_build_input().is_none());
         let (program, provenance) = compiled
@@ -7318,6 +7336,10 @@ impl Encoder<'_> {
                     push(&mut self.image.node_children, field, self.work)?;
                 }
                 Ok(NodeTag::RegionTuple {
+                    constructor: tuple
+                        .constructor
+                        .map(|id| self.constructor(id))
+                        .transpose()?,
                     api: self.module(tuple.api)?,
                     context: self.node(tuple.context)?,
                     storage: self.node(tuple.storage)?,
@@ -8369,6 +8391,7 @@ impl Decoder<'_> {
                     .map_err(ImageFailure::from);
             }
             NodeTag::RegionTuple {
+                constructor,
                 api,
                 context,
                 storage,
@@ -8380,6 +8403,7 @@ impl Decoder<'_> {
                     push(&mut elements, *get(nodes, *field)?, self.work)?;
                 }
                 let tuple = crate::core::region::RegionTupleNode {
+                    constructor: constructor.map(|id| self.constructor(id)).transpose()?,
                     api,
                     context: *get(nodes, context)?,
                     storage: *get(nodes, storage)?,

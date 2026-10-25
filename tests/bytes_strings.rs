@@ -100,7 +100,9 @@ main () = resource cell<R> trace = 0 {
 let result = handle ((perform Read.choose ()) ((perform Read.left ()), (perform Read.right ()))) with Read {
 choose ignored => {
 let _ = Cell.write (trace, (Cell.read trace) * 10 + 1)
-resume T.equal
+resume (fn(pair) {
+T.equal pair
+})
 }
 left ignored => {
 let _ = Cell.write (trace, (Cell.read trace) * 10 + 2)
