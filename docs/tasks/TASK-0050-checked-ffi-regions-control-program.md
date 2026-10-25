@@ -7,7 +7,7 @@
 
 > This task records the agreed work boundary and delivery plan. It does not
 > define Ash semantics. CP-0024 records the independently reviewed, accepted
-> S1 and S2 are retained; S3 binding/canary work is active.
+> S1 design. S1 and S2 are retained; S3 binding/canary work is active.
 
 ## Dependencies
 
@@ -61,8 +61,8 @@ C-aligned representation gaps are future work to prioritize as needed.
 
 The obsolete artifact/launch retirement is delivered by PR138. S1 has reviewed
 and accepted the concrete Address/Bytes mapping in CP-0024. S2 implementation is
-next after design retention and assignment. See the owned plan for the reuse
-and removal sequence and final verification owner.
+retained; S3 binding/canary work is active. See the owned plan for the reuse and
+removal sequence and final verification owner.
 
 ## Progress
 
@@ -120,8 +120,7 @@ FFI cases, including ordinary handler override, also pass. The focused receipt
 `a0522c6d0940e9bbd93a2afbe7739e3b5512f6182a489e668ec50590ac33778b`;
 it uses Rust 1.97.1, all features, locked dependencies, a cleared wrapper and
 one job with the existing shared/nested-host caches. Native harness runtime is
-9.37 seconds; source tests take 0.09 seconds. S3 independent review and retention
-remain pending.
+9.37 seconds. S3 independent review and retention remain pending.
 S4 specification/documentation, including operational rules, and the connected
 normal workspace gate remain pending before M1 acceptance or Main integration.
 
