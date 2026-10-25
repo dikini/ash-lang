@@ -92,6 +92,9 @@ impl TransformFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             binders.push(resource.handle.id());
         }
+        if let EffectExprKind::Operation(EffectOperation::Region(scope)) = kind {
+            binders.push(scope.access.id());
+        }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
             _ => return Ok(()),
@@ -114,6 +117,33 @@ impl TransformFamily for EffectOperationFamily {
         let effects = copy_expression_row(builder, expression)?;
         let origin = copy_origin(builder, expression.origin()?)?;
         match operation {
+            EffectOperation::RegionValueRequest(request) => builder.region_operation(
+                EffectOperation::RegionValueRequest(request.clone()),
+                ty.into_inner(),
+                effects,
+                origin,
+            ),
+            EffectOperation::RegionTuple(tuple) => {
+                let mut fields = Vec::new();
+                builder.charge_effect_metadata(tuple.fields.len())?;
+                fields
+                    .try_reserve_exact(tuple.fields.len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                for field in &tuple.fields {
+                    fields.push(remap(remapped, *field)?);
+                }
+                builder.region_operation(
+                    EffectOperation::RegionTuple(super::region::RegionTupleNode {
+                        api: tuple.api,
+                        context: remap(remapped, tuple.context)?,
+                        storage: remap(remapped, tuple.storage)?,
+                        fields: fields.into_boxed_slice(),
+                    }),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
             EffectOperation::Region(scope) => {
                 let access_type = copy_type(builder, scope.access.ty())?;
                 let access_id = copy_binder_id(builder, scope.access.id())?;

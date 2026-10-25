@@ -67,14 +67,19 @@ cleared the bounded evidence; root accepted CP-0025's matched semantic content.
 Exact-head review, GitHub milestone retention and retained verification completed
 through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`; R1 #65 and R2 #66 are closed after independent acceptance readback.
 
-The first R3 work checkpoint adds region/selection syntax, shared default-effect
-expansion, explicit owner/handler lowering, generated root setup and runtime
-owner/close control. The binding facade exposes only Request, Storage and three binding functions;
-its pending backing adapter checks owner, invocation, layout and replay. Focused
-tests cover this control plumbing, not actual supplied storage.
-Persistent records, buffers, closure captures and recursive slots still use the
-previous representations. Target-specific discharge, typed initialization, full
-close/composition, R-core and all R3–R5 acceptance remain pending. Existing issues
+The active [R3 draft PR #147](https://github.com/dikini/ash-lang/pull/147)
+connects source tuple construction to explicit context/operand bindings, a typed
+request, owner-targeted allocation and initialization into the same supplied host
+array. Ordinary owner close retires those arrays; outer selection survives an
+inner close. Whole-record residency is separate from projectable field facts.
+The private binding facade and pending adapter preserve owner/invocation/layout
+and replay guards. This is a partial host tuple result, not R3 acceptance.
+
+Native/custom-provider initialization, nominal records, owned buffers, closure
+capture storage and recursive slots remain pending. The host root retains its
+backing through the existing observed heap, but observation-before-root-release
+ordering remains pending. Target-specific discharge, full close/composition,
+connected R-core and all R3–R5 acceptance remain pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
 [#66](https://github.com/dikini/ash-lang/issues/66),
 [#67](https://github.com/dikini/ash-lang/issues/67),

@@ -554,6 +554,14 @@ impl Error for RuntimeFailure {}
 
 #[derive(Debug)]
 enum Frame {
+    RegionTuple {
+        node: NodeId,
+        environment: Environment,
+        context: Option<ActivationKey>,
+        storage: Option<super::value::RegionStorage>,
+        next: usize,
+        fields: Vec<Value>,
+    },
     RegionPreceding {
         node: NodeId,
         environment: Environment,
@@ -948,6 +956,11 @@ impl<'runtime> Machine<'runtime> {
                     self.apply(transition);
                 }
                 Control::Return(value) => {
+                    if matches!(self.frames.last(), Some(Frame::RegionBoundary { .. })) {
+                        // Closing replaces one owner frame with completion and
+                        // release frames. Reserve before moving that owner.
+                        reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, true)?;
+                    }
                     let Some(frame) = self.frames.pop() else {
                         if self.live_resources != 0
                             || self.live_cleanups != 0
@@ -1007,6 +1020,16 @@ impl<'runtime> Machine<'runtime> {
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
         disposal::check()?;
         match frame {
+            Frame::RegionTuple {
+                node,
+                environment,
+                context,
+                storage,
+                next,
+                fields,
+            } => {
+                self.return_region_tuple(node, environment, context, storage, next, fields, value)?;
+            }
             Frame::RegionPreceding { node, environment } => {
                 self.prepare_region_provider(node, environment, value)?
             }
@@ -1035,9 +1058,34 @@ impl<'runtime> Machine<'runtime> {
                 self.frames.push(Frame::ApplyArgument { function: release });
                 self.control = Some(Control::Return(Value::Unit));
             }
-            Frame::RegionCompletion { saved, .. } => {
+            Frame::RegionCompletion {
+                node,
+                saved,
+                records,
+                ..
+            } => {
                 if !matches!(value, Value::Unit) {
                     return Err(RuntimeFailure::InvalidControlState);
+                }
+                let entry = self
+                    .region_scope(node)
+                    .ok_or(RuntimeFailure::InvalidControlState)?
+                    .entry;
+                if !entry {
+                    charge_effect_work(
+                        &mut self.instantiation_work,
+                        records.len(),
+                        RuntimePhase::Cleanup,
+                    )?;
+                    for record in records {
+                        if let Some(location) = record.host_location {
+                            let cell = self
+                                .heap
+                                .get_mut(location)
+                                .ok_or(RuntimeFailure::InvalidControlState)?;
+                            *cell = HeapCell::Uninitialized;
+                        }
+                    }
                 }
                 self.control = Some(Control::Return(saved));
             }
@@ -1080,10 +1128,17 @@ impl<'runtime> Machine<'runtime> {
             Frame::ApplyArgument {
                 function: Value::RegionHostFunction { owner, release },
             } => {
-                if !release || !matches!(value, Value::Unit) || !self.frames.iter().any(|frame| matches!(frame, Frame::RegionCompletion { key, .. } if *key == owner)) {
-                    return Err(RuntimeFailure::InvalidControlState);
+                if release {
+                    if !matches!(value, Value::Unit)
+                        || !matches!(self.frames.last(), Some(Frame::RegionCompletion { key, .. }) if *key == owner)
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    self.control = Some(Control::Return(Value::Unit));
+                } else {
+                    let storage = self.allocate_host_region_storage(owner, value)?;
+                    self.control = Some(Control::Return(storage));
                 }
-                self.control = Some(Control::Return(Value::Unit));
             }
             Frame::CloseCompletion => {
                 if !matches!(value, Value::Unit) {
@@ -2672,7 +2727,10 @@ fn dispatch_entry(
             EffectExprKind::Pure(kind) => (kind, &expression.origin),
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
-                    EffectOperation::Region(_) | EffectOperation::RegionAllocate(_) => {
+                    EffectOperation::Region(_)
+                    | EffectOperation::RegionAllocate(_)
+                    | EffectOperation::RegionTuple(_)
+                    | EffectOperation::RegionValueRequest(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
                     EffectOperation::Registration(_) => {

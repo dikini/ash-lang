@@ -69,10 +69,14 @@ exact source/registration transfer passed. Independent actual-gate audit has
 cleared this bounded result and root accepted CP-0025's matched semantic content.
 Exact-head review and retained verification completed through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`.
 R1 #65 and R2 #66 are closed after author/PM acceptance and independent readback.
-R3 is active; no product criterion is complete. Its first control-plumbing
-checkpoint covers default expansion, explicit owners/handlers and generated
-entry setup. Actual supplied storage and the connected R-core gate remain
-pending. This changes no original criterion or required product evidence.
+R3 is active in [draft PR #147](https://github.com/dikini/ash-lang/pull/147);
+no product criterion is complete. Its source tuple path now requests and
+initializes actual supplied host arrays and retires them on ordinary owner
+close. Outer-selected tuples survive an inner close. This extends the explicit
+owner/handler and default-entry control checkpoint. Native/custom initialization,
+other required representations, target-specific discharge, observation-before-root-release
+ordering and full completion remain pending, followed by the connected R-core
+gate. This changes no original criterion or required product evidence.
 
 ## Ordered deliveries
 

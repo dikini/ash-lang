@@ -64,6 +64,23 @@ impl RegionAllocateNode {
     }
 }
 
+/// Immediate layout request for a persistent typed value array.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegionValueRequestNode {
+    pub(crate) api: ModuleId,
+    pub(crate) fields: usize,
+}
+
+/// Local initialization into the pending storage supplied by an allocation.
+/// Context, storage and every already evaluated field remain explicit children.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegionTupleNode {
+    pub(crate) api: ModuleId,
+    pub(crate) context: NodeId,
+    pub(crate) storage: NodeId,
+    pub(crate) fields: Box<[NodeId]>,
+}
+
 /// Reconstruct owner effects from its children and the fixed pair's full rows.
 /// The preceding query runs before this owner and is never discharged here.
 pub(crate) fn owner_effects(

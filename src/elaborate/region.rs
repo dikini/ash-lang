@@ -24,6 +24,123 @@ pub(super) struct SelectionProgress {
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    pub(super) fn initialize_region_tuple(
+        &mut self,
+        operands: Vec<NodeId>,
+        ty: &Type,
+        span: Span,
+    ) -> Result<NodeId, TypeError> {
+        use crate::core::region::{RegionTupleNode, RegionValueRequestNode};
+        let api = self.region_api_at(span)?;
+        let Type::Tuple(types) = ty else {
+            return Err(invalid_state());
+        };
+        if types.len() != operands.len() {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(operands.len())
+            .map_err(|()| type_resource())?;
+        let context = self
+            .builder
+            .binder(Type::Nominal(api.region_view()), Origin::Source(span))?;
+        let context_value = self.builder.variable(
+            context.id(),
+            Type::Nominal(api.region_view()),
+            Origin::Source(span),
+        )?;
+        let unit = self.builder.unit(Type::Unit, Origin::Source(span))?;
+        let default = EffectInstance::new(api.default_alloc(), Box::new([]));
+        let default_row = EffectRow::singleton(default.clone());
+        let query_row = self.core_effect_row(&default_row)?;
+        let query = self.push_effect_core(
+            Type::Nominal(api.region_view()),
+            query_row,
+            Origin::Source(span),
+            EffectOperation::Request(RequestNode::new(
+                default,
+                crate::types::OperationId::new(api.default_alloc(), 1),
+                unit,
+            )),
+        )?;
+        let mut bindings = Vec::new();
+        let mut fields = Vec::new();
+        bindings
+            .try_reserve_exact(operands.len())
+            .map_err(|_| type_resource())?;
+        fields
+            .try_reserve_exact(operands.len())
+            .map_err(|_| type_resource())?;
+        for (operand, ty) in operands.into_iter().zip(types) {
+            let binder_type = self.clone_type(ty)?;
+            let binder = self.builder.binder(binder_type, Origin::Source(span))?;
+            let value_type = self.clone_type(ty)?;
+            fields.push(
+                self.builder
+                    .variable(binder.id(), value_type, Origin::Source(span))?,
+            );
+            bindings.push((binder, operand));
+        }
+        let request = self.push_effect_core(
+            Type::Nominal(api.request()),
+            EffectRow::empty(),
+            Origin::Source(span),
+            EffectOperation::RegionValueRequest(RegionValueRequestNode {
+                api: api.module(),
+                fields: fields.len(),
+            }),
+        )?;
+        let allocate_row = self.core_effect_row(&default_row)?;
+        let allocated = self.push_effect_core(
+            Type::Nominal(api.storage_view()),
+            allocate_row,
+            Origin::Source(span),
+            EffectOperation::RegionAllocate(RegionAllocateNode {
+                api: api.module(),
+                context: context_value,
+                request,
+            }),
+        )?;
+        let storage = self
+            .builder
+            .binder(Type::Nominal(api.storage_view()), Origin::Source(span))?;
+        let storage_value = self.builder.variable(
+            storage.id(),
+            Type::Nominal(api.storage_view()),
+            Origin::Source(span),
+        )?;
+        let result_type = self.clone_type(ty)?;
+        let initialized = self.push_effect_core(
+            result_type,
+            EffectRow::empty(),
+            Origin::Source(span),
+            EffectOperation::RegionTuple(RegionTupleNode {
+                api: api.module(),
+                context: context_value,
+                storage: storage_value,
+                fields: fields.into_boxed_slice(),
+            }),
+        )?;
+        let result_type = self.clone_type(ty)?;
+        let mut body = self.builder.binding(
+            storage,
+            allocated,
+            initialized,
+            result_type,
+            Origin::Source(span),
+        )?;
+        for (binder, operand) in bindings.into_iter().rev() {
+            let result_type = self.clone_type(ty)?;
+            body =
+                self.builder
+                    .binding(binder, operand, body, result_type, Origin::Source(span))?;
+        }
+        let result_type = self.clone_type(ty)?;
+        Ok(self
+            .builder
+            .binding(context, query, body, result_type, Origin::Source(span))?)
+    }
+
     pub(super) fn wrap_region_entry(&mut self, body: TypedNode) -> Result<TypedNode, TypeError> {
         let body = TypedNodeOwner::new(body);
         let span = body.provenance.span().ok_or_else(invalid_state)?;

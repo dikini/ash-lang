@@ -2018,6 +2018,26 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Control, Failure> {
     Ok(match operation {
+        Some(EffectOperation::RegionValueRequest(_)) => Control::Return,
+        Some(EffectOperation::RegionTuple(tuple)) => {
+            let mut children = Vec::new();
+            charge(budget, tuple.fields.len() + 2)?;
+            children
+                .try_reserve_exact(tuple.fields.len() + 2)
+                .map_err(|_| Failure::Resource)?;
+            children.push(index(tuple.context) + 1);
+            children.push(index(tuple.storage) + 1);
+            children.extend(tuple.fields.iter().map(|child| index(*child) + 1));
+            Control::Sequence(children)
+        }
+        Some(EffectOperation::Region(scope)) if scope.entry => Control::Sequence(copy_slice(
+            &[
+                index(scope.preceding) + 1,
+                index(scope.provider) + 1,
+                index(scope.body) + 1,
+            ],
+            budget,
+        )?),
         Some(EffectOperation::Region(scope)) => {
             let api = crate::resolved::RegionApi::for_module(scope.api).ok_or(Failure::Invalid)?;
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;

@@ -262,6 +262,7 @@ or compiler-correctness theorem.
 Exact proof-source/registration transfer and exact-head delivery review passed.
 [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924` retains the reviewed tree; independent retained verification and
 author/PM readback completed R1/R2 acceptance. R3 implementation has begun with
-source/Core/runtime control plumbing. Actual supplied backing and full
-construction/completion acceptance remain pending; normative specification
+source/Core/runtime control plumbing and actual supplied host tuple backing.
+Native/custom backing, other required representations, root observation-before-release
+ordering and full construction/completion acceptance remain pending; normative specification
 changes have not begun.

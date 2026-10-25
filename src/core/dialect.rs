@@ -1591,6 +1591,10 @@ pub trait CoreOperationFamily: Clone + Copy + fmt::Debug + Eq + PartialEq + 'sta
     fn from_operation(operation: Self::Operation) -> Self::Kind;
     /// Borrows an ordinary Core feature when present.
     fn pure(kind: &Self::Kind) -> Option<&PureExprKind>;
+    /// Borrows explicit region construction metadata for guarded-data checking.
+    fn region_construction(_kind: &Self::Kind) -> Option<&super::effect::EffectOperation> {
+        None
+    }
     /// Mutably borrows an ordinary Core feature when present.
     fn pure_mut(kind: &mut Self::Kind) -> Option<&mut PureExprKind>;
     /// Visits binders owned by dialect operations at their enclosing node.

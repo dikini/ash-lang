@@ -143,7 +143,23 @@ fn nested_source_execution_and_release_fit_a_fresh_small_stack() {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(released, (0..24).rev().collect::<Vec<_>>());
+            let acquired = result
+                .effect_trace()
+                .iter()
+                .filter_map(|event| match event {
+                    EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(acquired.len(), 24);
+            assert_eq!(
+                acquired
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                24
+            );
+            assert_eq!(released, acquired.into_iter().rev().collect::<Vec<_>>());
         })
         .unwrap()
         .join()
@@ -156,11 +172,24 @@ fn write_then_read_observes_42() {
         "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {\nlet _ = Cell.write (c, 42)\nCell.read c\n}\n",
     );
     assert_eq!(result.value.to_string(), "42");
-    assert!(
-        result
-            .effect_trace()
-            .contains(&EffectTraceEvent::ResourceWritten(0))
-    );
+    let acquired = result
+        .effect_trace()
+        .iter()
+        .filter_map(|event| match event {
+            EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [key] = acquired.as_slice() else {
+        panic!("one Cell activation");
+    };
+    for event in [
+        EffectTraceEvent::ResourceWritten(*key),
+        EffectTraceEvent::ResourceRead(*key),
+        EffectTraceEvent::ResourceReleased(*key),
+    ] {
+        assert!(result.effect_trace().contains(&event), "{event:?}");
+    }
 }
 
 #[test]
@@ -199,15 +228,26 @@ fn copied_result_survives_nested_scope_completion() {
         })
         .cloned()
         .collect::<Vec<_>>();
+    let acquired = resource_events
+        .iter()
+        .filter_map(|event| match event {
+            EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [outer, inner] = acquired.as_slice() else {
+        panic!("two Cell activations");
+    };
+    assert_ne!(outer, inner);
     assert_eq!(
         resource_events,
         [
-            EffectTraceEvent::ResourceAcquired(0),
-            EffectTraceEvent::ResourceAcquired(1),
-            EffectTraceEvent::ResourceRead(1),
-            EffectTraceEvent::ResourceReleased(1),
-            EffectTraceEvent::ResourceRead(0),
-            EffectTraceEvent::ResourceReleased(0),
+            EffectTraceEvent::ResourceAcquired(*outer),
+            EffectTraceEvent::ResourceAcquired(*inner),
+            EffectTraceEvent::ResourceRead(*inner),
+            EffectTraceEvent::ResourceReleased(*inner),
+            EffectTraceEvent::ResourceRead(*outer),
+            EffectTraceEvent::ResourceReleased(*outer),
         ]
     );
 }
@@ -636,15 +676,27 @@ fn generic_cell_c02_owned_discard_keeps_both_cells_live_for_dependent_cleanup() 
         2,
         1,
     );
+    let acquired = result
+        .effect_trace()
+        .iter()
+        .filter_map(|event| match event {
+            EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [outer, inner] = acquired.as_slice() else {
+        panic!("two Cell activations");
+    };
+    assert_ne!(outer, inner);
     let written = result
         .effect_trace()
         .iter()
-        .position(|event| matches!(event, EffectTraceEvent::ResourceWritten(0)))
+        .position(|event| matches!(event, EffectTraceEvent::ResourceWritten(key) if key == outer))
         .unwrap();
     let inner_release = result
         .effect_trace()
         .iter()
-        .position(|event| matches!(event, EffectTraceEvent::ResourceReleased(1)))
+        .position(|event| matches!(event, EffectTraceEvent::ResourceReleased(key) if key == inner))
         .unwrap();
     assert!(
         written < inner_release,

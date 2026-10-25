@@ -99,6 +99,11 @@ impl ObservedHeap {
     }
 
     #[cfg(test)]
+    pub(crate) fn cells_for_test(&self) -> &[HeapCell] {
+        &self.cells
+    }
+
+    #[cfg(test)]
     pub(crate) fn cell_count(&self) -> usize {
         self.cells.len()
     }

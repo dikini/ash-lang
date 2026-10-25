@@ -308,6 +308,16 @@ struct RecursiveMemberRecord {
 
 #[derive(Clone, Copy, Debug)]
 enum NodeTag {
+    RegionValueRequest {
+        api: u32,
+        fields: u32,
+    },
+    RegionTuple {
+        api: u32,
+        context: u32,
+        storage: u32,
+        fields: Slice,
+    },
     RegionBinding {
         module: u32,
         operation: u8,
@@ -2109,6 +2119,23 @@ impl Wire for NodeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::RegionValueRequest { api, fields } => {
+                34u8.write(writer)?;
+                api.write(writer)?;
+                fields.write(writer)
+            }
+            Self::RegionTuple {
+                api,
+                context,
+                storage,
+                fields,
+            } => {
+                35u8.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                storage.write(writer)?;
+                fields.write(writer)
+            }
             Self::RegionBinding {
                 module,
                 operation,
@@ -2345,6 +2372,16 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            34 => Self::RegionValueRequest {
+                api: Wire::read(reader)?,
+                fields: Wire::read(reader)?,
+            },
+            35 => Self::RegionTuple {
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                storage: Wire::read(reader)?,
+                fields: Wire::read(reader)?,
+            },
             33 => Self::RegionBinding {
                 module: Wire::read(reader)?,
                 operation: Wire::read(reader)?,
@@ -3226,6 +3263,8 @@ impl Decoder<'_> {
     ) -> Result<NodeId, ImageFailure> {
         let node = match record {
             NodeTag::Region { .. }
+            | NodeTag::RegionValueRequest { .. }
+            | NodeTag::RegionTuple { .. }
             | NodeTag::RegionAllocate { .. }
             | NodeTag::CellScope { .. }
             | NodeTag::Cleanup { .. }
@@ -7266,6 +7305,25 @@ impl Encoder<'_> {
     ) -> Result<NodeTag, ImageFailure> {
         use crate::core::{EffectExprKind, EffectOperation};
         match kind {
+            EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) => {
+                Ok(NodeTag::RegionValueRequest {
+                    api: self.module(request.api)?,
+                    fields: index(request.fields)?,
+                })
+            }
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
+                let start = self.image.node_children.len();
+                for field in &tuple.fields {
+                    let field = self.node(*field)?;
+                    push(&mut self.image.node_children, field, self.work)?;
+                }
+                Ok(NodeTag::RegionTuple {
+                    api: self.module(tuple.api)?,
+                    context: self.node(tuple.context)?,
+                    storage: self.node(tuple.storage)?,
+                    fields: Slice::of(&self.image.node_children, start)?,
+                })
+            }
             EffectExprKind::Pure(kind) => self.encode_node(kind),
             EffectExprKind::Operation(EffectOperation::Region(scope)) => Ok(NodeTag::Region {
                 entry: scope.entry,
@@ -8286,6 +8344,51 @@ impl Decoder<'_> {
                     .with_caller_type_work(self.work, |builder| {
                         builder.region_operation(
                             crate::core::EffectOperation::Region(Box::new(scope)),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionValueRequest { api, fields } => {
+                let api = *get(&self.modules, api)?;
+                let request = crate::core::region::RegionValueRequestNode {
+                    api,
+                    fields: usize::try_from(fields).map_err(|_| ImageFailure::InvalidRecord)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionValueRequest(request),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionTuple {
+                api,
+                context,
+                storage,
+                fields,
+            } => {
+                let api = *get(&self.modules, api)?;
+                let mut elements = Vec::new();
+                for field in fields.get(&self.image.node_children)? {
+                    push(&mut elements, *get(nodes, *field)?, self.work)?;
+                }
+                let tuple = crate::core::region::RegionTupleNode {
+                    api,
+                    context: *get(nodes, context)?,
+                    storage: *get(nodes, storage)?,
+                    fields: elements.into_boxed_slice(),
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionTuple(tuple),
                             ty.into_inner(),
                             effects,
                             origin.take(),

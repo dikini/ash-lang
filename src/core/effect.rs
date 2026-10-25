@@ -430,6 +430,8 @@ pub enum EffectOperation {
     Resource(Box<ResourceScopeNode>),
     Region(Box<super::region::RegionScopeNode>),
     RegionAllocate(super::region::RegionAllocateNode),
+    RegionValueRequest(super::region::RegionValueRequestNode),
+    RegionTuple(super::region::RegionTupleNode),
 
     Request(RequestNode),
     Handler(HandlerNode),
@@ -475,6 +477,17 @@ impl CoreOperationFamily for EffectOperationFamily {
         match kind {
             EffectExprKind::Pure(kind) => Some(kind),
             EffectExprKind::Operation(_) => None,
+        }
+    }
+    fn region_construction(kind: &Self::Kind) -> Option<&EffectOperation> {
+        match kind {
+            EffectExprKind::Operation(
+                operation @ (EffectOperation::RegionTuple(_)
+                | EffectOperation::RegionAllocate(_)
+                | EffectOperation::RegionValueRequest(_)
+                | EffectOperation::Request(_)),
+            ) => Some(operation),
+            _ => None,
         }
     }
     fn pure_mut(kind: &mut Self::Kind) -> Option<&mut PureExprKind> {
@@ -534,7 +547,9 @@ impl CoreOperationFamily for EffectOperationFamily {
                 ));
                 None
             }
-            EffectOperation::RegionAllocate(_) => None,
+            EffectOperation::RegionAllocate(_)
+            | EffectOperation::RegionValueRequest(_)
+            | EffectOperation::RegionTuple(_) => None,
             EffectOperation::Request(request) => Some(&request.effect),
             EffectOperation::Handler(handler) => {
                 if let Some(registration) = &handler.hook_registration {
@@ -632,6 +647,10 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Region(_)) => 3,
             EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => 0,
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
+                tuple.fields.len() + 2
+            }
 
             EffectExprKind::Operation(
                 EffectOperation::NativeInterpret(_)
@@ -677,6 +696,12 @@ impl CoreOperationFamily for EffectOperationFamily {
                 1 => Some(allocation.request),
                 _ => None,
             },
+            EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => None,
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => match index {
+                0 => Some(tuple.context),
+                1 => Some(tuple.storage),
+                _ => tuple.fields.get(index - 2).copied(),
+            },
             EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
                 (index == 0).then_some(boundary.body)
@@ -708,7 +733,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::Region(region)) => drop(region),
-            EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => {}
+            EffectExprKind::Operation(
+                EffectOperation::RegionAllocate(_)
+                | EffectOperation::RegionValueRequest(_)
+                | EffectOperation::RegionTuple(_),
+            ) => {}
 
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
@@ -781,6 +810,8 @@ impl CoreBuilder<EffectOperationFamily> {
         enum Equation {
             Region(super::region::RegionScopeNode),
             RegionAllocate(super::region::RegionAllocateNode),
+            RegionTuple(super::region::RegionTupleNode),
+            Empty,
             Registration(NodeId),
             Cleanup(NodeId, NodeId),
             Pure,
@@ -809,6 +840,25 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                     EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => {
                         Equation::RegionAllocate(allocation.clone())
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => {
+                        Equation::Empty
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
+                        self.type_work
+                            .charge(tuple.fields.len())
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+                        let mut fields = Vec::new();
+                        fields
+                            .try_reserve_exact(tuple.fields.len())
+                            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+                        fields.extend_from_slice(&tuple.fields);
+                        Equation::RegionTuple(super::region::RegionTupleNode {
+                            api: tuple.api,
+                            context: tuple.context,
+                            storage: tuple.storage,
+                            fields: fields.into_boxed_slice(),
+                        })
                     }
                     EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
                         Equation::Cleanup(scope.body, scope.action)
@@ -871,6 +921,27 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                 };
                 let effects = match equation {
+                    Equation::Empty => EffectRow::empty(),
+                    Equation::RegionTuple(tuple) => {
+                        let mut row = EffectRow::empty();
+                        for child in [tuple.context, tuple.storage]
+                            .iter()
+                            .chain(tuple.fields.iter())
+                        {
+                            row = row
+                                .union_with_budget(
+                                    &self
+                                        .nodes
+                                        .get(child.index()?)
+                                        .ok_or(super::BuildError::InvalidNodeId)?
+                                        .effects,
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        row
+                    }
                     Equation::Region(scope) => {
                         let preceding = self
                             .nodes

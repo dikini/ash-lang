@@ -3005,6 +3005,15 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::RegionValueRequest(request) => builder.region_operation(
+                EffectOperation::RegionValueRequest(request),
+                ty,
+                effects,
+                origin,
+            ),
+            EffectOperation::RegionTuple(tuple) => {
+                builder.region_operation(EffectOperation::RegionTuple(tuple), ty, effects, origin)
+            }
             EffectOperation::NativeInterpret(boundary) => {
                 let (body, interpretations) = boundary.into_parts();
                 builder.native_interpret(body, interpretations, ty, effects, origin)
@@ -15286,8 +15295,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .charge(1)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let ty = IterativeTypeOwner::new(Type::Tuple(types.into_boxed_slice()));
-        let core_ty = self.clone_type(&ty)?;
-        let node = self.builder.tuple(nodes, core_ty, Origin::Source(span))?;
+        let api = self
+            .registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()));
+        if let Some(api) = api {
+            let allocation =
+                EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+            effects = self.union_effects(&effects, &allocation, span)?;
+        }
+        let node = if F::EFFECTS && api.is_some() {
+            self.initialize_region_tuple(nodes, &ty, span)?
+        } else {
+            let core_ty = self.clone_type(&ty)?;
+            self.builder.tuple(nodes, core_ty, Origin::Source(span))?
+        };
         Ok(TypedNode {
             node,
             effects,

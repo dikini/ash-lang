@@ -115,3 +115,40 @@ fn generated_service_has_no_user_import_spelling() {
 fn region_access_cannot_be_used_after_its_owner_closes() {
     assert!(run_result("main : Unit -> Int\nmain () = {\nlet leaked = region<R> r { r }\nusing leaked { 42 }\n}\n").is_err());
 }
+
+#[test]
+fn outer_selected_tuple_remains_readable_after_inner_close() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = region<R> outer {\n",
+            "let kept = region<S> inner {\nlet local = (1, 2)\n",
+            "let total = match local {\n(a, b) => a + b\n}\n",
+            "using outer {\n(20, 22)\n}\n}\n",
+            "match kept {\n(a, b) => a + b\n}\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
+fn generated_root_backing_survives_tuple_observation() {
+    assert_eq!(
+        run("main : Unit -> (Int, Int)\nmain () = (20, 22)\n"),
+        "(20, 22)"
+    );
+}
+
+#[test]
+fn a_whole_tuple_cannot_escape_its_declared_region() {
+    let failure = run_result("main : Unit -> (Int, Int)\nmain () = region<R> r {\n(20, 22)\n}\n")
+        .unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected the source lifetime diagnostic");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source resource escape, got {diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
