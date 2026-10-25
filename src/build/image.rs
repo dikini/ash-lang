@@ -37,7 +37,6 @@ pub(crate) enum Unsupported {
     ErasedTypeOperation,
     LargeIntegerLiteral,
     EffectOperation,
-    OpenNativeInstance,
 }
 
 #[derive(Debug)]
@@ -663,10 +662,6 @@ struct Encoder<'a> {
         ),
     >,
 
-    source_declaration_catalogs: HashMap<
-        *const crate::core::dialect::MethodEvidenceCatalog,
-        (Arc<crate::core::dialect::MethodEvidenceCatalog>, u32),
-    >,
     // Exact flat representation keys only. Every origin is still traversed
     // and depth checked; no validation or source correspondence is retained.
     origin_records: HashMap<OriginRecord, u32>,
@@ -731,7 +726,6 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
         prepared_libraries: HashMap::new(),
         native_symbols: HashMap::new(),
 
-        source_declaration_catalogs: HashMap::new(),
 
         origin_records: HashMap::new(),
         origin_spans: HashMap::new(),
@@ -3756,68 +3750,7 @@ mod tests {
         size(&[], 0, &mut empty).unwrap();
         assert!(empty.finish_sizing(total(0, 0, 32).unwrap()).is_err());
 
-        // Optional artifact collection uses existing matched images. Restoring
-        // resident checked inputs is diagnostic SETUP, not sizing work or a
-        // host run. The sizing function itself is callable before any encoding.
-        if let Some(directory) = std::env::var_os("ASH_GAS_CALIBRATION_DIR").map(PathBuf::from) {
-            let mut rows = Vec::new();
-            let mut retained_meters = Vec::new();
-            for (case, observed, fit) in [
-                ("current", 385445usize, true),
-                ("buffer", 88221, true),
-                ("blob-holdout", 255014, false),
-            ] {
-                let folder = directory.join(format!("sqlite-gas-profile-{case}-20261015"));
-                let bytes = fs::read(folder.join("program-image.bin")).unwrap();
-                let facts = fs::read(folder.join("expected-facts.bin")).unwrap();
-                let mut setup = TypeWorkBudget::with_limit(1_048_576);
-                let image = PureImage::decode_bytes(&bytes, &mut setup).unwrap();
-                let expected = image
-                    .admit_expected_native_facts(&facts, &mut setup)
-                    .unwrap();
-                let restored = image.restore_effect(&mut setup).unwrap();
-                let nodes = restored.program.node_count();
-                let mut work = TypeWorkBudget::with_limit(restored.sources.len() + 1);
-                let before = std::time::Instant::now();
-                let (source_bytes, proxy) = size(&restored.sources, nodes, &mut work).unwrap();
-                let wall = before.elapsed().as_nanos();
-                let overhead = work.used();
-                rows.push(serde_json::json!({"case":case,"fit":fit,"source_bytes":source_bytes,"main_nodes":nodes,"proxy":proxy,"sizing_used":overhead,"sizing_wall_ns":wall,"diagnostic_restoration_setup_used":setup.used(),"observed_previous_preparation":observed,"previous_preparation_plus_sizing":observed+overhead}));
-                retained_meters.push(work);
-                drop(expected);
-            }
-            // One conservative rounded coefficient from FIT rows only. The
-            // reserve is an engineering choice, not a statistical guarantee.
-            let coefficient = rows
-                .iter()
-                .filter(|r| r["fit"] == true)
-                .map(|r| {
-                    let observed = r["previous_preparation_plus_sizing"].as_u64().unwrap() as usize;
-                    let proxy = r["proxy"].as_u64().unwrap() as usize;
-                    observed
-                        .checked_mul(5)
-                        .unwrap()
-                        .div_ceil(proxy.checked_mul(4).unwrap())
-                })
-                .max()
-                .unwrap();
-            for (row, work) in rows.iter_mut().zip(&mut retained_meters) {
-                let bytes = row["source_bytes"].as_u64().unwrap() as usize;
-                let nodes = row["main_nodes"].as_u64().unwrap() as usize;
-                let forecast = total(bytes, nodes, coefficient).unwrap();
-                let before = work.used();
-                work.finish_sizing(forecast).unwrap();
-                assert_eq!(work.used(), before);
-                row["forecast"] = forecast.into();
-                row["error_units"] = (forecast as i64
-                    - row["previous_preparation_plus_sizing"].as_i64().unwrap())
-                .into();
-            }
-            println!(
-                "prospective preparation sizing {}",
-                serde_json::json!({"status":"test-only proposal, not production admission","definition":"P=resident source UTF8 bytes+validated main node count; gas=k*P; sizing included","coefficient":coefficient,"rows":rows})
-            );
-        }
+
     }
 
     #[test]
@@ -3849,7 +3782,6 @@ mod tests {
             prepared_libraries: HashMap::new(),
             native_symbols: HashMap::new(),
 
-            source_declaration_catalogs: HashMap::new(),
 
             origin_records: HashMap::new(),
             origin_spans: HashMap::new(),
@@ -4588,7 +4520,6 @@ mod tests {
                 prepared_libraries: HashMap::new(),
                 native_symbols: HashMap::new(),
 
-                source_declaration_catalogs: HashMap::new(),
 
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
@@ -5052,7 +4983,6 @@ main () = {
                 prepared_libraries: HashMap::new(),
                 native_symbols: HashMap::new(),
 
-                source_declaration_catalogs: HashMap::new(),
 
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
@@ -5185,7 +5115,6 @@ main () = {
                 prepared_libraries: HashMap::new(),
                 native_symbols: HashMap::new(),
 
-                source_declaration_catalogs: HashMap::new(),
 
                 origin_records: HashMap::new(),
                 origin_spans: HashMap::new(),
@@ -7147,7 +7076,6 @@ impl Encoder<'_> {
                     interpretations: Slice::of(&self.image.interpretations, start)?,
                 })
             }
-            _ => Err(ImageFailure::Unsupported(Unsupported::EffectOperation)),
         }
     }
 }
@@ -7795,11 +7723,11 @@ struct RestoredNativeRegistry {
 /// coordinates. These handles are needed by the generated-registration gate;
 /// returning them alone never admits an executable callback.
 pub(crate) struct RestoredEffectImage {
-    provenance: Option<RestoredProvenance>,
+    _provenance: Option<RestoredProvenance>,
     pub(crate) program: crate::core::ValidatedEffectProgram,
     pub(crate) prepared: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
     pub(crate) symbols: Vec<Arc<crate::foreign::checked_source::CheckedForeignSymbol>>,
-    sources: Vec<SourceFile>,
+    _sources: Vec<SourceFile>,
     modules: Vec<ModuleId>,
 }
 
@@ -7988,11 +7916,11 @@ impl PureImage {
         let sources = source_arena;
         let modules = module_arena;
         Ok(RestoredEffectImage {
-            provenance,
+            _provenance: provenance,
             program,
             prepared,
             symbols,
-            sources,
+            _sources: sources,
             modules,
         })
     }
@@ -8027,7 +7955,7 @@ impl Decoder<'_> {
     fn effect_node(
         &mut self,
         builder: &mut crate::core::EffectCoreBuilder,
-        registry: &ResolvedRegistry,
+        _registry: &ResolvedRegistry,
         nodes: &[NodeId],
         symbols: &[Arc<crate::foreign::checked_source::CheckedForeignSymbol>],
         tag: NodeTag,

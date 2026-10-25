@@ -8,9 +8,8 @@ use std::{
     },
 };
 
-use super::{
-    check_ordinary_effect_modules_with_budget_for_test, validate_effect_modules_with_work,
-};
+use super::check_ordinary_effect_modules_with_budget_for_test;
+use super::validate::validate_effect_modules_with_work;
 use crate::{
     core::{
         EffectCoreBuilder, EffectExprKind, EffectOperation, NativeInterpretation,
@@ -28,7 +27,7 @@ use crate::{
 };
 
 const SOURCE: &str = r#"import @builtin.foreign as Foreign
-import @builtin.bytes as Bytes
+import @builtin.bytes as B
 pub foreign library C {
     profile "x86_64-unknown-linux-gnu"
     symbol Make : Unit -> Foreign.Address { name "fixture_make" }

@@ -915,11 +915,11 @@ mod tests {
     use crate::{
         core::EffectCoreBuilder,
         resolved::{
-            ResolvedEffectDeclaration, ResolvedEffectOperation, ResolvedNominalType, ResolvedType,
-            ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+            ResolvedEffectDeclaration, ResolvedEffectOperation, ResolvedType,
+            ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
         },
         surface::{SurfaceModule, SurfaceTypeKind},
-        types::{Kind, OperationId, Type, TypeVariableId},
+        types::{OperationId, Type},
     };
     use std::sync::Arc;
 

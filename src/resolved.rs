@@ -7,11 +7,9 @@ pub(crate) use constructor_original::ConstructorOriginal;
 #[cfg(test)]
 mod image_subset_tests;
 
-mod semantic_type_variables;
-
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     hash::Hash,
     sync::Arc,
 };
@@ -13354,28 +13352,21 @@ impl ExportSummary {
                 .ok_or(ResolvedBuildFailure::InvalidState)?
                 .retain(type_work)?
         };
-        if self
-            .hidden_constructors
-            .insert(
-                constructor_id,
-                ExportedConstructor {
-                    original: Some(original),
-                    id: constructor_id,
-                    spelling: spelling.to_owned(),
-                    payload: payload
-                        .map(|payload| clone_type_with_budget(payload, type_work))
-                        .transpose()
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                    scheme,
-                    origin: origin.clone(),
-                },
-            )
-            .is_some()
-        {
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-        }
+        let entry = match self.hidden_constructors.entry(constructor_id) {
+            Entry::Vacant(entry) => entry,
+            Entry::Occupied(_) => return Err(ResolvedBuildFailure::InvalidState),
+        };
+        entry.insert(ExportedConstructor {
+            original: Some(original),
+            id: constructor_id,
+            spelling: spelling.to_owned(),
+            payload: payload
+                .map(|payload| clone_type_with_budget(payload, type_work))
+                .transpose()
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            scheme,
+            origin: origin.clone(),
+        });
         self.hidden_constructor_order.push(constructor_id);
         Ok(())
     }
@@ -18275,7 +18266,7 @@ impl ValidatedCheckedRegistries<'_> {
 fn validate_checked_registries<'a>(
     modules: &'a [CheckedModule],
     counts: &CombinedRegistryCounts,
-    type_work: &mut TypeWorkBudget,
+    _type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<ValidatedCheckedRegistries<'a>, ResolvedBuildFailure> {
     constraint_work
@@ -23271,17 +23262,6 @@ impl ResourceAcquisition {
     }
 }
 
-/// An exact family application with one fresh lexical window argument.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedCopyWindowExpr {
-    pub family: NominalTypeId,
-    pub identity: ResolvedTypeVariable,
-    pub arguments: Box<[ResolvedOwnerArgument]>,
-    pub state: Box<ResolvedExpr>,
-    pub body: Box<ResolvedExpr>,
-    pub family_span: Span,
-}
-
 /// Resolved ownership of the initializer and the identity-scoped body.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedResourceExpr {
@@ -25028,13 +25008,38 @@ mod tests {
             vec![("User", constructor, Some(Type::Int), Origin::Source(span))],
             Vec::new(),
         );
+        let representation_provenance = canonical_representation_provenance_for_test();
         let nominal = summary
             .nominals
             .get_mut("User")
             .expect("the fixture should retain its public nominal");
         nominal.declaration_kind = ResolvedNominalDeclarationKind::Newtype;
         nominal.representation = Some(Type::Int);
-        nominal.representation_provenance = Some(canonical_representation_provenance_for_test());
+        nominal.representation_provenance = Some(representation_provenance.clone());
+        let defining = Arc::new(
+            ResolvedRegistry::new(
+                vec![ResolvedNominalType {
+                    id: owner,
+                    spelling: "User".into(),
+                    declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                    constructors: Box::new([constructor]),
+                    representation: Some(Type::Int),
+                    representation_provenance: Some(representation_provenance),
+                    origin: Origin::Source(span),
+                }],
+                vec![ResolvedConstructor {
+                    id: constructor,
+                    owner,
+                    spelling: "User".into(),
+                    payload: None,
+                    origin: Origin::Source(span),
+                }],
+            )
+            .with_type_parameters(vec![(owner, Vec::new())]),
+        );
+        summary.constructors.get_mut("User").unwrap().original = Some(
+            ConstructorOriginal::from_checked(&defining, &mut TypeWorkBudget::unbounded()).unwrap(),
+        );
         summary
     }
 
@@ -27672,6 +27677,46 @@ mod tests {
                 }
             }
             SummaryAliasCarrierForTest::Nominal | SummaryAliasCarrierForTest::Constructor => {
+                let mut fixture_work = TypeWorkBudget::unbounded();
+                let defining = Arc::new(
+                    ResolvedRegistry::new(
+                        vec![ResolvedNominalType {
+                            id: nominal,
+                            spelling: "Nominal0".into(),
+                            declaration_kind: ResolvedNominalDeclarationKind::Data,
+                            constructors: Box::new([constructor]),
+                            representation: None,
+                            representation_provenance: None,
+                            origin: if matches!(carrier, SummaryAliasCarrierForTest::Nominal) {
+                                alias_origin(0)
+                            } else {
+                                Origin::Source(first_span)
+                            },
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner: nominal,
+                            spelling: "Make".into(),
+                            payload: None,
+                            origin: if matches!(carrier, SummaryAliasCarrierForTest::Constructor) {
+                                alias_origin(0)
+                            } else {
+                                Origin::Source(first_span)
+                            },
+                        }],
+                    )
+                    .with_type_parameters(vec![(
+                        nominal,
+                        vec![ResolvedTypeVariable {
+                            id: parameter,
+                            spelling: "A".into(),
+                            kind: Kind::Type,
+                            origin: Origin::Source(first_span),
+                        }],
+                    )]),
+                );
+                let original = ConstructorOriginal::from_checked(&defining, &mut fixture_work)
+                    .expect("the completed defining alias constructor should fit");
                 let nominal_aliases = if matches!(carrier, SummaryAliasCarrierForTest::Nominal) {
                     aliases
                 } else {
@@ -27724,7 +27769,7 @@ mod tests {
                     summary.constructors.insert(
                         spelling.clone(),
                         ExportedConstructor {
-                            original: None,
+                            original: Some(original.retain(&mut fixture_work).unwrap()),
                             id: constructor,
                             spelling: "Make".to_owned(),
                             payload: None,
@@ -27756,113 +27801,90 @@ mod tests {
     #[test]
     fn duplicate_public_summary_aliases_compare_only_on_constraint_work() {
         const DEPTH: usize = 32_768;
+        // One original pays four fixed cells, both Make spellings and both A
+        // spellings. Duplicate comparisons retain no additional Type cells.
+        const CONSTRUCTOR_ORIGINAL_TYPE: usize = 4 + 2 * "Make".len() + 2 * "A".len();
         std::thread::Builder::new()
             .name("duplicate-public-summary-aliases".to_owned())
             .stack_size(256 * 1024)
             .spawn(|| {
-                // Global double: two fused order/collision cells + four canonical
-                // and binder-index cells + two Unit-scheme cells + D+1 Origin
-                // cells + two canonical Unit binder-scan cells = D+11.
-                // Nominal double: four fused order/collision + two carrier + two
-                // family + five parameter/mirror cells + D+1 Origin + one each for
-                // withheld relation, physical fact, and closure + three
-                // reverse-index cells = D+19.
-                // Constructor double: three fused order/collision + one carrier + one
-                // family + one withheld relation + two physical carriers +
-                // ten scheme/mirror cells + D+1 Origin + one closure + three
-                // reverse-index cells = D+23. The final three-cell reverse
-                // batches explain the nominal/constructor D+16/D+20 C-short
-                // prefixes.
-                for (carrier, single_constraint, double_constraint, short_used, early, late) in [
-                    (
-                        SummaryAliasCarrierForTest::Global,
-                        7,
-                        DEPTH + 13,
-                        DEPTH + 12,
-                        10,
-                        DEPTH + 11,
-                    ),
-                    (
-                        SummaryAliasCarrierForTest::Nominal,
-                        11,
-                        DEPTH + 19,
-                        DEPTH + 16,
-                        8,
-                        DEPTH + 11,
-                    ),
-                    (
-                        SummaryAliasCarrierForTest::Constructor,
-                        11,
-                        DEPTH + 23,
-                        DEPTH + 20,
-                        11,
-                        DEPTH + 19,
-                    ),
-                ] {
-                    let single = summary_with_public_aliases(
-                        carrier,
-                        1,
-                        SummaryAliasConflictForTest::None,
-                        DEPTH,
-                    );
-                    let mut single_type = TypeWorkBudget::unbounded();
-                    let mut single_graph = crate::interface::InterfaceConstraintBudget::default();
-                    single
-                        .authenticate(&mut single_type, &mut single_graph)
-                        .expect("the defining alias fact should authenticate");
-                    assert_eq!(single_graph.used(), single_constraint);
-                    let retained_type_work = single_type.used();
-
-                    let double = summary_with_public_aliases(
-                        carrier,
-                        2,
-                        SummaryAliasConflictForTest::None,
-                        DEPTH,
-                    );
-                    let mut short_type = TypeWorkBudget::with_limit(retained_type_work);
-                    let mut short_graph = crate::interface::InterfaceConstraintBudget::with_limit(
-                        double_constraint - 1,
-                    );
-                    assert_eq!(
-                        double.authenticate(&mut short_type, &mut short_graph),
-                        Err(ResolvedBuildFailure::ConstraintResource),
-                    );
-                    assert_eq!(short_graph.used(), short_used);
-                    for _ in 0..2 {
-                        let mut exact_type = TypeWorkBudget::with_limit(retained_type_work);
-                        let mut exact_graph =
-                            crate::interface::InterfaceConstraintBudget::with_limit(
-                                double_constraint,
-                            );
-                        double
-                            .authenticate(&mut exact_type, &mut exact_graph)
-                            .expect("an identical alias should add no retained Type work");
-                        assert_eq!(exact_type.used(), retained_type_work);
-                        assert_eq!(exact_graph.used(), double_constraint);
-                    }
-
-                    for (conflict, exact) in [
-                        (SummaryAliasConflictForTest::FirstField, early),
-                        (SummaryAliasConflictForTest::LastField, late),
+                let receipt = |summary: &ExportSummary, expected| {
+                    let mut types = TypeWorkBudget::unbounded();
+                    let mut constraints = crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX);
+                    assert_eq!(summary.authenticate(&mut types, &mut constraints), expected);
+                    (types.used(), constraints.used())
+                };
+                // Depth zero checks the fixed tariff separately from the deep
+                // traversal slope. Both retain exact/short/retry obligations.
+                for depth in [0, DEPTH] {
+                    // An original compares the A record, Source origin and Kind
+                    // (3), then its constructor origin (D+1). Nominal aliases
+                    // have one Source constructor original (4); constructor
+                    // aliases each have one deep original (D+4).
+                    // The prior positive alias deltas D+6/D+8/D+12 therefore
+                    // become D+6/D+8/2D+16, independently of measured receipts.
+                    for (label, carrier, single_expected, double_expected, early, late) in [
+                        ("global", SummaryAliasCarrierForTest::Global,
+                            7, depth + 13, 10, depth + 11),
+                        ("nominal", SummaryAliasCarrierForTest::Nominal,
+                            11 + 4, depth + 19 + 4, 8, depth + 11),
+                        ("constructor", SummaryAliasCarrierForTest::Constructor,
+                            11 + depth + 4, depth + 23 + 2 * (depth + 4),
+                            11 + 2 * (depth + 4), 2 * depth + 18),
                     ] {
-                        let conflicting = summary_with_public_aliases(carrier, 2, conflict, DEPTH);
-                        let mut short_type = TypeWorkBudget::with_limit(retained_type_work);
-                        let mut short_graph =
-                            crate::interface::InterfaceConstraintBudget::with_limit(exact - 1);
-                        assert_eq!(
-                            conflicting.authenticate(&mut short_type, &mut short_graph),
-                            Err(ResolvedBuildFailure::ConstraintResource),
-                        );
-                        assert_eq!(short_graph.used(), exact - 1);
+                        let single = summary_with_public_aliases(carrier, 1, SummaryAliasConflictForTest::None, depth);
+                        let (single_type, single_constraint) = receipt(&single, Ok(()));
+                        let double = summary_with_public_aliases(carrier, 2, SummaryAliasConflictForTest::None, depth);
+                        let (double_type, double_constraint) = receipt(&double, Ok(()));
+                        eprintln!("alias {label} D={depth}: single T={single_type} C={single_constraint} expected C={single_expected}; double T={double_type} C={double_constraint} expected C={double_expected}");
+                        assert_eq!(single_constraint, single_expected, "{label} D={depth}");
+                        assert_eq!(double_constraint, double_expected, "{label} D={depth}");
+                        assert_eq!(double_constraint - single_constraint, double_expected - single_expected);
+                        let added_original_type = if matches!(carrier, SummaryAliasCarrierForTest::Constructor) {
+                            CONSTRUCTOR_ORIGINAL_TYPE
+                        } else { 0 };
+                        assert_eq!(double_type, single_type + added_original_type,
+                            "alias comparison adds no Type work beyond an additional physical original check");
+                        let mut short_type = TypeWorkBudget::with_limit(double_type);
+                        let mut short_graph = crate::interface::InterfaceConstraintBudget::with_limit(double_expected - 1);
+                        assert_eq!(double.authenticate(&mut short_type, &mut short_graph), Err(ResolvedBuildFailure::ConstraintResource));
+                        // The final reverse-index charge is an atomic batch.
+                        let final_batch = if matches!(carrier, SummaryAliasCarrierForTest::Global) { 1 } else { 3 };
+                        assert_eq!(short_graph.used(), double_expected - final_batch);
                         for _ in 0..2 {
-                            let mut exact_type = TypeWorkBudget::with_limit(retained_type_work);
-                            let mut exact_graph =
-                                crate::interface::InterfaceConstraintBudget::with_limit(exact);
-                            assert_eq!(
-                                conflicting.authenticate(&mut exact_type, &mut exact_graph),
-                                Err(ResolvedBuildFailure::InvalidState),
-                            );
-                            assert_eq!(exact_graph.used(), exact);
+                            let mut exact_type = TypeWorkBudget::with_limit(double_type);
+                            let mut exact_graph = crate::interface::InterfaceConstraintBudget::with_limit(double_expected);
+                            double.authenticate(&mut exact_type, &mut exact_graph).expect("an identical alias should authenticate at its independently derived tariff");
+                            assert_eq!(exact_type.used(), double_type);
+                            assert_eq!(exact_graph.used(), double_expected);
+                        }
+                        // Global and nominal failures precede original checks.
+                        // Constructor first-field refusal follows two complete
+                        // original checks. Last-origin refusal occurs IN the
+                        // second original: old D+19 minus duplicate scheme (8)
+                        // and alias origin (D+1), plus two originals 2(D+4),
+                        // giving 2D+18. Scheme8 = parameter/Kind2 + type root1,
+                        // Application visit1, child scheduling2, leaf visits2.
+                        // No duplicate comparison follows the Source refusal.
+                        for (conflict, exact) in [
+                            (SummaryAliasConflictForTest::FirstField, early),
+                            (SummaryAliasConflictForTest::LastField, late),
+                        ] {
+                            let conflicting = summary_with_public_aliases(carrier, 2, conflict, depth);
+                            let (conflict_type, measured_constraint) = receipt(&conflicting, Err(ResolvedBuildFailure::InvalidState));
+                            eprintln!("alias {label} D={depth}: rejection T={conflict_type} C={measured_constraint} expected C={exact}");
+                            assert_eq!(measured_constraint, exact, "{label} D={depth}");
+                            let mut short_type = TypeWorkBudget::with_limit(double_type);
+                            let mut short_graph = crate::interface::InterfaceConstraintBudget::with_limit(exact - 1);
+                            assert_eq!(conflicting.authenticate(&mut short_type, &mut short_graph), Err(ResolvedBuildFailure::ConstraintResource));
+                            assert_eq!(short_graph.used(), exact - 1);
+                            for _ in 0..2 {
+                                let mut exact_type = TypeWorkBudget::with_limit(double_type);
+                                let mut exact_graph = crate::interface::InterfaceConstraintBudget::with_limit(exact);
+                                assert_eq!(conflicting.authenticate(&mut exact_type, &mut exact_graph), Err(ResolvedBuildFailure::InvalidState));
+                                assert_eq!(exact_type.used(), conflict_type);
+                                assert_eq!(exact_graph.used(), exact);
+                            }
                         }
                     }
                 }
@@ -30735,6 +30757,45 @@ mod tests {
                 )),
             ),
         );
+
+        let span = summary.interfaces[0].span;
+        let effect_parameter = TypeVariableId::resolved(summary.module, 2);
+        summary.effects.push(ResolvedEffectDeclaration {
+            native_contract: None,
+            id: effect,
+            public: false,
+            spelling: "Changed".into(),
+            parameters: Box::new([ResolvedTypeVariable {
+                id: effect_parameter,
+                spelling: "Value".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }]),
+            operations: Box::new([ResolvedEffectOperation {
+                id: OperationId::new(effect, 0),
+                spelling: "change".into(),
+                annotation: ResolvedType {
+                    ty: Type::Function(
+                        Box::new(Type::Variable(effect_parameter)),
+                        Box::new(Type::Unit),
+                    ),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                origin: Origin::Source(span),
+                span,
+            }]),
+            origin: Origin::Source(span),
+            span,
+        });
+        summary.effect_positions.insert(effect, 0);
+        summary.implementations[0].publication = Some(implementation_publication_for_test(
+            &summary.implementations[0].fact,
+        ));
 
         summary
             .authenticate(
@@ -35656,13 +35717,17 @@ mod tests {
     fn whole_freeze_nominal_collection_has_exact_transaction_boundary() {
         const DEPTH: usize = 32_768;
         const TYPE_CELLS: usize = 2 * DEPTH + 1;
-        // One checked-global index and one public-order cell precede one full
-        // scheme clone and one full nominal-identity traversal.
-        const DEEP_STAGING: usize = 2 + 2 * TYPE_CELLS;
-        // Authentication visits and schedules each type cell (2N), then
-        // synthesizes kinds (N + one continuation and two comparisons per
-        // function + current state + final comparison).
-        const DEEP_EXACT: usize = DEEP_STAGING + 3 * TYPE_CELLS + 3 * DEPTH + 2;
+        // The original publication pays its index slot, lookup, record plus the
+        // five spelling bytes. Source-origin and default-capture clones pay zero;
+        // the original scheme clone is counted separately below.
+        const PUBLICATION_FIXED: usize = 1 + 1 + 1 + "value".len();
+        const PUBLICATION_AUTH: usize = 1 + 1; // presence + Source-origin comparison
+        // Checked-global index/public order, two scheme copies (original and
+        // projection), then the complete nominal-identity traversal.
+        const DEEP_STAGING: usize = 2 + 3 * TYPE_CELLS + PUBLICATION_FIXED;
+        // Variable authentication/scheduling (2N), kind synthesis (N+3D+2)
+        // and the distinct completed-original authentication header.
+        const DEEP_EXACT: usize = DEEP_STAGING + 3 * TYPE_CELLS + 3 * DEPTH + 2 + PUBLICATION_AUTH;
         std::thread::Builder::new()
             .name("whole-freeze-nominal-collection".to_owned())
             .stack_size(256 * 1024)
@@ -35715,6 +35780,15 @@ mod tests {
                     origin: Origin::Source(value_span),
                 }];
 
+                let mut measured_type = TypeWorkBudget::unbounded();
+                let mut measured_constraint = crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX);
+                let measured = ExportSummary::freeze(
+                    &resolved, &checked, &[], &[], &[], &mut measured_type, &mut measured_constraint,
+                ).expect("complete freeze must produce a phase receipt before testing cuts");
+                eprintln!("deep freeze D={DEPTH}: T={} C={} expected T={DEEP_EXACT}", measured_type.used(), measured_constraint.used());
+                assert_eq!(measured_type.used(), DEEP_EXACT, "the complete receipt must match the derived publication/collection/authentication tariff");
+                drop(measured);
+
                 let mut short = TypeWorkBudget::with_limit(DEEP_STAGING - 1);
                 assert_eq!(
                     ExportSummary::freeze(
@@ -35733,6 +35807,20 @@ mod tests {
                     DEEP_STAGING - 1,
                     "each completed child scheduling visit is charged",
                 );
+                let mut publication_short = TypeWorkBudget::with_limit(DEEP_EXACT - 1);
+                assert_eq!(
+                    ExportSummary::freeze(
+                        &resolved,
+                        &checked,
+                        &[],
+                        &[],
+                        &[],
+                        &mut publication_short,
+                        &mut crate::interface::InterfaceConstraintBudget::default()
+                    ),
+                    Err(ResolvedBuildFailure::TypeResource),
+                );
+                assert_eq!(publication_short.used(), DEEP_EXACT - 1);
                 for _ in 0..2 {
                     let mut exact = TypeWorkBudget::with_limit(DEEP_EXACT);
                     let summary = ExportSummary::freeze(
@@ -35827,10 +35915,23 @@ mod tests {
                     scheme: ConstrainedScheme::from_rank1_type(Type::Nominal(nominal)),
                     origin: Origin::Source(value_span),
                 }];
-                // Prefix 7 = checked index + public order + four withheld
-                // storage cells + one cloned nominal cell. The collector root
-                // costs the eighth cell; the unique nominal index is ninth.
-                let mut short = TypeWorkBudget::with_limit(8);
+                // Add one scalar scheme cell plus the publication's fixed
+                // index/lookup/record/spelling to the original collector/index prefix.
+                const NOMINAL_PUBLICATION: usize = 1 + PUBLICATION_FIXED;
+                // Twelve staging cells, two nominal-kind retention cells,
+                // two variable-authentication cells and three kind checks.
+                const NOMINAL_EXACT: usize =
+                    12 + 2 + 2 + 3 + NOMINAL_PUBLICATION + PUBLICATION_AUTH;
+                let mut measured_type = TypeWorkBudget::unbounded();
+                let mut measured_constraint = crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX);
+                let measured = ExportSummary::freeze(
+                    &resolved, &checked, &[], &[], &[], &mut measured_type, &mut measured_constraint,
+                ).expect("complete nominal freeze must yield its receipt");
+                eprintln!("nominal freeze: T={} C={} expected T={NOMINAL_EXACT}", measured_type.used(), measured_constraint.used());
+                assert_eq!(measured_type.used(), NOMINAL_EXACT, "nominal receipt includes original publication separately from hidden retention");
+                drop(measured);
+
+                let mut short = TypeWorkBudget::with_limit(8 + NOMINAL_PUBLICATION);
                 assert_eq!(
                     ExportSummary::freeze(
                         &resolved,
@@ -35843,8 +35944,8 @@ mod tests {
                     ),
                     Err(ResolvedBuildFailure::TypeResource),
                 );
-                assert_eq!(short.used(), 8);
-                let mut record_short = TypeWorkBudget::with_limit(11);
+                assert_eq!(short.used(), 8 + NOMINAL_PUBLICATION);
+                let mut record_short = TypeWorkBudget::with_limit(11 + NOMINAL_PUBLICATION);
                 assert_eq!(
                     ExportSummary::freeze(
                         &resolved,
@@ -35859,12 +35960,9 @@ mod tests {
                 );
                 assert_eq!(
                     record_short.used(),
-                    10,
+                    10 + NOMINAL_PUBLICATION,
                     "the two-cell hidden-record retention charge is atomic",
                 );
-                // Twelve staging cells, two nominal-kind retention cells,
-                // two variable-authentication cells and three kind checks.
-                const NOMINAL_EXACT: usize = 12 + 2 + 2 + 3;
                 let mut publication_short = TypeWorkBudget::with_limit(NOMINAL_EXACT - 1);
                 assert_eq!(
                     ExportSummary::freeze(

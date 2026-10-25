@@ -41,3 +41,6 @@ pub use variable::TypedBinder;
 
 #[cfg(test)]
 pub(crate) use validate::check_ordinary_effect_modules_with_budget_for_test;
+
+#[cfg(test)]
+mod native_interpret_tests;

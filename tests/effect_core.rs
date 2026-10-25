@@ -371,21 +371,12 @@ fn checked_source_lowers_to_explicit_effect_core() {
                 EffectOperation::Resource(_) => {
                     panic!("resume-only fixture cannot contain resource")
                 }
-                EffectOperation::ProviderScope(_) | EffectOperation::SourceResourceScope(_) => {
-                    panic!("resume-only fixture cannot contain provider scope")
-                }
                 EffectOperation::Registration(_) => {
                     panic!("resume-only fixture cannot contain registration")
                 }
                 EffectOperation::Cleanup(_) => panic!("resume-only fixture cannot contain cleanup"),
-                EffectOperation::ProviderStateAccess(_) => {
-                    panic!("resume-only fixture cannot contain provider state access")
-                }
                 EffectOperation::NativeInterpret(_) => {
                     panic!("resume-only fixture cannot contain native interpretation")
-                }
-                EffectOperation::SourceCopyWindow(_) => {
-                    panic!("resume-only fixture cannot contain source copy window")
                 }
             }
         }

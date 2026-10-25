@@ -40,7 +40,6 @@ enum PrivateFailure {
     RuntimeMismatch,
     Image(image::ImageFailure),
     Evaluation(crate::eval::RuntimeFailure),
-    ForeignAdmission(crate::foreign::checked_source::ForeignAdmissionError),
 }
 
 impl fmt::Display for PrivateProgramFailure {
@@ -51,11 +50,6 @@ impl fmt::Display for PrivateProgramFailure {
             }
             PrivateFailure::Image(error) => error.fmt(formatter),
             PrivateFailure::Evaluation(error) => error.fmt(formatter),
-            PrivateFailure::ForeignAdmission(error) => write!(
-                formatter,
-                "embedded native binding admission refused: {:?}",
-                error.reason()
-            ),
         }
     }
 }

@@ -2381,24 +2381,6 @@ impl<'a> Analysis<'a> {
         Self::enqueue_normalized(state, pending, visited, budget)
     }
 
-    /// The private bridge executes only selected pure source calls. Dictionary
-    /// staging is already represented by exact value-graph evidence bindings.
-
-    pub(super) fn actual_request_path(
-        &self,
-        request: super::ActualRequestContext,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(Span, Vec<super::ActualValuePathStep>), Failure> {
-        self.data
-            .as_ref()
-            .ok_or(Failure::Invalid)?
-            .actual_request_path(
-                request.port.ok_or(Failure::Invalid)?,
-                request.value_context,
-                budget,
-            )
-    }
-
     pub(super) fn check(
         &mut self,
         roots: &[usize],
@@ -3680,14 +3662,14 @@ impl<'a> Analysis<'a> {
             self.check_payload(state, event, &selected.prefix, budget)?;
             let Frame::Handler {
                 code: handler,
-                context,
+                context: _,
                 ..
             } = selected.boundary.frame
             else {
                 return Err(Failure::Invalid);
             };
             let Control::Handler {
-                clauses, effect, ..
+                clauses, effect: _, ..
             } = &self.graph.code[handler]
             else {
                 return Err(Failure::Invalid);
@@ -4073,7 +4055,6 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
-    #[inline(never)]
     #[inline(never)]
     fn requested_clause(
         &mut self,

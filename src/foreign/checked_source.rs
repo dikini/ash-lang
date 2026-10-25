@@ -3,7 +3,7 @@ use super::source_contract::{PreparedForeignLibrary, PreparedForeignSymbol};
 use crate::{
     module::ModuleId,
     resolved::{ResolvedEffectDeclaration, ResolvedRegistry},
-    source::{Origin, Span},
+    source::Span,
     types::{
         EffectId, IterativeTypeOwner, NominalTypeId, OperationId, Type, TypeVariableId,
         TypeWorkBudget, clone_type_with_budget, same_type_with_budget,

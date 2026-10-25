@@ -87,7 +87,7 @@ impl TransformFamily for EffectOperationFamily {
     fn collect_operation_binders(
         kind: &Self::Kind,
         binders: &mut Vec<crate::resolved::BinderId>,
-        builder: &mut CoreBuilder<Self>,
+        _builder: &mut CoreBuilder<Self>,
     ) -> Result<(), TransformError> {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             binders.push(resource.handle.id());
@@ -235,7 +235,7 @@ impl TransformFamily for EffectOperationFamily {
                     .as_ref()
                     .map(|registration| {
                         builder.charge_effect_metadata(1)?;
-                        let mut copied = registration
+                        let copied = registration
                             .with_target(copy_effect_instance(builder, &registration.target)?);
                         Ok::<_, TransformError>(Box::new(copied))
                     })
@@ -245,7 +245,7 @@ impl TransformFamily for EffectOperationFamily {
                     .hook_root()
                     .map(|root| {
                         builder.charge_effect_metadata(1)?;
-                        let mut copied =
+                        let copied =
                             root.with_target(copy_effect_instance(builder, &root.target)?);
                         Ok::<_, TransformError>(copied)
                     })

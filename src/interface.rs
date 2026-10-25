@@ -3635,33 +3635,6 @@ struct OriginalEvidenceOwner {
 }
 
 impl EvidenceSelection {
-    pub(crate) fn visit_semantic_type_variables(
-        &self,
-        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
-    ) -> Result<(), ()> {
-        for plan in std::iter::once(self.plan.as_ref()).chain(
-            self.original
-                .as_ref()
-                .filter(|original| !Arc::ptr_eq(&original.plan, &self.plan))
-                .map(|original| original.plan.as_ref()),
-        ) {
-            uses.application(&plan.application)?;
-            uses.charge(plan.nodes.len())?;
-            for node in &plan.nodes {
-                match node {
-                    EvidenceNodeData::Implementation { substitution, .. } => {
-                        uses.charge(substitution.len())?;
-                        for substitution in substitution {
-                            uses.id(substitution.parameter)?;
-                            uses.ty(&substitution.argument)?;
-                        }
-                    }
-                    EvidenceNodeData::Lexical { .. } | EvidenceNodeData::Abstract { .. } => {}
-                }
-            }
-        }
-        Ok(())
-    }
     fn canonical_original(&self) -> (&Arc<EvidencePlan>, EvidenceNodeId) {
         self.original
             .as_ref()
@@ -4022,24 +3995,6 @@ pub struct EvidenceSlot {
 }
 
 impl EvidenceSlot {
-    pub(crate) fn visit_semantic_type_variables(
-        &self,
-        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
-    ) -> Result<(), ()> {
-        uses.charge(1)?;
-        if let Some(filled) = self.filled.get() {
-            uses.application(&filled.checked_application)?;
-            uses.selection(&filled.selection)?;
-            uses.charge(filled.method_arguments.len())?;
-            for argument in &filled.method_arguments {
-                uses.ty(argument)?;
-            }
-            if let Some(ty) = &filled.checked_value_type {
-                uses.ty(ty)?;
-            }
-        }
-        Ok(())
-    }
     /// Creates one independently fillable empty evidence slot.
     #[must_use]
     pub fn empty() -> Self {
@@ -4097,6 +4052,7 @@ impl EvidenceSlot {
     }
 
     /// Retains the exact unpublished slot for a private compiler transaction.
+    #[cfg(test)]
     pub(crate) fn retain_unpublished(&self) -> Option<Self> {
         self.filled.get().is_none().then(|| Self {
             filled: Arc::clone(&self.filled),

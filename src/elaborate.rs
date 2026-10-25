@@ -2,7 +2,6 @@
 
 mod cleanup_rows;
 
-mod module_bodies;
 
 use std::{
     cell::RefCell,
@@ -1378,12 +1377,6 @@ struct ScopedEvidenceBinder {
     binder: TypedBinder,
 }
 
-impl ScopedEvidenceBinder {
-    fn binder(&self) -> &TypedBinder {
-        &self.binder
-    }
-}
-
 #[derive(Debug)]
 struct EvidenceLowering {
     lexical_binders: HashMap<(crate::interface::LexicalEvidenceId, MethodId), ActiveEvidenceBinder>,
@@ -2335,20 +2328,6 @@ impl OwnedArgumentBuffer {
         Self::retain_actual_kinds(parameters.iter().map(|(_, kind)| kind), types, rows, budget)
     }
 
-    fn retain_defining_actuals(
-        parameters: &[crate::resolved::ResolvedTypeVariable],
-        types: &[Type],
-        rows: &[EffectRow],
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Box<[crate::types::KindedArgument]>, TypeError> {
-        Self::retain_actual_kinds(
-            parameters.iter().map(|parameter| &parameter.kind),
-            types,
-            rows,
-            budget,
-        )
-    }
-
     fn retain_actual_kinds<'a>(
         kinds: impl ExactSizeIterator<Item = &'a Kind> + Clone,
         types: &[Type],
@@ -2462,28 +2441,7 @@ impl OwnerReplacementBuffer {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.types.as_map().is_empty() && self.rows.is_empty()
-    }
 
-    fn insert_fresh(
-        &mut self,
-        source: TypeVariableId,
-        fresh: TypeVariableId,
-        kind: &Kind,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), TypeError> {
-        let argument =
-            crate::types::IterativeArgumentOwner::new(if matches!(kind, Kind::EffectRow) {
-                crate::types::KindedArgument::RowArg(EffectRow::open(
-                    EffectRowVariable::rigid(fresh),
-                    Box::new([]),
-                ))
-            } else {
-                crate::types::KindedArgument::TypeArg(Type::Variable(fresh))
-            });
-        self.insert_cloned(source, &argument, budget)
-    }
 
     fn insert_cloned(
         &mut self,
@@ -2818,30 +2776,6 @@ impl GeneratedTypeVariableRegistry {
         Ok(())
     }
 
-    /// Reserves an excluded allocation identity without granting it a Kind.
-    /// Vacant records remain missing to every inference/Kind consumer.
-    fn skip_reserved(
-        &mut self,
-        identity: TypeVariableId,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), GeneratedTypeVariableRegistryFailure> {
-        budget
-            .charge(1)
-            .map_err(|()| GeneratedTypeVariableRegistryFailure::Resource)?;
-        let TypeVariableId::Generated(local) = identity else {
-            return Err(GeneratedTypeVariableRegistryFailure::Missing);
-        };
-        let index = usize::try_from(u32::MAX - local)
-            .map_err(|_| GeneratedTypeVariableRegistryFailure::Missing)?;
-        if index != self.0.len() {
-            return Err(GeneratedTypeVariableRegistryFailure::Missing);
-        }
-        self.0
-            .try_reserve(1)
-            .map_err(|_| GeneratedTypeVariableRegistryFailure::Resource)?;
-        self.0.push(None);
-        Ok(())
-    }
 
     fn fact(
         &self,
@@ -3263,7 +3197,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(result)
     }
 
-    pub(super) fn retain_completed_implementation_lowering(
+    fn retain_completed_implementation_lowering(
         &mut self,
         lowering: &mut EvidenceLowering,
         implementation: &CheckedImplementationFact,
@@ -3588,9 +3522,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 );
             }
         }
-        collect_expression_binders(&mut binders, expressions, |units| {
-            builder.charge_rebuild_work(units)
-        })?;
+        collect_expression_binders(&mut binders, expressions);
         builder.reserve_resolved_binders(binders)?;
         let elaborator = Self {
             builder,
@@ -4012,9 +3944,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let registry = Arc::clone(module.registry());
         let mut builder = CoreBuilder::<F>::with_registry_for_family(Arc::clone(&registry));
         let mut binders = Vec::new();
-        collect_expression_binders(&mut binders, vec![expression], |units| {
-            builder.charge_rebuild_work(units)
-        })?;
+        collect_expression_binders(&mut binders, vec![expression]);
         builder.reserve_resolved_binders(binders)?;
         Ok(Self {
             builder,
@@ -4286,7 +4216,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         module: &ResolvedModule,
         checked_schemes: &mut [CheckedGlobalScheme],
         checked_interfaces: &[CheckedInterface],
-        interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
+        _interface_facts: &[crate::resolved::SharedCheckedInterfaceFact],
         checked_implementations: &[CheckedImplementation],
         started: &mut Vec<ModuleBodyChecking>,
     ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
@@ -4298,14 +4228,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             None => self.begin_module_body_checking(module, checked_schemes)?,
         };
         for declaration in module.declaration_order() {
-            if matches!(
-                declaration,
-                ResolvedDeclarationIndex::Global(_) | ResolvedDeclarationIndex::Implementation(_)
-            ) && let Some(schedule) = &checking.schedule
-                && schedule.is_completed(*declaration)?
-            {
-                continue;
-            }
             self.step_module_body_checking(
                 module,
                 checked_interfaces,
@@ -4321,11 +4243,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             checking,
         )
     }
-
-    /// Checks each available body and original once as its dependencies close.
-    /// Private originals release later bodies; only the complete group exports.
-    /// Publication remains the enclosing module's single transaction.
-    #[allow(clippy::too_many_arguments)] // Original declarations, checked bodies and independent ledgers remain explicit.
 
     fn begin_module_body_checking(
         &mut self,
@@ -4344,31 +4261,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             facts_reserved: false,
             next_global: 0,
             next_implementation: 0,
-            schedule: None,
-            publication: None,
         })
-    }
-
-    /// Enables dependency order only when a local provider admission requires
-    /// it. Ordinary source-order checking retains its existing work path.
-    fn enable_module_body_reordering(
-        &mut self,
-        module: &ResolvedModule,
-        schemes: &[CheckedGlobalScheme],
-        checking: &mut ModuleBodyChecking,
-    ) -> Result<(), TypeError> {
-        if checking.schedule.is_some()
-            || checking.next_global != 0
-            || checking.next_implementation != 0
-        {
-            return Err(invalid_state());
-        }
-        checking.schedule = Some(module_bodies::ModuleBodySchedule::new(
-            module,
-            schemes,
-            &mut self.type_work,
-        )?);
-        Ok(())
     }
 
     fn step_module_body_checking(
@@ -4401,11 +4294,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 return Err(invalid_state());
             }
             ResolvedDeclarationIndex::Global(source_index) => {
-                if let Some(schedule) = &checking.schedule {
-                    if schedule.is_completed(declaration)? {
-                        return Err(invalid_state());
-                    }
-                } else if source_index != checking.next_global {
+                if source_index != checking.next_global {
                     return Err(invalid_state());
                 }
                 let definition = module
@@ -4413,20 +4302,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .get(source_index)
                     .ok_or_else(invalid_state)?;
                 self.elaborate_prepared_definition(definition, &mut checking.globals)?;
-                if let Some(schedule) = &mut checking.schedule {
-                    schedule.mark_completed(declaration)?;
-                }
                 checking.next_global = checking
                     .next_global
                     .checked_add(1)
                     .ok_or_else(invalid_state)?;
             }
             ResolvedDeclarationIndex::Implementation(source_index) => {
-                if let Some(schedule) = &checking.schedule {
-                    if schedule.is_completed(declaration)? {
-                        return Err(invalid_state());
-                    }
-                } else if source_index != checking.next_implementation {
+                if source_index != checking.next_implementation {
                     return Err(invalid_state());
                 }
                 if !checking.facts_reserved {
@@ -4452,16 +4334,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     checked,
                     &mut checking.globals.context,
                 )?);
-                if let Some(schedule) = &mut checking.schedule {
-                    schedule.mark_completed(declaration)?;
-                }
                 checking.next_implementation = checking
                     .next_implementation
                     .checked_add(1)
                     .ok_or_else(invalid_state)?;
             }
-            ResolvedDeclarationIndex::Resource(_)
-            | ResolvedDeclarationIndex::Type(_)
+            ResolvedDeclarationIndex::Type(_)
             | ResolvedDeclarationIndex::Interface(_)
             | ResolvedDeclarationIndex::Effect(_) => {}
         }
@@ -4473,21 +4351,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         module: &ResolvedModule,
         checked_schemes: &mut [CheckedGlobalScheme],
         checked_implementation_count: usize,
-        mut checking: ModuleBodyChecking,
+        checking: ModuleBodyChecking,
     ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
-        if let Some(schedule) = checking.schedule.take() {
-            schedule.restore_source_order(
-                &mut checking,
-                &mut self.implementation_capture_roots,
-                &mut self.type_work,
-            )?;
-        }
         let ModuleBodyChecking {
             globals,
             mut facts,
             next_global,
             next_implementation,
-            publication: previous_publication,
             ..
         } = checking;
         if next_global != module.definitions().len()
@@ -4503,15 +4373,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             span: module.span(),
         };
         self.elaborate_result(&result, &mut context)?;
-        let incoming = self.prepare_evidence_publication()?;
-        let publication = if let Some(mut previous) = previous_publication {
-            previous
-                .append(incoming, &mut self.constraint_work)
-                .map_err(|failure| selection_failure(failure, None))?;
-            previous
-        } else {
-            incoming
-        };
+        let publication = self.prepare_evidence_publication()?;
         if self.cleanup_rows.is_empty() {
             self.zonk_builder_types().map_err(TypeError::Internal)?;
         } else {
@@ -5762,7 +5624,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     fn close_typed_owner_evidence(
         &mut self,
         marker: PendingObligationMarker,
-        owner: NodeId,
+        _owner: NodeId,
     ) -> Result<(), TypeError> {
         self.close_evidence_obligations(marker)?;
         Ok(())
@@ -11325,7 +11187,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             clone_effect_instance_with_budget(&request.effect.instance, &mut self.type_work)
                 .map_err(|error| TypeError::Internal(error.into()))?,
         );
-        let mut effects = self.union_effects(&operand.effects, &requested, span)?;
+        let effects = self.union_effects(&operand.effects, &requested, span)?;
 
         let ty = result.into_inner();
         let core_ty = self.pure_core_type(&ty)?;
@@ -14113,9 +13975,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 });
             }
         }
-        // Ordinary generalization and its type abstraction complete
-        // this initializer before conditional source metadata is saved.
-        if let Some(marker) = evidence_marker {}
         Ok(())
     }
 
@@ -20932,19 +20791,6 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
     }
 }
 
-/// Exposes only the internal scheduling selector. It neither checks a body nor
-/// establishes that an unavailable prerequisite makes the whole module invalid.
-#[cfg(test)]
-pub(crate) fn source_original_prerequisites_for_test(
-    module: &ResolvedModule,
-) -> Result<Vec<ResolvedDeclarationIndex>, TypeError> {
-    let mut elaborator = EffectElaborator::for_module(module)?;
-    let schemes = elaborator.checked_module_schemes(module.definitions())?;
-    let schedule =
-        module_bodies::ModuleBodySchedule::new(module, &schemes, &mut elaborator.type_work)?;
-    schedule.available_original_prerequisites(module, &mut elaborator.type_work)
-}
-
 #[allow(
     clippy::too_many_arguments,
     reason = "source and rewrite work retain separate owners alongside the test observer"
@@ -21007,7 +20853,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
             constraint_work,
         )?);
         let mut started_bodies = Vec::new();
-        let (implementation_facts, mut publication) = elaborator.check_module_bodies(
+        let (implementation_facts, publication) = elaborator.check_module_bodies(
             &resolved,
             &mut schemes,
             &checked_interfaces,
@@ -21916,16 +21762,13 @@ impl Drop for CoreRecursiveMemberBuffer {
     }
 }
 
-/// Check-once body state. The default driver keeps original declaration order;
-/// completed roots remain available for dependency-closed capture checking.
+/// Body state for checking declarations once in source order.
 struct ModuleBodyChecking {
     globals: PreparedGlobals,
     facts: CheckedImplementationFactBuffer,
     facts_reserved: bool,
     next_global: usize,
     next_implementation: usize,
-    schedule: Option<module_bodies::ModuleBodySchedule>,
-    publication: Option<PendingEvidencePublication>,
 }
 
 struct PreparedGlobals {
@@ -27223,7 +27066,7 @@ fn resolved_module_binders(
 
     collect_definition_binders(module.definitions(), &mut binders, &mut expressions);
     collect_implementation_binders(module.implementations(), &mut binders, &mut expressions);
-    collect_expression_binders(&mut binders, expressions, charge)?;
+    collect_expression_binders(&mut binders, expressions);
     Ok(binders)
 }
 
@@ -27333,11 +27176,7 @@ fn collect_definition_kind_binders<'a>(
     }
 }
 
-fn collect_expression_binders(
-    binders: &mut Vec<BinderId>,
-    mut expressions: Vec<&ResolvedExpr>,
-    mut charge: impl FnMut(usize) -> Result<(), BuildError>,
-) -> Result<(), BuildError> {
+fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<&ResolvedExpr>) {
     while let Some(expression) = expressions.pop() {
         match &expression.kind {
             ResolvedExprKind::Apply(application) => {
@@ -27399,7 +27238,6 @@ fn collect_expression_binders(
             | ResolvedExprKind::Constructor(_) => {}
         }
     }
-    Ok(())
 }
 
 fn collect_resolved_declaration<'a>(

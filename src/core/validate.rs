@@ -5,7 +5,6 @@ mod declaration_closure_tests;
 #[cfg(test)]
 mod effect_signature_borrow_tests;
 
-pub(crate) mod semantic_type_variables;
 mod source_declarations;
 
 pub(crate) use source_declarations::DeclarationCoordinateLoan;
@@ -65,19 +64,6 @@ fn core_validation_type_work_limit() -> usize {
         CORE_VALIDATION_TYPE_WORK_LIMIT,
         crate::calibration::DiagnosticOwner::Core,
     )
-}
-
-/// Checks the exact source-native operation table, then legacy registrations.
-/// Pay before the lookup and each legacy inventory traversal.
-pub(crate) fn registered_foreign_effect_with_charge<E>(
-    registry: &crate::resolved::ResolvedRegistry,
-    effect: crate::types::EffectId,
-    mut charge: impl FnMut(usize) -> Result<(), E>,
-) -> Result<bool, E> {
-    charge(1)?;
-    Ok(registry
-        .native_symbol(OperationId::new(effect, 0))
-        .is_some())
 }
 
 struct TypeReplacementMap(HashMap<crate::types::TypeVariableId, Type>);
@@ -3359,7 +3345,6 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     binders: HashMap<BinderId, &'program TypedBinder>,
 
     authenticated_abstract_nominals: std::cell::RefCell<HashSet<crate::types::NominalTypeId>>,
-    unused_ordering: std::cell::RefCell<HashSet<crate::types::TypeVariableId>>,
     type_work: Cell<usize>,
 
     type_work_limit: usize,
@@ -3495,7 +3480,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             module_sources: None,
             binders: HashMap::new(),
             authenticated_abstract_nominals: std::cell::RefCell::new(HashSet::new()),
-            unused_ordering: std::cell::RefCell::new(HashSet::new()),
             type_work: Cell::new(0),
             type_work_limit: core_validation_type_work_limit(),
             #[cfg(test)]
@@ -7379,8 +7363,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let parameter_range = parameter_span.range();
                 self.charge_type_work(1)?;
                 let contextual = self.is_lexical_source_parameter(parameter.id)?
-                    || generatives.is_some_and(|original| original.contains(&parameter.id))
-                    || original.is_some() && self.unused_ordering.borrow().contains(&parameter.id);
+                    || generatives.is_some_and(|original| original.contains(&parameter.id));
                 if parameter.id.local() != *expected
                     || parameter_span.source() != source
                     || !origin_depth_within_limit(&parameter.origin)
@@ -12598,35 +12581,6 @@ enum ClauseOutput<'a> {
 }
 
 impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
-    fn unused_ordering_candidates(
-        &self,
-        candidates: &HashSet<crate::types::TypeVariableId>,
-    ) -> Result<HashSet<crate::types::TypeVariableId>, ValidationError> {
-        if candidates.is_empty() {
-            return Ok(HashSet::new());
-        }
-        let mut work =
-            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
-        let result = (|| {
-            let mut uses = semantic_type_variables::UnusedVariables::new(candidates, &mut work)?;
-            uses.program(self.program)?;
-
-            Ok(uses.finish())
-        })();
-        // The shared loan is debited even if traversal or allocation refuses.
-        self.charge_type_work(work.used())?;
-        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
-    }
-
-    fn unused_ordering_still_unused(
-        &self,
-        candidates: &HashSet<crate::types::TypeVariableId>,
-    ) -> Result<bool, ValidationError> {
-        let unused = self.unused_ordering_candidates(candidates)?;
-        self.charge_type_work(candidates.len())?;
-        Ok(unused.len() == candidates.len())
-    }
-
     fn validate_cleanup_owner(
         &self,
         id: NodeId,

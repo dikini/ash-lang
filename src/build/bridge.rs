@@ -4,7 +4,7 @@ use crate::{
         CheckedForeignSymbol, NativeArgument, NativeResult, authenticate_foreign_symbol,
     },
     source::Span,
-    types::{OperationId, TypeWorkBudget},
+    types::TypeWorkBudget,
 };
 use std::{
     fmt::{self, Write},
@@ -35,15 +35,10 @@ pub(crate) struct TargetResolvedForeignBridge {
     symbol: Arc<CheckedForeignSymbol>,
     span: Span,
 }
+#[cfg(test)]
 impl TargetResolvedForeignBridge {
     pub(crate) fn symbol(&self) -> &Arc<CheckedForeignSymbol> {
         &self.symbol
-    }
-    pub(crate) fn operation(&self) -> OperationId {
-        self.symbol.operation()
-    }
-    pub(crate) fn library(&self) -> crate::foreign::checked_source::NativeLibraryId {
-        self.symbol.library()
     }
 }
 pub(crate) fn plan_foreign_bridge_in_program(

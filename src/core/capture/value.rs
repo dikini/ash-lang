@@ -288,21 +288,6 @@ pub(super) struct Graph {
     evidence_index: Vec<EvidenceIndex>,
 }
 
-impl Graph {
-    pub(super) fn visit_semantic_type_variables(
-        &self,
-        uses: &mut crate::core::validate::semantic_type_variables::UnusedVariables<'_>,
-    ) -> Result<(), ()> {
-        // Expressions carry graph/term coordinates. The
-        // canonical type identities in this data graph live in metadata.
-        uses.charge(self.metadata.len())?;
-        for id in self.metadata.values() {
-            uses.id(*id)?;
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 #[cfg(test)]
 pub(super) fn observed_control_call_graph_for_test() -> Graph {
@@ -1049,7 +1034,7 @@ impl Graph {
         headers: &mut FunctionMetadataPreparation<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
-        let node = nodes.get(id).ok_or(Failure::Invalid)?;
+        let _node = nodes.get(id).ok_or(Failure::Invalid)?;
         let source = self.sources[id];
         Ok(match pure {
             Some(PureExprKind::Variable(variable)) => {
@@ -3295,6 +3280,7 @@ impl<'a> Analysis<'a> {
         self.revision
     }
 
+    #[cfg(test)]
     pub(super) fn actual_request_path(
         &self,
         port: usize,
@@ -3986,7 +3972,7 @@ impl<'a> Analysis<'a> {
         request: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        let (expression, context) = self.slots[request].key;
+        let (expression, _context) = self.slots[request].key;
         let scalar = matches!(
             self.graph.expressions[expression],
             Expr::Request { scalar: true, .. } | Expr::Call { scalar: true, .. }

@@ -33,7 +33,7 @@ use crate::{
         ValidatedProgram,
     },
     resolved::{BinderId, ResumeId},
-    types::{ConstructorId, EffectInstance, OperationId, TypeWorkBudget},
+    types::{EffectInstance, OperationId, TypeWorkBudget},
 };
 
 /// Inspectable lexical values available while evaluating one expression.

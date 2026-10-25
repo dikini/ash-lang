@@ -26,7 +26,7 @@ use crate::{
     source::Span,
     types::{
         EffectInstance, EffectRow, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
-        discard_type_iteratively, same_type_with_budget,
+        discard_type_iteratively,
     },
 };
 
@@ -100,6 +100,7 @@ impl<'a> CaptureGraphVisits<'a> {
 impl CaptureValueSummary {
     /// Whether this summary retains a graph. Logical query projections also
     /// retain graphs; presence alone does not prove ordinary capture admission.
+    #[cfg(test)]
     pub(crate) fn has_graph(&self) -> bool {
         self.graph.is_some()
     }
@@ -226,48 +227,6 @@ struct SummaryGraph {
     code: Vec<Control>,
     types: TypeArguments,
     data: Option<Arc<value::Graph>>,
-}
-
-impl SummaryGraph {
-    fn visit_semantic_type_variables(
-        &self,
-        uses: &mut super::validate::semantic_type_variables::UnusedVariables<'_>,
-    ) -> Result<(), ()> {
-        uses.charge(self.callables.positions.len() + self.types.0.len() + self.code.len())?;
-        for callable in self.callables.positions.iter().flatten() {
-            uses.ty(&callable.ty)?;
-        }
-        for ty in &self.types.0 {
-            uses.ty(ty)?;
-        }
-        for code in &self.code {
-            for request in code.requests() {
-                uses.charge(1)?;
-                if let Some(effect) = &request.effect {
-                    uses.instance(effect)?;
-                }
-                if let Some(row) = &request.opaque_row {
-                    uses.row(row)?;
-                }
-            }
-        }
-        if let Some(data) = &self.data {
-            data.visit_semantic_type_variables(uses)?;
-        }
-        Ok(())
-    }
-}
-
-impl CaptureValueSummary {
-    pub(crate) fn visit_semantic_type_variables(
-        &self,
-        uses: &mut super::validate::semantic_type_variables::UnusedVariables<'_>,
-    ) -> Result<(), ()> {
-        if let Some(graph) = &self.graph {
-            graph.visit_semantic_type_variables(uses)?;
-        }
-        Ok(())
-    }
 }
 
 // Dense original code coordinates remain stable even where no callable exists.
@@ -2065,12 +2024,12 @@ fn compile_pure_capture_control<F: CoreOperationFamily>(
     })
 }
 
-#[inline(never)]
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the existing selected scope and original borrowed projections retain authority without a copied environment"
 )]
-#[inline(never)]
+
 #[expect(
     clippy::too_many_arguments,
     reason = "source-resource phase temporaries must not enlarge ordinary capture-control frames"
@@ -2482,6 +2441,7 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     Ok(summaries)
 }
 
+#[cfg(test)]
 fn actual_capture_domain<F: CoreOperationFamily>(
     nodes: &[StoredNode<F>],
     arena: super::dialect::ArenaId,
@@ -5509,6 +5469,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ActualValuePathStep {
     Root(Span),

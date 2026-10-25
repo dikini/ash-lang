@@ -17,7 +17,7 @@ use std::io::{self, Write};
 pub struct PreparedRuntimeMessages {
     reasons: [(&'static str, String); 20],
     phases: [(RuntimePhase, String); 7],
-    resources: [(RuntimeResource, String); 24],
+    resources: [(RuntimeResource, String); 22],
     cleanup: [(CleanupStatus, String); 3],
     cause: String,
     phase: String,
@@ -149,16 +149,8 @@ impl PreparedRuntimeMessages {
             ],
             resources: [
                 (
-                    RuntimeResource::ForeignAdmission,
-                    catalogue.format(&Message::runtime_resource_foreign_admission())?,
-                ),
-                (
                     RuntimeResource::PackedBytes,
                     catalogue.format(&Message::runtime_resource_packed_bytes())?,
-                ),
-                (
-                    RuntimeResource::ForeignCodecStorage,
-                    catalogue.format(&Message::runtime_resource_foreign_codec_storage())?,
                 ),
                 (
                     RuntimeResource::TypeDisposal,

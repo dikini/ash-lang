@@ -139,6 +139,16 @@ This changes test accounting, not a production limit. The broader library and
 workspace gate, remaining retirement, S3 example/canary and final review remain
 pending; the checkpoint stays a draft.
 
+The next working checkpoint passes all 1,549 library tests and all 47
+architecture checks. The four remaining summary-fixture failures were repaired
+with coherent defining originals and independently derived exact budgets; their
+negative newtype, alias, effect and retry cases pass. Dependency-closed removal
+also retires 152 obsolete policy fixtures and the native calibration branches,
+while preserving ordinary generators and their reference-corpus inputs. The
+ordinary Cell export-shape guard's lost invocation has been identified for
+restoration. Warning cleanup, fresh generated-native/image execution, S3/S4 and
+the full normal workspace gate remain pending; this is still a draft checkpoint.
+
 The removal preserves ordinary Cell execution and body-free generic resource
 metadata used by kind and import checking. Nonbuiltin provider execution used
 the retired foreign policy engine and now receives the existing unsupported

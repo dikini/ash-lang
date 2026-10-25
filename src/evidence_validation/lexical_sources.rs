@@ -1,6 +1,19 @@
 //! Original ordinary lexical context and row qualification.
-use super::*;
-use crate::types::EffectRowVariable;
+use super::{
+    EvidenceScope, EvidenceValidationFailure, ExpectedEquation, LinkedInterfaceRegistry,
+    LinkedLocalScope, OwnerReplacements, charge, invalid_root, same_argument_charged,
+    type_resource, unknown,
+};
+use crate::{
+    interface::{InterfaceApplication, InterfaceConstraintBudget},
+    resolved::ResolvedModuleProgram,
+    source::Span,
+    types::{
+        EffectRowVariable, IterativeTypeOwner, Kind, KindedArgument, Type, TypeWorkBudget,
+        clone_kinded_argument_with_budget, substitute_type_and_row_variables_with,
+    },
+};
+use std::collections::HashMap;
 #[derive(Clone, Copy)]
 pub(super) struct OriginalLexicalContext {
     pub(super) equation: Option<ExpectedEquation>,

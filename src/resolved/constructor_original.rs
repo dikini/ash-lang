@@ -3,8 +3,19 @@
 //! This reference supplies no projected kind, source access or native authority.
 //! Only completed local checking may create it; imports retain the same reference.
 
-use super::*;
-use std::fmt;
+use super::{
+    ResolvedBuildFailure, ResolvedNominalDeclarationKind, ResolvedRegistry, ResolvedTypeVariable,
+    same_origin_with_constraint_budget,
+    same_summary_resolved_type_variables_with_constraint_budget,
+};
+#[cfg(test)]
+use crate::types::discard_type_iteratively;
+use crate::{
+    interface::same_type_with_constraint_budget,
+    source::Origin,
+    types::{ConstructorId, Type, TypeWorkBudget},
+};
+use std::{fmt, sync::Arc};
 
 /// The existing defining registry, rather than a copied constructor fact.
 pub(crate) struct ConstructorOriginal(Arc<ResolvedRegistry>);
@@ -141,6 +152,11 @@ impl ConstructorOriginal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        module::ModuleId,
+        resolved::{ResolvedConstructor, ResolvedNominalType},
+        types::NominalTypeId,
+    };
 
     #[test]
     fn constructor_original_last_owner_refusal_and_replacement_drop_iteratively() {

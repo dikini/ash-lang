@@ -36,7 +36,6 @@ mod tests {
     };
 
     #[test]
-    #[test]
     fn failed_unification_rolls_back_cleanup_row_obligations() {
         let source = crate::source::SourceFile::new("cleanup-rollback.ash", "()").unwrap();
         let span = source

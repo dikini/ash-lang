@@ -891,7 +891,7 @@ impl CoreBuilder<EffectOperationFamily> {
                         .map_err(|()| super::BuildError::TypeWorkExceeded)?,
                     Equation::Request(operand, effect) => {
                         let operand = operand.index()?;
-                        let mut requested = EffectRow::singleton(effect);
+                        let requested = EffectRow::singleton(effect);
 
                         self.nodes
                             .get(operand)

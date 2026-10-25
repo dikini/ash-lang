@@ -135,7 +135,7 @@ fn contains_inference(root: &Type) -> bool {
                 pending.push(Task::Type(function));
             }
             Task::Type(
-                Type::ResourceApply(_, arguments) | Type::ForeignOwnerApply(_, arguments),
+                Type::ResourceApply(_, arguments),
             ) => pending.extend(arguments.iter().map(Task::Argument)),
             Task::Type(Type::EffectfulFunction(domain, codomain)) => {
                 pending.push(Task::Row(codomain.effects()));

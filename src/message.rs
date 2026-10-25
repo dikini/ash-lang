@@ -185,8 +185,6 @@ messages! {
     runtime_phase_diagnostic_preparation => "runtime-phase-diagnostic-preparation" {},
     runtime_resource_type_disposal => "runtime-resource-type-disposal" {},
     runtime_resource_packed_bytes => "runtime-resource-packed-bytes" {},
-    runtime_resource_foreign_admission => "runtime-resource-foreign-admission" {},
-    runtime_resource_foreign_codec_storage => "runtime-resource-foreign-codec-storage" {},
     runtime_resource_kind_disposal => "runtime-resource-kind-disposal" {},
     runtime_resource_environment_disposal => "runtime-resource-environment-disposal" {},
     runtime_resource_captured_disposal => "runtime-resource-captured-disposal" {},

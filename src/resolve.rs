@@ -1989,7 +1989,7 @@ fn reject_duplicate_module_aliases(surface: &SurfaceModule) -> Result<(), Resolv
     reason = "publication checks retain the original declaration tables and caller work ledger at one boundary"
 )]
 fn build_export_candidate(
-    module: ModuleId,
+    _module: ModuleId,
     surface: &SurfaceModule,
     registry: &ResolvedRegistry,
     interfaces: &[ResolvedInterfaceDeclaration],
@@ -4544,7 +4544,7 @@ impl Resolver {
     fn retain_imported_effect(
         &mut self,
         exported: &ResolvedEffectDeclaration,
-        summary: &ExportSummary,
+        _summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         let retained =
@@ -14104,6 +14104,311 @@ mod tests {
     }
 
     #[test]
+    fn shared_foreign_nominal_constructor_family_transaction_is_exact_atomic_and_reusable() {
+        const FIRST_CONSTRAINT_WORK: usize = 19;
+        const FIRST_TYPE_WORK: usize = 22;
+        const DUPLICATE_CONSTRAINT_WORK: usize = 32;
+        const DEFERRED_FOREIGN_CONFLICT_WORK: usize = 31;
+        const LATE_SIBLING_CONFLICT_WORK: usize = 19;
+
+        std::thread::Builder::new()
+            .name("shared-foreign-constructor-family".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new(
+                    "shared-foreign-constructor-family.ash",
+                    "First Second Foreign forged",
+                )
+                .expect("the shared-foreign source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 5).expect("the clean range should be ordered"))
+                    .expect("the clean span should fit");
+                let forged_span = source
+                    .span(ByteRange::new(21, 27).expect("the forged range should be ordered"))
+                    .expect("the forged span should fit");
+                let module = ModuleId::new(9_110);
+                let owner = NominalTypeId::new(module, 0);
+                let foreign = NominalTypeId::new(module, 1);
+                let first = ConstructorId::new(owner, 0);
+                let second = ConstructorId::new(owner, 1);
+                let foreign_constructor = ConstructorId::new(foreign, 0);
+                let make_summary = |foreign_origin, second_origin| {
+                    ExportSummary::test_fixture(
+                        module,
+                        Vec::new(),
+                        vec![
+                            (
+                                "Pair",
+                                owner,
+                                ExportedTypeAccess::Transparent,
+                                Origin::Source(span),
+                            ),
+                            (
+                                "Foreign",
+                                foreign,
+                                ExportedTypeAccess::Transparent,
+                                foreign_origin,
+                            ),
+                        ],
+                        vec![
+                            (
+                                "First",
+                                first,
+                                Some(Type::Nominal(foreign)),
+                                Origin::Source(span),
+                            ),
+                            (
+                                "Second",
+                                second,
+                                Some(Type::Nominal(foreign)),
+                                second_origin,
+                            ),
+                            (
+                                "ForeignValue",
+                                foreign_constructor,
+                                None,
+                                Origin::Source(span),
+                            ),
+                        ],
+                        Vec::new(),
+                    )
+                };
+                let clean = make_summary(Origin::Source(span), Origin::Source(span));
+                let mut foreign_conflicting =
+                    make_summary(Origin::Source(forged_span), Origin::Source(span));
+                let mut late_sibling_conflicting =
+                    make_summary(Origin::Source(forged_span), Origin::Source(forged_span));
+                // Unchanged sibling meanings retain their actual original;
+                // only the conflicting second sibling has another witness.
+                for id in [first, second] {
+                    foreign_conflicting.share_constructor_original_for_test(&clean, id);
+                }
+                late_sibling_conflicting.share_constructor_original_for_test(&clean, first);
+                for candidate in [&clean, &foreign_conflicting, &late_sibling_conflicting] {
+                    candidate
+                        .authenticate(
+                            &mut TypeWorkBudget::default(),
+                            &mut InterfaceConstraintBudget::default(),
+                        )
+                        .expect("each independently coherent family route should authenticate");
+                }
+                let clean_first = clean
+                    .constructor("First")
+                    .expect("the clean first constructor should exist");
+
+                let assert_empty_snapshot = |resolver: &Resolver| {
+                    assert!(resolver.imported.nominals().next().is_none());
+                    assert!(resolver.imported.constructor(first).is_none());
+                    assert!(resolver.imported.constructor(second).is_none());
+                    assert!(resolver.imported.constructor(foreign_constructor).is_none());
+                };
+                let assert_clean_snapshot = |resolver: &Resolver| {
+                    assert_eq!(
+                        resolver
+                            .imported
+                            .nominals()
+                            .map(|nominal| nominal.id)
+                            .collect::<Vec<_>>(),
+                        [owner, foreign],
+                    );
+                    let retained_owner = resolver
+                        .imported
+                        .nominal(owner)
+                        .expect("the complete owner should be retained");
+                    assert_eq!(retained_owner.access, ImportedTypeAccess::Transparent);
+                    assert_eq!(retained_owner.constructors.as_ref(), [first, second]);
+                    let retained_foreign = resolver
+                        .imported
+                        .nominal(foreign)
+                        .expect("the shared foreign closure should be retained once");
+                    assert_eq!(retained_foreign.access, ImportedTypeAccess::Hidden);
+                    assert!(retained_foreign.constructors.is_empty());
+                    assert_eq!(retained_foreign.constructor_count, 1);
+                    for (identity, spelling) in [(first, "First"), (second, "Second")] {
+                        let constructor = resolver
+                            .imported
+                            .constructor(identity)
+                            .expect("both physical owner constructors should be retained");
+                        assert_eq!(constructor.spelling, spelling);
+                        assert_eq!(constructor.payload.as_ref(), Some(&Type::Nominal(foreign)));
+                        assert_eq!(
+                            constructor.scheme.value_type(),
+                            &Type::Function(
+                                Box::new(Type::Nominal(foreign)),
+                                Box::new(Type::Nominal(owner)),
+                            ),
+                        );
+                        assert_eq!(constructor.origin, Origin::Source(span));
+                    }
+                    assert!(resolver.imported.constructor(foreign_constructor).is_none());
+                };
+
+                // Shape and family planning cost five cells. The first sibling's
+                // three-node scheme and one-node payload cost eight cells,
+                // including two cells for each newly observed owner and foreign
+                // identity. The second sibling costs four traversal cells because
+                // the family-wide observer has already seen both identities. The
+                // deferred foreign closure validation and staging record cost two.
+                let mut constraint_short = Resolver::with_budgets(
+                    ModuleId::new(9_111),
+                    TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+                    InterfaceConstraintBudget::with_limit(FIRST_CONSTRAINT_WORK - 1),
+                );
+                let error = constraint_short
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect_err("one missing foreign-closure cell must reject atomically");
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    constraint_short.constraint_work.used(),
+                    FIRST_CONSTRAINT_WORK - 1,
+                );
+                assert_eq!(constraint_short.type_work.used(), 0);
+                assert_empty_snapshot(&constraint_short);
+
+                let mut type_short = Resolver::with_budgets(
+                    ModuleId::new(9_112),
+                    TypeWorkBudget::with_limit(FIRST_TYPE_WORK - 1),
+                    InterfaceConstraintBudget::with_limit(FIRST_CONSTRAINT_WORK),
+                );
+                let error = type_short
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect_err("one missing aggregate Type cell must reject atomically");
+                assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+                assert_eq!(type_short.constraint_work.used(), FIRST_CONSTRAINT_WORK);
+                assert_eq!(type_short.type_work.used(), 0);
+                assert_empty_snapshot(&type_short);
+
+                let mut resolver = Resolver::with_budgets(
+                    ModuleId::new(9_113),
+                    TypeWorkBudget::with_limit(FIRST_TYPE_WORK),
+                    InterfaceConstraintBudget::with_limit(FIRST_CONSTRAINT_WORK),
+                );
+                resolver
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect("the exact family budget should retain both siblings and one closure");
+                assert_eq!(resolver.constraint_work.used(), FIRST_CONSTRAINT_WORK);
+                assert_eq!(resolver.type_work.used(), FIRST_TYPE_WORK);
+                assert_clean_snapshot(&resolver);
+
+                // Both sibling facts must compare before the shared foreign
+                // closure. One short stops on that closure's Origin comparison;
+                // exact reaches the semantic disagreement. Neither path retains
+                // Type cells or changes the published family.
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(DEFERRED_FOREIGN_CONFLICT_WORK - 1);
+                let error = resolver
+                    .retain_imported_constructor(
+                        foreign_conflicting
+                            .constructor("First")
+                            .expect("the foreign-conflicting route should retain First"),
+                        &foreign_conflicting,
+                        span,
+                    )
+                    .expect_err("one missing deferred Origin cell must preserve the clean family");
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    resolver.constraint_work.used(),
+                    DEFERRED_FOREIGN_CONFLICT_WORK - 1,
+                );
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(DEFERRED_FOREIGN_CONFLICT_WORK);
+                let error = resolver
+                    .retain_imported_constructor(
+                        foreign_conflicting
+                            .constructor("First")
+                            .expect("the foreign-conflicting route should retain First"),
+                        &foreign_conflicting,
+                        span,
+                    )
+                    .expect_err("the deferred foreign Origin disagreement must reject");
+                assert_eq!(error.reason, ResolveReason::InternalState);
+                assert_eq!(
+                    resolver.constraint_work.used(),
+                    DEFERRED_FOREIGN_CONFLICT_WORK,
+                );
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                // A late second-sibling original-reference disagreement owns
+                // failure before that route's foreign closure can run.
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(LATE_SIBLING_CONFLICT_WORK - 1);
+                let error = resolver
+                    .retain_imported_constructor(
+                        late_sibling_conflicting
+                            .constructor("First")
+                            .expect("the late-conflicting route should retain First"),
+                        &late_sibling_conflicting,
+                        span,
+                    )
+                    .expect_err(
+                        "one missing late sibling comparison cell must preserve the family",
+                    );
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    resolver.constraint_work.used(),
+                    LATE_SIBLING_CONFLICT_WORK - 1,
+                );
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(LATE_SIBLING_CONFLICT_WORK);
+                let error = resolver
+                    .retain_imported_constructor(
+                        late_sibling_conflicting
+                            .constructor("First")
+                            .expect("the late-conflicting route should retain First"),
+                        &late_sibling_conflicting,
+                        span,
+                    )
+                    .expect_err("the late sibling disagreement must own deterministic rejection");
+                assert_eq!(error.reason, ResolveReason::InternalState);
+                assert_eq!(resolver.constraint_work.used(), LATE_SIBLING_CONFLICT_WORK,);
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                // A clean duplicate route performs only Constraint comparisons.
+                // The first sibling observes both identities once for the whole
+                // family; the second sibling reuses that observer, and D compares
+                // the foreign closure before the already retained owner metadata.
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK - 1);
+                let error = resolver
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect_err("one missing duplicate owner-metadata cell must preserve state");
+                assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
+                assert_eq!(
+                    resolver.constraint_work.used(),
+                    DUPLICATE_CONSTRAINT_WORK - 1,
+                );
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+
+                resolver.type_work = TypeWorkBudget::with_limit(0);
+                resolver.constraint_work =
+                    InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
+                resolver
+                    .retain_imported_constructor(clean_first, &clean, span)
+                    .expect("the clean duplicate route should remain reusable after every failure");
+                assert_eq!(resolver.constraint_work.used(), DUPLICATE_CONSTRAINT_WORK);
+                assert_eq!(resolver.type_work.used(), 0);
+                assert_clean_snapshot(&resolver);
+            })
+            .expect("the shared-foreign family thread should start")
+            .join()
+            .expect("the shared-foreign family thread should finish");
+    }
+
+    #[test]
     fn constructor_family_transaction_rejects_a_late_sibling_conflict_before_owner_metadata() {
         const FIRST_CONSTRAINT_WORK: usize = 9;
         const LATE_CONFLICT_WORK: usize = 11;
@@ -15729,7 +16034,11 @@ mod tests {
         );
         let error = opaque_short
             .expect_err("the opaque-family withheld entry should exhaust candidate staging");
-        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted, "{error:?}");
+        assert_eq!(
+            error.reason,
+            ResolveReason::TypeResourceExhausted,
+            "{error:?}"
+        );
         assert_eq!(error.primary.span().range().start(), 23);
         assert_eq!(opaque_short_used, private_opaque_used + 3);
 
@@ -15815,15 +16124,25 @@ mod tests {
         let mut binding_cutoffs = 0;
         for limit in 0..exact_work {
             let (result, used) = resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, limit);
-            let failure = result.expect_err("every short cumulative allowance must refuse publication");
-            assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted, "limit={limit}: {failure:?}");
+            let failure =
+                result.expect_err("every short cumulative allowance must refuse publication");
+            assert_eq!(
+                failure.reason,
+                ResolveReason::TypeResourceExhausted,
+                "limit={limit}: {failure:?}"
+            );
             assert!(used <= limit);
-            binding_cutoffs += usize::from(failure.primary.message() ==
-                "foreign symbol binding exceeded its work budget");
+            binding_cutoffs += usize::from(
+                failure.primary.message() == "foreign symbol binding exceeded its work budget",
+            );
         }
-        assert!(binding_cutoffs > 0, "the cutoffs must reach the actual symbol binder");
+        assert!(
+            binding_cutoffs > 0,
+            "the cutoffs must reach the actual symbol binder"
+        );
         for _ in 0..2 {
-            let (result, used) = resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, exact_work);
+            let (result, used) =
+                resolve_import_fixture_with_type_limit(ENTRY, DEPENDENCY, exact_work);
             result.expect("the exact foreign resolution allowance must retry");
             assert_eq!(used, exact_work);
         }
@@ -15855,7 +16174,11 @@ mod tests {
             resolve_import_fixture_with_type_limit(PUBLIC, DEPENDENCY, exact_limit - 1);
         let error =
             short.expect_err("the second complete withheld-order scan should fail atomically");
-        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted, "{error:?}");
+        assert_eq!(
+            error.reason,
+            ResolveReason::TypeResourceExhausted,
+            "{error:?}"
+        );
         assert_eq!(
             error.primary.message(),
             "opaque constructor-family scan exceeded its type-work budget",

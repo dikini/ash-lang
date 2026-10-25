@@ -5624,7 +5624,7 @@ fn reserve_linked_registry_authentication_indexes(
 fn authenticate_linked_registry_facts(
     program: &ResolvedModuleProgram,
     budget: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
+    _type_work: &mut TypeWorkBudget,
 ) -> Result<HashMap<TypeVariableId, LinkedBinderOwner>, EvidenceValidationFailure> {
     let span = program.result().span;
     charge(budget, 1, span)?;

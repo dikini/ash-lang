@@ -1608,7 +1608,7 @@ fn admit_builtin_foreign(
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     text.push_str(FOREIGN_SOURCE);
     let path = PathBuf::from("@builtin.foreign");
-    let (source, mut surface) =
+    let (source, surface) =
         parse_surface_module(&path, text, Some(import_span), &mut budget.syntax_work)?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;

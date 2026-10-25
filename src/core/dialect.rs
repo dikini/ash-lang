@@ -2496,6 +2496,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
     }
 
     /// Fresh compiler arenas inherit capacity, never another arena's spending.
+    #[cfg(test)]
     pub(crate) const fn rewrite_work_limit(&self) -> usize {
         self.rewrite_type_work.limit()
     }
@@ -4060,6 +4061,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .map_err(|()| BuildError::TypeWorkExceeded)
     }
 
+    #[cfg(test)]
     pub(crate) fn with_rebuild_type_work<T>(
         &mut self,
         operation: impl FnOnce(&mut TypeWorkBudget) -> T,

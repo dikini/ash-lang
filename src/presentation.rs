@@ -1379,9 +1379,6 @@ pub fn compile_build_diagnostic<'a>(
 
 /// Presents the executable's failed standard-output write.
 #[must_use]
-
-/// Presents the executable's failed standard-output write.
-#[must_use]
 pub fn compile_output_write_diagnostic() -> CompileDiagnostic<'static> {
     CompileDiagnostic {
         reason: "internal.output-write".into(),

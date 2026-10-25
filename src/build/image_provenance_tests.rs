@@ -18,7 +18,6 @@ fn encoder<'a>(source: &SourceFile, work: &'a mut TypeWorkBudget) -> Encoder<'a>
         prepared_libraries: HashMap::new(),
         native_symbols: HashMap::new(),
 
-        source_declaration_catalogs: HashMap::new(),
         origin_records: HashMap::new(),
         origin_spans: HashMap::new(),
         original_native_symbols: Vec::new(),
