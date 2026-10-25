@@ -1,7 +1,7 @@
 # CP-0025: Lexical region construction and paired allocators
 
 - ID: `CP-0025`
-- Status: proposed
+- Status: accepted
 - Related: [TASK-0055](../tasks/TASK-0055-lexical-regions.md),
   [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md),
   [DN-0055](../design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md),
@@ -13,7 +13,7 @@
   [R4 #68](https://github.com/dikini/ash-lang/issues/68),
   [R5 #70](https://github.com/dikini/ash-lang/issues/70)
 
-> This proposal is not current Ash. It fixes a candidate contract for matched R1 modeling and R2 review. Product implementation remains held until the reconciled contract and bounded proof gate are accepted.
+> This accepted transition is not current Ash. The matched finite model and frozen proof gate have passed independent review. Product R3 remains held until this accepted contract and matching proof delivery are retained on the milestone and verified.
 
 ## Current behavior
 
@@ -237,3 +237,29 @@ Required invariants/preservation:
 Prove preservation by the concrete update for each transition and its local premises. Supply counterexamples for omitted initialized-state, dependency, one-shot, close-order and allocator-isolation premises. Do not encode `well_formed(next)` as a provider or transition assumption.
 
 The correspondence report maps each transition to the source forms and explicit Core operands above, including context query, canonical owner-position invocation/return and row discharge, public backend-interpreter availability, prospective identity capture, backing registration and preserved outside continuation. It must check those mappings rather than treat them as a model-only safety claim. A frozen Lean integration receipt under AD-0012, independent review and reconciled R2 contract remain acceptance gates. Use a small standalone module/minimal imports and the existing integration runner/cache; no proof run was performed to draft this file.
+
+## Acceptance and evidence
+
+The acceptance owner accepted the semantic content on 2026-10-25 after matched
+model/correspondence review and independent audit of the actual frozen gate.
+The reviewed pre-adoption proposal SHA-256 is
+`4455ca6657439037b02e8164c61e73e99e91da2aa05419741dd1421b53a9c796`;
+this adoption changes status and evidence metadata, not that semantic content.
+The [model guide](../design/lexical-regions/README.md),
+[correspondence and assumptions](../design/lexical-regions/correspondence.md) and
+[gate/transfer record](../design/lexical-regions/evidence.md) identify the matched
+eight modules, 195 reports, independent review and frozen gate receipt.
+The gate validated eight cached artifacts and invoked no fresh compiler.
+
+The accepted proof scope is finite sequential `Coherent` preservation under
+local admissions and stated source/Core/module assumptions. Context query is
+observational; typed RegionView results, per-action saved-view payloads and
+generated adapters remain source/Core obligations. Effect-row discharge,
+lexical handler compatibility and physical provider validity/isolation are not
+proved by finite preservation. Acceptance does not claim a native allocator
+or compiler-correctness theorem.
+
+Exact proof-source/registration transfer is verified. Current-head delivery
+review, GitHub milestone retention, retained verification and R1/R2 issue
+acceptance remain pending. Product implementation and normative specification
+changes have not begun; R3 remains held until those retention obligations close.
