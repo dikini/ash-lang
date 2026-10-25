@@ -13718,6 +13718,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
                 let mut nominal_payload = None;
                 let types: &[Type] = if let Some(constructor) = tuple.constructor {
+                    if crate::resolved::ResourceApi::for_module(constructor.owner().module())
+                        .is_some_and(|api| api.hides_constructor(constructor))
+                        || crate::resolved::RegionApi::for_module(constructor.owner().module())
+                            .is_some()
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
                     let info = self
                         .program
                         .registry
@@ -19893,6 +19900,88 @@ mod tests {
         let error = super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
         assert_eq!(error.reason, ValidationReason::NodeType);
         assert_eq!(error.node, Some(legacy));
+    }
+
+    #[test]
+    fn region_nominal_initializer_rejects_private_runtime_constructors() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            "import @builtin.cell as Cell\ntype Item = Empty\nmain : Unit -> Item\nmain () = Empty\n",
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        let private = donor
+            .registry()
+            .constructors()
+            .iter()
+            .filter(|info| {
+                crate::resolved::ResourceApi::for_module(info.owner.module())
+                    .is_some_and(|api| api.hides_constructor(info.id))
+                    || crate::resolved::RegionApi::for_module(info.owner.module()).is_some()
+            })
+            .map(|info| info.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            private.len(),
+            5,
+            "Cell Hidden and four private region representations"
+        );
+        for constructor in private {
+            let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+            let index = copied
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(
+                        &node.kind,
+                        EffectExprKind::Operation(EffectOperation::RegionTuple(record))
+                            if record.constructor.is_some()
+                    )
+                })
+                .unwrap();
+            let mut ty = Type::Nominal(constructor.owner());
+            for _ in copied
+                .registry
+                .nominal_parameters(constructor.owner())
+                .unwrap()
+            {
+                ty = Type::Application(Box::new(ty), Box::new(Type::Unit));
+            }
+            let clone_node =
+                |node: &StoredNode<super::super::effect::EffectOperationFamily>| StoredNode {
+                    dialect: node.dialect,
+                    ty: node.ty.clone(),
+                    effects: node.effects.clone(),
+                    origin: node.origin.clone(),
+                    kind: node.kind.clone(),
+                };
+            let mut forged = clone_node(&copied.nodes[index]);
+            forged.ty = ty.clone();
+            let EffectExprKind::Operation(EffectOperation::RegionTuple(record)) = &mut forged.kind
+            else {
+                unreachable!()
+            };
+            record.constructor = Some(constructor);
+            let id = node_id(copied.arena, copied.nodes.len()).unwrap();
+            copied.nodes.push(forged);
+            let saved = node_id(copied.arena, copied.nodes.len()).unwrap();
+            copied.nodes.push(clone_node(&copied.nodes[index]));
+            let binder = TypedBinder::new(
+                copied.arena,
+                BinderId::Generated(u32::MAX - 18),
+                ty,
+                copied.nodes[index].origin.clone().unwrap(),
+            );
+            // Keep the original result type and every context/request/storage
+            // child reachable, so the forged initializer is the rejection site.
+            copied.nodes[index].kind = EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::Bind(crate::core::binding::BindingNode::new(binder, id, saved)),
+            ));
+            let error =
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+            assert_eq!(error.reason, ValidationReason::Registry, "{constructor:?}");
+            assert_eq!(error.node, Some(id), "{constructor:?}");
+        }
     }
 
     #[test]
