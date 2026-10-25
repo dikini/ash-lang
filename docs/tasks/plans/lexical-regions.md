@@ -64,7 +64,7 @@ The [finite model guide](../../design/lexical-regions/README.md),
 [correspondence report](../../design/lexical-regions/correspondence.md) and
 [evidence record](../../design/lexical-regions/evidence.md) describe the reviewed
 eight-module candidate. The frozen gate passed all 195 reports through eight
-independently validated cache reuses, with zero fresh compiler invocations;
+independently validated cache reuses, with zero fresh module compilations;
 exact source/registration transfer passed. Independent actual-gate audit has
 cleared this bounded result and root accepted CP-0025's matched semantic content.
 Current-head review, milestone retention and author acceptance remain pending.

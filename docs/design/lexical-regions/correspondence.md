@@ -175,5 +175,3 @@ release preserve other regions. The model's owner-specific `closeRegion` update
 preserves B's record because it assumes that contract; it cannot certify this
 faulty provider. This finite countermodel explains the isolation premise without
 adding addresses, a native protocol or a new proof framework.
-
-

@@ -58,7 +58,7 @@ operands and fixed paired allocation/release. It is not current Ash.
 
 The reviewed finite model now has eight modules and 195 axiom reports under
 `Coherent` step/trace preservation. Its frozen AD-0012 integration passed using
-eight independently validated cached artifacts and no fresh compiler invocations.
+eight independently validated cached artifacts and no fresh module compilations.
 The [proof guide](../design/lexical-regions/README.md),
 [correspondence and assumptions](../design/lexical-regions/correspondence.md) and
 [gate/transfer record](../design/lexical-regions/evidence.md) delimit that result.

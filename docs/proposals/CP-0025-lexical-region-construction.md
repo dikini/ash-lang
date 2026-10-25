@@ -249,7 +249,7 @@ The [model guide](../design/lexical-regions/README.md),
 [correspondence and assumptions](../design/lexical-regions/correspondence.md) and
 [gate/transfer record](../design/lexical-regions/evidence.md) identify the matched
 eight modules, 195 reports, independent review and frozen gate receipt.
-The gate validated eight cached artifacts and invoked no fresh compiler.
+The gate validated eight cached artifacts and performed no fresh module compilations.
 
 The accepted proof scope is finite sequential `Coherent` preservation under
 local admissions and stated source/Core/module assumptions. Context query is

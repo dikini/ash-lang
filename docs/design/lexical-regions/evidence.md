@@ -15,7 +15,7 @@ milestone baseline `31fcfa5674f7cbd46ee583507f47a5c0cf21170e` through
 The frozen Lean 4.33.1 gate completed with eight modules and 195 expected axiom
 reports. The module scheduler independently validated eight cached artifacts,
 logs, compiler/library/options/report pins and selected direct-import hashes;
-it made zero fresh compiler invocations. Final source, tool, configuration,
+it made zero fresh module compilations. Final source, tool, configuration,
 review and import-coherence audits passed. Reported axioms contain only
 `propext` and `Quot.sound`. This is bounded model evidence, not a native allocator
 or compiler-correctness theorem, and not a workspace product gate.
