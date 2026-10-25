@@ -38,6 +38,13 @@ storage/bootstrap and operational directions in DN-0054 and the execution plan.
 It reconciles informative DN-0055 and the trajectory with that scope. No region
 implementation, proof theorem or accepted semantic proposal is claimed.
 
+The current Main one-shot registry has 763 modules; the existing frozen
+1,035-module integration parent does not match it. R1 therefore starts a small
+standalone proof root with the same pinned Lean toolchain and an explicitly
+empty registration seed. A narrow existing-runner directory option preserves
+its checks rather than rebuilding or changing unrelated proofs. This is gate
+preparation, not a region theorem or accepted R2 contract.
+
 R1/R2 deliverables and all R3–R5 acceptance remain pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
 [#66](https://github.com/dikini/ash-lang/issues/66),

@@ -70,7 +70,20 @@ configuration = json.loads(configuration_contents)
 parent_path = Path(configuration["parent_evidence"])
 parent = read_pinned(parent_path, configuration["parent_evidence_sha256"])
 work = Path(configuration["worktree"])
-live = work / "docs/design/direct-effects/one-shot"
+proof_directory = configuration.get("proof_directory", "docs/design/direct-effects/one-shot")
+assert proof_directory in {"docs/design/direct-effects/one-shot", "docs/design/lexical-regions"}, \
+    "Unreviewed proof directory"
+live = work / proof_directory
+assert live.resolve() == work.resolve() / proof_directory, "Proof directory escapes through symlink"
+assert parent.get("proof_directory", "docs/design/direct-effects/one-shot") == proof_directory, \
+    "Parent proof directory mismatch"
+if not parent["registered_order"]:
+    assert parent.get("seed_kind") == "empty-registration", "Unlabeled empty parent"
+    assert parent["records"] == {} and parent["imports"] == {} and parent["reports"] == 0, \
+        "Empty seed cannot claim proof records"
+    assert set(parent["manifest"]) == {"check.sh", "lean-toolchain"}, \
+        "Empty seed cannot claim module sources"
+    assert sha(live / "lean-toolchain") == parent["manifest"]["lean-toolchain"]
 head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=work, text=True).strip()
 assert head == configuration["parent_head"]
 prefix = Path(configuration["output_prefix"])
@@ -243,6 +256,8 @@ for path, digest in libraries.items():
 for name in parent["registered_order"]:
     assert sha(live / (name + ".lean")) == parent["records"][name]["source_sha256"]
 assert sha(live / "check.sh") == parent["manifest"]["check.sh"]
+assert live.resolve() == work.resolve() / proof_directory, "Proof directory changed during build"
+assert sha(live / "lean-toolchain") == manifest["lean-toolchain"]
 for name, patch in patches.items():
     assert sha(patch["source"]) == patch["source_sha256"]
 assert sha(configuration_path) == configuration_sha256, "Configuration changed during build"
@@ -256,7 +271,7 @@ aggregate = "".join("".join(re.findall(report_pattern, Path(records[name]["log"]
                     for name in modules)
 Path(str(prefix) + "-proof.log").write_text(aggregate)
 Path(str(prefix) + "-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-evidence = {"cwd": str(snapshot), "cache": str(cache), "lean_path": str(cache),
+evidence = {"proof_directory": proof_directory, "cwd": str(snapshot), "cache": str(cache), "lean_path": str(cache),
             "version": parent["version"], "compiler_library_hashes": libraries,
             "manifest": manifest, "registered_order": modules, "imports": imports,
             "records": records, "reports": sum(len(r["reports"]) for r in records.values()),
