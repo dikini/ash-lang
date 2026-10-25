@@ -68,7 +68,7 @@ source gas      = 2600 * (canonical loaded source UTF8 bytes, including builtins
 final gas       = 800 * (the same canonical source UTF8 closure)
 rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
 Core gas        = 5300 * (the same canonical source UTF8 closure)
-startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
+startup gas     = 65 * (canonical image bytes + canonical expected-fact bytes)
 ```
 
 Source checking sizes the complete canonical loaded source closure before
@@ -169,6 +169,20 @@ policy verification remains separate. Canonical source counting, paid census,
 cumulative phase owners and checked overflow are unchanged. No floor, runtime
 margin, refill, cross-phase credit or change to standalone, private-image,
 constraint, runtime, depth or stack defaults is introduced.
+
+On 2026-10-26 the project lead also selected startup `65B`, preserving B as
+canonical image bytes plus canonical expected-fact bytes. Of nine complete
+imported-flow restoration observations, the recursive case used 406,477 units
+for B = 7,873 (4,900 image and 2,973 fact bytes): 51.629239 units per byte.
+The existing 25% fitting rule gives `ceil(1.25 * 51.629239) = 65`, above the
+previous coefficient 22. This measures framing, fact comparison and complete
+restoration; later native binding correspondence and final admission remain in
+the same meter but were not measured by that restoration fixture. Actual native
+caller verification is separate. The recursive case refuses the unchanged
+327,680 standalone image allowance; the other eight measured cases fit it.
+Normal `65B` restoration must retain all nine expected results and exact
+short/retry checks. No standalone limit, extra runtime margin, refill or
+Source/Core credit transfer is introduced.
 
 The project lead subsequently selected preparation `125P` under the same
 delegated judgment after independent review of four complete preparation

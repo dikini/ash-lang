@@ -101,16 +101,18 @@ completion remain required, followed by the connected R-core gate. This changes 
 [integer admission clarification](../../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission)
 at `5ce3f294` before product work. The current candidate reuses byte storage for
 large digits and keeps small values inline. Existing actual-value equations now
-cover legacy Cell contents; finite creation classes distinguish invocation
-contexts without changing exact capture coordinates or recurrence.
+cover legacy Cell contents; finite creation classes distinguish invocation and
+handler-dispatch contexts while preserving exact capture coordinates, existing
+invocation recurrence and class-sensitive dispatch recurrence.
 
-The approved Source/Core coefficient recalibration preserves canonical source
-counting and separate cumulative phase owners. Normal source execution and the
+The approved Source/Core and startup coefficient recalibrations preserve
+canonical input counting and separate cumulative phase owners. Normal source execution and the
 original staged 256 KiB stress checks pass with the exact 24-owner release
 assertions. The separate whole-public-driver 256 KiB abort is unclassified.
-Finish affected native/image/caller checks and independent review before partial
-retention; do not count setup-blocked numeric outputs or the rejected raw-key
-trial as verification. All original R3–R5 criteria, remaining representations,
+The original 1,024-level registration runtime/refusal/retry stress also passes
+with its 256 KiB worker. Finish the final focused refresh and independent review
+before partial retention; do not count setup-blocked numeric outputs or the
+rejected raw-key trial as verification. All original R3–R5 criteria, remaining representations,
 completion/discharge and the connected R-core gate stay pending.
 
 ## Ordered deliveries

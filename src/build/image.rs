@@ -3876,6 +3876,8 @@ mod tests {
 
     #[test]
     fn generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work() {
+        let mut default_refusal_checked = false;
+        let mut case = 0;
         for (source, helper, value) in [
             (
                 include_str!("../../tests/fixtures/generic-cell/snapshot-entry.ash"),
@@ -3923,6 +3925,7 @@ mod tests {
                 "42",
             ),
         ] {
+            case += 1;
             let (program, sources, relation) =
                 crate::core::validate::generic_cell_source_fixture_for_test(source, Some(helper));
             let program = if source.contains("90 + 9") {
@@ -3972,8 +3975,51 @@ mod tests {
                 image.admit_expected_native_facts(&expected, work)?;
                 image.restore_effect(work)
             };
-            let mut measured = TypeWorkBudget::default();
-            let restored = restore(&mut measured).unwrap();
+            let mut standalone = TypeWorkBudget::default();
+            let standalone_outcome = match restore(&mut standalone) {
+                Ok(restored) => {
+                    drop(restored);
+                    "complete"
+                }
+                Err(ImageFailure::Resource) => {
+                    default_refusal_checked = true;
+                    "resource-refusal"
+                }
+                Err(ImageFailure::Validation(error))
+                    if error.reason() == crate::core::ValidationReason::Resource =>
+                {
+                    default_refusal_checked = true;
+                    "validation-resource-refusal"
+                }
+                Err(error) => panic!("standalone image refusal must be capacity: {error:?}"),
+            };
+            eprintln!(
+                "imported-flow startup case={case} standalone={standalone_outcome} used={}/{}",
+                standalone.used(),
+                standalone.limit()
+            );
+            // Use the same startup owner as the generated runner, carrying
+            // framing, expected facts and reconstruction in one cumulative meter.
+            if case == 2 {
+                assert_eq!(standalone_outcome, "validation-resource-refusal");
+            }
+            let mut measured = super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+            let restored = restore(&mut measured).unwrap_or_else(|error| {
+                panic!(
+                    "startup image case={case} bytes={} facts={} used={}/{} error={error:?}",
+                    bytes.len(),
+                    expected.len(),
+                    measured.used(),
+                    measured.limit()
+                )
+            });
+            eprintln!(
+                "imported-flow startup case={case} bytes={} facts={} used={}/{} result={value}",
+                bytes.len(),
+                expected.len(),
+                measured.used(),
+                measured.limit()
+            );
             assert_eq!(
                 crate::eval::evaluate_effect(&restored.program)
                     .unwrap()
@@ -3990,6 +4036,10 @@ mod tests {
                 assert_eq!(exact.used(), measured.used());
             }
         }
+        assert!(
+            default_refusal_checked,
+            "the unchanged standalone allowance refuses at least one retained flow"
+        );
     }
 
     #[test]

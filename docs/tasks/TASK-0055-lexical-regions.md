@@ -118,21 +118,27 @@ merely from its type. Mathematical results remain unbounded, while local
 arithmetic escape follows the accepted conservative restriction.
 
 Legacy Cell analysis exposed a closure-context join. The candidate distinguishes
-invocations with a finite projection of existing creation paths, preserving exact
-capture coordinates, caller/focus parents and oldest-callee recurrence. The
+invocations and handler dispatches with a finite projection of existing creation
+paths, preserving exact capture coordinates, caller/focus parents, oldest-callee
+invocation recurrence and class-sensitive dispatch recurrence. The
 rejected raw dynamic-ID trial is not product code. The approved dated
 [AD-0013 recalibration](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
-uses Source `2600S`, Final `800S` and Core `5300S`; standalone limits are unchanged.
+uses Source `2600S`, Final `800S`, Core `5300S` and startup `65B`; standalone limits are unchanged.
 Normal-driver checks of the two original same-site fixtures and 24 nested Cells
 return 42. The original staged 256 KiB stress pipeline also preserves 24 unique
 acquisitions and exact reverse release order. A separate whole-public-driver
 256 KiB abort remains unclassified; the staged result does not clear it.
 
-This is an unaccepted implementation checkpoint. Focused source/resource,
-finite-context and accounting checks pass; final native/image/caller refresh and
-independent exact-head review remain pending. Existing module-fixture setup
-failures are recorded separately; unreached numeric assertions are not verified.
-No full R-core gate or R3–R5 product acceptance is claimed.
+[PR #151](https://github.com/dikini/ash-lang/pull/151) remains an unaccepted
+implementation checkpoint. The dispatch repair also restores the original
+1,024-level registration stress, including its 256 KiB runtime worker, callback
+counts, exact refusal/retry and teardown assertions. Startup fitting uses complete
+restore-stage costs; later native admission retains the same cumulative meter.
+Focused runtime, image and native checks are recorded with their exact inputs for
+independent review. The representative bindings helper now checks its actual
+entry and passes all ten cases. Other module-fixture setup failures remain
+separate; unreached numeric assertions are not verified. No full R-core gate or
+R3–R5 product acceptance is claimed.
 
 Accepted large-Int delivery, closure capture storage and remaining recursive
 initialization/capture/abandonment evidence are still required. No executable

@@ -5233,31 +5233,48 @@ mod tests {
                 let mut primitive_nodes = Vec::new();
                 while let Some(node) = pending.pop() {
                     let kind = &program.node(node).unwrap().kind;
-                    if matches!(
-                        kind,
-                        EffectExprKind::Pure(PureExprKind::Computation(
-                            PureComputation::Primitive(_)
-                        ))
-                    ) {
+                    if matches!(kind, EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) if matches!(buffer.operation, crate::core::region::RegionBufferOperation::IntegerArithmetic(_)))
+                        || matches!(
+                            kind,
+                            EffectExprKind::Pure(PureExprKind::Computation(
+                                PureComputation::Primitive(_)
+                            ))
+                        )
+                    {
                         primitive_nodes.push(node);
                     }
                     pending
                         .extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
                 }
+                let handlers = evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter_map(|event| match event {
+                        EffectTraceEvent::ClauseEntered(handler, operation)
+                            if program
+                                .registry()
+                                .effect(operation.owner())
+                                .is_some_and(|effect| effect.spelling == "Adjust") =>
+                        {
+                            Some(*handler)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
                 let selected = evaluation
                     .effect_trace()
                     .iter()
-                    .filter(|event| matches!(event, EffectTraceEvent::HandlerSelected(_)))
+                    .filter(|event| matches!(event, EffectTraceEvent::HandlerSelected(handler) if handlers.contains(handler)))
                     .count();
                 let requests = evaluation
                     .effect_trace()
                     .iter()
-                    .filter(|event| matches!(event, EffectTraceEvent::Request(_)))
+                    .filter(|event| matches!(event, EffectTraceEvent::Request(operation) if program.registry().effect(operation.owner()).is_some_and(|effect| effect.spelling == "Adjust")))
                     .count();
                 let resumed = evaluation
                     .effect_trace()
                     .iter()
-                    .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
+                    .filter(|event| matches!(event, EffectTraceEvent::Resume(handler) if handlers.contains(handler)))
                     .count();
                 let callback_steps = evaluation.trace.iter().filter(|event| matches!(event, TraceEvent::Enter(node) if primitive_nodes.contains(node))).count();
                 assert_eq!(evaluation.registration_acquisitions as usize, depth);
@@ -5287,7 +5304,26 @@ mod tests {
         let source = format!(
             "import @builtin.cell as Cell\neffect Adjust {{\npublish : Int -> Int\n}}\neffect Pause {{\nask : Int -> Int\n}}\ndescend : Int -> Int ! {{Adjust, Pause}}\ndescend depth = resource cell<R> c = depth {{\nlet callback : Int -> Int ! {{Cell.Ops<R>, Pause}} = fn(value) {{\nlet copied = Cell.read c\nperform Pause.ask (value + copied)\n}}\nregister Adjust callback {{\nmatch depth == {DEPTH} {{\ntrue => perform Adjust.publish 0\nfalse => descend (depth + 1)\n}}\n}}\n}}\nmain : Unit -> Int\nmain () = handle (hook Adjust {{\ndescend 0\n}}) with Pause {{\nask value => resume value\n}}\n"
         );
-        let program = effect_program(&source);
+        // Compilation was already outside the runtime stack worker. Use the
+        // ordinary modular phase owners rather than standalone API capacity.
+        let path = std::env::temp_dir().join(format!(
+            "ash-registration-modular-{}-{}.ash",
+            std::process::id(),
+            SourceFile::new("registration modular", "")
+                .unwrap()
+                .id()
+                .value()
+        ));
+        std::fs::write(&path, &source).unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: path.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let (program, _) = compiled
+            .effect_build_input()
+            .expect("registration Effect Core");
         let mut pending = vec![program.root()];
         let mut requests = Vec::new();
         while let Some(node) = pending.pop() {
@@ -5313,7 +5349,8 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn(move || {
-                let mut machine = Machine::new_effect(&program);
+                let (program, _) = compiled.effect_build_input().unwrap();
+                let mut machine = Machine::new_effect(program);
                 machine.work_trace = Some(Arc::new(std::sync::Mutex::new(Vec::new())));
                 let result = machine.run().unwrap();
                 assert_eq!(
@@ -5993,6 +6030,15 @@ mod tests {
         measured.instantiation_work = TypeWorkBudget::unbounded();
         let observation = measured.run_loop().unwrap();
         assert_eq!(observation.value.to_string(), "(42, 12)");
+        let keys = observation
+            .effect_trace()
+            .iter()
+            .filter_map(|event| match event {
+                EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [counter, target]: [u32; 2] = keys.try_into().unwrap();
         let required = observation.runtime_work;
         let mut cut = None;
         for allowance in 0..required {
@@ -6013,7 +6059,7 @@ mod tests {
                         key: actual,
                         payload:
                             ResourcePayload::Generic {
-                                value: Value::Integer(value),
+                                value: Value::SmallInteger(value),
                                 ..
                             },
                         ..
@@ -6021,27 +6067,25 @@ mod tests {
                     _ => None,
                 })
             };
-            if root(0).as_deref() != Some("12") || root(1).as_deref() != Some("41") {
+            if root(counter).as_deref() != Some("12") || root(target).as_deref() != Some("41") {
                 continue;
             }
             let trace = machine.effect_trace.as_deref().unwrap();
             assert_eq!(
                 trace
                     .iter()
-                    .filter(|event| matches!(event, EffectTraceEvent::ResourceWritten(0)))
+                    .filter(|event| matches!(event, EffectTraceEvent::ResourceWritten(key) if *key == counter))
                     .count(),
                 2
             );
-            assert!(
-                !trace
-                    .iter()
-                    .any(|event| matches!(event, EffectTraceEvent::ResourceWritten(1)))
-            );
+            assert!(!trace.iter().any(
+                |event| matches!(event, EffectTraceEvent::ResourceWritten(key) if *key == target)
+            ));
             let api = machine
                 .frames
                 .iter()
                 .find_map(|frame| match frame {
-                    Frame::ResourceBoundary { node, key, .. } if key.0 == 1 => {
+                    Frame::ResourceBoundary { node, key, .. } if key.0 == target => {
                         machine.resource(*node).unwrap().acquisition.api()
                     }
                     _ => None,
@@ -6050,7 +6094,7 @@ mod tests {
             let write = OperationId::new(api.ops(), 1);
             assert_eq!(trace.iter().filter(|event|matches!(event,EffectTraceEvent::Request(operation) if *operation==write)).count(),2,"target request is not published");
             assert_eq!(machine.live_resources, 2);
-            assert_eq!(machine.next_activation, 2);
+            assert_eq!(machine.next_activation, target + 1);
             cut = Some(allowance);
             break;
         }
@@ -8133,8 +8177,46 @@ mod tests {
         let evaluation = evaluate_effect(&program)
             .expect("the identity-free closure should execute after its scope returns");
         assert!(matches!(evaluation.value, Value::SmallInteger(42)));
-        assert_eq!(evaluation.heap.cell_count(), 0);
-        assert!(evaluation.effect_trace().is_empty());
+        let erased = effect_program(
+            "make : Unit -> (Unit -> Int)\nmake () = {\nlet offset = 41\nfn(ignored) {\noffset + 1\n}\n}\nmain : Unit -> Int\nmain () = make()()\n",
+        );
+        let erased = evaluate_effect(&erased).unwrap();
+        assert_eq!(erased.value.to_string(), "42");
+        assert_eq!(evaluation.heap.cell_count(), erased.heap.cell_count());
+        let reference = program
+            .registry()
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .unwrap()
+            .default_alloc();
+        let normalize = |events: &[EffectTraceEvent]| {
+            events
+                .iter()
+                .map(|event| {
+                    let operation = |operation: OperationId| {
+                        let api =
+                            crate::resolved::RegionApi::for_module(operation.owner().module())
+                                .expect("only authenticated region operations occur");
+                        assert_eq!(operation.owner(), api.default_alloc());
+                        OperationId::new(reference, operation.operation())
+                    };
+                    match *event {
+                        EffectTraceEvent::Request(original) => {
+                            EffectTraceEvent::Request(operation(original))
+                        }
+                        EffectTraceEvent::ClauseEntered(handler, original) => {
+                            EffectTraceEvent::ClauseEntered(handler, operation(original))
+                        }
+                        other => other,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            normalize(evaluation.effect_trace()),
+            normalize(erased.effect_trace())
+        );
     }
 
     #[test]

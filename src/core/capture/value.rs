@@ -2005,7 +2005,7 @@ enum Transition {
     Root(usize),
     Call(usize),
     Invoke(usize, usize, usize), // Static call/callee IDs and finite creation class.
-    Dispatch(usize, usize, usize),
+    Dispatch(usize, usize, usize, usize), // Request/handler/clause and finite creation class.
     Focus,
     Restore(usize, usize, usize),
 }
@@ -2174,12 +2174,15 @@ impl ContextPaths {
         if let Some(id) = self.lookup(parent, transition, budget)? {
             return Ok((id, false));
         }
-        // Erase only nested Invoke discrimination. The projected parent is
+        // Erase nested call and dispatch creation discrimination. The projected parent is
         // already canonical; Restore keeps its exact frozen coordinates.
         charge(budget, 1)?;
         let projected_parent = self.paths[parent].projection();
         let projected_transition = match transition {
             Transition::Invoke(call, target, _) => Transition::Invoke(call, target, 0),
+            Transition::Dispatch(request, handler, ordinal, _) => {
+                Transition::Dispatch(request, handler, ordinal, 0)
+            }
             other => other,
         };
         let (projection, canonical) =
@@ -3467,7 +3470,7 @@ impl<'a> Analysis<'a> {
                 Transition::Invoke(call, target, _) => {
                     super::ActualValuePathStep::Invoke(source(call)?, source(target)?)
                 }
-                Transition::Dispatch(request, handler, ordinal) => {
+                Transition::Dispatch(request, handler, ordinal, _) => {
                     super::ActualValuePathStep::Dispatch(
                         source(request)?,
                         source(handler)?,
@@ -3584,9 +3587,10 @@ impl<'a> Analysis<'a> {
             return Err(Failure::Invalid);
         };
         let clause = clauses.get(ordinal).ok_or(Failure::Invalid)?;
+        let class = self.creation_class(creation, budget)?;
         let context = self.context(
             request_context,
-            Transition::Dispatch(request_expression, expression, ordinal),
+            Transition::Dispatch(request_expression, expression, ordinal, class),
             budget,
         )?;
         let input = self.slot(clause.input, context, budget)?;
@@ -4291,14 +4295,22 @@ impl<'a> Analysis<'a> {
         creation: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
+        let class = self.creation_class(creation, budget)?;
+        self.context(caller, Transition::Invoke(call, target, class), budget)
+    }
+
+    fn creation_class(
+        &self,
+        creation: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
         charge(budget, 1)?;
-        let class = self
+        Ok(self
             .contexts
             .paths
             .get(creation)
             .ok_or(Failure::Invalid)?
-            .projection();
-        self.context(caller, Transition::Invoke(call, target, class), budget)
+            .projection())
     }
 
     fn context(
@@ -9255,7 +9267,7 @@ mod tests {
     }
 
     #[test]
-    fn invocation_creation_classes_are_idempotent_copied_and_atomic() {
+    fn call_and_dispatch_creation_classes_are_idempotent_copied_and_atomic() {
         let mut work = TypeWorkBudget::unbounded();
         let mut paths = ContextPaths::new(&mut work).unwrap();
         let a = paths.intern(0, Transition::Root(30), &mut work).unwrap().0;
@@ -9267,6 +9279,30 @@ mod tests {
         let class = paths.paths[exact].projection();
         assert_ne!(exact, class);
         assert_ne!(paths.paths[a].projection(), paths.paths[b].projection());
+        let dispatched_a = paths
+            .intern(exact, Transition::Dispatch(2, 3, 4, a), &mut work)
+            .unwrap()
+            .0;
+        let dispatched_b = paths
+            .intern(exact, Transition::Dispatch(2, 3, 4, b), &mut work)
+            .unwrap()
+            .0;
+        assert_ne!(dispatched_a, dispatched_b);
+        assert_eq!(
+            paths.paths[dispatched_a].projection(),
+            paths.paths[dispatched_b].projection()
+        );
+        let nested = paths
+            .intern(dispatched_a, Transition::Call(90), &mut work)
+            .unwrap()
+            .0;
+        assert_eq!(
+            paths
+                .intern(nested, Transition::Dispatch(2, 3, 4, a), &mut work)
+                .unwrap()
+                .0,
+            dispatched_a
+        );
         let focus = paths.intern(0, Transition::Focus, &mut work).unwrap().0;
         let transition = Transition::Restore(exact, 50, 2);
         let restored = paths.intern(focus, transition, &mut work).unwrap().0;
@@ -9281,7 +9317,9 @@ mod tests {
             } = paths.paths[projected]
             {
                 assert_eq!(paths.paths[parent].projection(), parent);
-                if let Transition::Invoke(_, _, creation) = transition {
+                if let Transition::Invoke(_, _, creation)
+                | Transition::Dispatch(_, _, _, creation) = transition
+                {
                     assert_eq!(creation, 0);
                 }
             }
@@ -9460,7 +9498,7 @@ mod tests {
                 Transition::Root(0),
                 Transition::Call(1),
                 Transition::Invoke(2, 3, 0),
-                Transition::Dispatch(1, 2, 4),
+                Transition::Dispatch(1, 2, 4, 0),
             ] {
                 parent = analysis.context(parent, transition, &mut work).unwrap();
             }
