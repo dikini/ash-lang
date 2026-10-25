@@ -152,3 +152,32 @@ fn a_whole_tuple_cannot_escape_its_declared_region() {
     };
     assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
 }
+
+#[test]
+fn tuple_fields_resume_in_order_and_are_evaluated_once() {
+    assert_eq!(
+        run(concat!(
+            "import @builtin.generic_cell as Cell\n",
+            "effect Yield {\nnext : Int -> Int\n}\n",
+            "main : Unit -> Int\nmain () = resource Cell.Cell<R,Int> count = 0 {\n",
+            "let pair = handle (\nperform Yield.next 20,\nperform Yield.next 22\n) with Yield {\n",
+            "next value => {\nlet previous = Cell.read count\n",
+            "let ignored = Cell.write (count, previous + 1)\nresume (value + previous)\n}\n}\n",
+            "match pair {\n(left, right) => left + right + Cell.read count\n}\n}\n",
+        )),
+        "45"
+    );
+}
+
+#[test]
+fn discarding_a_field_continuation_abandons_unrequested_tuple_storage() {
+    assert_eq!(
+        run(concat!(
+            "effect Stop {\nstop : Unit -> Int\n}\n",
+            "main : Unit -> Int\nmain () = region<R> owner {\n",
+            "handle (match (20, perform Stop.stop ()) {\n(left, right) => left + right\n}) with Stop {\n",
+            "stop ignored => {\nlet done = discard\n99\n}\n}\n}\n",
+        )),
+        "99"
+    );
+}

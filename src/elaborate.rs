@@ -15306,7 +15306,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             effects = self.union_effects(&effects, &allocation, span)?;
         }
         let node = if F::EFFECTS && api.is_some() {
-            self.initialize_region_tuple(nodes, &ty, span)?
+            self.initialize_region_tuple(nodes, &ty, &effects, span)?
         } else {
             let core_ty = self.clone_type(&ty)?;
             self.builder.tuple(nodes, core_ty, Origin::Source(span))?

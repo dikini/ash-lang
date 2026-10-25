@@ -699,8 +699,8 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => None,
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => match index {
                 0 => Some(tuple.context),
-                1 => Some(tuple.storage),
-                _ => tuple.fields.get(index - 2).copied(),
+                _ if index == tuple.fields.len() + 1 => Some(tuple.storage),
+                _ => tuple.fields.get(index - 1).copied(),
             },
             EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
@@ -924,9 +924,9 @@ impl CoreBuilder<EffectOperationFamily> {
                     Equation::Empty => EffectRow::empty(),
                     Equation::RegionTuple(tuple) => {
                         let mut row = EffectRow::empty();
-                        for child in [tuple.context, tuple.storage]
-                            .iter()
+                        for child in std::iter::once(&tuple.context)
                             .chain(tuple.fields.iter())
+                            .chain(std::iter::once(&tuple.storage))
                         {
                             row = row
                                 .union_with_budget(

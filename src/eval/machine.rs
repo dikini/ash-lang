@@ -558,7 +558,6 @@ enum Frame {
         node: NodeId,
         environment: Environment,
         context: Option<ActivationKey>,
-        storage: Option<super::value::RegionStorage>,
         next: usize,
         fields: Vec<Value>,
     },
@@ -1024,11 +1023,10 @@ impl<'runtime> Machine<'runtime> {
                 node,
                 environment,
                 context,
-                storage,
                 next,
                 fields,
             } => {
-                self.return_region_tuple(node, environment, context, storage, next, fields, value)?;
+                self.return_region_tuple(node, environment, context, next, fields, value)?;
             }
             Frame::RegionPreceding { node, environment } => {
                 self.prepare_region_provider(node, environment, value)?

@@ -63,7 +63,6 @@ impl Machine<'_> {
         node: NodeId,
         environment: Environment,
         mut context: Option<ActivationKey>,
-        mut storage: Option<RegionStorage>,
         next: usize,
         mut fields: Vec<Value>,
         value: Value,
@@ -71,41 +70,37 @@ impl Machine<'_> {
         let tuple = self
             .region_tuple(node)
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        let (following, next) = if next == 0 {
+        let following = if next == 0 {
             let Value::RegionView(owner) = value else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             context = Some(owner);
-            (Some(tuple.storage), 1)
-        } else if next == 1 {
-            let Value::RegionStorage(pending) = value else {
+            tuple.fields.first().copied()
+        } else if next <= tuple.fields.len() {
+            fields.push(value);
+            Some(tuple.fields.get(next).copied().unwrap_or(tuple.storage))
+        } else {
+            let Value::RegionStorage(storage) = value else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
-            if Some(pending.invocation.owner) != context {
+            if Some(storage.invocation.owner) != context {
                 return Err(RuntimeFailure::InvalidControlState);
             }
-            storage = Some(pending);
-            (tuple.fields.first().copied(), 2)
-        } else {
-            fields.push(value);
-            (tuple.fields.get(next - 1).copied(), next + 1)
+            let initialized = self.initialize_host_region_tuple(storage, fields)?;
+            self.control = Some(Control::Return(initialized));
+            return Ok(());
         };
         if let Some(following) = following {
             self.frames.push(Frame::RegionTuple {
                 node,
                 environment: environment.clone(),
                 context,
-                storage,
-                next,
+                next: next + 1,
                 fields,
             });
             self.control = Some(Control::Evaluate(following, environment));
         } else {
-            let initialized = self.initialize_host_region_tuple(
-                storage.ok_or(RuntimeFailure::InvalidControlState)?,
-                fields,
-            )?;
-            self.control = Some(Control::Return(initialized));
+            return Err(RuntimeFailure::InvalidControlState);
         }
         Ok(())
     }
@@ -142,7 +137,6 @@ impl Machine<'_> {
                 node,
                 environment: environment.clone(),
                 context: None,
-                storage: None,
                 next: 0,
                 fields,
             });
@@ -767,6 +761,31 @@ mod tests {
         );
         let evaluation = evaluate_effect(program).unwrap();
         assert_eq!(evaluation.value.to_string(), "(42, 1)");
+        for node in program.nodes() {
+            let EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) = &node.kind else {
+                continue;
+            };
+            let positions = |child| {
+                evaluation
+                    .trace
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(position, event)| {
+                        (*event == TraceEvent::Enter(child)).then_some(position)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let storage = positions(tuple.storage);
+            assert_eq!(storage.len(), 1);
+            let mut previous = None;
+            for field in &tuple.fields {
+                let field = positions(*field);
+                assert_eq!(field.len(), 1, "each original operand runs once");
+                assert!(previous.is_none_or(|position| position < field[0]));
+                assert!(field[0] < storage[0], "fields precede the storage request");
+                previous = Some(field[0]);
+            }
+        }
         let cells = evaluation.heap.cells_for_test();
         assert_eq!(
             cells

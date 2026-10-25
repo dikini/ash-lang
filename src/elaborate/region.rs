@@ -28,6 +28,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         operands: Vec<NodeId>,
         ty: &Type,
+        effects: &EffectRow,
         span: Span,
     ) -> Result<NodeId, TypeError> {
         use crate::core::region::{RegionTupleNode, RegionValueRequestNode};
@@ -63,31 +64,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 unit,
             )),
         )?;
-        let mut bindings = Vec::new();
-        let mut fields = Vec::new();
-        bindings
-            .try_reserve_exact(operands.len())
-            .map_err(|_| type_resource())?;
-        fields
-            .try_reserve_exact(operands.len())
-            .map_err(|_| type_resource())?;
-        for (operand, ty) in operands.into_iter().zip(types) {
-            let binder_type = self.clone_type(ty)?;
-            let binder = self.builder.binder(binder_type, Origin::Source(span))?;
-            let value_type = self.clone_type(ty)?;
-            fields.push(
-                self.builder
-                    .variable(binder.id(), value_type, Origin::Source(span))?,
-            );
-            bindings.push((binder, operand));
-        }
         let request = self.push_effect_core(
             Type::Nominal(api.request()),
             EffectRow::empty(),
             Origin::Source(span),
             EffectOperation::RegionValueRequest(RegionValueRequestNode {
                 api: api.module(),
-                fields: fields.len(),
+                fields: operands.len(),
             }),
         )?;
         let allocate_row = self.core_effect_row(&default_row)?;
@@ -101,44 +84,27 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 request,
             }),
         )?;
-        let storage = self
-            .builder
-            .binder(Type::Nominal(api.storage_view()), Origin::Source(span))?;
-        let storage_value = self.builder.variable(
-            storage.id(),
-            Type::Nominal(api.storage_view()),
-            Origin::Source(span),
-        )?;
         let result_type = self.clone_type(ty)?;
+        let initialized_effects = self.core_effect_row(effects)?;
         let initialized = self.push_effect_core(
             result_type,
-            EffectRow::empty(),
+            initialized_effects,
             Origin::Source(span),
             EffectOperation::RegionTuple(RegionTupleNode {
                 api: api.module(),
                 context: context_value,
-                storage: storage_value,
-                fields: fields.into_boxed_slice(),
+                storage: allocated,
+                fields: operands.into_boxed_slice(),
             }),
         )?;
         let result_type = self.clone_type(ty)?;
-        let mut body = self.builder.binding(
-            storage,
-            allocated,
+        Ok(self.builder.binding(
+            context,
+            query,
             initialized,
             result_type,
             Origin::Source(span),
-        )?;
-        for (binder, operand) in bindings.into_iter().rev() {
-            let result_type = self.clone_type(ty)?;
-            body =
-                self.builder
-                    .binding(binder, operand, body, result_type, Origin::Source(span))?;
-        }
-        let result_type = self.clone_type(ty)?;
-        Ok(self
-            .builder
-            .binding(context, query, body, result_type, Origin::Source(span))?)
+        )?)
     }
 
     pub(super) fn wrap_region_entry(&mut self, body: TypedNode) -> Result<TypedNode, TypeError> {

@@ -87,6 +87,12 @@ connected R-core and all R3–R5 acceptance remain pending. Existing issues
 [#70](https://github.com/dikini/ash-lang/issues/70) retain their review,
 verification, integration and author-acceptance obligations.
 
+Keep implementation tight: reuse existing Ash mechanisms and libraries, prefer
+removing duplicate machinery, and seek constructive planner/reviewer scrutiny
+before adding a material mechanism. The tuple initializer now retains original
+field values in its existing frame before requesting storage; one saved-context
+binding replaces the field/storage binding scaffold. Full M2 scope remains required.
+
 ## Verification
 
 For the changed task/plan/proof prose, check artifact authority, required coverage,

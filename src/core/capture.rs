@@ -2026,8 +2026,8 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 .try_reserve_exact(tuple.fields.len() + 2)
                 .map_err(|_| Failure::Resource)?;
             children.push(index(tuple.context) + 1);
-            children.push(index(tuple.storage) + 1);
             children.extend(tuple.fields.iter().map(|child| index(*child) + 1));
+            children.push(index(tuple.storage) + 1);
             Control::Sequence(children)
         }
         Some(EffectOperation::Region(scope)) if scope.entry => Control::Sequence(copy_slice(

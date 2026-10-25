@@ -72,7 +72,7 @@ pub struct RegionValueRequestNode {
 }
 
 /// Local initialization into the pending storage supplied by an allocation.
-/// Context, storage and every already evaluated field remain explicit children.
+/// Evaluate context, original fields in order, then explicit storage; initialize locally.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegionTupleNode {
     pub(crate) api: ModuleId,

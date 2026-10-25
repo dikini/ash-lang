@@ -10978,66 +10978,33 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.guarded_payload(payload, recursive)
     }
 
-    /// Recognize only the complete explicit tuple construction emitted by the
-    /// lowerer. Its original operands retain the existing guarded grammar.
-    fn guarded_region_tuple_fields(
-        &self,
-        root: NodeId,
-    ) -> Result<Option<Vec<NodeId>>, ValidationError> {
+    /// A saved context query precedes the tuple's original guarded fields.
+    fn guarded_region_context(&self, root: NodeId) -> Result<Option<NodeId>, ValidationError> {
         use super::effect::EffectOperation;
-        let mut cursor = root;
-        let mut bindings = Vec::new();
-        let mut administrative = HashSet::new();
-        loop {
-            self.charge_type_work(1)?;
-            let node = self.node(cursor)?;
-            let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
-                F::pure(&node.kind)
-            else {
-                break;
-            };
-            let binder = binding.binder().id();
-            if !matches!(binder, BinderId::Generated(_)) {
-                return Ok(None);
-            }
-            administrative
-                .try_reserve(1)
-                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
-            if !administrative.insert(binder) {
-                return Ok(None);
-            }
-            bindings
-                .try_reserve(1)
-                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
-            bindings.push((binder, binding.initializer()));
-            cursor = binding.body();
-        }
-        let Some(EffectOperation::RegionTuple(tuple)) =
-            F::region_construction(&self.node(cursor)?.kind)
+        let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+            F::pure(&self.node(root)?.kind)
         else {
             return Ok(None);
         };
-        if tuple.fields.len() < 2 || bindings.len() != tuple.fields.len() + 2 {
+        if !matches!(binding.binder().id(), BinderId::Generated(_)) {
             return Ok(None);
         }
-        let (context, query) = bindings[0];
-        let (storage, allocation) = bindings[bindings.len() - 1];
-        let same_variable = |node: NodeId, binder| -> Result<bool, ValidationError> {
-            Ok(
-                matches!(F::pure(&self.node(node)?.kind), Some(PureExprKind::Variable(variable)) if variable.binder() == binder),
-            )
+        let Some(EffectOperation::RegionTuple(tuple)) =
+            F::region_construction(&self.node(binding.body())?.kind)
+        else {
+            return Ok(None);
         };
-        if !same_variable(tuple.context, context)? || !same_variable(tuple.storage, storage)? {
-            return Ok(None);
-        }
         let Some(api) = crate::resolved::RegionApi::for_module(tuple.api) else {
             return Ok(None);
         };
-        let Some(EffectOperation::Request(query)) = F::region_construction(&self.node(query)?.kind)
+        let Some(EffectOperation::Request(query)) =
+            F::region_construction(&self.node(binding.initializer())?.kind)
         else {
             return Ok(None);
         };
-        if query.effect().effect() != api.default_alloc()
+        if !matches!(F::pure(&self.node(tuple.context)?.kind),
+            Some(PureExprKind::Variable(variable)) if variable.binder() == binding.binder().id())
+            || query.effect().effect() != api.default_alloc()
             || !query.effect().arguments().is_empty()
             || query.operation() != crate::types::OperationId::new(api.default_alloc(), 1)
             || !matches!(
@@ -11047,41 +11014,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         {
             return Ok(None);
         }
-        let Some(EffectOperation::RegionAllocate(allocation)) =
-            F::region_construction(&self.node(allocation)?.kind)
-        else {
-            return Ok(None);
-        };
-        if allocation.api != tuple.api || !same_variable(allocation.context, context)? {
-            return Ok(None);
-        }
-        let Some(EffectOperation::RegionValueRequest(request)) =
-            F::region_construction(&self.node(allocation.request)?.kind)
-        else {
-            return Ok(None);
-        };
-        if request.api != tuple.api || request.fields != tuple.fields.len() {
-            return Ok(None);
-        }
-        self.charge_type_work(tuple.fields.len())?;
-        let mut operands = Vec::new();
-        operands
-            .try_reserve_exact(tuple.fields.len())
-            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
-        for (field, (binder, operand)) in tuple.fields.iter().zip(&bindings[1..bindings.len() - 1])
-        {
-            if !same_variable(*field, *binder)? {
-                return Ok(None);
-            }
-            // An alias to an administrative field can hide an unguarded force.
-            // Genuine original operands predate all fresh administrative IDs.
-            let aliases = self.recursive_reachability(*operand, &administrative)?;
-            if aliases.get(operand).copied().unwrap_or(false) {
-                return Ok(None);
-            }
-            operands.push(*operand);
-        }
-        Ok(Some(operands))
+        Ok(Some(binding.body()))
     }
 
     fn guarded_payload(
@@ -11115,12 +11048,28 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Some(PureExprKind::Value(PureValue::Function(_))) => {}
                 _ => {
-                    let Some(fields) = self.guarded_region_tuple_fields(id)? else {
+                    if let Some(super::effect::EffectOperation::RegionTuple(tuple)) =
+                        F::region_construction(&node.kind)
+                    {
+                        if [tuple.context, tuple.storage]
+                            .iter()
+                            .any(|child| reaches_recursive.get(child).copied().unwrap_or(false))
+                        {
+                            return Ok(Some(ValidationCause::RecursivePayloadForm));
+                        }
+                        self.charge_type_work(tuple.fields.len())?;
+                        work.try_reserve(tuple.fields.len()).map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(id))
+                        })?;
+                        work.extend(tuple.fields.iter().copied());
+                    } else if let Some(body) = self.guarded_region_context(id)? {
+                        work.try_reserve(1).map_err(|_| {
+                            ValidationError::new(ValidationReason::Resource, Some(id))
+                        })?;
+                        work.push(body);
+                    } else {
                         return Ok(Some(ValidationCause::RecursivePayloadForm));
-                    };
-                    work.try_reserve(fields.len())
-                        .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
-                    work.extend(fields);
+                    }
                 }
             }
         }
@@ -13707,9 +13656,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 }
                 for (field, ty) in tuple.fields.iter().zip(types) {
                     let field = self.node(*field)?;
-                    if !matches!(field.kind, EffectExprKind::Pure(PureExprKind::Variable(_)))
-                        || !self.same_type_charged(&field.ty, ty)?
-                    {
+                    if !self.same_type_charged(&field.ty, ty)? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
@@ -14576,9 +14523,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         }
                         EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
                             let mut row = EffectRow::empty();
-                            for child in [tuple.context, tuple.storage]
-                                .iter()
+                            for child in std::iter::once(&tuple.context)
                                 .chain(tuple.fields.iter())
+                                .chain(std::iter::once(&tuple.storage))
                             {
                                 row =
                                     self.union_effect_rows_charged(&row, child_row(*child)?, id)?;
@@ -19735,47 +19682,78 @@ mod tests {
     }
 
     #[test]
-    fn region_tuple_recursive_payload_rejects_administrative_alias() {
+    fn region_tuple_recursive_payload_rejects_forcing_and_transport() {
         use super::super::effect::{EffectExprKind, EffectOperation};
         let (donor, sources, relation) = generic_cell_source_fixture(
-            "type Knot = Fork(Knot, Knot)\nmain : Unit -> Unit\nmain () = {\nlet rec knot : Knot = Fork(knot, knot)\nmatch knot {\nFork(left, right) => ()\n}\n}\n",
+            "type Knot = Fork(Knot, Knot)\nforce : Knot -> Knot\nforce value = value\nmain : Unit -> Unit\nmain () = {\nlet rec knot : Knot = Fork(knot, knot)\nmatch force knot {\nFork(left, right) => ()\n}\n}\n",
             None,
         );
-        let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
         let refs = sources.iter().collect::<Vec<_>>();
-        let validator = Validator::new_modules(&copied, &refs, &relation).unwrap();
-        let root = copied
+        let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+        let (tuple_id, tuple) = copied
             .nodes
             .iter()
             .enumerate()
-            .find_map(|(index, _)| {
-                let id = NodeId::new(copied.arena, u32::try_from(index).unwrap());
-                validator
-                    .guarded_region_tuple_fields(id)
-                    .unwrap()
-                    .map(|_| id)
+            .find_map(|(index, node)| {
+                if let EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) = &node.kind {
+                    Some((
+                        NodeId::new(copied.arena, u32::try_from(index).unwrap()),
+                        tuple.clone(),
+                    ))
+                } else {
+                    None
+                }
             })
-            .expect("the guarded constructor has an explicit tuple construction");
-        let mut cursor = root;
-        let mut initializers = Vec::new();
-        while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
-            &copied.nodes[cursor.index().unwrap()].kind
-        {
-            initializers.push(binding.initializer());
-            cursor = binding.body();
+            .unwrap();
+        let recursive = copied
+            .nodes
+            .iter()
+            .find_map(|node| {
+                if let EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::RecursiveBind(group),
+                )) = &node.kind
+                {
+                    Some(HashSet::from([group.members()[0].binder().id()]))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let call = copied
+            .nodes
+            .iter()
+            .find(|node| {
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(call))) =
+                    &node.kind
+                else {
+                    return false;
+                };
+                node.ty == copied.nodes[tuple.fields[0].index().unwrap()].ty
+                    && call.argument() != tuple.fields[0]
+                    && !matches!(
+                        copied.nodes[call.function().index().unwrap()].kind,
+                        EffectExprKind::Pure(PureExprKind::Value(PureValue::Constructor(_)))
+                    )
+            })
+            .unwrap();
+        let call_kind = call.kind.clone();
+        let call_effects = call.effects.clone();
+        for target in [tuple.context, tuple.storage] {
+            let original = copied.nodes[target.index().unwrap()].kind.clone();
+            copied.nodes[target.index().unwrap()].kind =
+                copied.nodes[tuple.fields[0].index().unwrap()].kind.clone();
+            let validator = Validator::new_modules(&copied, &refs, &relation).unwrap();
+            assert_eq!(
+                validator.guarded_payload(tuple_id, &recursive).unwrap(),
+                Some(ValidationCause::RecursivePayloadForm)
+            );
+            copied.nodes[target.index().unwrap()].kind = original;
         }
-        let EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) =
-            &copied.nodes[cursor.index().unwrap()].kind
-        else {
-            panic!("tuple initializer")
-        };
-        let alias = copied.nodes[tuple.fields[0].index().unwrap()].kind.clone();
-        assert_ne!(initializers[1], initializers[2]);
-        // The second original operand now reads the first administrative field.
-        // It has the right type and lexical scope, but hides recursive reachability.
-        copied.nodes[initializers[2].index().unwrap()].kind = alias;
+        let target = tuple.fields[0].index().unwrap();
+        copied.nodes[target].kind = call_kind;
+        copied.nodes[target].effects = call_effects;
         let error = super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
-        assert_eq!(error.cause, Some(ValidationCause::RecursivePayloadForm));
+        assert_eq!(error.cause, Some(ValidationCause::RecursivePayloadCall));
     }
 
     #[test]
