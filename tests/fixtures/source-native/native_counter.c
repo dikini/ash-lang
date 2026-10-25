@@ -1,4 +1,4 @@
-/* UNRUN S3 candidate. Ordinary fixture; no shim around another library. */
+/* Ordinary pointer fixture; no shim around another library. */
 #include <stdio.h>
 #include <stdlib.h>
 

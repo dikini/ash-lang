@@ -19,6 +19,11 @@ const NATIVE: &str = include_str!("fixtures/source-native/native.ash");
 const POINTERS: &str = include_str!("fixtures/source-native/cases/pointers.ash");
 const C: &str = include_str!("fixtures/source-native/native_counter.c");
 
+const BINDING: &str = include_str!("fixtures/source-native/binding.ash");
+const BINDING_ENTRY: &str = include_str!("fixtures/source-native/cases/binding.ash");
+const SQLITE: &str = include_str!("fixtures/source-native/sqlite.ash");
+const SQLITE_ENTRY: &str = include_str!("fixtures/source-native/cases/sqlite.ash");
+
 struct Fixture(PathBuf);
 
 impl Fixture {
@@ -286,4 +291,58 @@ fn generated_pointer_hosts_preserve_native_calls_and_bytes_with_both_linkages() 
             assert_eq!(calls, b"mepbbrf", "{linkage}: native call count/order");
         }
     }
+}
+
+#[test]
+fn ordinary_binding_checks_null_length_and_cleanup_with_both_linkages() {
+    let fixture = Fixture::new();
+    for (linkage, input) in ["static", "shared"]
+        .into_iter()
+        .zip(fixture.native_inputs())
+    {
+        let executable = build_case(
+            &fixture,
+            &format!("{linkage}-binding"),
+            BINDING_ENTRY,
+            &[("native.ash", NATIVE), ("binding.ash", BINDING)],
+            input,
+        );
+        let (output, calls) = run_host(&executable, &fixture, true);
+        assert!(output.status.success(), "{linkage}: {output:?}");
+        assert_eq!(
+            output.stdout,
+            b"(true, true, true, (true, true, true, true, true, true, true))\n"
+        );
+        assert!(output.stderr.is_empty(), "{linkage}: {output:?}");
+        assert_eq!(calls, b"merfmrbebb", "{linkage}: native call count/order");
+    }
+}
+
+#[test]
+fn direct_sqlite_getters_return_nonnull_repeatable_addresses() {
+    let fixture = Fixture::new();
+    // Use the installed versioned runtime directly; no headers or C wrapper.
+    let discovery = Command::new("cc")
+        .arg("-print-file-name=libsqlite3.so.0")
+        .output()
+        .expect("cc locates the installed SQLite runtime");
+    assert!(discovery.status.success(), "{discovery:?}");
+    let spelling = String::from_utf8(discovery.stdout).unwrap();
+    let library = PathBuf::from(spelling.trim());
+    assert!(
+        library.is_absolute() && library.is_file(),
+        "the direct SQLite canary requires an installed libsqlite3.so.0: {library:?}"
+    );
+    let executable = build_case(
+        &fixture,
+        "sqlite",
+        SQLITE_ENTRY,
+        &[("sqlite.ash", SQLITE)],
+        NativeLinkInput::SharedLibrary(library),
+    );
+    let (output, calls) = run_host(&executable, &fixture, false);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"(true, true, true, true)\n");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(calls.is_empty(), "SQLite has no fixture instrumentation");
 }
