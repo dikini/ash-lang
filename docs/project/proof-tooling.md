@@ -32,6 +32,20 @@ their validated hashes. The compiler is resolved through `elan` in the proof
 directory, or the configuration's explicit `compiler` path; its version and
 hash must match the parent evidence.
 
+The optional `proof_directory` selects one of two reviewed repository-relative
+roots: `docs/design/direct-effects/one-shot` (unchanged default) or
+`docs/design/lexical-regions`. The runner rejects other paths, symlink escapes
+and a parent evidence record for another root. Non-default evidence must name
+its root explicitly.
+
+A new root may begin with an explicitly labelled `seed_kind: empty-registration`
+parent: empty module registration, records and imports, zero reports, and only
+exact `check.sh`/`lean-toolchain` source pins plus the existing compiler/library
+pins and version. This seed claims no prior proof or artifact. New sources still
+require reviewed components and pass the same compilation, import, report,
+axiom, resource and final-coherence checks. It does not authorize rebuilding or
+copying unrelated one-shot proofs to make a mismatched parent fit.
+
 Optional settings are:
 
 | Setting | Default | Meaning |

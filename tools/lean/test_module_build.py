@@ -179,6 +179,101 @@ class ModuleBuildTests(unittest.TestCase):
         with patch.object(native, "Path", side_effect=paths):
             self.assertEqual(native.external_compiler_count(), 2)
 
+    def empty_integration(self):
+        work = self.root / "empty-work"
+        live = work / "docs/design/lexical-regions"
+        live.mkdir(parents=True)
+        (live / "check.sh").write_text("#!/usr/bin/env bash\nset -euo pipefail\n")
+        (live / "lean-toolchain").write_text("leanprover/lean4:v4.33.1\n")
+        subprocess.run(["git", "init", "-q", str(work)], check=True)
+        subprocess.run(["git", "add", "."], cwd=work, check=True)
+        subprocess.run(["git", "-c", "user.name=Tooling tests", "-c", "user.email=tests@example.invalid",
+                        "-c", "commit.gpgSign=false", "commit", "-qm", "empty fixture"], cwd=work, check=True)
+        parent = {"seed_kind": "empty-registration", "proof_directory": "docs/design/lexical-regions",
+                  "registered_order": [], "imports": {}, "records": {}, "reports": 0,
+                  "manifest": {p.name: digest(p) for p in live.iterdir()},
+                  "version": subprocess.check_output([str(LEAN), "--version"], text=True).strip(),
+                  "compiler_library_hashes": {str(LEAN): digest(LEAN)},
+                  "cache": str(self.store)}
+        parent_path = self.root / "empty-parent.json"
+        parent_path.write_text(json.dumps(parent))
+        source = self.root / "RegionProbe.lean"
+        source.write_text("theorem region_probe : True := True.intro\n#print axioms region_probe\n")
+        review = self.root / "synthetic-review.json"
+        review.write_text('{"scope": "runner test fixture only, not an actual review"}\n')
+        config = {"worktree": str(work), "proof_directory": "docs/design/lexical-regions",
+                  "parent_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=work, text=True).strip(),
+                  "compiler": str(LEAN), "parent_evidence": str(parent_path),
+                  "parent_evidence_sha256": digest(parent_path),
+                  "new_registered_order": ["RegionProbe"], "module_cache": str(self.store),
+                  "jobs": 1, "memory_mb": 4096, "headroom_mb": 0,
+                  "output_prefix": str(self.root / "empty-first"),
+                  "components": [{"name": "synthetic-runner-test", "root_verified_review_pass": True,
+                      "checkpoint": str(review), "checkpoint_sha256": digest(review),
+                      "review": str(review), "review_sha256": digest(review), "sources": [{
+                          "module": "RegionProbe", "source": str(source),
+                          "source_sha256": digest(source), "reports": ["region_probe"]}]}]}
+        return config, parent
+
+    def run_integration(self, config):
+        config_path = self.root / "empty-config.json"
+        config_path.write_text(json.dumps(config))
+        with patch.dict(sys.modules, {"module_build": self.runner}), \
+                patch.object(sys, "argv", ["integrate.py", str(config_path)]):
+            runpy.run_path(str(SCRIPT.with_name("integrate.py")), run_name="__main__")
+
+    def test_empty_seed_integrates_without_claiming_parent_proofs(self):
+        config, _ = self.empty_integration()
+        self.run_integration(config)
+        result = json.loads(Path(config["output_prefix"] + "-evidence.json").read_text())
+        self.assertEqual(result["proof_directory"], "docs/design/lexical-regions")
+        self.assertEqual(result["registered_order"], ["RegionProbe"])
+        self.assertEqual(result["reports"], 1)
+        self.assertEqual(result["module_scheduler"]["max_running"], 1)
+        self.assertTrue(result["all_modules_fresh"])
+
+    def test_empty_seed_rejects_directory_escape_and_wrong_parent(self):
+        config, _ = self.empty_integration()
+        for directory in ("/tmp", "../lexical-regions", "docs/design/other",
+                          "docs/design/direct-effects/one-shot"):
+            with self.subTest(directory=directory), self.assertRaises(AssertionError):
+                self.run_integration({**config, "proof_directory": directory})
+        live = Path(config["worktree"]) / "docs/design/lexical-regions"
+        moved = self.root / "outside"
+        live.rename(moved)
+        live.symlink_to(moved, target_is_directory=True)
+        with self.assertRaisesRegex(AssertionError, "symlink"):
+            self.run_integration(config)
+
+    def test_empty_seed_cannot_smuggle_prior_proof_or_changed_sources(self):
+        config, parent = self.empty_integration()
+        parent_path = Path(config["parent_evidence"])
+        for change in ({"seed_kind": "ordinary"}, {"reports": 1},
+                       {"records": {"Ghost": {}}}, {"imports": {"Ghost": []}},
+                       {"manifest": {**parent["manifest"], "Ghost.lean": "forged"}}):
+            parent_path.write_text(json.dumps({**parent, **change}))
+            config["parent_evidence_sha256"] = digest(parent_path)
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                self.run_integration(config)
+        parent_path.write_text(json.dumps(parent))
+        config["parent_evidence_sha256"] = digest(parent_path)
+        Path(config["components"][0]["sources"][0]["source"]).write_text("-- changed\n")
+        with self.assertRaises(AssertionError):
+            self.run_integration(config)
+
+    def test_empty_seed_preserves_report_and_compiler_pin_refusals(self):
+        config, parent = self.empty_integration()
+        config["components"][0]["sources"][0]["reports"] = ["wrong_report"]
+        with self.assertRaises(SystemExit):
+            self.run_integration(config)
+        parent["compiler_library_hashes"][str(LEAN)] = "0" * 64
+        parent_path = Path(config["parent_evidence"])
+        parent_path.write_text(json.dumps(parent))
+        config["parent_evidence_sha256"] = digest(parent_path)
+        config["output_prefix"] = str(self.root / "bad-compiler")
+        with self.assertRaises(AssertionError):
+            self.run_integration(config)
+
     def test_integration_freshness_flag_distinguishes_receipt_reuse(self):
         baseline = self.build()
         work = self.root / "work"
