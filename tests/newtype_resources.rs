@@ -58,7 +58,7 @@ const OWNERS: &[OwnerEvidence] = &[
         source: RESOLVE,
         exact_probe: "fn shared_foreign_nominal_constructor_family_transaction_is_exact_atomic_and_reusable()",
         boundary_markers: &[
-            "const FIRST_TYPE_WORK: usize = 20;",
+            "const FIRST_TYPE_WORK: usize = 22;",
             "one missing family cell must leave the route cache and facts empty",
             "the exact first route should retain the complete family",
         ],
@@ -161,7 +161,7 @@ const OWNERS: &[OwnerEvidence] = &[
         source: CORE_VALIDATE,
         exact_probe: "fn parameterized_newtype_validation_is_exact_atomic_and_retryable()",
         boundary_markers: &[
-            "const EXACT_WORK: usize = VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;",
+            "RESERVED_SOURCE_SCAN_WORK + VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;",
             "let one_short = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1));",
             "let retry = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);",
         ],
