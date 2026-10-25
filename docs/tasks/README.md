@@ -9,7 +9,10 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active task is listed.
+[TASK-0055: Lexical regions](TASK-0055-lexical-regions.md) organizes the
+authorized R1/R2 design and bounded-proof stage, with its
+[owned execution plan](plans/lexical-regions.md). Product R3 remains held for
+the accepted contract and matched proof; the task defines no current semantics.
 
 [TASK-0053](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0053-checked-owner-core-execution.md) and
 [TASK-0054](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0054-checked-sqlite-source-policy.md) are superseded
