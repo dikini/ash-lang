@@ -31,30 +31,6 @@ pub enum Intrinsic {
     AddressIsNull,
     /// Compares raw data-pointer values, without interpreting their lifetime.
     AddressEqual,
-    /// Checks the GNU64 signed range without invoking a native symbol.
-
-    /// Checks the GNU64 size_t range without invoking a native symbol.
-
-    /// Checks that an ordinary string contains no NUL, without native authority.
-
-    /// Reads the selected source descriptor's ordinary private payload.
-
-    /// Replaces that payload after complete fallible admission.
-
-    /// Reads through an independently admitted initialized live State.
-
-    /// Writes through that State only after complete reply admission.
-
-    /// Copies a checked live view with its opaque exact-view extent.
-
-    /// Copies a checked live NUL view under its bounded scan contract.
-
-    /// Exposes a copied length without adding access permission.
-
-    /// Conservatively denies the exact authenticated Current/Enclosing group.
-
-    /// Denies the exact pending unpublished acquisition group, including null.
-
     /// Constructs empty bytes.
     BytesEmpty,
     /// Appends a checked byte and returns an ordinary constructor result.
