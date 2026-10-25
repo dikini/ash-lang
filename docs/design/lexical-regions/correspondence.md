@@ -40,6 +40,17 @@ usable-reference liveness.
 
 The finite region extension leaves ordinary source effects and lexical evaluation abstract. operandHistory is an opaque already-performed-effects marker; region transitions do not roll it back or replay it. Internal work/control exhaustion is not an ordinary source allocator refusal and carries no new cleanup guarantee. Source/Core access, cleanup/interpreter compatibility and foreign module guarantees are stated assumptions, never `Coherent successor` premises. No runtime implementation or proof of a native allocator is claimed.
 
+The model has no numeric range domain or source `Int` classification. Under
+[CP-0025 integer admission](../../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission),
+an independent immediate needs no owned record; persistent digits instantiate
+existing request/supply/initialize/publication and dependency guards. Generic
+source/Core Scalar-to-Free lowering must not classify unknown Int as independent.
+Conservative arithmetic admission and faithful Cell/call/request summaries remain
+compiler correspondence obligations. The existing finite preservation result
+does not establish these classifications, private immediate-range agreement or
+arithmetic correctness; this clarification adds no theorem,
+proof module or changed transition premise.
+
 ## Admitted trace evidence
 
 - Complete-predicate and control evidence: `initial_coherent`, `empty_coherent`, `cyclic_full_trace_coherent`,

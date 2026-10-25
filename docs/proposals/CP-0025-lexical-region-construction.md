@@ -177,6 +177,43 @@ After complete implementation/integration, ordinary construction has explicit ch
 
 This changes current source annotations, construction lowering, runtime value/backing representation and entry wrapping. It does not change integer mathematics, newtype erasure, exact handler selection, rank-1 source values, guardedness, existing Cell ordering or the slim FFI assumption boundary.
 
+### Integer residency admission
+
+Clarification dated 2026-10-25: this adds a conservative lifetime-admission
+restriction before Int product work. PR #146 and its pre-adoption semantic hash
+remain historical evidence for the original contract; their exact-body equality
+does not cover this amendment. This clarification requires separate review and
+retention, without extending the finite proof claim.
+
+`Int` remains mathematical and unbounded. Its type alone does not establish
+region independence. Known immediate literals and intrinsically bounded leaves
+are independent when their complete persistent representation is immediate.
+Large literals retain the selected region that backs their digits. Aliases,
+projections and calls preserve actual dependency summaries; unknown Int results
+have no blanket scalar exemption. Cell storage/read and request results must
+preserve these facts rather than copy host BigInt ownership or erase residency.
+Cell reads are not intrinsically bounded; they preserve stored-value facts.
+
+Potentially large addition and multiplication retain selected-region residency,
+even if a particular execution produces an immediate result. Without existing
+facts proving independence, admission rejects that result escaping its region.
+For example, the body `42` may leave a host-backed `region<R> r`, while the body
+`20 + 22` is conservatively rejected at that same boundary. Projecting a known
+immediate field preserves its independence; applying addition to projected
+operands does not establish a bounded result. These are required admission
+examples for the next implementation, not claims of current executable support.
+
+This deliberately changes lifetime admission, not mathematical results. Runtime
+small-result representation does not retroactively authorize a rejected escape.
+Where an outer region is live, existing `using outer` can select it before the
+arithmetic, permitting the result to leave the inner region without relocation.
+No constant/range propagation or implicit copying/relocation is introduced, and
+existing arithmetic escape fixtures must not be silently rewritten. The private
+immediate encoding must cover byte values and checked implementation-size request
+metadata without recursive allocation to formulate requests. Source, Core and
+runtime must agree on immediate eligibility; its exact range is
+an implementation choice, not a public numeric type or a bound on `Int`.
+
 ## Affected specification areas
 
 - [lexical-structure](../../spec/lexical-structure.md), [syntax](../../spec/syntax.md): `region`/`using`, provider-pair checking, default-expanded computation annotations.
