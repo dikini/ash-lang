@@ -1,7 +1,7 @@
 # DN-0050: Native program gas estimates
 
 - ID: `DN-0050`
-- Status: calibration record; `800S` source, `800S` final elaboration, `16S` compiler-arena rewrite, `345S` Core, `125P` preparation and `22B` startup accepted
+- Status: calibration record; `2600S` source, `800S` final elaboration, `16S` compiler-arena rewrite, `5300S` Core, `850P` preparation and `22B` startup accepted
 - Related: [TASK-0040 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/tasks/TASK-0040-ash-copying-sqlite-library.md),
   [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md),
   [CP-0022 transition history](https://github.com/dikini/ash-lang/blob/adddeffe5d135bd03bf5fc30051965e5da70ed24/docs/proposals/CP-0022-ash-authored-foreign-interfaces.md)
@@ -24,11 +24,11 @@ mechanism, normal-host and quality checks. The human then approved startup
 The current formulas are:
 
 ```text
-source checking = 800 * canonical loaded source UTF8 bytes, including builtins
-preparation     = 125 * (admitted source UTF8 bytes + validated main Core nodes)
+source checking = 2600 * canonical loaded source UTF8 bytes, including builtins
+preparation     = 850 * (admitted source UTF8 bytes + validated main Core nodes)
 final elaboration = 800 * canonical loaded source UTF8 bytes, including builtins
 compiler rewrite  = 16 * the same source closure, per compiler arena lifetime
-independent Core  = 345 * canonical loaded source UTF8 bytes, including builtins
+independent Core  = 5300 * canonical loaded source UTF8 bytes, including builtins
 startup         = 22 * (canonical image bytes + canonical expected-fact bytes)
 ```
 

@@ -128,6 +128,7 @@ impl TransformFamily for EffectOperationFamily {
                     api: buffer.api,
                     context: remap(remapped, buffer.context)?,
                     operand: buffer.operand.map(|id| remap(remapped, id)).transpose()?,
+                    right: buffer.right.map(|id| remap(remapped, id)).transpose()?,
                     operation: buffer.operation.clone(),
                 }),
                 ty.into_inner(),

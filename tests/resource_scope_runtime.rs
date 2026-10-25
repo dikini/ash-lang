@@ -12,10 +12,10 @@ use ash::{
 
 #[test]
 fn same_site_metadata_only_closure_uses_its_lexical_activation() {
-    let result = run(
+    let result = run_modular(
         "import @builtin.cell as Cell\neffect E<T> {\nask : Unit -> Int\n}\neffect Pause {\nask : Unit -> Unit\n}\nvisit : Int -> Int ! {Pause}\nvisit depth = resource cell<R> c = depth {\nlet observe : Unit -> Int ! {E<R>} = fn(ignored) {\nperform E<R>.ask ()\n}\nhandle (match depth == 0 {\ntrue => {\nlet _ = perform Pause.ask ()\nobserve ()\n}\nfalse => {\nhandle (visit 0) with Pause {\nask ignored => {\nlet outer = observe ()\nlet inner = resume ()\nouter + inner\n}\n}\n}\n}) with E<R> {\nask ignored => resume (match depth == 0 {\ntrue => 1\nfalse => 41\n})\n}\n}\nmain : Unit -> Int\nmain () = handle (visit 1) with Pause {\nask ignored => resume ()\n}\n",
     );
-    assert_eq!(result.value.to_string(), "42");
+    assert_eq!(result.value_display(), "42");
 }
 
 #[test]
@@ -105,65 +105,24 @@ fn run(source: &str) -> Evaluation {
     evaluate_effect(&program(source)).expect("resource execution")
 }
 
-#[test]
-fn nested_source_execution_and_release_fit_a_fresh_small_stack() {
-    const CHILD: &str = "ASH_RESOURCE_RUNTIME_STACK_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "nested_source_execution_and_release_fit_a_fresh_small_stack",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .status()
-            .unwrap();
-        assert!(status.success(), "fresh resource runtime process: {status}");
-        return;
-    }
-    std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(|| {
-            let mut source =
-                String::from("import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = ");
-            for _ in 0..24 {
-                source.push_str("resource cell<R> c = 42 {\n");
-            }
-            source.push_str("Cell.read c\n");
-            for _ in 0..24 {
-                source.push_str("}\n");
-            }
-            let result = run(&source);
-            assert_eq!(result.value.to_string(), "42");
-            let released = result
-                .effect_trace()
-                .iter()
-                .filter_map(|event| match event {
-                    EffectTraceEvent::ResourceReleased(key) => Some(*key),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            let acquired = result
-                .effect_trace()
-                .iter()
-                .filter_map(|event| match event {
-                    EffectTraceEvent::ResourceAcquired(key) => Some(*key),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(acquired.len(), 24);
-            assert_eq!(
-                acquired
-                    .iter()
-                    .collect::<std::collections::HashSet<_>>()
-                    .len(),
-                24
-            );
-            assert_eq!(released, acquired.into_iter().rev().collect::<Vec<_>>());
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+// Functional source execution uses the modular driver's phase-owner allowances.
+// The lower-level helper above intentionally retains standalone API capacities.
+fn run_modular(source: &str) -> ash::driver::Observation {
+    let path = std::env::temp_dir().join(format!(
+        "ash-resource-modular-{}-{}.ash",
+        std::process::id(),
+        SourceFile::new("resource modular", "")
+            .unwrap()
+            .id()
+            .value()
+    ));
+    std::fs::write(&path, source).unwrap();
+    let result = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: path.clone(),
+        roots: ModuleRoots::empty(),
+    });
+    std::fs::remove_file(path).unwrap();
+    result.expect("normal modular resource execution")
 }
 
 #[test]
@@ -278,10 +237,10 @@ fn sequential_scopes_release_before_next_acquisition() {
 
 #[test]
 fn same_site_closure_uses_its_outer_activation() {
-    let result = run(
+    let result = run_modular(
         "import @builtin.cell as Cell\neffect Pause {\nask : Unit -> Unit\n}\nvisit : Int -> Int ! {Pause}\nvisit depth = resource cell<R> c = (match depth == 0 {\ntrue => 1\nfalse => 41\n}) {\nmatch depth == 0 {\ntrue => {\nlet _ = perform Pause.ask ()\nCell.read c\n}\nfalse => {\nlet observe : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nhandle (visit 0) with Pause {\nask ignored => {\nlet outer = observe ()\nlet inner = resume ()\nouter + inner\n}\n}\n}\n}\n}\nmain : Unit -> Int\nmain () = handle (visit 1) with Pause {\nask ignored => resume ()\n}\n\n",
     );
-    assert_eq!(result.value.to_string(), "42");
+    assert_eq!(result.value_display(), "42");
 }
 
 #[test]
@@ -732,4 +691,9 @@ fn generic_cell_c02_initializer_discard_never_publishes_the_unacquired_owner() {
             .count(),
         1
     );
+}
+
+#[test]
+fn returned_closure_recurrence_keeps_existing_context_bound() {
+    assert_eq!(run("import @builtin.cell as Cell\ntype Chain = Chain(Unit -> Chain)\nmake : Unit -> Chain\nmake () = Chain (fn(ignored) {\n    make ()\n})\nnext : Chain -> Chain\nnext (Chain(step)) = step ()\nwalk : (Int, Chain) -> Int\nwalk (depth, value) = match depth == 0 {\ntrue => 42\nfalse => walk (0, next value)\n}\nmain : Unit -> Int\nmain () = resource cell<R> c = 7 {\n    let _ = Cell.read c\n    walk (1, make ())\n}\n").value.to_string(), "42");
 }

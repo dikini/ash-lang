@@ -2471,9 +2471,11 @@ impl<'a> Analysis<'a> {
                         self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
                     }
                     Control::Request(request) => {
-                        if request.effect.as_ref().is_some_and(|effect| {
-                            effect.effect().module().is_builtin_generic_cell()
-                        }) {
+                        if request
+                            .effect
+                            .as_ref()
+                            .is_some_and(|effect| effect.effect().module().is_builtin_resource())
+                        {
                             state.charge_key(budget)?;
                             if !cell_requests.contains(&state) {
                                 cell_requests
@@ -2888,7 +2890,7 @@ impl<'a> Analysis<'a> {
                 data.close(budget)?;
                 if let Err(failure) = data.check_resources(budget) {
                     if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. }
-                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource()))
                     {
                         return Err(data.cell_escape_failure(
                             failure,
@@ -3161,7 +3163,7 @@ impl<'a> Analysis<'a> {
         let Control::Resource { body, .. } = self.graph.code[entry.position.code] else {
             return Err(Failure::Invalid);
         };
-        let fresh_cell = if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. } if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+        let fresh_cell = if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. } if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource()))
         {
             let owner = data.resource_key(entry.position.code, context, budget)?;
             let (_, root) =
@@ -3403,12 +3405,12 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
-    fn is_generic_cell_handler(&self, frame: Frame) -> bool {
+    fn is_cell_handler(&self, frame: Frame) -> bool {
         let code = match frame {
             Frame::Handler { code, .. } | Frame::RemovedHandler { code, .. } => code,
             _ => return false,
         };
-        matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.effect.as_ref().is_some_and(|effect| effect.effect().module().is_builtin_generic_cell()))
+        matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.effect.as_ref().is_some_and(|effect| effect.effect().module().is_builtin_resource()))
     }
 
     fn boundary_match_key(&self, frame: Frame) -> (usize, usize, Option<Frame>) {
@@ -3423,7 +3425,7 @@ impl<'a> Analysis<'a> {
         (
             code,
             context,
-            (self.is_generic_cell(frame) || self.is_generic_cell_handler(frame)).then_some(frame),
+            (self.is_cell(frame) || self.is_cell_handler(frame)).then_some(frame),
         )
     }
 
@@ -3477,10 +3479,10 @@ impl<'a> Analysis<'a> {
                 }
                 let target = self.label(code, context, budget)?;
                 let relation = self.match_labels(event.label, target, budget)?;
-                let relation = if self.is_generic_cell(edge.frame)
+                let relation = if self.is_cell(edge.frame)
                     && let Control::Request(request) = &self.graph.code[event.code]
                     && let Some(operation) = request.operation
-                    && operation.owner().module().is_builtin_generic_cell()
+                    && operation.owner().module().is_builtin_resource()
                 {
                     let port = event.port.ok_or(Failure::Invalid)?;
                     if cell_operands.is_none() {
@@ -3522,10 +3524,10 @@ impl<'a> Analysis<'a> {
                     // builtin occurrence; every other possible target continues
                     // outward. Empty operands await the value-queue replay.
                     (relation.0 && possible, relation.1 || outward)
-                } else if self.is_generic_cell_handler(edge.frame)
+                } else if self.is_cell_handler(edge.frame)
                     && let Control::Request(request) = &self.graph.code[event.code]
                     && let Some(operation) = request.operation
-                    && operation.owner().module().is_builtin_generic_cell()
+                    && operation.owner().module().is_builtin_resource()
                 {
                     let (Frame::Handler { value_context, .. }
                     | Frame::RemovedHandler { value_context, .. }) = edge.frame
@@ -3697,10 +3699,10 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
-    fn is_generic_cell(&self, frame: Frame) -> bool {
+    fn is_cell(&self, frame: Frame) -> bool {
         matches!(frame, Frame::Resource { code, .. }
             if matches!(&self.graph.code[code], Control::Resource { effect, .. }
-                if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell())))
+                if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource())))
     }
 
     fn cell_enclosing(
@@ -3814,7 +3816,7 @@ impl<'a> Analysis<'a> {
             context: state.context,
             focused: false,
         };
-        if !self.is_generic_cell(frame) {
+        if !self.is_cell(frame) {
             return Ok(());
         }
         let Control::Resource { effect, .. } = &self.graph.code[code] else {
@@ -4015,7 +4017,7 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        if self.is_generic_cell(selected.boundary.frame) {
+        if self.is_cell(selected.boundary.frame) {
             return self.requested_cell(state, event, selected, pending, visited, budget);
         }
         if let (Some(data), Some(port)) = (&mut self.data, event.port) {
@@ -4669,7 +4671,7 @@ impl<'a> Analysis<'a> {
                 } else {
                     if self.focusing
                         && matches!(&self.graph.code[code], Control::Resource { effect, .. }
-                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource()))
                     {
                         return Err(data.cell_escape_failure(
                             failure,

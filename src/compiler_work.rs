@@ -5,7 +5,7 @@
 
 use crate::{module::ModuleGraph, source::SourceFile, types::TypeWorkBudget};
 
-const SOURCE_PER_BYTE: usize = 800;
+const SOURCE_PER_BYTE: usize = 2600;
 
 /// Separate per-arena capacity from the already-paid canonical source size.
 pub(crate) fn rewrite_total(bytes: usize) -> Result<usize, ()> {
@@ -17,11 +17,12 @@ fn source_total(bytes: usize) -> Result<usize, ()> {
 }
 
 fn phase_total(phase: CompilationPhase, bytes: usize) -> Result<usize, ()> {
-    match phase {
+    let total = match phase {
         CompilationPhase::SourceChecking => source_total(bytes),
         CompilationPhase::FinalElaboration => bytes.checked_mul(800).ok_or(()),
-        CompilationPhase::IndependentCore => bytes.checked_mul(345).ok_or(()),
-    }
+        CompilationPhase::IndependentCore => bytes.checked_mul(5300).ok_or(()),
+    }?;
+    Ok(total)
 }
 
 fn size_sources<'a>(
@@ -206,7 +207,7 @@ mod tests {
         let (source_work, bytes) =
             resident_phase_work(CompilationPhase::SourceChecking, &[&source]).unwrap();
         assert_eq!(bytes, source.text().len());
-        assert_eq!((source_work.used(), source_work.limit()), (2, 800 * bytes));
+        assert_eq!((source_work.used(), source_work.limit()), (2, 2600 * bytes));
         assert_eq!(rewrite_total(bytes), Ok(16 * bytes));
         assert_eq!(rewrite_total(0), Ok(0));
         assert!(rewrite_total(usize::MAX / 16 + 1).is_err());
@@ -221,7 +222,7 @@ mod tests {
         let source = SourceFile::new("phase.ash", "main : Unit -> Int\nmain () = 42\n").unwrap();
         for (phase, coefficient) in [
             (CompilationPhase::FinalElaboration, 800),
-            (CompilationPhase::IndependentCore, 345),
+            (CompilationPhase::IndependentCore, 5300),
         ] {
             let total = coefficient * source.text().len();
             let (fresh, bytes) = resident_phase_work(phase, &[&source]).unwrap();
@@ -257,8 +258,8 @@ mod tests {
     #[test]
     fn source_gas_is_paid_carried_checked_and_has_no_extra_ten_percent() {
         let source = SourceFile::new("source.ash", "main : Unit -> Int\nmain () = 42\n").unwrap();
-        let total = source.text().len() * 800;
-        assert!(source_total(usize::MAX / 800 + 1).is_err());
+        let total = source.text().len() * 2600;
+        assert!(source_total(usize::MAX / 2600 + 1).is_err());
         let mut empty = TypeWorkBudget::with_limit(1);
         assert_eq!(
             size_sources(

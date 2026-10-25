@@ -1157,7 +1157,7 @@ where
         })?;
     let source_normal_limit = checking_type_work.limit();
     // Preserve the existing explicit diagnostic feature, with the paid census
-    // already in the same ledger. Ordinary builds retain exactly 800*S.
+    // already in the same ledger. Ordinary builds retain exactly 2600*S.
     checking_type_work
         .finish_sizing(crate::calibration::limit(
             source_normal_limit,
@@ -1936,6 +1936,212 @@ mod tests {
     };
 
     #[test]
+    fn nested_source_execution_and_release_fit_a_fresh_small_stack() {
+        const CHILD: &str = "ASH_RESOURCE_RUNTIME_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "driver::tests::nested_source_execution_and_release_fit_a_fresh_small_stack",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "fresh resource runtime process: {status}");
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut source =
+                    String::from("import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = ");
+                for _ in 0..24 {
+                    source.push_str("resource cell<R> c = 42 {\n");
+                }
+                source.push_str("Cell.read c\n");
+                for _ in 0..24 {
+                    source.push_str("}\n");
+                }
+                // Preserve the original staged pipeline and small-stack claim;
+                // each compiler phase receives its existing canonical-source owner
+                // allowance once. Standalone API defaults remain unchanged.
+                let fixture = TestSource::write(&source);
+                let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).unwrap();
+                let (mut source_work, bytes) = crate::compiler_work::source_work(&graph).unwrap();
+                let mut checked = Vec::<crate::resolved::CheckedModule>::new();
+                for module in graph.modules() {
+                    let dependencies = module
+                        .dependencies()
+                        .iter()
+                        .map(|edge| {
+                            crate::resolve::DependencyExports::new(
+                                edge,
+                                checked
+                                    .iter()
+                                    .find(|module| module.module() == edge.target())
+                                    .unwrap()
+                                    .exports(),
+                            )
+                            .unwrap()
+                        })
+                        .collect::<Vec<_>>();
+                    let resolved = crate::resolve::resolve_module(module, &dependencies).unwrap();
+                    checked.push(
+                        crate::elaborate::check_module_with_budget_and_rewrite_work(
+                            resolved,
+                            &mut source_work,
+                            &mut crate::pattern::UsefulnessBudget::default(),
+                            &mut InterfaceConstraintBudget::default(),
+                            Some(TypeWorkBudget::with_limit(
+                                crate::compiler_work::rewrite_total(bytes).unwrap(),
+                            )),
+                        )
+                        .unwrap(),
+                    );
+                }
+                let linked = crate::evidence_validation::validate_interface_evidence(
+                    crate::elaborate::link_modules(checked, graph.entry()).unwrap(),
+                )
+                .unwrap();
+                let sources = graph
+                    .modules()
+                    .iter()
+                    .map(|module| module.source())
+                    .collect::<Vec<_>>();
+                let module_sources = graph
+                    .modules()
+                    .iter()
+                    .map(|module| (module.id(), module.source().id()))
+                    .collect::<Vec<_>>();
+                let (final_work, _) = crate::compiler_work::resident_phase_work(
+                    crate::compiler_work::CompilationPhase::FinalElaboration,
+                    &sources,
+                )
+                .unwrap();
+                let mut elaborator = EffectElaborator::for_module_program_with_budgets(
+                    &linked,
+                    final_work,
+                    TypeWorkBudget::with_limit(crate::compiler_work::rewrite_total(bytes).unwrap()),
+                )
+                .unwrap();
+                let typed = elaborator
+                    .synthesize_effect_module_program(&linked)
+                    .unwrap();
+                let (core, _) = elaborator.finish_with_work(typed.node).unwrap();
+                let (mut core_work, _) = crate::compiler_work::resident_phase_work(
+                    crate::compiler_work::CompilationPhase::IndependentCore,
+                    &sources,
+                )
+                .unwrap();
+                let program = crate::core::validate::validate_effect_modules_with_work(
+                    core,
+                    &sources,
+                    &module_sources,
+                    &mut core_work,
+                )
+                .unwrap();
+                let result = crate::eval::evaluate_effect(&program).unwrap();
+                assert_eq!(result.value.to_string(), "42");
+                let released = result
+                    .effect_trace()
+                    .iter()
+                    .filter_map(|event| match event {
+                        crate::eval::EffectTraceEvent::ResourceReleased(key) => Some(*key),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let acquired = result
+                    .effect_trace()
+                    .iter()
+                    .filter_map(|event| match event {
+                        crate::eval::EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(acquired.len(), 24);
+                assert_eq!(
+                    acquired
+                        .iter()
+                        .collect::<std::collections::HashSet<_>>()
+                        .len(),
+                    24
+                );
+                assert_eq!(released, acquired.into_iter().rev().collect::<Vec<_>>());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn integer_cell_regressions_fit_normal_modular_allowances() {
+        (|| {
+            for (name, source) in [
+                (
+                    "same-site",
+                    "import @builtin.cell as Cell\neffect Pause {\nask : Unit -> Unit\n}\nvisit : Int -> Int ! {Pause}\nvisit depth = resource cell<R> c = (match depth == 0 {\ntrue => 1\nfalse => 41\n}) {\nmatch depth == 0 {\ntrue => {\nlet _ = perform Pause.ask ()\nCell.read c\n}\nfalse => {\nlet observe : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nhandle (visit 0) with Pause {\nask ignored => {\nlet outer = observe ()\nlet inner = resume ()\nouter + inner\n}\n}\n}\n}\n}\nmain : Unit -> Int\nmain () = handle (visit 1) with Pause {\nask ignored => resume ()\n}\n\n",
+                ),
+                (
+                    "metadata",
+                    "import @builtin.cell as Cell\neffect E<T> {\nask : Unit -> Int\n}\neffect Pause {\nask : Unit -> Unit\n}\nvisit : Int -> Int ! {Pause}\nvisit depth = resource cell<R> c = depth {\nlet observe : Unit -> Int ! {E<R>} = fn(ignored) {\nperform E<R>.ask ()\n}\nhandle (match depth == 0 {\ntrue => {\nlet _ = perform Pause.ask ()\nobserve ()\n}\nfalse => {\nhandle (visit 0) with Pause {\nask ignored => {\nlet outer = observe ()\nlet inner = resume ()\nouter + inner\n}\n}\n}\n}) with E<R> {\nask ignored => resume (match depth == 0 {\ntrue => 1\nfalse => 41\n})\n}\n}\nmain : Unit -> Int\nmain () = handle (visit 1) with Pause {\nask ignored => resume ()\n}\n",
+                ),
+                (
+                    "nested24",
+                    "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nCell.read c\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n",
+                ),
+            ] {
+                let fixture = TestSource::write(source);
+                let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).unwrap();
+                let bytes: usize = graph
+                    .modules()
+                    .iter()
+                    .map(|module| module.source().text().len())
+                    .sum();
+                let compiled = compile_path(fixture.configuration())
+                    .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+                eprintln!(
+                    "integer Cell {name}: canonical_bytes={bytes}, work={:?}",
+                    compiled.compilation_work()
+                );
+                let (program, _) = compiled.effect_build_input().expect("region Effect Core");
+                let evaluation =
+                    crate::eval::evaluate_effect(program).expect("resource fixture evaluates");
+                assert_eq!(evaluation.value.to_string(), "42");
+                if name == "nested24" {
+                    use crate::eval::EffectTraceEvent;
+                    let acquired = evaluation
+                        .effect_trace()
+                        .iter()
+                        .filter_map(|event| match event {
+                            EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let released = evaluation
+                        .effect_trace()
+                        .iter()
+                        .filter_map(|event| match event {
+                            EffectTraceEvent::ResourceReleased(key) => Some(*key),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(acquired.len(), 24);
+                    assert_eq!(
+                        acquired
+                            .iter()
+                            .collect::<std::collections::HashSet<_>>()
+                            .len(),
+                        24
+                    );
+                    assert_eq!(released, acquired.into_iter().rev().collect::<Vec<_>>());
+                }
+                eprintln!("integer Cell {name}: result=42");
+            }
+        })();
+    }
+
+    #[test]
     fn deep_recursive_group_and_call_chain_use_explicit_work_stacks() {
         const MEMBERS: usize = 8_000;
         let worker = std::thread::Builder::new()
@@ -2213,7 +2419,14 @@ mod tests {
         ));
         source.write_sibling("helper.ash", "pub answer : Unit -> Int\nanswer () = 42\n");
         let graph = load_module_graph(&source.0, &ModuleRoots::empty()).unwrap();
-        assert_eq!(graph.modules().len(), 3);
+        assert_eq!(
+            graph
+                .modules()
+                .iter()
+                .filter(|module| module.source().display_path() == "@builtin.bytes")
+                .count(),
+            1
+        );
         let bytes: usize = graph
             .modules()
             .iter()
@@ -2223,7 +2436,7 @@ mod tests {
         assert_eq!(counted_bytes, bytes);
         assert_eq!(
             (work.used(), work.limit()),
-            (graph.modules().len() + 1, 800 * bytes)
+            (graph.modules().len() + 1, 2600 * bytes)
         );
         let sources = graph
             .modules()
@@ -2235,7 +2448,10 @@ mod tests {
                 crate::compiler_work::CompilationPhase::FinalElaboration,
                 800,
             ),
-            (crate::compiler_work::CompilationPhase::IndependentCore, 345),
+            (
+                crate::compiler_work::CompilationPhase::IndependentCore,
+                5300,
+            ),
         ] {
             let (work, counted_bytes) =
                 crate::compiler_work::resident_phase_work(phase, &sources).unwrap();

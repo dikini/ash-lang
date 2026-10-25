@@ -132,7 +132,7 @@ main () = {{
         .expect("folded Core should revalidate");
     for program in [program, identity, folded] {
         assert!(
-            matches!(evaluate(&program).expect("ordinary method closure should execute").value, Value::Integer(value) if value.to_string() == "42")
+            matches!(evaluate(&program).expect("ordinary method closure should execute").value, Value::SmallInteger(value) if value.to_string() == "42")
         );
     }
 }

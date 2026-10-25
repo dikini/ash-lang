@@ -4397,7 +4397,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let generic_type_origin = self
             .builder
-            .generic_cell_dependency_origin(&mut self.type_work)
+            .cell_dependency_origin(&mut self.type_work)
             .map_err(|()| type_resource())?;
         if self
             .generic_dependency_origin
@@ -4489,8 +4489,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &method_routes,
             &method_adapters,
             &mut self.type_work,
-        )
-        .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
+        );
+        let captures = captures.map_err(|failure| capture_failure(failure, &mut self.type_work))?;
         Ok(captures)
     }
 
@@ -14090,6 +14090,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     self.initialize_region_buffer(
                         crate::core::region::RegionBufferOperation::StringLiteral(Arc::from(bytes)),
                         None,
+                        None,
                         &Type::String,
                         &effects,
                         current.span,
@@ -14110,13 +14111,40 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             ResolvedExprKind::Integer(value) => {
                 let ty = Type::Int;
-                let node =
+                let api = self.active_region_api()?;
+                let effects = if F::EFFECTS && api.is_some() && value.to_i128().is_none() {
+                    EffectRow::singleton(EffectInstance::new(
+                        api.ok_or_else(invalid_state)?.default_alloc(),
+                        Box::new([]),
+                    ))
+                } else {
+                    EffectRow::empty()
+                };
+                let node = if effects.is_empty() {
                     self.builder
-                        .integer(value.clone(), Type::Int, Origin::Source(current.span))?;
+                        .integer(value.clone(), Type::Int, Origin::Source(current.span))?
+                } else {
+                    self.type_work
+                        .charge(
+                            usize::try_from(value.magnitude_byte_length())
+                                .map_err(|_| type_resource())?,
+                        )
+                        .map_err(|()| type_resource())?;
+                    self.initialize_region_buffer(
+                        crate::core::region::RegionBufferOperation::IntegerLiteral(Arc::new(
+                            value.clone(),
+                        )),
+                        None,
+                        None,
+                        &Type::Int,
+                        &effects,
+                        current.span,
+                    )?
+                };
                 values.push(TypedNode {
                     node,
                     ty,
-                    effects: EffectRow::empty(),
+                    effects,
                     provenance: TypeProvenance::atom(Some(current.span)),
                 });
             }
@@ -14652,10 +14680,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     primary: Box::new(Origin::Source(whole_span)),
                     related: vec![operator_span],
                 };
-                let effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
-                let node =
+                let mut effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
+                let node = if F::EFFECTS
+                    && self.active_region_api()?.is_some()
+                    && primitive != Primitive::Equal
+                {
+                    let api = self.active_region_api()?.ok_or_else(invalid_state)?;
+                    effects = self.union_effects(
+                        &effects,
+                        &EffectRow::singleton(EffectInstance::new(
+                            api.default_alloc(),
+                            Box::new([]),
+                        )),
+                        whole_span,
+                    )?;
+                    self.initialize_region_buffer(
+                        crate::core::region::RegionBufferOperation::IntegerArithmetic(primitive),
+                        Some(left.node),
+                        Some(right.node),
+                        &ty,
+                        &effects,
+                        whole_span,
+                    )?
+                } else {
                     self.builder
-                        .primitive(primitive, left.node, right.node, ty.clone(), origin)?;
+                        .primitive(primitive, left.node, right.node, ty.clone(), origin)?
+                };
                 values.push(TypedNode {
                     node,
                     ty,

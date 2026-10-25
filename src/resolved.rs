@@ -358,21 +358,18 @@ impl ResourceApi {
     }
 }
 
-/// Dependency admission applies to computational uses of generic access
+/// Dependency admission applies to computational uses of either Cell access
 /// or indexed operations, including a body-free helper's exposed callable type.
-pub(crate) fn generic_cell_dependency_type(
-    root: &Type,
-    work: &mut TypeWorkBudget,
-) -> Result<bool, ()> {
+pub(crate) fn cell_dependency_type(root: &Type, work: &mut TypeWorkBudget) -> Result<bool, ()> {
     crate::types::visit_type_structure_and_instances_with_budget(
         root,
         work,
         |node, _| {
             Ok(
-                matches!(node, crate::types::TypeStructureNode::Type(Type::Nominal(id)) if id.module().is_builtin_generic_cell()),
+                matches!(node, crate::types::TypeStructureNode::Type(Type::Nominal(id)) if id.module().is_builtin_resource()),
             )
         },
-        |instance, _| Ok(instance.effect().module().is_builtin_generic_cell()),
+        |instance, _| Ok(instance.effect().module().is_builtin_resource()),
     )
 }
 
@@ -21046,10 +21043,7 @@ impl ResolvedRegistry {
     /// The caller must have authenticated its closed nominal/effect registry,
     /// including opaque imported kinds. This query discovers identities only;
     /// it grants no capture, source or Core admission permission.
-    pub(crate) fn has_generic_cell_type_identity(
-        &self,
-        work: &mut TypeWorkBudget,
-    ) -> Result<bool, ()> {
+    pub(crate) fn has_cell_type_identity(&self, work: &mut TypeWorkBudget) -> Result<bool, ()> {
         let count = self
             .nominals
             .len()
@@ -21063,15 +21057,15 @@ impl ResolvedRegistry {
             .nominals
             .iter()
             .chain(self.lexical_nominals.iter())
-            .any(|nominal| nominal.id.module().is_builtin_generic_cell())
+            .any(|nominal| nominal.id.module().is_builtin_resource())
             || self
                 .abstract_nominal_kinds
                 .keys()
-                .any(|id| id.module().is_builtin_generic_cell())
+                .any(|id| id.module().is_builtin_resource())
             || self
                 .effects
                 .iter()
-                .any(|effect| effect.id.module().is_builtin_generic_cell()))
+                .any(|effect| effect.id.module().is_builtin_resource()))
     }
 
     /// Returns nominal declarations in source order.
@@ -23869,31 +23863,25 @@ mod tests {
                     _ => unreachable!(),
                 }
                 let mut measured = TypeWorkBudget::unbounded();
-                assert_eq!(
-                    registry.has_generic_cell_type_identity(&mut measured),
-                    Ok(generic)
-                );
+                assert_eq!(registry.has_cell_type_identity(&mut measured), Ok(generic));
                 assert_eq!(measured.used(), 2);
                 let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
-                assert_eq!(registry.has_generic_cell_type_identity(&mut short), Err(()));
+                assert_eq!(registry.has_cell_type_identity(&mut short), Err(()));
                 assert_eq!(short.used(), 0, "precharge before examining any identity");
                 for _ in 0..2 {
                     let mut exact = TypeWorkBudget::with_limit(measured.used());
-                    assert_eq!(
-                        registry.has_generic_cell_type_identity(&mut exact),
-                        Ok(generic)
-                    );
+                    assert_eq!(registry.has_cell_type_identity(&mut exact), Ok(generic));
                     assert_eq!(exact.remaining(), 0);
                 }
             }
         }
         let empty = ResolvedRegistry::default();
         assert_eq!(
-            empty.has_generic_cell_type_identity(&mut TypeWorkBudget::with_limit(0)),
+            empty.has_cell_type_identity(&mut TypeWorkBudget::with_limit(0)),
             Err(())
         );
         assert_eq!(
-            empty.has_generic_cell_type_identity(&mut TypeWorkBudget::with_limit(1)),
+            empty.has_cell_type_identity(&mut TypeWorkBudget::with_limit(1)),
             Ok(false)
         );
     }

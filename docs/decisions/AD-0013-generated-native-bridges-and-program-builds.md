@@ -64,22 +64,22 @@ owners and for native preparation and startup. The accepted policy is:
 
 ```text
 preparation gas = 850 * (admitted source UTF8 bytes + validated main Core nodes)
-source gas      = 800 * (canonical loaded source UTF8 bytes, including builtins)
+source gas      = 2600 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 800 * (the same canonical source UTF8 closure)
 rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
-Core gas        = 345 * (the same canonical source UTF8 closure)
+Core gas        = 5300 * (the same canonical source UTF8 closure)
 startup gas     = 22 * (canonical image bytes + canonical expected-fact bytes)
 ```
 
 Source checking sizes the complete canonical loaded source closure before
 checking. Count each loaded module once, including builtin sources, rather than
 import edges or aliases. Pay one unit per source and one for the census in a
-finite source-count-derived bootstrap, then carry that work inside `800*S`
+finite source-count-derived bootstrap, then carry that work inside `2600*S`
 through every module, source copy, closed entry and retained provenance. This is
 the total allowance; the historical ten-percent deficit does not apply.
 Final elaboration and independent compiler Core each pay their own identical
 resident-length census before work begins and carry it inside their respective
-`800*S` and `345*S` totals. Apply this at both Pure and Effect modular driver
+`800*S` and `5300*S` totals. Apply this at both Pure and Effect modular driver
 entries. Their existing remaining-credit loans debit the same cumulative meter.
 These totals have no historical extra ten percent.
 
@@ -154,6 +154,21 @@ These finite measurements stopped before independent Core, preparation or
 native execution. They are fitting evidence, not a holdout, normal caller pass
 or universal complexity guarantee. Normal verification and retained delivery
 remain separate obligations.
+
+On 2026-10-26 the project lead selected Source `2600S` and Core `5300S`
+for the connected integer-residency and legacy Cell analysis. Final remains
+`800S`. The exact 24-owner fixture used 3,595,764 Source units and 7,560,218
+Core units over 1,791 canonical source bytes (2,007.685 and 4,221.227 units per
+byte). Applying the existing 25% fitting reserve gives minimum coefficients
+2,510 and 5,277; rounding upward to hundreds gives 2,600 and 5,300. The fitted
+headroom is about 29.5% and 25.6%. This increases admitted work; it does not
+claim unchanged analysis cost. Focused rediscovery dominated the measured work.
+The finite diagnostic returned 42 and checked 24 unique Cell acquisitions with
+exact reverse release order. It used larger diagnostic allowances, so normal
+policy verification remains separate. Canonical source counting, paid census,
+cumulative phase owners and checked overflow are unchanged. No floor, runtime
+margin, refill, cross-phase credit or change to standalone, private-image,
+constraint, runtime, depth or stack defaults is introduced.
 
 The project lead subsequently selected preparation `125P` under the same
 delegated judgment after independent review of four complete preparation

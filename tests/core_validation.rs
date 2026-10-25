@@ -435,13 +435,10 @@ fn assert_primitive_profile(
 
 fn assert_integer_evaluation(program: &ValidatedProgram, expected: &str) {
     let evaluation = evaluate(program).expect("validated linked Core should erase and evaluate");
-    let Value::Integer(value) = evaluation.value else {
+    let Value::SmallInteger(value) = evaluation.value else {
         panic!("the transformed linked program should evaluate to an integer");
     };
-    assert_eq!(
-        value,
-        Integer::parse_decimal(expected).expect("the expected integer should parse"),
-    );
+    assert_eq!(value.to_string(), expected);
 }
 
 #[test]
@@ -1267,13 +1264,10 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         roots: ModuleRoots::empty(),
     })
     .expect("the static linked product should run through the public library path");
-    let Value::Integer(value) = observation.value() else {
+    let Value::SmallInteger(value) = observation.value() else {
         panic!("the public library path should observe an integer");
     };
-    assert_eq!(
-        value,
-        &Integer::parse_decimal("42").expect("42 should parse")
-    );
+    assert_eq!(value.to_string(), "42");
     assert_eq!(observation.ty(), &Type::Int);
 
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
@@ -1642,8 +1636,8 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
     assert_eq!(observation.ty(), &Type::Int);
     assert!(matches!(
         observation.value(),
-        Value::Integer(value)
-            if value == &Integer::parse_decimal("42").expect("42 should parse")
+        Value::SmallInteger(value)
+            if value.to_string() == "42"
     ));
 }
 

@@ -1567,7 +1567,7 @@ impl Graph {
                 budget,
             )?);
         }
-        let cell_owner = if handler.effect().effect().module().is_builtin_generic_cell() {
+        let cell_owner = if handler.effect().effect().module().is_builtin_resource() {
             match handler.effect().arguments().first() {
                 Some(crate::types::KindedArgument::TypeArg(Type::Variable(variable))) => {
                     Some(self.symbol(types, *variable, source, budget)?)
@@ -1953,7 +1953,7 @@ impl Graph {
 }
 
 fn scalar(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::Bool | Type::Unit)
+    matches!(ty, Type::Bool | Type::Unit)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -2004,7 +2004,7 @@ impl SlotPreparation {
 enum Transition {
     Root(usize),
     Call(usize),
-    Invoke(usize, usize), // Call expression and callee expression, both static graph IDs.
+    Invoke(usize, usize, usize), // Static call/callee IDs and finite creation class.
     Dispatch(usize, usize, usize),
     Focus,
     Restore(usize, usize, usize),
@@ -2019,6 +2019,7 @@ enum ContextPath {
         parent: usize,
         transition: Transition,
         length: usize,
+        projection: usize,
     },
 }
 
@@ -2027,6 +2028,13 @@ impl ContextPath {
         match self {
             Self::Empty => 0,
             Self::Step { length, .. } => length,
+        }
+    }
+
+    fn projection(self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Step { projection, .. } => projection,
         }
     }
 }
@@ -2043,6 +2051,8 @@ struct PendingContextExtension<'a> {
     parent: usize,
     transition: Transition,
     length: usize,
+    projection: usize,
+    canonical: Option<(usize, Transition, usize)>,
 }
 
 struct ReservedContextExtension<'a>(PendingContextExtension<'a>);
@@ -2051,14 +2061,15 @@ impl<'a> PendingContextExtension<'a> {
     fn reserve(self, budget: &mut TypeWorkBudget) -> Result<ReservedContextExtension<'a>, Failure> {
         // One new flat path record and one exact index entry, before either
         // allocation or publication. No full-prefix copy or hash is performed.
-        charge(budget, 2)?;
+        let count = 1 + usize::from(self.canonical.is_some());
+        charge(budget, count * 2)?;
         self.paths
             .paths
-            .try_reserve(1)
+            .try_reserve(count)
             .map_err(|_| Failure::Resource)?;
         self.paths
             .extensions
-            .try_reserve(1)
+            .try_reserve(count)
             .map_err(|_| Failure::Resource)?;
         Ok(ReservedContextExtension(self))
     }
@@ -2071,12 +2082,25 @@ impl ReservedContextExtension<'_> {
             parent,
             transition,
             length,
+            projection,
+            canonical,
         } = self.0;
+        if let Some((parent, transition, length)) = canonical {
+            let id = paths.paths.len();
+            paths.paths.push(ContextPath::Step {
+                parent,
+                transition,
+                length,
+                projection: id,
+            });
+            paths.extensions.insert((parent, transition), id);
+        }
         let id = paths.paths.len();
         paths.paths.push(ContextPath::Step {
             parent,
             transition,
             length,
+            projection,
         });
         paths.extensions.insert((parent, transition), id);
         id
@@ -2099,18 +2123,18 @@ impl ContextPaths {
         self.paths.len()
     }
 
-    fn intern(
-        &mut self,
+    fn lookup(
+        &self,
         parent: usize,
         transition: Transition,
         budget: &mut TypeWorkBudget,
-    ) -> Result<(usize, bool), Failure> {
+    ) -> Result<Option<usize>, Failure> {
         let length = self.paths.get(parent).ok_or(Failure::Invalid)?.length();
         // Only completed nonrecurrence walks publish this exact extension.
         // Its parent chain is immutable, including in a focused complete copy.
         charge(budget, 1)?;
         if let Some(&id) = self.extensions.get(&(parent, transition)) {
-            return Ok((id, false));
+            return Ok(Some(id));
         }
         // The original recurrence relation is checked along the whole parent
         // chain. Walking backwards must retain the OLDEST match, not the nearest.
@@ -2124,8 +2148,8 @@ impl ContextPaths {
         } = self.paths[cursor]
         {
             let matches = match (site, transition) {
-                (Transition::Root(target), Transition::Invoke(_, callee))
-                | (Transition::Invoke(_, target), Transition::Invoke(_, callee)) => {
+                (Transition::Root(target), Transition::Invoke(_, callee, _))
+                | (Transition::Invoke(_, target, _), Transition::Invoke(_, callee, _)) => {
                     target == callee
                 }
                 _ => site == transition,
@@ -2136,13 +2160,56 @@ impl ContextPaths {
             cursor = parent;
         }
         if let Some(id) = repeated {
+            return Ok(Some(id));
+        }
+        Ok(None)
+    }
+
+    fn intern(
+        &mut self,
+        parent: usize,
+        transition: Transition,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, bool), Failure> {
+        if let Some(id) = self.lookup(parent, transition, budget)? {
             return Ok((id, false));
         }
+        // Erase only nested Invoke discrimination. The projected parent is
+        // already canonical; Restore keeps its exact frozen coordinates.
+        charge(budget, 1)?;
+        let projected_parent = self.paths[parent].projection();
+        let projected_transition = match transition {
+            Transition::Invoke(call, target, _) => Transition::Invoke(call, target, 0),
+            other => other,
+        };
+        let (projection, canonical) =
+            if (projected_parent, projected_transition) == (parent, transition) {
+                (self.paths.len(), None)
+            } else if let Some(id) = self.lookup(projected_parent, projected_transition, budget)? {
+                (id, None)
+            } else {
+                let length = self.paths[projected_parent]
+                    .length()
+                    .checked_add(1)
+                    .ok_or(Failure::Resource)?;
+                (
+                    self.paths.len(),
+                    Some((projected_parent, projected_transition, length)),
+                )
+            };
+        let length = self.paths[parent]
+            .length()
+            .checked_add(1)
+            .ok_or(Failure::Resource)?;
+        // Reserve the classifier and exact entries together. A refusal cannot
+        // publish an auxiliary path without the corresponding analysis revision.
         let id = PendingContextExtension {
             paths: self,
             parent,
             transition,
-            length: length.checked_add(1).ok_or(Failure::Resource)?,
+            length,
+            projection,
+            canonical,
         }
         .reserve(budget)?
         .publish();
@@ -2323,9 +2390,11 @@ struct CallTransferInstallation<'s, 'g, 'v> {
 
 impl CallTransferInstallation<'_, '_, '_> {
     fn install(self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
-        let invoked = self.analysis.context(
+        let invoked = self.analysis.invocation_context(
             self.context,
-            Transition::Invoke(self.expression, self.target),
+            self.expression,
+            self.target,
+            self.creation,
             budget,
         )?;
         // Only this actual exact reader can omit structural shortcut watches.
@@ -3395,7 +3464,7 @@ impl<'a> Analysis<'a> {
                 Transition::Call(expression) => {
                     super::ActualValuePathStep::Call(source(expression)?)
                 }
-                Transition::Invoke(call, target) => {
+                Transition::Invoke(call, target, _) => {
                     super::ActualValuePathStep::Invoke(source(call)?, source(target)?)
                 }
                 Transition::Dispatch(request, handler, ordinal) => {
@@ -3465,9 +3534,9 @@ impl<'a> Analysis<'a> {
         let mut targets = Vec::new();
         for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
             match atom {
-                Atom::Closure(target, _) => {
+                Atom::Closure(target, creation) => {
                     let context =
-                        self.context(context, Transition::Invoke(expression, target), budget)?;
+                        self.invocation_context(context, expression, target, creation, budget)?;
                     let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
                     targets.try_reserve(1).map_err(|_| Failure::Resource)?;
                     targets.push((target, context));
@@ -3616,7 +3685,7 @@ impl<'a> Analysis<'a> {
         let mut outer = None;
         for step in self.contexts.forward(context, budget)? {
             charge(budget, 1)?;
-            if let Transition::Invoke(call, _) = step
+            if let Transition::Invoke(call, _, _) = step
                 && let Some(source) = self.graph.sources.get(call).copied()
                 && source != acquisition
             {
@@ -4212,6 +4281,24 @@ impl<'a> Analysis<'a> {
             focus: None,
             cuts: HashMap::new(),
         })
+    }
+
+    fn invocation_context(
+        &mut self,
+        caller: usize,
+        call: usize,
+        target: usize,
+        creation: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        charge(budget, 1)?;
+        let class = self
+            .contexts
+            .paths
+            .get(creation)
+            .ok_or(Failure::Invalid)?
+            .projection();
+        self.context(caller, Transition::Invoke(call, target, class), budget)
     }
 
     fn context(
@@ -6532,7 +6619,7 @@ mod tests {
         assert!(analysis.slots[first_argument].readers.contains(&calls[0]));
         assert!(!analysis.slots[first_argument].readers.contains(&calls[1]));
         let first_invoked = analysis
-            .context(first, Transition::Invoke(6, 5), &mut work)
+            .invocation_context(first, 6, 5, creation, &mut work)
             .unwrap();
         for expression in [2, 3] {
             let installed = analysis.indices[&(expression, first_invoked)];
@@ -6684,7 +6771,7 @@ mod tests {
                 .contains(&(Some(other_reader), call, 5, 0))
         );
         let invoked = measured
-            .context(0, Transition::Invoke(6, 5), &mut extra)
+            .context(0, Transition::Invoke(6, 5, 0), &mut extra)
             .unwrap();
         for key in [
             (0, 0),
@@ -7136,9 +7223,9 @@ mod tests {
         let mut measured = TypeWorkBudget::unbounded();
         let linked_phase_reads = run(&mut measured).unwrap();
         assert_eq!(linked_phase_reads, WIDTH * WIDTH);
-        // Empty context(1) + target(2) + W * [context(4) + slot(2) + vacant edge(6)]
+        // Empty context(1) + target(2) + W * [context(5) + slot(2) + vacant edge(6)]
         // + W^2 * linked hit(2) + close [W + 1 pops + W empty edges].
-        assert_eq!(measured.used(), 2 * WIDTH * WIDTH + 14 * WIDTH + 4);
+        assert_eq!(measured.used(), 2 * WIDTH * WIDTH + 15 * WIDTH + 4);
         let linked_phase_read_work = 1;
         let original_tariff_work = measured.used() - linked_phase_reads * linked_phase_read_work;
         assert!(
@@ -9168,21 +9255,88 @@ mod tests {
     }
 
     #[test]
+    fn invocation_creation_classes_are_idempotent_copied_and_atomic() {
+        let mut work = TypeWorkBudget::unbounded();
+        let mut paths = ContextPaths::new(&mut work).unwrap();
+        let a = paths.intern(0, Transition::Root(30), &mut work).unwrap().0;
+        let b = paths.intern(0, Transition::Root(31), &mut work).unwrap().0;
+        let exact = paths
+            .intern(a, Transition::Invoke(1, 10, b), &mut work)
+            .unwrap()
+            .0;
+        let class = paths.paths[exact].projection();
+        assert_ne!(exact, class);
+        assert_ne!(paths.paths[a].projection(), paths.paths[b].projection());
+        let focus = paths.intern(0, Transition::Focus, &mut work).unwrap().0;
+        let transition = Transition::Restore(exact, 50, 2);
+        let restored = paths.intern(focus, transition, &mut work).unwrap().0;
+        assert!(
+            matches!(paths.paths[restored], ContextPath::Step { transition: actual, .. } if actual == transition)
+        );
+        for node in &paths.paths {
+            let projected = node.projection();
+            assert_eq!(paths.paths[projected].projection(), projected);
+            if let ContextPath::Step {
+                parent, transition, ..
+            } = paths.paths[projected]
+            {
+                assert_eq!(paths.paths[parent].projection(), parent);
+                if let Transition::Invoke(_, _, creation) = transition {
+                    assert_eq!(creation, 0);
+                }
+            }
+        }
+        let copied = paths.copy(&mut work).unwrap();
+        assert_eq!(format!("{:?}", paths.paths), format!("{:?}", copied.paths));
+        let next = Transition::Call(70);
+        let mut measured = paths.copy(&mut work).unwrap();
+        let mut paid = TypeWorkBudget::unbounded();
+        measured.intern(exact, next, &mut paid).unwrap();
+        assert_eq!(measured.paths.len(), paths.paths.len() + 2);
+        let before = format!("{:?}", paths.paths);
+        let index = paths.extensions.clone();
+        assert!(matches!(
+            paths.intern(
+                exact,
+                next,
+                &mut TypeWorkBudget::with_limit(paid.used() - 1)
+            ),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(format!("{:?}", paths.paths), before);
+        assert_eq!(paths.extensions, index);
+        paths
+            .intern(exact, next, &mut TypeWorkBudget::with_limit(paid.used()))
+            .unwrap();
+    }
+
+    #[test]
     fn recursive_callee_contexts_join_calls_but_keep_distinct_entries() {
         let graph = graph(vec![Expr::Scalar]);
         let run = |budget: &mut TypeWorkBudget| {
             let mut analysis = Analysis::new(&graph, budget)?;
-            let first = analysis.context(0, Transition::Invoke(1, 10), budget)?;
-            let second = analysis.context(0, Transition::Invoke(2, 10), budget)?;
+            let first = analysis.context(0, Transition::Invoke(1, 10, 0), budget)?;
+            let second = analysis.context(0, Transition::Invoke(2, 10, 0), budget)?;
             assert_ne!(first, second);
-            let mutual = analysis.context(first, Transition::Invoke(3, 20), budget)?;
+            let creation_a = analysis.context(0, Transition::Root(30), budget)?;
+            let creation_b = analysis.context(0, Transition::Root(31), budget)?;
+            let lexical_a = analysis.context(0, Transition::Invoke(1, 10, creation_a), budget)?;
+            let lexical_b = analysis.context(0, Transition::Invoke(1, 10, creation_b), budget)?;
+            assert_ne!(lexical_a, lexical_b);
+            // Creation separates entry only; recurrence still rejoins the
+            // oldest static callee, even when its new closure was recreated.
+            assert_eq!(
+                analysis.context(lexical_a, Transition::Invoke(3, 10, creation_b), budget)?,
+                lexical_a
+            );
+            let mutual = analysis.context(first, Transition::Invoke(3, 20, 0), budget)?;
             for site in [4, 5] {
                 assert_eq!(
-                    analysis.context(mutual, Transition::Invoke(site, 10), budget)?,
+                    analysis.context(mutual, Transition::Invoke(site, 10, 0), budget)?,
                     first
                 );
                 assert_eq!(
-                    analysis.context(second, Transition::Invoke(site, 10), budget)?,
+                    analysis.context(second, Transition::Invoke(site, 10, 0), budget)?,
                     second
                 );
             }
@@ -9190,13 +9344,13 @@ mod tests {
             // Invoke. Reverse parent traversal must still select the first one.
             let later_root = analysis.context(first, Transition::Root(10), budget)?;
             assert_eq!(
-                analysis.context(later_root, Transition::Invoke(99, 10), budget)?,
+                analysis.context(later_root, Transition::Invoke(99, 10, 0), budget)?,
                 first
             );
             // Recurrence results are never installed as extensions: a lookup
             // miss still executes the original full oldest-match walk. Moving
             // the lookup before that walk adds exactly one unit on this path.
-            let transition = Transition::Invoke(99, 10);
+            let transition = Transition::Invoke(99, 10, 0);
             assert!(
                 !analysis
                     .contexts
@@ -9227,11 +9381,11 @@ mod tests {
             );
             let root = analysis.context(0, Transition::Root(10), budget)?;
             assert_eq!(
-                analysis.context(root, Transition::Invoke(6, 10), budget)?,
+                analysis.context(root, Transition::Invoke(6, 10, 0), budget)?,
                 root
             );
             let focus = analysis.context(0, Transition::Focus, budget)?;
-            let fresh = analysis.context(focus, Transition::Invoke(1, 10), budget)?;
+            let fresh = analysis.context(focus, Transition::Invoke(1, 10, 0), budget)?;
             assert_ne!(fresh, first);
             Ok::<(), Failure>(())
         };
@@ -9305,7 +9459,7 @@ mod tests {
             for transition in [
                 Transition::Root(0),
                 Transition::Call(1),
-                Transition::Invoke(2, 3),
+                Transition::Invoke(2, 3, 0),
                 Transition::Dispatch(1, 2, 4),
             ] {
                 parent = analysis.context(parent, transition, &mut work).unwrap();
@@ -9963,7 +10117,7 @@ mod tests {
         let evidence = analysis.indices[&(6, 0)];
         let specialized = analysis.context(0, Transition::Call(6), &mut work).unwrap();
         let invoked = analysis
-            .context(0, Transition::Invoke(11, 5), &mut work)
+            .invocation_context(0, 11, 5, specialized, &mut work)
             .unwrap();
         assert!(
             analysis

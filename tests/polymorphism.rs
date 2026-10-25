@@ -140,11 +140,17 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
+        Value::RegionRequest(_) => "region-request",
+        Value::RegionStorage(_) => "region-storage",
+        Value::RegionBackingFunction(_) => "region-backing-function",
+        Value::RegionView(_) => "region-view",
+        Value::RegionHostFunction { .. } => "region-host-function",
+        Value::ConstructorTag(_) => "constructor-tag",
         Value::Bytes(_) => "bytes",
         Value::Address(_) => "address",
         Value::String(_) => "string",
         Value::Intrinsic(_) => "intrinsic",
-        Value::Integer(_) => "integer",
+        Value::Integer(_) | Value::SmallInteger(_) | Value::RegionInteger { .. } => "integer",
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",
         Value::Function(_) => "function",

@@ -2153,19 +2153,19 @@ pub(crate) struct CoreBuilderCheckpoint {
 }
 
 impl<F: CoreOperationFamily> CoreBuilder<F> {
-    pub(crate) fn generic_cell_dependency_origin(
+    pub(crate) fn cell_dependency_origin(
         &self,
         work: &mut TypeWorkBudget,
     ) -> Result<Option<Span>, ()> {
         // The source checker has already authenticated the closed registry.
         // Hidden/imported nominal kinds count as identities too; imported
         // capture publication remains a separate obligation of the caller.
-        if !self.registry.has_generic_cell_type_identity(work)? {
+        if !self.registry.has_cell_type_identity(work)? {
             return Ok(None);
         }
         for node in &self.nodes {
             work.charge(1)?;
-            if crate::resolved::generic_cell_dependency_type(&node.ty, work)? {
+            if crate::resolved::cell_dependency_type(&node.ty, work)? {
                 return Ok(node.origin.as_ref().map(Origin::primary_span));
             }
         }

@@ -546,7 +546,7 @@ fn transparent_newtype_constructor_pattern_unwraps_its_representation() {
     let program = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
         .expect("the canonical unwrap conversion should independently authenticate");
     let evaluation = evaluate(&program).expect("the authenticated conversions should erase");
-    let Value::Integer(value) = evaluation.value else {
+    let Value::SmallInteger(value) = evaluation.value else {
         panic!("the unwrapped representation should remain an integer");
     };
     assert_eq!(value.to_string(), "42");

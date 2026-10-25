@@ -107,17 +107,34 @@ Source/native, allocation suspension/discard, independent Core and image checks
 passed independent exact-head review and retained verification: 125 distinct
 focused cases transfer by exact tree equality. No new build or full gate is claimed.
 
-Next is the [CP-0025 integer admission clarification](../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission),
-reviewed before Int product changes. Known immediate literals/bounded leaves are
-independent; potentially large arithmetic retains selected-region residency;
-unknown Int is not scalar by type. The product slice must replace primitive
-Scalar/Free shortcuts and Int erasure in call/request summaries, preserve aliases
-and projections, and remove legacy Cell host-Integer cloning. Use supplied digit
-bytes and existing temporary arithmetic, without value/range analysis. Preserve
-arithmetic escape fixtures as explicit expected admission changes, not silent
-fixture adaptations. This clarification changes no code, tests or proof modules.
+[PR #150](https://github.com/dikini/ash-lang/pull/150) retained the integer
+admission clarification at `5ce3f2943b1efad1f7c0b7a001da43cb06d8d842` before
+product work. The current integer candidate uses private inline `i128` values
+and selected supplied byte backing for larger sign/magnitude digits. Literal,
+addition and multiplication preparation reuse the existing explicit context,
+ordered operands, request and initialization path. Actual Cell values and
+summaries preserve digit ownership; unknown Int no longer becomes independent
+merely from its type. Mathematical results remain unbounded, while local
+arithmetic escape follows the accepted conservative restriction.
 
-Persistent large-Int digits, closure capture storage and remaining recursive
+Legacy Cell analysis exposed a closure-context join. The candidate distinguishes
+invocations with a finite projection of existing creation paths, preserving exact
+capture coordinates, caller/focus parents and oldest-callee recurrence. The
+rejected raw dynamic-ID trial is not product code. The approved dated
+[AD-0013 recalibration](../decisions/AD-0013-generated-native-bridges-and-program-builds.md)
+uses Source `2600S`, Final `800S` and Core `5300S`; standalone limits are unchanged.
+Normal-driver checks of the two original same-site fixtures and 24 nested Cells
+return 42. The original staged 256 KiB stress pipeline also preserves 24 unique
+acquisitions and exact reverse release order. A separate whole-public-driver
+256 KiB abort remains unclassified; the staged result does not clear it.
+
+This is an unaccepted implementation checkpoint. Focused source/resource,
+finite-context and accounting checks pass; final native/image/caller refresh and
+independent exact-head review remain pending. Existing module-fixture setup
+failures are recorded separately; unreached numeric assertions are not verified.
+No full R-core gate or R3–R5 product acceptance is claimed.
+
+Accepted large-Int delivery, closure capture storage and remaining recursive
 initialization/capture/abandonment evidence are still required. No executable
 memory-read-to-Bytes producer exists at the current slim-FFI boundary, whose
 native replies are Address or Unit; its borrowed Bytes argument uses the common

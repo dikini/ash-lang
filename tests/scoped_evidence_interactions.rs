@@ -65,7 +65,7 @@ fn assert_execution(text: &str) {
     let relation = [(graph.entry(), source.id())];
     let validated = validate_modules(program, &[source], &relation).expect("Core should validate");
     let observed = evaluate(&validated).expect("Core should execute");
-    assert!(matches!(observed.value, Value::Integer(value) if value.to_string() == "42"));
+    assert!(matches!(observed.value, Value::SmallInteger(value) if value.to_string() == "42"));
     for transformed in [
         ash::core::transform::identity_traversal(&validated)
             .expect("identity traversal should rebuild"),
@@ -75,7 +75,7 @@ fn assert_execution(text: &str) {
         let validated = validate_modules(transformed, &[source], &relation)
             .expect("transformed Core should validate");
         let observed = evaluate(&validated).expect("transformed Core should execute");
-        assert!(matches!(observed.value, Value::Integer(value) if value.to_string() == "42"));
+        assert!(matches!(observed.value, Value::SmallInteger(value) if value.to_string() == "42"));
     }
 }
 
@@ -116,7 +116,7 @@ fn assert_effect_execution(text: &str) {
     let validated = validate_effect_modules(program, &[source], &relation)
         .expect("effect Core should validate");
     let observed = evaluate_effect(&validated).expect("effect Core should execute");
-    assert!(matches!(observed.value, Value::Integer(ref value) if value.to_string() == "42"));
+    assert!(matches!(observed.value, Value::SmallInteger(ref value) if value.to_string() == "42"));
     assert_eq!(
         observed
             .effect_trace()
@@ -144,7 +144,7 @@ fn assert_effect_execution(text: &str) {
         let transformed =
             evaluate_effect(&validated).expect("transformed effect Core should execute");
         assert!(
-            matches!(transformed.value, Value::Integer(ref value) if value.to_string() == "42")
+            matches!(transformed.value, Value::SmallInteger(ref value) if value.to_string() == "42")
         );
         assert_eq!(transformed.effect_trace(), observed.effect_trace());
     }

@@ -341,7 +341,7 @@ fn assert_execution(source: &str) {
         let validated = validate_modules(transformed, &[source], &relation)
             .expect("transformed Core should validate");
         let observed = evaluate(&validated).expect("transformed Core should execute");
-        assert!(matches!(observed.value, Value::Integer(value) if value.to_string() == "42"));
+        assert!(matches!(observed.value, Value::SmallInteger(value) if value.to_string() == "42"));
     }
 }
 

@@ -2051,10 +2051,11 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             };
             let mut children = Vec::new();
             children
-                .try_reserve_exact(3)
+                .try_reserve_exact(4)
                 .map_err(|_| Failure::Resource)?;
             children.push(index(buffer.context) + 1);
             children.extend(buffer.operand.map(|id| index(id) + 1));
+            children.extend(buffer.right.map(|id| index(id) + 1));
             children.push(service);
             Control::Sequence(children)
         }
@@ -4873,7 +4874,7 @@ mod tests {
         );
         assert!(
             retained.code.iter().any(|control| match control {
-                Control::Call { ty, .. } => crate::resolved::generic_cell_dependency_type(
+                Control::Call { ty, .. } => crate::resolved::cell_dependency_type(
                     &retained.types.0[*ty],
                     &mut TypeWorkBudget::default()
                 )
