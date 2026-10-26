@@ -6,11 +6,11 @@ use std::{
 
 use ash::{
     core::{Primitive, PureComputation, PureExprKind, PureValue, validate},
-    elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason},
+    elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason, check_module},
     eval::{TraceEvent, Value, evaluate},
     module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
-    resolved::{ResolvedDefinitionKind, ResolvedExpr},
+    resolve::{DependencyExports, resolve_module},
+    resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExpr},
     source::{Origin, SourceFile},
     types::Type,
 };
@@ -45,7 +45,30 @@ fn resolved(text: &str) -> (SourceFile, ResolvedExpr) {
         .module(graph.entry())
         .expect("entry module should be retained");
     let source = loaded.source().clone();
-    let resolved = resolve_module(loaded, &[]).expect("module fixture should resolve");
+    let mut checked = Vec::new();
+    let mut entry = None;
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let target = checked
+                    .iter()
+                    .find(|target: &&CheckedModule| target.module() == edge.target())
+                    .expect("the exact dependency target precedes its importer");
+                DependencyExports::new(edge, target.exports())
+                    .expect("the actual dependency edge authenticates")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("module fixture should resolve");
+        if module.id() == graph.entry() {
+            entry = Some(resolved);
+            break;
+        }
+        checked.push(check_module(resolved).expect("preceding dependencies should check"));
+    }
+    let resolved = entry.expect("the unresolved entry should remain present");
     let definition = resolved
         .definitions()
         .iter()

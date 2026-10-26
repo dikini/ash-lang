@@ -25,14 +25,27 @@ matching reviewed bounded R1 proof and audited frozen gate, retained by
 
 Focused interface and scoped-evidence migrations now pass all 44 and 53 original
 tests respectively. The module-newtype and local-newtype targets now pass 23
-and 20 tests. Their 19 and 18 original restored names are disjoint from the prior
-285 staged restorations, giving 322; two constructor negatives and a private
-Core census are new coverage, not restored names. These selected observations do
-not refresh Library9 (1,560/35) or Integration69 (1,276/504). The scoped controls retain exact
+and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 original
+tests. Their 15 and 11 newly restored names are disjoint from the prior 322,
+giving 348 staged restorations; repeated passes are counted once. Two constructor
+negatives and a private Core census remain new coverage, not restored names.
+These selected observations do not refresh Library9 (1,560/35) or Integration69
+(1,276/504). The scoped controls retain exact
 resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
 transformed effect traces still equal the original trace.
+
+Runtime trace controls retain all 13 original Source programs, exact user event
+vectors/counts/handler identities and whole raw transformed-trace equality. A
+local test classifier identifies canonical compiler-service operations and full
+validated handlers, rejects unknown events and attributes contiguous restoration
+blocks to the immediately preceding resume. Raw observations remain available.
+The manual 4,096-addition/256 KiB continuation and 24-hook/256 KiB fresh-process
+witnesses retain their original controls after actual-entry/provenance repair.
+Primitive admission now checks only preceding dependencies; its deliberate Pure
+scalar pipeline, exact trace, huge integers, poisoning and manual closure remain.
+No Source rule, API, runtime limit or production policy changed in this slice.
 
 First-class constructor positives use existing inferred local functions because
 CP-0025 default-expands explicit callable annotations while erased constructor
