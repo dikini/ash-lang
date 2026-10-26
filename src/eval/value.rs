@@ -99,7 +99,11 @@ impl HeapCell {
 
     pub(crate) fn tuple_fields(&self) -> Option<&[Value]> {
         let fields = self.stored_fields()?;
-        (!matches!(fields.first(), Some(Value::ConstructorTag(_)))).then_some(fields)
+        (!matches!(
+            fields.first(),
+            Some(Value::ConstructorTag(_) | Value::ClosureCode(_))
+        ))
+        .then_some(fields)
     }
 
     pub(crate) fn constructor_fields(&self) -> Option<(ConstructorId, Option<&Value>)> {
@@ -226,6 +230,11 @@ impl ObservedHeap {
     }
 
     #[cfg(test)]
+    pub(crate) fn cells_mut_for_test(&mut self) -> &mut [HeapCell] {
+        &mut self.cells
+    }
+
+    #[cfg(test)]
     pub(crate) fn cell_count(&self) -> usize {
         self.cells.len()
     }
@@ -308,7 +317,9 @@ impl ObservedValue {
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
-                    Value::Function(_)
+                    Value::ClosureCode(_) => output.push_str("<private-closure-code>"),
+                    Value::RegionFunction(_)
+                    | Value::Function(_)
                     | Value::Polymorphic { .. }
                     | Value::ConstructorFunction(_) => output.push_str("<function>"),
                     Value::ConstructorTag(_) => output.push_str("<private-constructor-tag>"),
@@ -336,6 +347,13 @@ impl ObservedValue {
                                 }
                                 tasks.push(Task::Exit(location));
                                 match cell {
+                                    cell if matches!(
+                                        cell.stored_fields().and_then(|fields| fields.first()),
+                                        Some(Value::ClosureCode(_))
+                                    ) =>
+                                    {
+                                        output.push_str("<function>")
+                                    }
                                     cell if cell.byte_fields().is_some() => {
                                         let (bytes, string) =
                                             cell.byte_fields().expect("byte backing");
@@ -455,6 +473,24 @@ impl fmt::Debug for Closure {
     }
 }
 
+/// A callable view. All captured term Values remain in the supplied record.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct RegionFunction {
+    pub(super) record: Location,
+    pub(super) instantiation: Option<super::machine::Instantiation>,
+}
+
+/// Code and lexical type/row metadata only; captured term Values follow in slots.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct ClosureCode {
+    pub(super) abstraction: Option<NodeId>,
+    pub(super) node: NodeId,
+    pub(super) program: ExecutableProgram,
+    pub(super) instantiation: super::machine::Instantiation,
+}
+
 /// An inert foreign address. This value owns no memory behind its pointer.
 ///
 /// Relaxed loads preserve the pointer for ordinary value transport; they do not
@@ -549,6 +585,10 @@ pub enum Value {
     Unit,
     /// A lexical unary function and its captured Ash environment.
     Function(Closure),
+    /// A region-backed callable with an independent lexical instantiation view.
+    RegionFunction(RegionFunction),
+    /// Private code identity in the first supplied closure slot; never a callable.
+    ClosureCode(ClosureCode),
     /// Internal lexical construction retained until validated Effect instantiation.
     Polymorphic {
         /// The admitted abstraction in the current executable arena.
@@ -600,7 +640,8 @@ impl fmt::Display for Value {
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),
-            Self::Function(_) => formatter.write_str("<function>"),
+            Self::Function(_) | Self::RegionFunction(_) => formatter.write_str("<function>"),
+            Self::ClosureCode(_) => formatter.write_str("<private-closure-code>"),
             Self::Polymorphic { .. } => formatter.write_str("<function>"),
             Self::ConstructorFunction(_) => formatter.write_str("<function>"),
             Self::ConstructorTag(_) => formatter.write_str("<private-constructor-tag>"),

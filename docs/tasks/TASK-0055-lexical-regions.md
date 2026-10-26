@@ -109,7 +109,7 @@ focused cases transfer by exact tree equality. No new build or full gate is clai
 
 [PR #150](https://github.com/dikini/ash-lang/pull/150) retained the integer
 admission clarification at `5ce3f2943b1efad1f7c0b7a001da43cb06d8d842` before
-product work. The current integer candidate uses private inline `i128` values
+product work. The retained integer implementation uses private inline `i128` values
 and selected supplied byte backing for larger sign/magnitude digits. Literal,
 addition and multiplication preparation reuse the existing explicit context,
 ordered operands, request and initialization path. Actual Cell values and
@@ -117,7 +117,7 @@ summaries preserve digit ownership; unknown Int no longer becomes independent
 merely from its type. Mathematical results remain unbounded, while local
 arithmetic escape follows the accepted conservative restriction.
 
-Legacy Cell analysis exposed a closure-context join. The candidate distinguishes
+Legacy Cell analysis exposed a closure-context join. The implementation distinguishes
 invocations and handler dispatches with a finite projection of existing creation
 paths, preserving exact capture coordinates, caller/focus parents, oldest-callee
 invocation recurrence and class-sensitive dispatch recurrence. The
@@ -129,19 +129,26 @@ return 42. The original staged 256 KiB stress pipeline also preserves 24 unique
 acquisitions and exact reverse release order. A separate whole-public-driver
 256 KiB abort remains unclassified; the staged result does not clear it.
 
-[PR #151](https://github.com/dikini/ash-lang/pull/151) remains an unaccepted
-implementation checkpoint. The dispatch repair also restores the original
+[PR #151](https://github.com/dikini/ash-lang/pull/151) retained the partial Int
+delivery at `df79789134d680f4288b48c0081c6c74c6bf4de9`, with author and
+independent retained acceptance complete. Its 216 distinct focused cases transfer
+by exact reviewed-tree equality; no fresh build or full gate is claimed. The dispatch repair also restores the original
 1,024-level registration stress, including its 256 KiB runtime worker, callback
 counts, exact refusal/retry and teardown assertions. Startup fitting uses complete
 restore-stage costs; later native admission retains the same cumulative meter.
-Focused runtime, image and native checks are recorded with their exact inputs for
-independent review. The representative bindings helper now checks its actual
+Focused runtime, image and native checks passed independent exact-head review. The representative bindings helper now checks its actual
 entry and passes all ten cases. Other module-fixture setup failures remain
 separate; unreached numeric assertions are not verified. No full R-core gate or
 R3–R5 product acceptance is claimed.
 
-Accepted large-Int delivery, closure capture storage and remaining recursive
-initialization/capture/abandonment evidence are still required. No executable
+[PR #152](https://github.com/dikini/ash-lang/pull/152) carries the accepted
+[closure timing amendment](../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26)
+and the active partial closure implementation. Ordinary creation now uses the
+existing supplied Value slots and common callable reader; initial source lifetime,
+outer-selection and direct polymorphic-view checks pass. Forwarding and
+prerequisite-adapter capture paths, mixed recursion, independent Core bypass
+checks and full affected regressions remain pending. Closure capture storage and
+remaining recursive initialization/capture/abandonment evidence are still required. No executable
 memory-read-to-Bytes producer exists at the current slim-FFI boundary, whose
 native replies are Address or Unit; its borrowed Bytes argument uses the common
 reader. The native checks distinguish custom supplied-byte construction/read,

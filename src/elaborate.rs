@@ -2837,6 +2837,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     row_inference_solutions: RowInferenceSolutionMap,
     row_inference_obligations: RowInferenceSolutionMap,
     cleanup_rows: cleanup_rows::CleanupRows,
+    pending_region_closures: Vec<(NodeId, NodeId)>,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
@@ -3017,6 +3018,12 @@ impl CoreLoweringFamily for EffectOperationFamily {
             EffectOperation::RegionTuple(tuple) => {
                 builder.region_operation(EffectOperation::RegionTuple(tuple), ty, effects, origin)
             }
+            EffectOperation::RegionClosure(closure) => builder.region_operation(
+                EffectOperation::RegionClosure(closure),
+                ty,
+                effects,
+                origin,
+            ),
             EffectOperation::NativeInterpret(boundary) => {
                 let (body, interpretations) = boundary.into_parts();
                 builder.native_interpret(body, interpretations, ty, effects, origin)
@@ -3292,6 +3299,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3429,6 +3437,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3551,6 +3560,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3973,6 +3983,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -5214,8 +5225,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ));
             if generated_parameters.is_empty() {
                 return self
-                    .builder
-                    .function(
+                    .construct_function(
                         parameter,
                         conversion,
                         function_type.into_inner(),
@@ -5224,7 +5234,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .map_err(Into::into);
             }
             let retained_function_type = self.clone_type(&function_type)?;
-            let function = self.builder.function(
+            let function = self.construct_function(
                 parameter,
                 conversion,
                 retained_function_type,
@@ -6703,7 +6713,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Box::new(codomain),
             ));
             let core_ty = self.clone_type(&ty)?;
-            let node = self.builder.function(
+            let node = self.construct_function(
                 binder,
                 function.node,
                 core_ty,
@@ -13345,12 +13355,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 let core_ty = self.pure_core_type(&ty)?;
                 let node =
-                    self.builder
-                        .function(binder, body.node, core_ty, origin.into_inner())?;
+                    self.construct_function(binder, body.node, core_ty, origin.into_inner())?;
                 values.push(TypedNode {
                     node,
                     ty: ty.into_inner(),
-                    effects: EffectRow::empty(),
+                    effects: self
+                        .builder
+                        .clone_node_effects_with_budget(node, &mut self.type_work)?,
                     provenance,
                 });
             }
@@ -15915,7 +15926,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ),
             ));
             let core_type = self.clone_type(&next_type)?;
-            body = self.builder.function(
+            body = self.construct_function(
                 binder,
                 body,
                 core_type,
@@ -18241,7 +18252,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ComputationType::new(body_type.into_inner(), effects),
             ));
             let core_ty = self.clone_type(&ty)?;
-            body_node = self.builder.function(
+            body_node = self.construct_function(
                 parameter,
                 body_node,
                 core_ty,
@@ -18436,7 +18447,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             body.set_node(node);
         }
         let core_function_type = self.pure_core_type(&function_type.ty)?;
-        let node = self.builder.function(
+        let node = self.construct_function(
             parameter,
             body.node,
             core_function_type,
@@ -18449,7 +18460,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty: function_type.ty,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(node, &mut self.type_work)?,
             provenance: function_type.provenance,
         })
     }

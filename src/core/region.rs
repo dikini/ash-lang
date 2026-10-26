@@ -83,6 +83,18 @@ pub struct RegionTupleNode {
     pub(crate) fields: Box<[NodeId]>,
 }
 
+/// Closure creation into the same supplied Value slots used by records.
+/// Context, capture operands and storage are strict; the function body is delayed.
+/// Capture binders identify existing lexical values, not new binding definitions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegionClosureNode {
+    pub(crate) api: ModuleId,
+    pub(crate) context: NodeId,
+    pub(crate) captures: Box<[NodeId]>,
+    pub(crate) storage: NodeId,
+    pub(crate) function: super::function::FunctionNode,
+}
+
 /// Reconstruct owner effects from its children and the fixed pair's full rows.
 /// The preceding query runs before this owner and is never discharged here.
 pub(crate) fn owner_effects(
@@ -157,4 +169,48 @@ pub enum RegionBufferOperation {
     IntegerArithmetic(super::Primitive),
     StringLiteral(std::sync::Arc<[u8]>),
     Intrinsic(super::packed::IntrinsicNode),
+}
+
+/// The only administrative prefix admitted around a direct stored function is
+/// its generated Unit context query. This does not admit arbitrary initializer code.
+pub(crate) fn closure_initializer<'a, F: super::dialect::CoreOperationFamily>(
+    root: NodeId,
+    mut kind: impl FnMut(NodeId) -> Option<&'a F::Kind>,
+) -> Option<(NodeId, &'a RegionClosureNode)>
+where
+    F::Kind: 'a,
+{
+    use super::{PureComputation, PureExprKind, PureValue, effect::EffectOperation};
+    if let Some(EffectOperation::RegionClosure(closure)) = F::region_construction(kind(root)?) {
+        return Some((root, closure));
+    }
+    let PureExprKind::Computation(PureComputation::Bind(binding)) = F::pure(kind(root)?)? else {
+        return None;
+    };
+    let Some(EffectOperation::RegionClosure(closure)) =
+        F::region_construction(kind(binding.body())?)
+    else {
+        return None;
+    };
+    let api = crate::resolved::RegionApi::for_module(closure.api)?;
+    let PureExprKind::Variable(context) = F::pure(kind(closure.context)?)? else {
+        return None;
+    };
+    let Some(EffectOperation::Request(query)) =
+        F::region_construction(kind(binding.initializer())?)
+    else {
+        return None;
+    };
+    if context.binder() != binding.binder().id()
+        || query.effect().effect() != api.default_alloc()
+        || !query.effect().arguments().is_empty()
+        || query.operation() != crate::types::OperationId::new(api.default_alloc(), 1)
+        || !matches!(
+            F::pure(kind(query.operand())?),
+            Some(PureExprKind::Value(PureValue::Unit(_)))
+        )
+    {
+        return None;
+    }
+    Some((binding.body(), closure))
 }

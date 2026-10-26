@@ -3456,6 +3456,13 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         child: usize,
         visit: &mut dyn FnMut(BinderId),
     ) {
+        if let super::effect::EffectExprKind::Operation(
+            super::effect::EffectOperation::RegionClosure(closure),
+        ) = kind
+            && child == closure.captures.len() + 2
+        {
+            visit(closure.function.parameter().id());
+        }
         if child == 2
             && let Some(scope) = Self::region_scope(kind)
         {
@@ -9930,7 +9937,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 id,
                                 binder,
                                 ValidationReason::Pattern,
-                                false,
+                                matches!(
+                                    F::region_construction(&node.kind),
+                                    Some(super::effect::EffectOperation::RegionClosure(_))
+                                ),
                                 false,
                             );
                         }
@@ -10149,6 +10159,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<(), ValidationError> {
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
+
             if !authenticated_method_evidence.contains(&id)
                 && !matches!(
                     F::pure(&node.kind),
@@ -10424,21 +10435,31 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .collect::<HashSet<_>>();
                 for member in group.members() {
                     let initializer = self.node(member.initializer())?;
+                    self.charge_type_work(5)?;
+                    let stored_function =
+                        super::region::closure_initializer::<F>(member.initializer(), |node| {
+                            self.program
+                                .nodes
+                                .get(node.index().ok()?)
+                                .map(|node| &node.kind)
+                        })
+                        .is_some();
                     let failure = match member.binder().ty() {
                         Type::Function(_, _) => (!matches!(
                             F::pure(&initializer.kind),
                             Some(PureExprKind::Value(
                                 PureValue::Function(_) | PureValue::Intrinsic(_)
                             ))
-                        ))
-                        .then_some(ValidationCause::RecursiveFunctionInitializer),
+                        ) && !stored_function)
+                            .then_some(ValidationCause::RecursiveFunctionInitializer),
                         Type::EffectfulFunction(_, _) if F::ALLOWS_EFFECTFUL_TYPES => (!matches!(
                             F::pure(&initializer.kind),
                             Some(PureExprKind::Value(
                                 PureValue::Function(_) | PureValue::Intrinsic(_)
                             ))
-                        ))
-                        .then_some(ValidationCause::RecursiveFunctionInitializer),
+                        )
+                            && !stored_function)
+                            .then_some(ValidationCause::RecursiveFunctionInitializer),
                         ty if ty.outer_nominal().is_some() => match ty.outer_nominal() {
                             Some(owner) => {
                                 self.guarded_data_root(member.initializer(), owner, &recursive)?
@@ -10470,7 +10491,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                     Some(PureExprKind::Value(
                                         PureValue::Function(_) | PureValue::Intrinsic(_)
                                     ))
-                                ))
+                                ) && super::region::closure_initializer::<F>(
+                                    abstraction.body(),
+                                    |node| {
+                                        self.program
+                                            .nodes
+                                            .get(node.index().ok()?)
+                                            .map(|node| &node.kind)
+                                    },
+                                )
+                                .is_none())
                                 .then_some(ValidationCause::RecursiveFunctionBody)
                             }
                         }
@@ -12362,6 +12392,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                         )
                                     })?;
                                 let mut child_free = self.requirements_for(&requirements, child)?;
+                                if matches!(F::region_construction(&node.kind), Some(super::effect::EffectOperation::RegionClosure(closure)) if child_index == closure.captures.len() + 2)
+                                {
+                                    self.reject_resume_capture(&child_free, id)?;
+                                }
                                 F::visit_operation_child_binders(
                                     &node.kind,
                                     child_index,
@@ -13719,6 +13753,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         >,
     ) -> Result<bool, ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation, ResumeUse};
+
         let mut has_discard = false;
         match &node.kind {
             EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
@@ -13820,6 +13855,89 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     || !node.effects.is_empty()
                 {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                let api = crate::resolved::RegionApi::for_module(closure.api)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+                let Some(function_type) = node.ty.function_view() else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let body = self.node(closure.function.body())?;
+                if !self
+                    .same_type_charged(function_type.domain(), closure.function.parameter().ty())?
+                    || !self.same_type_charged(function_type.value(), &body.ty)?
+                    || !self.same_type_charged(
+                        &self.node(closure.context)?.ty,
+                        &Type::Nominal(api.region_view()),
+                    )?
+                    || !self.same_type_charged(
+                        &self.node(closure.storage)?.ty,
+                        &Type::Nominal(api.storage_view()),
+                    )?
+                    || !self.effect_row_subset_charged(
+                        &body.effects,
+                        function_type.effects().unwrap_or(&EffectRow::empty()),
+                        id,
+                    )?
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                let mut work = TypeWorkBudget::with_limit(
+                    self.type_work_limit.saturating_sub(self.type_work.get()),
+                );
+                let expected = super::capture::closure_capture_binders(
+                    &self.program.nodes,
+                    &closure.function,
+                    &[],
+                    &mut work,
+                );
+                self.charge_type_work(work.used())?;
+                let expected = expected.map_err(|failure| {
+                    ValidationError::new(
+                        if matches!(failure, super::capture::Failure::Resource) {
+                            ValidationReason::Resource
+                        } else {
+                            ValidationReason::NodeType
+                        },
+                        Some(id),
+                    )
+                })?;
+                if expected.len() != closure.captures.len() {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                let EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) =
+                    &self.node(closure.storage)?.kind
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) =
+                    &self.node(allocation.request)?.kind
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                if allocation.api != closure.api
+                    || allocation.context != closure.context
+                    || request.api != closure.api
+                    || request.fields != closure.captures.len() + 1
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                let mut captures = HashSet::new();
+                for (capture, expected) in closure.captures.iter().zip(expected) {
+                    self.charge_type_work(1)?;
+                    let PureExprKind::Variable(variable) = self.pure_kind(*capture)? else {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                    };
+                    captures
+                        .try_reserve(1)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                    if variable.binder() != expected
+                        || variable.binder() == closure.function.parameter().id()
+                        || !captures.insert(variable.binder())
+                    {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                    }
                 }
             }
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
@@ -14322,6 +14440,19 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 self.charge_type_work(1)?;
                 pending.try_reserve(1).map_err(|_| resource())?;
                 pending.push(current);
+                if super::region::closure_initializer::<super::effect::EffectOperationFamily>(
+                    current,
+                    |id| {
+                        self.program
+                            .nodes
+                            .get(usize::try_from(id.value()).ok()?)
+                            .map(|node| &node.kind)
+                    },
+                )
+                .is_some()
+                {
+                    break;
+                }
                 match super::effect::EffectOperationFamily::pure(&self.node(current)?.kind) {
                     Some(
                         PureExprKind::Value(
@@ -14789,6 +14920,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             {
                                 row =
                                     self.union_effect_rows_charged(&row, child_row(child)?, id)?;
+                            }
+                            row
+                        }
+                        EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                            let mut row = EffectRow::empty();
+                            for child in std::iter::once(&closure.context)
+                                .chain(closure.captures.iter())
+                                .chain(std::iter::once(&closure.storage))
+                            {
+                                row =
+                                    self.union_effect_rows_charged(&row, child_row(*child)?, id)?;
                             }
                             row
                         }

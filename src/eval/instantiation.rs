@@ -12,7 +12,7 @@ use crate::types::{
 };
 
 #[derive(Clone, Default)]
-pub(super) struct Instantiation(Option<Arc<Bindings>>);
+pub(in crate::eval) struct Instantiation(Option<Arc<Bindings>>);
 
 #[derive(Default)]
 struct Bindings {

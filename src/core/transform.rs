@@ -95,6 +95,9 @@ impl TransformFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Region(scope)) = kind {
             binders.push(scope.access.id());
         }
+        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind {
+            binders.push(closure.function.parameter().id());
+        }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
             _ => return Ok(()),
@@ -151,6 +154,37 @@ impl TransformFamily for EffectOperationFamily {
                         context: remap(remapped, tuple.context)?,
                         storage: remap(remapped, tuple.storage)?,
                         fields: fields.into_boxed_slice(),
+                    }),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::RegionClosure(closure) => {
+                let parameter = closure.function.parameter();
+                let parameter_type = copy_type(builder, parameter.ty())?;
+                let parameter_id = copy_binder_id(builder, parameter.id())?;
+                let parameter_origin = copy_origin(builder, parameter.origin())?;
+                let parameter =
+                    builder.resolved_binder(parameter_id, parameter_type, parameter_origin)?;
+                builder.charge_effect_metadata(closure.captures.len())?;
+                let mut captures = Vec::new();
+                captures
+                    .try_reserve_exact(closure.captures.len())
+                    .map_err(|_| BuildError::TypeWorkExceeded)?;
+                for capture in &closure.captures {
+                    captures.push(remap(remapped, *capture)?);
+                }
+                builder.region_operation(
+                    EffectOperation::RegionClosure(super::region::RegionClosureNode {
+                        api: closure.api,
+                        context: remap(remapped, closure.context)?,
+                        storage: remap(remapped, closure.storage)?,
+                        captures: captures.into_boxed_slice(),
+                        function: super::function::FunctionNode::new(
+                            parameter,
+                            remap(remapped, closure.function.body())?,
+                        ),
                     }),
                     ty.into_inner(),
                     effects,

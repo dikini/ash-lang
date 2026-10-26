@@ -332,6 +332,14 @@ enum NodeTag {
         storage: u32,
         fields: Slice,
     },
+    RegionClosure {
+        api: u32,
+        context: u32,
+        storage: u32,
+        parameter: u32,
+        body: u32,
+        captures: Slice,
+    },
     RegionBinding {
         module: u32,
         operation: u8,
@@ -1652,7 +1660,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x17";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x18";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2172,6 +2180,22 @@ impl Wire for NodeTag {
                 api.write(writer)?;
                 fields.write(writer)
             }
+            Self::RegionClosure {
+                api,
+                context,
+                storage,
+                parameter,
+                body,
+                captures,
+            } => {
+                38u8.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                storage.write(writer)?;
+                parameter.write(writer)?;
+                body.write(writer)?;
+                captures.write(writer)
+            }
             Self::RegionTuple {
                 constructor,
                 api,
@@ -2422,6 +2446,14 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            38 => Self::RegionClosure {
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                storage: Wire::read(reader)?,
+                parameter: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+                captures: Wire::read(reader)?,
+            },
             37 => Self::IntegerMagnitude {
                 negative: Wire::read(reader)?,
                 bytes: Wire::read(reader)?,
@@ -3330,6 +3362,7 @@ impl Decoder<'_> {
             NodeTag::Region { .. }
             | NodeTag::RegionValueRequest { .. }
             | NodeTag::RegionTuple { .. }
+            | NodeTag::RegionClosure { .. }
             | NodeTag::RegionBuffer { .. }
             | NodeTag::RegionAllocate { .. }
             | NodeTag::CellScope { .. }
@@ -7553,6 +7586,21 @@ impl Encoder<'_> {
                     bytes,
                 })
             }
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                let start = self.image.node_children.len();
+                for capture in &closure.captures {
+                    let value = self.node(*capture)?;
+                    push(&mut self.image.node_children, value, self.work)?;
+                }
+                Ok(NodeTag::RegionClosure {
+                    api: self.module(closure.api)?,
+                    context: self.node(closure.context)?,
+                    storage: self.node(closure.storage)?,
+                    parameter: self.encode_binder(closure.function.parameter())?,
+                    body: self.node(closure.function.body())?,
+                    captures: Slice::of(&self.image.node_children, start)?,
+                })
+            }
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
                 let start = self.image.node_children.len();
                 for field in &tuple.fields {
@@ -8690,6 +8738,41 @@ impl Decoder<'_> {
                     .with_caller_type_work(self.work, |builder| {
                         builder.region_operation(
                             crate::core::EffectOperation::RegionValueRequest(request),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionClosure {
+                api,
+                context,
+                storage,
+                parameter,
+                body,
+                captures,
+            } => {
+                let api = *get(&self.modules, api)?;
+                let mut values = Vec::new();
+                for value in captures.get(&self.image.node_children)? {
+                    push(&mut values, *get(nodes, *value)?, self.work)?;
+                }
+                let parameter = self.binder(builder, parameter)?;
+                let closure = crate::core::region::RegionClosureNode {
+                    api,
+                    context: *get(nodes, context)?,
+                    storage: *get(nodes, storage)?,
+                    function: crate::core::function::FunctionNode::new(
+                        parameter,
+                        *get(nodes, body)?,
+                    ),
+                    captures: values.into_boxed_slice(),
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionClosure(closure),
                             ty.into_inner(),
                             effects,
                             origin.take(),

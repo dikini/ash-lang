@@ -60,6 +60,37 @@ fn ordinary_construction_without_selection_uses_generated_root() {
 }
 
 #[test]
+fn ordinary_closure_records_cannot_escape_their_creation_region() {
+    for body in ["42", "captured"] {
+        let source = format!(
+            "main : Unit -> (Unit -> Int)\nmain () = region<R> owner {{\nlet captured = 42\nlet function : Unit -> Int = fn(ignored) {{\n{body}\n}}\nfunction\n}}\n"
+        );
+        let failure = run_result(&source).unwrap_err();
+        let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+            panic!("expected source lifetime rejection, got {failure:?}");
+        };
+        let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+            diagnostic.failure()
+        else {
+            panic!("expected source resource escape, got {diagnostic:?}");
+        };
+        assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+    }
+}
+
+#[test]
+fn ordinary_closure_explicitly_created_in_outer_region_survives_inner_close() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = region<R> outer {\n",
+            "let function : Unit -> Int = region<S> inner {\nusing outer {\n",
+            "let captured = 42\nlet saved : Unit -> Int = fn(ignored) {\ncaptured\n}\nsaved\n}\n}\nfunction ()\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
 fn generated_root_does_not_hide_unrelated_outstanding_effects() {
     let failure = run_result("effect Console {\nwrite : Unit -> Unit\n}\nmain : Unit -> Unit ! {Console}\nmain () = perform Console.write ()\n").unwrap_err();
     let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
@@ -481,4 +512,17 @@ fn integer_imported_summaries_preserve_actual_residency() {
         }
     }
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn polymorphic_closure_views_keep_independent_type_instantiations() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = {\n",
+            "let identity = fn(value) {\nvalue\n}\n",
+            "let integer = identity 42\nlet boolean = identity true\n",
+            "match boolean {\ntrue => integer\nfalse => 0\n}\n}\n",
+        )),
+        "42"
+    );
 }

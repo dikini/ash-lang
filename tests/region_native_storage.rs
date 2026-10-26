@@ -117,6 +117,15 @@ fn custom_region_initializes_and_reads_its_native_backing_before_paired_release(
 }
 
 #[test]
+fn custom_region_stores_ordinary_closure_captures_in_supplied_backing() {
+    let source = ENTRY.replace(
+        TUPLE_BODY,
+        "let captured = 42\n        let callback : Unit -> Int = fn(ignored) {\n            captured\n        }\n        callback ()",
+    );
+    run_native("closure", &source, b"mar");
+}
+
+#[test]
 fn custom_region_stores_nullary_and_payload_nominal_records_in_supplied_backing() {
     let source = ENTRY
         .replace("provider<R> :", "type Item =\nEmpty\n| Full(Int)\nprovider<R> :")

@@ -375,6 +375,17 @@ impl Machine<'_> {
         Some(tuple)
     }
 
+    fn region_closure(&self, node: NodeId) -> Option<&crate::core::region::RegionClosureNode> {
+        let ExecutableNode::Effect(expression) = self.program.node(node)? else {
+            return None;
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &expression.kind
+        else {
+            return None;
+        };
+        Some(closure)
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "one explicit tuple initializer frame is moved through the existing machine"
@@ -382,24 +393,35 @@ impl Machine<'_> {
     pub(super) fn return_region_tuple(
         &mut self,
         node: NodeId,
+        abstraction: Option<NodeId>,
         environment: Environment,
         mut context: Option<ActivationKey>,
         next: usize,
         mut fields: Vec<Value>,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
-        let tuple = self
-            .region_tuple(node)
-            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let (operands, storage_node, constructor, closure) =
+            if let Some(tuple) = self.region_tuple(node) {
+                (
+                    tuple.fields.as_ref(),
+                    tuple.storage,
+                    tuple.constructor,
+                    false,
+                )
+            } else if let Some(closure) = self.region_closure(node) {
+                (closure.captures.as_ref(), closure.storage, None, true)
+            } else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
         let following = if next == 0 {
             let Value::RegionView(owner) = value else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             context = Some(owner);
-            tuple.fields.first().copied().or(Some(tuple.storage))
-        } else if next <= tuple.fields.len() {
+            operands.first().copied().or(Some(storage_node))
+        } else if next <= operands.len() {
             fields.push(value);
-            Some(tuple.fields.get(next).copied().unwrap_or(tuple.storage))
+            Some(operands.get(next).copied().unwrap_or(storage_node))
         } else {
             let Value::RegionStorage(storage) = value else {
                 return Err(RuntimeFailure::InvalidControlState);
@@ -407,15 +429,38 @@ impl Machine<'_> {
             if Some(storage.invocation.owner) != context {
                 return Err(RuntimeFailure::InvalidControlState);
             }
-            if let Some(constructor) = tuple.constructor {
+            if let Some(constructor) = constructor {
                 fields.insert(0, Value::ConstructorTag(constructor));
             }
+            if closure {
+                fields.insert(
+                    0,
+                    Value::ClosureCode(crate::eval::value::ClosureCode {
+                        abstraction,
+                        node,
+                        program: self.program.clone(),
+                        instantiation: environment.instantiation.clone(),
+                    }),
+                );
+            }
             let initialized = self.initialize_region_tuple(storage, fields)?;
+            let initialized = if closure {
+                let Value::Location(record) = initialized else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                Value::RegionFunction(crate::eval::value::RegionFunction {
+                    record,
+                    instantiation: None,
+                })
+            } else {
+                initialized
+            };
             self.control = Some(Control::Return(initialized));
             return Ok(());
         };
         if let Some(following) = following {
             self.frames.push(Frame::RegionTuple {
+                abstraction,
                 node,
                 environment: environment.clone(),
                 context,
@@ -427,6 +472,75 @@ impl Machine<'_> {
             return Err(RuntimeFailure::InvalidControlState);
         }
         Ok(())
+    }
+
+    pub(super) fn read_callable(
+        &mut self,
+        value: &Value,
+    ) -> Result<crate::eval::Closure, RuntimeFailure> {
+        self.read_callable_metadata(value)
+            .map(|(callable, _)| callable)
+    }
+
+    pub(super) fn read_callable_metadata(
+        &mut self,
+        value: &Value,
+    ) -> Result<(crate::eval::Closure, Option<NodeId>), RuntimeFailure> {
+        let (record, view) = match value {
+            Value::RegionFunction(callable) => (callable.record, callable.instantiation.as_ref()),
+            Value::Location(record) => (*record, None),
+            Value::Function(function) => return Ok((function.clone(), None)),
+            _ => return Err(RuntimeFailure::UnexpectedFunctionValue),
+        };
+        let location = packed_tuple_location(&self.heap, record, &mut self.instantiation_work)?;
+        let fields = self
+            .heap
+            .get(location)
+            .and_then(HeapCell::stored_fields)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let Some(Value::ClosureCode(code)) = fields.first() else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let Some(ExecutableNode::Effect(expression)) = code.program.node(code.node) else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &expression.kind
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if fields.len() != closure.captures.len() + 1 {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_effect_work(
+            &mut self.instantiation_work,
+            fields.len(),
+            RuntimePhase::Access,
+        )?;
+        let mut environment = Environment::new();
+        environment.instantiation = view.unwrap_or(&code.instantiation).clone();
+        for (capture, value) in closure.captures.iter().zip(&fields[1..]) {
+            let Some(ExecutableNode::Effect(expression)) = code.program.node(*capture) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &expression.kind else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            environment = environment.extend_in_phase(
+                variable.binder(),
+                value.clone(),
+                RuntimePhase::Access,
+            )?;
+        }
+        Ok((
+            crate::eval::Closure {
+                parameter: closure.function.parameter().id(),
+                body: closure.function.body(),
+                program: code.program.clone(),
+                environment,
+                origin: expression.origin.clone(),
+            },
+            code.abstraction,
+        ))
     }
 
     pub(super) fn enter_region(
@@ -466,6 +580,32 @@ impl Machine<'_> {
             self.control = Some(Control::Evaluate(context, environment.clone()));
             return Ok(true);
         }
+        if let Some(closure) = self.region_closure(node) {
+            let (context, count) = (closure.context, closure.captures.len() + 1);
+            let mut fields = Vec::new();
+            reserve_control(&mut fields, count, RuntimeResource::HeapCells, true)?;
+            reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+            let abstraction = match self.frames.last() {
+                Some(Frame::RegionAbstraction {
+                    abstraction,
+                    closure,
+                }) if *closure == node => Some(*abstraction),
+                _ => None,
+            };
+            if abstraction.is_some() {
+                self.frames.pop();
+            }
+            self.frames.push(Frame::RegionTuple {
+                abstraction,
+                node,
+                environment: environment.clone(),
+                context: None,
+                next: 0,
+                fields,
+            });
+            self.control = Some(Control::Evaluate(context, environment.clone()));
+            return Ok(true);
+        }
         if let Some(tuple) = self.region_tuple(node) {
             let (context, count) = (
                 tuple.context,
@@ -475,6 +615,7 @@ impl Machine<'_> {
             reserve_control(&mut fields, count, RuntimeResource::HeapCells, true)?;
             reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
             self.frames.push(Frame::RegionTuple {
+                abstraction: None,
                 node,
                 environment: environment.clone(),
                 context: None,
@@ -1422,6 +1563,50 @@ mod tests {
         assert_eq!(fields[0].to_string(), "42");
         assert_eq!(fields[1].to_string(), "1");
     }
+    #[test]
+    fn callable_reads_captures_from_the_supplied_record_slots() {
+        let path = std::env::temp_dir().join(format!(
+            "ash-region-capture-slots-{}.ash",
+            std::process::id()
+        ));
+        std::fs::write(&path, concat!(
+            "main : Unit -> (Unit -> Int)\nmain () = {\n",
+            "let captured = 42\nlet callback : Unit -> Int = fn(ignored) {\ncaptured\n}\ncallback\n}\n",
+        )).unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: path.clone(),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let (program, _) = compiled.effect_build_input().unwrap();
+        let mut evaluation = evaluate_effect(program).unwrap();
+        let Value::RegionFunction(function) = &evaluation.value else {
+            panic!("stored callable");
+        };
+        let record = function.record;
+        let cells = Arc::get_mut(&mut evaluation.heap)
+            .expect("unique observation owner")
+            .cells_mut_for_test();
+        let HeapCell::Tuple(fields) = &mut cells[record] else {
+            panic!("supplied Value slots");
+        };
+        assert_eq!(fields.len(), 2);
+        assert!(matches!(&fields[0], Value::ClosureCode(_)));
+        assert!(matches!(&fields[1], Value::SmallInteger(42)));
+        // A retained host Environment would still return 42. The shared
+        // callable reader must obtain the actual captured Value from its slot.
+        fields[1] = Value::SmallInteger(43);
+        let mut machine = Machine::new_effect(program);
+        machine.heap = cells
+            .iter_mut()
+            .map(|cell| std::mem::replace(cell, HeapCell::Uninitialized))
+            .collect();
+        let callable = machine.read_callable(&evaluation.value).unwrap();
+        machine.control = Some(Control::Evaluate(callable.body, callable.environment));
+        assert_eq!(machine.run().unwrap().value.to_string(), "43");
+    }
+
     #[test]
     fn rust_owned_native_fields_are_released_before_provider_call_and_survive_short_work() {
         use crate::eval::{NativeTupleAdapter, NativeTupleStorage};

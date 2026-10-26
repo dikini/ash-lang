@@ -4,7 +4,7 @@ use std::{error::Error, fmt, sync::Arc};
 
 #[path = "instantiation.rs"]
 mod instantiation;
-use instantiation::Instantiation;
+pub(super) use instantiation::Instantiation;
 #[path = "region.rs"]
 mod region;
 use region::BackingRecord;
@@ -555,7 +555,12 @@ impl Error for RuntimeFailure {}
 #[derive(Debug)]
 enum Frame {
     RegionBuffer(region::BufferProgress),
+    RegionAbstraction {
+        abstraction: NodeId,
+        closure: NodeId,
+    },
     RegionTuple {
+        abstraction: Option<NodeId>,
         node: NodeId,
         environment: Environment,
         context: Option<ActivationKey>,
@@ -1024,14 +1029,35 @@ impl<'runtime> Machine<'runtime> {
         disposal::check()?;
         match frame {
             Frame::RegionBuffer(progress) => self.return_region_buffer(progress, value)?,
+            Frame::ApplyFunction {
+                argument,
+                caller_environment,
+            } if matches!(value, Value::RegionFunction(_) | Value::Location(_)) => {
+                let function = Value::Function(self.read_callable(&value)?);
+                self.apply(return_application_function(
+                    argument,
+                    caller_environment,
+                    function,
+                )?);
+            }
+            Frame::RegionAbstraction { .. } => return Err(RuntimeFailure::InvalidControlState),
             Frame::RegionTuple {
+                abstraction,
                 node,
                 environment,
                 context,
                 next,
                 fields,
             } => {
-                self.return_region_tuple(node, environment, context, next, fields, value)?;
+                self.return_region_tuple(
+                    node,
+                    abstraction,
+                    environment,
+                    context,
+                    next,
+                    fields,
+                    value,
+                )?;
             }
             Frame::RegionPreceding { node, environment } => {
                 self.prepare_region_provider(node, environment, value)?
@@ -1122,6 +1148,15 @@ impl<'runtime> Machine<'runtime> {
                     .ok_or(RuntimeFailure::InvalidControlState)?;
                 self.frames.append(&mut segment.frames);
                 self.control = Some(Control::Return(value));
+            }
+            Frame::ApplyArgument {
+                function: function @ (Value::RegionFunction(_) | Value::Location(_)),
+            } => {
+                let function = self.read_callable(&function)?;
+                self.control = Some(Control::Evaluate(
+                    function.body,
+                    function.environment.extend(function.parameter, value)?,
+                ));
             }
             Frame::ApplyArgument {
                 function: Value::RegionBackingFunction(owner),
@@ -1403,9 +1438,7 @@ impl<'runtime> Machine<'runtime> {
         let callback = environment
             .lookup(scope.callback, &self.program)
             .ok_or(RuntimeFailure::MissingBinding)?;
-        if !matches!(callback, Value::Function(_)) {
-            return Err(RuntimeFailure::UnexpectedFunctionValue);
-        }
+        self.read_callable(&callback)?;
         let live = self
             .live_cleanups
             .checked_add(1)
@@ -1679,8 +1712,9 @@ impl<'runtime> Machine<'runtime> {
         caller: &Instantiation,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
+        let program = self.program.clone();
         let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
-            pure_expression(&self.program, node)?
+            pure_expression(&program, node)?
         else {
             return Err(RuntimeFailure::InvalidControlState);
         };
@@ -1703,9 +1737,34 @@ impl<'runtime> Machine<'runtime> {
                 )?;
                 self.control = Some(Control::Evaluate(abstraction.body(), environment));
             }
-            value @ (Value::ConstructorFunction(_) | Value::Location(_)) => {
-                self.control = Some(Control::Return(value))
+            value @ (Value::RegionFunction(_) | Value::Location(_)) => {
+                let (callable, abstraction) = self.read_callable_metadata(&value)?;
+                let abstraction = abstraction.ok_or(RuntimeFailure::InvalidControlState)?;
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    pure_expression(&callable.program, abstraction)?
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let instantiation = callable.environment.instantiation.apply(
+                    caller,
+                    abstraction.parameters(),
+                    application.arguments(),
+                    application.row_arguments(),
+                    &mut self.instantiation_work,
+                )?;
+                let record = match value {
+                    Value::RegionFunction(function) => function.record,
+                    Value::Location(location) => location,
+                    _ => return Err(RuntimeFailure::InvalidControlState),
+                };
+                self.control = Some(Control::Return(Value::RegionFunction(
+                    crate::eval::value::RegionFunction {
+                        record,
+                        instantiation: Some(instantiation),
+                    },
+                )));
             }
+            value @ Value::ConstructorFunction(_) => self.control = Some(Control::Return(value)),
             _ => return Err(RuntimeFailure::InvalidControlState),
         }
         Ok(())
@@ -2753,6 +2812,7 @@ fn dispatch_entry(
                     EffectOperation::Region(_)
                     | EffectOperation::RegionAllocate(_)
                     | EffectOperation::RegionTuple(_)
+                    | EffectOperation::RegionClosure(_)
                     | EffectOperation::RegionBuffer(_)
                     | EffectOperation::RegionValueRequest(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
@@ -2839,11 +2899,25 @@ fn dispatch_entry(
             Transition::direct(Control::Evaluate(scope.body(), environment))
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
-            if matches!(program, ExecutableProgram::Effect(_)) {
-                Transition::direct(Control::Return(Value::Polymorphic {
-                    abstraction: node,
-                    environment,
-                }))
+            if let ExecutableProgram::Effect(effect) = program {
+                if let Some((closure, _)) = crate::core::region::closure_initializer::<
+                    crate::core::EffectOperationFamily,
+                >(operation.body(), |node| {
+                    effect.node(node).map(|node| &node.kind)
+                }) {
+                    Transition::suspend(
+                        Control::Evaluate(operation.body(), environment),
+                        Frame::RegionAbstraction {
+                            abstraction: node,
+                            closure,
+                        },
+                    )
+                } else {
+                    Transition::direct(Control::Return(Value::Polymorphic {
+                        abstraction: node,
+                        environment,
+                    }))
+                }
             } else {
                 enter_type_abstraction(operation, environment)
             }
@@ -2973,6 +3047,10 @@ fn enter_recursive_binding(
 ) -> Result<Transition, RuntimeFailure> {
     let mut members = Vec::with_capacity(group.members().len());
     let mut pending = Vec::new();
+    let mut functions = Vec::new();
+    functions
+        .try_reserve_exact(group.members().len())
+        .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
     for member in group.members() {
         let initializer_origin = match program
             .node(member.initializer())
@@ -2983,12 +3061,30 @@ fn enter_recursive_binding(
         };
         let mut erased_initializer = member.initializer();
         loop {
-            let expression = pure_expression(program, erased_initializer)?;
-            let PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) = expression
+            let Ok(PureExprKind::Computation(PureComputation::TypeAbstraction(operation))) =
+                pure_expression(program, erased_initializer)
             else {
                 break;
             };
             erased_initializer = operation.body();
+        }
+        let stored = if let ExecutableProgram::Effect(effect) = program {
+            crate::core::region::closure_initializer::<crate::core::EffectOperationFamily>(
+                erased_initializer,
+                |node| effect.node(node).map(|node| &node.kind),
+            )
+        } else {
+            None
+        };
+        if stored.is_some() {
+            let location = allocate_heap(heap, HeapCell::Uninitialized)?;
+            functions.push((location, member.initializer()));
+            let kind = RecursiveMemberKind::Data { location };
+            members.push(RecursiveMemberTemplate {
+                binder: member.binder().id(),
+                kind,
+            });
+            continue;
         }
         let erased = pure_expression(program, erased_initializer)?;
         let kind = match erased {
@@ -3021,6 +3117,8 @@ fn enter_recursive_binding(
         });
     }
     let environment = environment.extend_recursive(members)?;
+    functions.extend(pending);
+    let pending = functions;
     if let Some((_, initializer)) = pending.first().copied() {
         Ok(Transition::suspend(
             Control::Evaluate(initializer, environment.clone()),
@@ -3185,8 +3283,10 @@ fn return_recursive_initialization(
     value: Value,
     heap: &mut [HeapCell],
 ) -> Result<Transition, RuntimeFailure> {
-    let Value::Location(value_location) = value else {
-        return Err(RuntimeFailure::UnexpectedRecursiveBinding);
+    let value_location = match value {
+        Value::Location(location) => location,
+        Value::RegionFunction(function) if function.instantiation.is_none() => function.record,
+        _ => return Err(RuntimeFailure::UnexpectedRecursiveBinding),
     };
     let (slot, _) = pending
         .get(next)
@@ -3255,6 +3355,7 @@ fn return_application_function(
     if !matches!(
         function,
         Value::Function(_)
+            | Value::RegionFunction(_)
             | Value::ConstructorFunction(_)
             | Value::Intrinsic(_)
             | Value::RegionHostFunction { .. }

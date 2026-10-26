@@ -1103,6 +1103,100 @@ fn capture_projections<F: CoreOperationFamily>(
     Ok(result)
 }
 
+/// Reuse the ordinary function projection for physical term-capture operands.
+/// Selected method routes are supplied by the existing completed-module phase.
+pub(in crate::core) fn closure_capture_binders<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    function: &super::function::FunctionNode,
+    methods: &[MethodUse],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<BinderId>, Failure> {
+    let methods = MethodUses::new(methods, budget)?;
+    let projected = capture_projections(
+        nodes,
+        index(function.body()),
+        &[function.parameter().id()],
+        &methods,
+        &[],
+        budget,
+    )?;
+    let mut seen = HashSet::new();
+    let mut binders = Vec::new();
+    charge(budget, projected.free_values.len())?;
+    seen.try_reserve(projected.free_values.len())
+        .map_err(|_| Failure::Resource)?;
+    binders
+        .try_reserve(projected.free_values.len())
+        .map_err(|_| Failure::Resource)?;
+    for binder in projected.free_values {
+        if seen.insert(binder) {
+            binders.push(binder);
+        }
+    }
+    Ok(binders)
+}
+
+pub(crate) fn prepare_region_closure(
+    builder: &mut CoreBuilder<super::effect::EffectOperationFamily>,
+    node: NodeId,
+    request: NodeId,
+    methods: &[MethodUse],
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    let super::effect::EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+        &builder.nodes[index(node)].kind
+    else {
+        return Err(Failure::Invalid);
+    };
+    let binders = closure_capture_binders(&builder.nodes, &closure.function, methods, budget)?;
+    let fields = binders.len().checked_add(1).ok_or(Failure::Resource)?;
+    fields
+        .checked_mul(core::mem::size_of::<crate::eval::Value>())
+        .filter(|bytes| *bytes <= isize::MAX as usize)
+        .ok_or(Failure::Resource)?;
+    let mut captures = Vec::new();
+    charge(budget, binders.len())?;
+    captures
+        .try_reserve_exact(binders.len())
+        .map_err(|_| Failure::Resource)?;
+    for binder in binders {
+        let mut found = None;
+        for (ordinal, candidate) in builder.nodes.iter().enumerate() {
+            charge(budget, 1)?;
+            if matches!(&candidate.kind, super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == binder)
+            {
+                found = Some(
+                    builder
+                        .node_at_ordinal(node, ordinal)
+                        .map_err(|_| Failure::Invalid)?,
+                );
+                break;
+            }
+        }
+        captures.push(found.ok_or(Failure::Invalid)?);
+    }
+    if !matches!(
+        &builder.nodes[index(request)].kind,
+        super::effect::EffectExprKind::Operation(EffectOperation::RegionValueRequest(_))
+    ) {
+        return Err(Failure::Invalid);
+    }
+    charge(budget, 2)?;
+    let super::effect::EffectExprKind::Operation(EffectOperation::RegionValueRequest(layout)) =
+        &mut builder.nodes[index(request)].kind
+    else {
+        return Err(Failure::Invalid);
+    };
+    layout.fields = fields;
+    let super::effect::EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+        &mut builder.nodes[index(node)].kind
+    else {
+        return Err(Failure::Invalid);
+    };
+    closure.captures = captures.into_boxed_slice();
+    Ok(())
+}
+
 #[derive(Default)]
 struct MetadataVariables {
     variables: Vec<TypeVariableId>,
@@ -2059,6 +2153,17 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             children.push(service);
             Control::Sequence(children)
         }
+        Some(EffectOperation::RegionClosure(closure)) => {
+            let mut children = Vec::new();
+            charge(budget, closure.captures.len() + 2)?;
+            children
+                .try_reserve_exact(closure.captures.len() + 2)
+                .map_err(|_| Failure::Resource)?;
+            children.push(index(closure.context) + 1);
+            children.extend(closure.captures.iter().map(|child| index(*child) + 1));
+            children.push(index(closure.storage) + 1);
+            Control::Sequence(children)
+        }
         Some(EffectOperation::RegionTuple(tuple)) => {
             let mut children = Vec::new();
             charge(budget, tuple.fields.len() + 2)?;
@@ -2319,6 +2424,16 @@ fn compile_with_boundary<F: CoreOperationFamily>(
             continue;
         }
         let source = node.origin.as_ref().ok_or(Failure::Invalid)?.primary_span();
+        if let Some(EffectOperation::RegionClosure(closure)) = operation(&node.kind) {
+            let result = values[index(closure.function.body())].copy(budget)?;
+            graph.callables.positions[id] = Some(Callable {
+                body: index(closure.function.body()) + 1,
+                ty: clone_type_with_budget(&node.ty, budget).map_err(|_| Failure::Resource)?,
+                result,
+            });
+            roots.try_reserve(1).map_err(|_| Failure::Resource)?;
+            roots.push(index(closure.function.body()) + 1);
+        }
         let code = match F::pure(&node.kind) {
             Some(
                 pure @ (PureExprKind::Value(PureValue::Intrinsic(_) | PureValue::Function(_))

@@ -433,6 +433,7 @@ pub enum EffectOperation {
     RegionValueRequest(super::region::RegionValueRequestNode),
     RegionBuffer(super::region::RegionBufferNode),
     RegionTuple(super::region::RegionTupleNode),
+    RegionClosure(super::region::RegionClosureNode),
 
     Request(RequestNode),
     Handler(HandlerNode),
@@ -485,6 +486,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(
                 operation @ (EffectOperation::RegionBuffer(_)
                 | EffectOperation::RegionTuple(_)
+                | EffectOperation::RegionClosure(_)
                 | EffectOperation::RegionAllocate(_)
                 | EffectOperation::RegionValueRequest(_)
                 | EffectOperation::Request(_)),
@@ -508,6 +510,9 @@ impl CoreOperationFamily for EffectOperationFamily {
         }
         if let EffectExprKind::Operation(EffectOperation::Region(region)) = kind {
             visit(&region.access);
+        }
+        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind {
+            visit(closure.function.parameter());
         }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
@@ -546,6 +551,12 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectOperation::Region(region) => {
                 visit(super::dialect::OperationTypeMetadata::Type(
                     region.access.ty(),
+                ));
+                None
+            }
+            EffectOperation::RegionClosure(closure) => {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    closure.function.parameter().ty(),
                 ));
                 None
             }
@@ -612,6 +623,14 @@ impl CoreOperationFamily for EffectOperationFamily {
                 region.access.rewrite_type(&mut |ty| rewrite(ty))?;
                 return Ok(());
             }
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                charge(1)?;
+                closure
+                    .function
+                    .parameter_mut()
+                    .rewrite_type(&mut |ty| rewrite(ty))?;
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Request(request)) => &mut request.effect,
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                 if let Some(registration) = &mut handler.hook_registration {
@@ -656,6 +675,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             }
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
                 tuple.fields.len() + 2
+            }
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                closure.captures.len() + 3
             }
 
             EffectExprKind::Operation(
@@ -709,6 +731,19 @@ impl CoreOperationFamily for EffectOperationFamily {
                 2 => buffer.right,
                 _ => None,
             },
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                if index == 0 {
+                    Some(closure.context)
+                } else if index <= closure.captures.len() {
+                    closure.captures.get(index - 1).copied()
+                } else if index == closure.captures.len() + 1 {
+                    Some(closure.storage)
+                } else if index == closure.captures.len() + 2 {
+                    Some(closure.function.body())
+                } else {
+                    None
+                }
+            }
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => match index {
                 0 => Some(tuple.context),
                 _ if index == tuple.fields.len() + 1 => Some(tuple.storage),
@@ -752,6 +787,9 @@ impl CoreOperationFamily for EffectOperationFamily {
                 | EffectOperation::RegionBuffer(_),
             ) => {}
 
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                closure.function.discard_metadata();
+            }
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
                 let (_, arguments) = std::mem::replace(&mut node.effect, placeholder).into_parts();
@@ -825,6 +863,7 @@ impl CoreBuilder<EffectOperationFamily> {
             RegionAllocate(super::region::RegionAllocateNode),
             RegionBuffer(super::region::RegionBufferNode),
             RegionTuple(super::region::RegionTupleNode),
+            RegionClosure(Vec<NodeId>),
             Empty,
             Registration(NodeId),
             Cleanup(NodeId, NodeId),
@@ -877,6 +916,19 @@ impl CoreBuilder<EffectOperationFamily> {
                             storage: tuple.storage,
                             fields: fields.into_boxed_slice(),
                         })
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                        self.type_work
+                            .charge(closure.captures.len() + 2)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+                        let mut children = Vec::new();
+                        children
+                            .try_reserve_exact(closure.captures.len() + 2)
+                            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+                        children.push(closure.context);
+                        children.extend(closure.captures.iter().copied());
+                        children.push(closure.storage);
+                        Equation::RegionClosure(children)
                     }
                     EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
                         Equation::Cleanup(scope.body, scope.action)
@@ -951,6 +1003,23 @@ impl CoreBuilder<EffectOperationFamily> {
                             .chain(buffer.operand)
                             .chain(buffer.right)
                         {
+                            row = row
+                                .union_with_budget(
+                                    &self
+                                        .nodes
+                                        .get(child.index()?)
+                                        .ok_or(super::BuildError::InvalidNodeId)?
+                                        .effects,
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        row
+                    }
+                    Equation::RegionClosure(children) => {
+                        let mut row = EffectRow::empty();
+                        for child in children {
                             row = row
                                 .union_with_budget(
                                     &self

@@ -1021,6 +1021,71 @@ impl Graph {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn function_expression<F: CoreOperationFamily>(
+        &mut self,
+        function: &crate::core::function::FunctionNode,
+        id: usize,
+        nodes: &[StoredNode<F>],
+        symbols: &mut HashMap<BinderId, usize>,
+        types: &mut HashMap<crate::types::TypeVariableId, usize>,
+        methods: &super::MethodUses<'_>,
+        adapters: &[super::MethodAdapter],
+        headers: &mut FunctionMetadataPreparation<'_, F>,
+        owner: Option<usize>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Expr, Failure> {
+        let source = self.sources[id];
+        Ok({
+            self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+            self.targets.insert(id, id);
+            let parameter = self.symbol(symbols, function.parameter().id(), source, budget)?;
+            let mut captures = Vec::new();
+            let super::CaptureProjections {
+                free_values,
+                abstract_steps,
+                invalid_abstract,
+            } = super::capture_projections(
+                nodes,
+                index(function.body()),
+                &[function.parameter().id()],
+                methods,
+                &[],
+                budget,
+            )?;
+            for binder in free_values {
+                let slot = self.symbol(symbols, binder, source, budget)?;
+                captures.try_reserve(1).map_err(|_| Failure::Resource)?;
+                captures.push(slot);
+            }
+            let metadata = headers.collect(index(function.body()), budget)?;
+            for variable in metadata.variables {
+                let slot = self.symbol(types, variable, source, budget)?;
+                captures.try_reserve(1).map_err(|_| Failure::Resource)?;
+                captures.push(slot);
+            }
+            self.abstract_captures(
+                &abstract_steps,
+                invalid_abstract,
+                methods,
+                adapters,
+                symbols,
+                &mut captures,
+                budget,
+            )?;
+            if let Some(owner) = owner {
+                charge(budget, 1)?;
+                captures.try_reserve(1).map_err(|_| Failure::Resource)?;
+                captures.push(owner);
+            }
+            Expr::Function {
+                parameters: copy_slice(&[parameter], budget)?,
+                body: index(function.body()),
+                captures,
+            }
+        })
+    }
+
     #[allow(clippy::too_many_arguments)] // The borrowed original node and phase inputs retain their existing authority.
     fn build_non_computation<F: CoreOperationFamily>(
         &mut self,
@@ -1041,49 +1106,9 @@ impl Graph {
             Some(PureExprKind::Variable(variable)) => {
                 Expr::Alias(self.symbol(symbols, variable.binder(), source, budget)?)
             }
-            Some(PureExprKind::Value(PureValue::Function(function))) => {
-                self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
-                self.targets.insert(id, id);
-                let parameter = self.symbol(symbols, function.parameter().id(), source, budget)?;
-                let mut captures = Vec::new();
-                let super::CaptureProjections {
-                    free_values,
-                    abstract_steps,
-                    invalid_abstract,
-                } = super::capture_projections(
-                    nodes,
-                    index(function.body()),
-                    &[function.parameter().id()],
-                    methods,
-                    &[],
-                    budget,
-                )?;
-                for binder in free_values {
-                    let slot = self.symbol(symbols, binder, source, budget)?;
-                    captures.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    captures.push(slot);
-                }
-                let metadata = headers.collect(index(function.body()), budget)?;
-                for variable in metadata.variables {
-                    let slot = self.symbol(types, variable, source, budget)?;
-                    captures.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    captures.push(slot);
-                }
-                self.abstract_captures(
-                    &abstract_steps,
-                    invalid_abstract,
-                    methods,
-                    adapters,
-                    symbols,
-                    &mut captures,
-                    budget,
-                )?;
-                Expr::Function {
-                    parameters: copy_slice(&[parameter], budget)?,
-                    body: index(function.body()),
-                    captures,
-                }
-            }
+            Some(PureExprKind::Value(PureValue::Function(function))) => self.function_expression(
+                function, id, nodes, symbols, types, methods, adapters, headers, None, budget,
+            )?,
             Some(PureExprKind::Value(PureValue::String(_))) => Expr::Scalar,
             Some(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) => {
                 self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1245,9 +1270,26 @@ impl Graph {
                     &mut captures,
                     budget,
                 )?;
+                let body = if let Some((terminal, closure)) =
+                    crate::core::region::closure_initializer::<F>(abstraction.body(), |node| {
+                        nodes.get(index(node)).map(|node| &node.kind)
+                    }) {
+                    // Type application binds metadata on the existing record.
+                    // Freeze its already evaluated selected context with term
+                    // captures; never replay the query/allocation prefix.
+                    let context = index(closure.context);
+                    charge(budget, captures.len() + 1)?;
+                    if !captures.contains(&context) {
+                        captures.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        captures.push(context);
+                    }
+                    index(terminal)
+                } else {
+                    index(abstraction.body())
+                };
                 Expr::Function {
                     parameters,
-                    body: index(abstraction.body()),
+                    body,
                     captures,
                 }
             }
@@ -1405,6 +1447,18 @@ impl Graph {
             },
             Some(EffectOperation::Registration(scope)) => Expr::Forward(index(scope.body)),
             Some(EffectOperation::RegionValueRequest(_)) => Expr::Scalar,
+            Some(EffectOperation::RegionClosure(closure)) => self.function_expression(
+                &closure.function,
+                id,
+                nodes,
+                symbols,
+                types,
+                methods,
+                adapters,
+                headers,
+                Some(index(closure.context)),
+                budget,
+            )?,
             Some(EffectOperation::RegionBuffer(buffer)) => {
                 use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
                 let owner = index(buffer.context);
