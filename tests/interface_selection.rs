@@ -88,14 +88,35 @@ fn imported_implementation_route_retains_its_exact_direct_dependency_identity() 
     let loaded_entry = graph
         .module(graph.entry())
         .expect("the loaded graph should retain its entry module");
-    let [qualified_edge, selector_edge] = loaded_entry.dependencies() else {
-        panic!("the entry should retain its name and implementation dependency edges");
+    let dependency_id = graph
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("dependency.ash"))
+        .expect("the declared source dependency remains loaded")
+        .id();
+    let source_edges = loaded_entry
+        .dependencies()
+        .iter()
+        .filter(|edge| edge.target() == dependency_id)
+        .collect::<Vec<_>>();
+    let [qualified_edge, selector_edge] = source_edges.as_slice() else {
+        panic!("the entry should retain its two distinct source import edges");
     };
+    assert_ne!(qualified_edge.import_span(), selector_edge.import_span());
     let [available] = entry.available_implementations() else {
         panic!("the entry should retain exactly one available implementation");
     };
-    let [qualified_dependency, selector_dependency] = entry.direct_dependencies() else {
-        panic!("the checked entry should retain both authenticated direct edges");
+    assert_eq!(
+        entry.direct_dependencies().len(),
+        loaded_entry.dependencies().len()
+    );
+    let source_dependencies = entry
+        .direct_dependencies()
+        .iter()
+        .filter(|dependency| dependency.target() == dependency_id)
+        .collect::<Vec<_>>();
+    let [qualified_dependency, selector_dependency] = source_dependencies.as_slice() else {
+        panic!("the checked entry should retain both authenticated source edges");
     };
     assert_eq!(qualified_dependency.target(), qualified_edge.target());
     assert_eq!(
@@ -129,11 +150,10 @@ fn check(text: &str) -> Result<CheckedModule, TypeError> {
     let fixture = SelectionFixture::create(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("selection fixture should load");
-    let loaded = graph
-        .module(graph.entry())
-        .expect("selection fixture entry should remain admitted");
-    let resolved = resolve_module(loaded, &[]).expect("selection fixture should resolve");
-    check_module(resolved)
+    Ok(check_graph(&graph)?
+        .into_iter()
+        .find(|module| module.module() == graph.entry())
+        .expect("selection fixture entry should remain checked"))
 }
 
 fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {

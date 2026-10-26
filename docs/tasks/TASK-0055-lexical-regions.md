@@ -82,14 +82,27 @@ execution. Ten focused product checks, 78 capture checks and the native suite's
 31 cases pass (29 native executions and two exact admission refusals).
 
 Dependency-ordered diagnostic/resolution helpers retain every builtin dependency
-and return the original unresolved entry or checking result. Selected reruns
-restore 135 baseline integration failures, with no newly failed names in those
+and return the original unresolved entry or checking result. Checkpoint 10 selected reruns
+restored 135 baseline integration failures, with no newly failed names in those
 selected groups; this is staged evidence, not a new full inventory. Remaining
 failures include seven known Core ledger cases, six effect-row expectations and
 one direct setup path, fourteen runtime trace/setup cases, one resolution type
 shape and three diagnostic/profile expectations. Two architecture probes now
 reach a separate visible-glob carrier ambiguity in evaluator region metadata;
 no manifest entries were guessed. The complete normal gate remains pending.
+
+The next interface fixture batch reuses dependency-ordered checking for original
+positive and negative entry endpoints. Exact callable checks retain their kinds,
+arguments and requirements and now include the closed singleton DefaultAlloc row
+from the actual defining checked compiler module. Import-route checks preserve
+the two source edges' target identities and distinct spans alongside the complete
+service graph. Both complete targets were rerun: interfaces 38 pass / 6 fail,
+interface selection 40 pass / 0 fail. All 68 original setup-blocked names now
+pass, with no new or missing failed names. Their exact name set is disjoint from
+the prior 135 restores, yielding 203 staged integration restorations without a
+refreshed whole-suite total. The six remaining interface failures reach existing
+Source-to-Pure Core producers; no stored-closure decoder, trace projection,
+capacity change or production code is included in this fixture batch.
 
 ## Work
 

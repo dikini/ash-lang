@@ -23,7 +23,7 @@ use ash::{
         ResolvedTermName,
     },
     source::Origin,
-    types::{Kind, Type},
+    types::{EffectInstance, EffectRow, Kind, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -82,25 +82,55 @@ fn check_error(text: &str) -> TypeError {
     let fixture = InterfaceFixture::create(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the interface fixture should load");
-    let loaded = graph
-        .module(graph.entry())
-        .expect("the entry module should remain admitted");
-    let resolved = resolve_module(loaded, &[]).expect("the interface fixture should resolve");
-    check_module(resolved).expect_err("the interface fixture should fail checking")
+    try_checked_graph(&graph).expect_err("the interface fixture should fail checking")
 }
 
 fn checked_module(text: &str) -> CheckedModule {
+    checked_module_with_default_row(text).0
+}
+
+fn checked_module_with_default_row(text: &str) -> (CheckedModule, EffectRow) {
     let fixture = InterfaceFixture::create(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the interface fixture should load");
-    let loaded = graph
-        .module(graph.entry())
-        .expect("the entry module should remain admitted");
-    let resolved = resolve_module(loaded, &[]).expect("the interface fixture should resolve");
-    check_module(resolved).expect("the interface fixture should check")
+    let checked = checked_graph(&graph);
+    let defining = checked
+        .iter()
+        .find(|module| {
+            graph
+                .module(module.module())
+                .expect("every checked module retains its loaded source")
+                .source()
+                .display_path()
+                == "@compiler.region"
+        })
+        .expect("the defining compiler service remains checked");
+    let mut effects = defining
+        .effects()
+        .iter()
+        .filter(|effect| effect.spelling == "DefaultAlloc");
+    let effect = effects
+        .next()
+        .expect("the defining checked service retains DefaultAlloc");
+    assert!(
+        effects.next().is_none(),
+        "the service effect identity is unique"
+    );
+    assert_eq!(effect.id.module(), defining.module());
+    assert!(effect.parameters.is_empty());
+    let row = EffectRow::singleton(EffectInstance::new(effect.id, Box::new([])));
+    let entry = checked
+        .into_iter()
+        .find(|module| module.module() == graph.entry())
+        .expect("the entry module should remain checked");
+    (entry, row)
 }
 
 fn checked_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
+    try_checked_graph(graph).expect("the interface fixture graph should check")
+}
+
+fn try_checked_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
     let mut checked = Vec::new();
     for module in graph.modules() {
         let dependencies = module
@@ -117,9 +147,9 @@ fn checked_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
             .collect::<Vec<_>>();
         let resolved = resolve_module(module, &dependencies)
             .expect("the interface fixture graph should resolve");
-        checked.push(check_module(resolved).expect("the interface fixture graph should check"));
+        checked.push(check_module(resolved)?);
     }
-    checked
+    Ok(checked)
 }
 
 fn check_valid(text: &str) {
@@ -1049,7 +1079,7 @@ fn accepts_public_method_signature_that_retains_a_hidden_nominal_identity() {
 
 #[test]
 fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_types() {
-    let checked = checked_module(concat!(
+    let (checked, default_row) = checked_module_with_default_row(concat!(
         "interface Equal<A> {\n",
         "equal : (A, A) -> Bool\n",
         "}\n",
@@ -1064,7 +1094,12 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
     for scheme in checked.schemes() {
         assert_eq!(scheme.scheme.type_parameters.len(), 1);
         assert_eq!(scheme.scheme.requirements.len(), 1);
-        assert!(matches!(scheme.scheme.value_type(), Type::Function(_, _)));
+        let function = scheme
+            .scheme
+            .value_type()
+            .function_view()
+            .expect("the checked scheme remains callable");
+        assert_eq!(function.effects(), Some(&default_row));
         let requirement = &scheme.scheme.requirements[0];
         assert_eq!(
             requirement.id.owner(),
@@ -1085,7 +1120,7 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
 
 #[test]
 fn checked_global_scheme_retains_declared_function_kind() {
-    let checked = checked_module(concat!(
+    let (checked, default_row) = checked_module_with_default_row(concat!(
         "type Holder<F : Type -> Type> = Holder\n\n",
         "uses<F : Type -> Type> : Holder<F> -> Bool\n",
         "uses value = true\n",
@@ -1101,10 +1136,13 @@ fn checked_global_scheme_retains_declared_function_kind() {
         kind,
         &Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
     );
-    let Type::Function(domain, _) = checked.scheme.value_type() else {
-        panic!("the checked global should remain callable");
-    };
-    let Type::Application(_, argument) = domain.as_ref() else {
+    let function = checked
+        .scheme
+        .value_type()
+        .function_view()
+        .expect("the checked global should remain callable");
+    assert_eq!(function.effects(), Some(&default_row));
+    let Type::Application(_, argument) = function.domain() else {
         panic!("the Holder application should remain canonical");
     };
     assert_eq!(argument.as_ref(), &Type::Variable(*parameter));
@@ -1140,9 +1178,15 @@ fn cross_module_constraint_lowers_to_method_evidence() {
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the interface fixture graph should load");
     let checked = checked_graph(&graph);
+    let library_id = graph
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("library.ash"))
+        .expect("the defining library source remains loaded")
+        .id();
     let library = checked
         .iter()
-        .find(|module| module.module() != graph.entry())
+        .find(|module| module.module() == library_id)
         .expect("the dependency should remain checked");
     let implementation_method = library.implementation_facts()[0].methods[0].binder;
     let same = library
@@ -1526,8 +1570,9 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
         .expect("the generic evidence fixture should load");
     let checked = checked_graph(&graph);
     let module = checked
-        .first()
-        .expect("the one-module fixture should remain checked");
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .expect("the actual source entry should remain checked");
     let [ground_implementation, generic_implementation] = module.implementation_facts() else {
         panic!("the fixture should retain its ground and generic implementations");
     };

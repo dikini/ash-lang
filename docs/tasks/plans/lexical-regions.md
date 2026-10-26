@@ -57,8 +57,14 @@ checks and all 31 native suite cases (29 executions, two admission refusals).
 Dependency-ordered admission helpers preserve original negative endpoints and
 all builtin facts. Selected staged runs restore 135 baseline integration names
 without a new failed name in those groups; neither complete inventory was rerun.
-Known ledger, row/trace/profile and separate architecture preflight residuals
-remain open. The next owner is the independent reviewer for the exact draft
+The subsequent two-target interface fixture refresh restores 68 further original
+names through exact dependency admission, callable rows and source-edge identity
+checks. Interfaces records 38 pass / 6 fail and interface selection 40 pass /
+0 fail; no new or missing failed names occur. The disjoint named restoration
+union is 203, not a recalculated full-suite result. Six Source-to-Pure Core
+producer failures remain in those targets; no new decoder or trace mechanism is
+part of this batch. Known ledger, row/trace/profile and separate architecture
+preflight residuals remain open. The next owner is the independent reviewer for the exact draft
 checkpoint, then root for publication/readback; the final full workspace gate
 remains pending. Core fixture repairs
 retain full provenance and actual user owners, separate the manual Pure donor's
