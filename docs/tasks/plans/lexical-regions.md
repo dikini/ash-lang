@@ -41,8 +41,8 @@ removing unused backward-prefix reconstruction from escape checks (37.49%
 Source saving, all 78 focused capture tests passing). Source `10000*S` and Core
 `25000*S` apply the existing 25% fitting rule; other owners/defaults are
 unchanged. Normal policy passes all 114 focused driver, policy, capture,
-reporting and observer checks. The latest full-library inventory is 1,532 pass /
-63 fail across 1,595 executed names: 22 existing failed names restored since the
+reporting and observer checks. The latest full-library inventory is 1,543 pass /
+52 fail across 1,595 executed names: 11 existing failed names restored since the
 prior draft and no new failures. The earlier private Source capture test was
 renamed to assert its required Effect lifetime summaries, with the unchanged Pure
 exact/short/retry contract passing separately; the rename is not counted as a
@@ -53,8 +53,13 @@ repairs select defining user nominal/summary owners, preserve complete dependenc
 provenance and caller budgets, and use actual Effect lowering for lexical final
 synthesis. The original paid effect-selection body loop is shared mechanically;
 its 96-block proof retains exact/short/retry checks on a 64 KiB stack separately
-from real Source headers' early Effect selection. All 8,565 inputs matched
-before/after; only task/plan inventory prose changed afterward. Full
+from real Source headers' early Effect selection. Standalone native and type-only
+GenericCell donors now retain their original complete declaration authority;
+image fixtures reuse the existing Effect path with full provenance and retain
+the original Pure unsupported-registry contract. All 8,565 inputs matched
+before/after; only task/plan inventory prose changed afterward. The seven prior
+reporting/observer integration passes were not rerun for this test-only delta;
+the fresh library inventory re-executes all affected unit tests. Full
 workspace/all-target/all-feature Clippy passes.
 An unfinished draft checkpoint and independent review precede further shared
 fixture repairs and the still-required complete normal workspace gate. Whole

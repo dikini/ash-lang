@@ -3824,20 +3824,25 @@ mod tests {
 
     #[test]
     fn generic_cell_private_image_reconstructs_dependency_proof_and_executes() {
-        let (donor, sources) = crate::core::validate::generic_cell_validated_fixture_for_test();
-        let provenance = donor
-            .registry()
-            .type_variables()
-            .map(|parameter| {
-                let module = parameter.id.module().unwrap();
-                let source = sources
-                    .iter()
-                    .find(|source| source.id() == parameter.origin.primary_span().source())
-                    .unwrap();
-                (module, std::sync::Arc::new(source.clone()))
+        let (donor, sources, relation) =
+            crate::core::validate::generic_cell_source_fixture_for_test(
+                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Int> c = 41 {\nCell.read c + 1\n}\n",
+                None,
+            );
+        let provenance = relation
+            .iter()
+            .map(|(module, identity)| {
+                (
+                    *module,
+                    Arc::new(
+                        sources
+                            .iter()
+                            .find(|source| source.id() == *identity)
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
             })
-            .collect::<std::collections::BTreeMap<_, _>>()
-            .into_iter()
             .collect::<Vec<_>>();
         let build = encode_effect_for_build(
             &donor,
@@ -4387,8 +4392,15 @@ mod tests {
         let tree = SourceTree::new();
         tree.write("entry.ash", "main : Unit -> Int\nmain () = 42\n");
         let compiled = compile_path(tree.configuration()).unwrap();
-        let (program, provenance) = compiled.pure_build_input().unwrap();
-        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let image = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
         let facts = image
             .encode_native_expectations(&mut TypeWorkBudget::default())
@@ -4655,18 +4667,29 @@ mod tests {
             let tree = SourceTree::new();
             tree.write("entry.ash", source);
             let compiled = compile_path(tree.configuration()).expect("recursive source compiles");
-            let (program, provenance) = compiled.pure_build_input().unwrap();
+            let (program, provenance) = compiled.effect_build_input().unwrap();
             let mut work = TypeWorkBudget::default();
-            let image = encode(program, provenance, &mut work).expect("recursive image encodes");
+            let image = encode_effect_for_build(
+                program,
+                provenance,
+                super::super::NATIVE_TARGET,
+                &mut work,
+            )
+            .expect("recursive image encodes")
+            .image;
             let bytes = image.encode_bytes(&mut work).unwrap();
+            let expected_facts = image.encode_native_expectations(&mut work).unwrap();
             drop(image);
             drop(compiled);
             drop(tree);
-            let restored = PureImage::decode_bytes(&bytes, &mut work)
-                .unwrap()
-                .restore(&mut work)
+            let image = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+            image
+                .admit_expected_native_facts(&expected_facts, &mut work)
+                .unwrap();
+            let restored = image
+                .restore_effect(&mut work)
                 .expect("recursive image independently validates");
-            let evaluation = crate::eval::evaluate(&restored).unwrap();
+            let evaluation = crate::eval::evaluate_effect(&restored.program).unwrap();
             assert_eq!(evaluation.value.to_string(), expected);
         }
     }
@@ -4689,28 +4712,44 @@ mod tests {
         );
         let compiled = compile_path(tree.configuration()).expect("ordinary source Core compiles");
         let (program, provenance) = compiled
-            .pure_build_input()
-            .expect("retained Pure build input");
-        let original_module = program.registry().nominals()[0].id.module();
+            .effect_build_input()
+            .expect("retained Effect build input");
+        let original_module = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.spelling == "Count")
+            .expect("the defining user Count remains canonical")
+            .id
+            .module();
         let original_work = *compiled.compilation_work();
         let mut encode_work = TypeWorkBudget::default();
-        let image = encode(program, provenance, &mut encode_work).expect("flat image prepares");
+        let image = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut encode_work,
+        )
+        .expect("flat image prepares")
+        .image;
         let encoded_cost = encode_work.used();
         assert!(
-            encode(
+            encode_effect_for_build(
                 program,
                 provenance,
+                super::super::NATIVE_TARGET,
                 &mut TypeWorkBudget::with_limit(encoded_cost)
             )
             .is_ok()
         );
         assert!(matches!(
-            encode(
+            encode_effect_for_build(
                 program,
                 provenance,
+                super::super::NATIVE_TARGET,
                 &mut TypeWorkBudget::with_limit(encoded_cost - 1)
             ),
-            Err(ImageFailure::Resource),
+            Err(NativeImageFailure::Image(ImageFailure::Resource)),
         ));
         assert_eq!(compiled.compilation_work(), &original_work);
         let mut wire_work = TypeWorkBudget::default();
@@ -4821,6 +4860,9 @@ mod tests {
             PureImage::decode_bytes(&bytes[..bytes.len() - 1], &mut TypeWorkBudget::default()),
             Err(ImageFailure::InvalidEncoding)
         ));
+        image
+            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
         fs::remove_dir_all(&tree.0).unwrap();
         drop(compiled);
         let mut restored_cost = None;
@@ -4828,27 +4870,38 @@ mod tests {
             let mut restore_work =
                 restored_cost.map_or_else(TypeWorkBudget::default, TypeWorkBudget::with_limit);
             let restored = image
-                .restore(&mut restore_work)
+                .restore_effect(&mut restore_work)
                 .expect("independent reconstruction validates");
             restored_cost = Some(restore_work.used());
             assert_ne!(
-                restored.registry().nominals()[0].id.module(),
+                restored
+                    .program
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .find(|nominal| nominal.spelling == "Count")
+                    .expect("the independently restored user Count remains canonical")
+                    .id
+                    .module(),
                 original_module
             );
             assert_eq!(
-                crate::eval::evaluate(&restored).unwrap().value.to_string(),
+                crate::eval::evaluate_effect(&restored.program)
+                    .unwrap()
+                    .value
+                    .to_string(),
                 "42"
             );
         }
         assert!(
             image
-                .restore(&mut TypeWorkBudget::with_limit(restored_cost.unwrap() - 1))
+                .restore_effect(&mut TypeWorkBudget::with_limit(restored_cost.unwrap() - 1))
                 .is_err()
         );
         let cost = restored_cost.unwrap();
         let mut prefixed_work = TypeWorkBudget::with_limit(cost + 37);
         prefixed_work.charge(37).unwrap();
-        image.restore(&mut prefixed_work).unwrap();
+        image.restore_effect(&mut prefixed_work).unwrap();
         assert_eq!(prefixed_work.used(), cost + 37);
         // A failed builder admission must also return its completed charges.
         // Reusing that same ledger cannot open another construction allowance.
@@ -4875,7 +4928,7 @@ mod tests {
 
         let mut work = TypeWorkBudget::with_limit(0);
         assert!(matches!(
-            image.restore(&mut work),
+            image.restore_effect(&mut work),
             Err(ImageFailure::Resource)
         ));
         // Malformed structural claims reach the same independent validator;
@@ -4886,6 +4939,13 @@ mod tests {
             .iter_mut()
             .find(|record| matches!(record.tag, NodeTag::Integer(_)))
             .unwrap();
+        assert!(
+            matches!(
+                corrupt.types[usize::try_from(literal.ty).unwrap()].tag,
+                TypeTag::Int
+            ),
+            "the current retained integer record must have its admitted Int type before corruption"
+        );
         literal.ty = push(
             &mut corrupt.types,
             TypeRecord {
@@ -4896,7 +4956,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            corrupt.restore(&mut TypeWorkBudget::default()),
+            corrupt.restore_effect(&mut TypeWorkBudget::default()),
             Err(ImageFailure::Validation(_))
         ));
     }
@@ -5811,16 +5871,52 @@ main () = {
 
     #[test]
     fn unsupported_registry_facts_are_refused_instead_of_dropped() {
-        let tree = SourceTree::new();
-        tree.write(
-            "entry.ash",
-            "type Boxed<A> = Boxed(A)\nmain : Unit -> Int\nmain () = 42\n",
+        let source = Arc::new(
+            SourceFile::new("generic-nominal.ash", "type Boxed<A> = Boxed(A)\n()\n").unwrap(),
         );
-        let compiled =
-            compile_path(tree.configuration()).expect("unused generic declaration is valid source");
-        let (program, provenance) = compiled.pure_build_input().unwrap();
+        let module = ModuleId::from(source.id());
+        let owner = NominalTypeId::new(module, 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let parameter = crate::types::TypeVariableId::resolved(module, 0);
+        let origin =
+            |start, end| Origin::Source(source.span(ByteRange::new(start, end).unwrap()).unwrap());
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: owner,
+                declaration_kind: ResolvedNominalDeclarationKind::Data,
+                spelling: "Boxed".to_owned(),
+                constructors: Box::new([constructor]),
+                representation: None,
+                representation_provenance: None,
+                origin: origin(0, 24),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner,
+                spelling: "Boxed".to_owned(),
+                payload: Some(Type::Variable(parameter)),
+                origin: origin(16, 24),
+            }],
+        )
+        .with_type_parameters(vec![(
+            owner,
+            vec![crate::resolved::ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".to_owned(),
+                kind: crate::types::Kind::Type,
+                origin: origin(11, 12),
+            }],
+        )]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin(25, 27)).unwrap();
+        let program = crate::core::validate(builder.finish(root).unwrap(), &[source.as_ref()])
+            .expect("the honest manual Pure donor retains its unused generic nominal");
         assert!(matches!(
-            encode(program, provenance, &mut TypeWorkBudget::default()),
+            encode(
+                &program,
+                &[(module, source)],
+                &mut TypeWorkBudget::default()
+            ),
             Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata))
         ));
     }

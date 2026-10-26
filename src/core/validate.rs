@@ -20163,25 +20163,81 @@ mod tests {
         }
     }
 
+    type GenericCellTypeOnlyFixture = (
+        super::super::ValidatedEffectProgram,
+        Arc<crate::resolved::ResolvedRegistry>,
+        Vec<SourceFile>,
+        Vec<(ModuleId, SourceId)>,
+    );
+
+    fn generic_cell_type_only_fixture() -> GenericCellTypeOnlyFixture {
+        let tree = LinkedValidationDirectory::create();
+        let entry = tree.write(
+            "entry.ash",
+            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let checked = checked_linked_validation_graph(&graph);
+        let builtin = checked
+            .iter()
+            .find(|module| module.module().is_builtin_generic_cell())
+            .unwrap();
+        assert!(
+            graph
+                .module(builtin.module())
+                .unwrap()
+                .dependencies()
+                .is_empty()
+        );
+        let registry = Arc::clone(builtin.registry());
+        let linked = crate::evidence_validation::validate_interface_evidence(
+            link_modules(checked, graph.entry()).unwrap(),
+        )
+        .unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let core = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source().clone())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let donor = super::super::validate_effect_modules(core, &refs, &relation).unwrap();
+        assert_eq!(
+            donor.method_evidence().methods().len(),
+            2,
+            "both original Provider methods remain available"
+        );
+        (donor, registry, sources, relation)
+    }
+
     #[test]
     fn generic_cell_pure_core_identity_preserves_conditional_access() {
         use super::super::dialect::MethodEvidenceCatalog;
-        let (donor, sources, relation) = cell_core_fixture_with_generic(true);
-        let super::super::effect::EffectExprKind::Operation(
-            super::super::effect::EffectOperation::Resource(scope),
-        ) = &donor.nodes[cell_resource_node(&donor).index().unwrap()].kind
-        else {
-            panic!("resource donor");
-        };
+        let (donor, registry, sources, relation) = generic_cell_type_only_fixture();
+        let api = registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::ResourceApi::for_module(effect.id.module()))
+            .unwrap();
         let access = Type::Application(
             Box::new(Type::Application(
-                Box::new(Type::Nominal(scope.acquisition.api().unwrap().handle())),
+                Box::new(Type::Nominal(api.handle())),
                 Box::new(Type::Int),
             )),
             Box::new(Type::Bool),
         );
         let catalog = MethodEvidenceCatalog::new(
-            donor.method_evidence.methods().to_vec(),
+            donor.method_evidence().methods().to_vec(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -20189,11 +20245,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let mut builder = super::super::CoreBuilder::<super::super::dialect::PureOperationFamily>::with_registry_and_method_evidence(std::sync::Arc::clone(&donor.registry), std::sync::Arc::new(catalog)).unwrap();
-        let origin = donor.nodes[donor.root.index().unwrap()]
-            .origin
-            .clone()
-            .unwrap();
+        let mut builder = super::super::CoreBuilder::<super::super::dialect::PureOperationFamily>::with_registry_and_method_evidence(Arc::clone(&registry), std::sync::Arc::new(catalog)).unwrap();
+        let origin = donor.node(donor.root()).unwrap().origin.clone();
         let parameter = builder.binder(access.clone(), origin.clone()).unwrap();
         let body = builder
             .variable(parameter.id(), access.clone(), origin.clone())
@@ -20215,21 +20268,12 @@ mod tests {
     fn generic_cell_indexed_callable_core_retains_conditional_rows() {
         use super::super::dialect::MethodEvidenceCatalog;
         // This type-only contract has no acquisition or generative local R.
-        let (donor, sources, relation) = generic_cell_source_fixture(
-            "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = 42\n",
-            None,
-        );
-        let api =
-            donor
-                .registry()
-                .effects()
-                .iter()
-                .find_map(|effect| {
-                    effect.id.module().is_builtin_generic_cell().then(|| {
-                        crate::resolved::ResourceApi::for_module(effect.id.module()).unwrap()
-                    })
-                })
-                .unwrap();
+        let (donor, registry, sources, relation) = generic_cell_type_only_fixture();
+        let api = registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::ResourceApi::for_module(effect.id.module()))
+            .unwrap();
         let callback = Type::function_computation(
             Type::Unit,
             crate::types::ComputationType::new(
@@ -20250,7 +20294,7 @@ mod tests {
             Vec::new(),
         );
         let mut builder = super::super::EffectCoreBuilder::with_registry_and_method_evidence(
-            std::sync::Arc::clone(donor.registry()),
+            Arc::clone(&registry),
             std::sync::Arc::new(catalog),
         )
         .unwrap();

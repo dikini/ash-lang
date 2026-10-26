@@ -61,7 +61,7 @@ rewrite, standalone and stack policies are unchanged. All temporary diagnostics
 were removed. The normal-policy focused run passes 114 distinct driver, policy, capture,
 reporting and observer tests, including the original staged 24-owner 256 KiB
 witness and 8,000-member worker. The latest full-library inventory records
-1,532 passes and 63 failures across 1,595 executed names. It restores 22 existing
+1,543 passes and 52 failures across 1,595 executed names. It restores 11 existing
 failed names since the prior draft without a new failure. The earlier private
 Source capture test has one justified rename and passes under its Effect lifetime
 obligation; its old name's disappearance is not counted as restoration. The
@@ -351,17 +351,17 @@ capture tests using complete dependency provenance and actual activation IDs.
 They also exposed and repaired stale resume-row finalization without cleanup
 equations and lost intermediate arrow rows in curried equation reconstruction.
 The latest complete all-feature library inventory executes 1,595 test names:
-1,532 pass and 63 fail, restoring 22 existing failed names since the prior draft
+1,543 pass and 52 fail, restoring 11 existing failed names since the prior draft
 checkpoint without a newly failing name. The earlier private-Pure Source
 expectation was renamed to assert required local Effect lifetime summaries; the adjacent Pure
 capture-demand exact/short/retry contract remains unchanged and passes. That
 rename is recorded separately, not counted as a restored old name. All 8,565
 tracked input hashes match before/after the run; only this task and its plan
 inventory prose changed afterward. Full workspace/all-target/all-feature Clippy
-and the 114 focused
-driver/policy/capture/reporting/observer checks pass. Seven integration names
-are additional to the library inventory; the overlapping 107 are not added
-again. This is partial repair evidence, not the complete workspace gate.
+and the 114 focused driver/policy/capture/reporting/observer checks pass. Seven
+integration names retain prior reviewed evidence because this checkpoint changes
+only test fixtures and progress prose; they were not rerun here. The fresh library
+inventory includes the overlapping 107, which are not added again. This is partial repair evidence, not the complete workspace gate.
 Cell mutation donors now validate through the actual Source/Effect pipeline
 before corruption, with physical closure capture/layout metadata kept coherent.
 Source Effect transforms preserve region arithmetic and its allocation effects;
@@ -381,8 +381,15 @@ uses Effect lowering while preserving poisoning and fresh-retry checks.
 Registration rebuilds retain actual module/source provenance. A mechanical
 extraction reuses the original paid effect-selection body walker: actual Source
 headers select Effect Core, while 96 nested empty blocks retain the exact 97-unit,
-one-short and retry proof on a 64 KiB stack. The remaining failures require
-classification across graph fixtures,
+one-short and retry proof on a 64 KiB stack. Standalone native donors now retain
+all original effect declarations, symbol Arcs and the defining Address kind
+through existing registry APIs. Type-only GenericCell donors retain the complete
+zero-dependency builtin registry and the same graph's original method catalog.
+Image fixtures use the existing Effect encoding/restoration path and complete
+source relations, preserving exact wire/preparation/refusal cuts and execution
+after source removal. The unsupported Pure registry case first publicly validates
+its original unused generic nominal. These are fixture repairs without codec or
+allowance changes. The remaining failures require classification across graph fixtures,
 selectors, exact ledgers and product behavior; this library run does not replace
 the canonical workspace gate.
 The final fresh full gate and independent review remain pending.
