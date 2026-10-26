@@ -61,11 +61,14 @@ rewrite, standalone and stack policies are unchanged. All temporary diagnostics
 were removed. The normal-policy focused run passes 114 distinct driver, policy, capture,
 reporting and observer tests, including the original staged 24-owner 256 KiB
 witness and 8,000-member worker. The latest full-library inventory records
-1,543 passes and 52 failures across 1,595 executed names. It restores 11 existing
+1,560 passes and 35 failures across 1,595 executed names. It restores 17 existing
 failed names since the prior draft without a new failure. The earlier private
 Source capture test has one justified rename and passes under its Effect lifetime
 obligation; its old name's disappearance is not counted as restoration. The
-complete workspace gate remains pending and no whole criterion closes here.
+complete workspace gate remains pending and no whole criterion closes here. These
+35 failures are the library backlog, not the complete regression scope: the next
+action after draft publication/readback is a serialized all-feature integration-only
+inventory with no fail-fast, before further cost-ledger migration.
 
 ## Work
 
@@ -351,7 +354,7 @@ capture tests using complete dependency provenance and actual activation IDs.
 They also exposed and repaired stale resume-row finalization without cleanup
 equations and lost intermediate arrow rows in curried equation reconstruction.
 The latest complete all-feature library inventory executes 1,595 test names:
-1,543 pass and 52 fail, restoring 11 existing failed names since the prior draft
+1,560 pass and 35 fail, restoring 17 existing failed names since the prior draft
 checkpoint without a newly failing name. The earlier private-Pure Source
 expectation was renamed to assert required local Effect lifetime summaries; the adjacent Pure
 capture-demand exact/short/retry contract remains unchanged and passes. That
@@ -362,6 +365,22 @@ and the 114 focused driver/policy/capture/reporting/observer checks pass. Seven
 integration names retain prior reviewed evidence because this checkpoint changes
 only test fixtures and progress prose; they were not rerun here. The fresh library
 inventory includes the overlapping 107, which are not added again. This is partial repair evidence, not the complete workspace gate.
+Core validation fixtures now retain complete provenance and actual defining
+user owners. The manual seven-node Pure donor keeps its original canonical
+relay/F facts through existing registry construction, with separate reserved-source,
+authority, final-carrier and identity-discovery debits. Its exact/short/retry and
+original deep 256 KiB assertions pass. Closure mutations inspect actual stored
+code, retain full rows/capture layouts, preserve the authenticated entry root,
+and reach their original rejection reasons and anchors. Extra-use tests check
+incoming authority at the original source before full refusal; the distinct
+Return mutant is not claimed otherwise ordinarily profile-typed. Whole-validation
+one-short cases preserve paid prefixes under atomic refusal rather than assume a
+rejected bulk debit consumes its remaining credit. Per-charge accounting tests
+retain their specific exact debits. These are test-fixture repairs, with no
+production behavior, capacity or meter change. The 35 remaining failures are only
+the library backlog; integration-only inventory remains pending before further
+ledger migration and the final canonical gate.
+
 Cell mutation donors now validate through the actual Source/Effect pipeline
 before corruption, with physical closure capture/layout metadata kept coherent.
 Source Effect transforms preserve region arithmetic and its allocation effects;

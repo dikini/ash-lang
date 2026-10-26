@@ -15783,11 +15783,12 @@ mod tests {
                     _ => None,
                 })
                 .expect("authenticated read provider binding");
-        let (closure_id, closure) =
-            super::super::region::closure_initializer::<EffectOperationFamily>(function, |id| {
-                core.nodes.get(id.index().ok()?).map(|node| &node.kind)
-            })
-            .expect("stored read provider");
+        let (closure_id, closure) = super::super::region::closure_initializer::<
+            crate::core::effect::EffectOperationFamily,
+        >(function, |id| {
+            core.nodes.get(id.index().ok()?).map(|node| &node.kind)
+        })
+        .expect("stored read provider");
         let function = closure.code.function().expect("read callable code");
         let request = function.body();
         let parameter = function.parameter().clone();
@@ -22856,11 +22857,13 @@ mod tests {
                         .iter()
                         .find_map(|node| match &node.kind {
                             EffectExprKind::Operation(EffectOperation::Request(request))
-                                if rebuilt.nodes[request.operand.index().unwrap()].ty
-                                    == Type::Function(
-                                        Box::new(Type::Unit),
-                                        Box::new(Type::Int),
-                                    ) =>
+                                if rebuilt.nodes[request.operand.index().unwrap()]
+                                    .ty
+                                    .function_view()
+                                    .is_some_and(|function| {
+                                        function.domain() == &Type::Unit
+                                            && function.value() == &Type::Int
+                                    }) =>
                             {
                                 Some(request.operand)
                             }
@@ -23207,7 +23210,7 @@ mod tests {
                 "main : Unit -> Wrap<Int>\n",
                 "main () = {\nlet ignored = fake(0)\nconvert((Wrap(42), true))\n}\n",
             ),
-            &[],
+            &["fake"],
         )
     }
 
@@ -23464,6 +23467,7 @@ mod tests {
 
     fn replace_concrete_monomorphic_adapter_edge_source_with_global(
         program: &mut UnvalidatedEffectProgram,
+        fake: BinderId,
     ) {
         let edge = program
             .method_evidence_anchors
@@ -23501,7 +23505,7 @@ mod tests {
             .enumerate()
             .find_map(|(index, node)| match node.kind {
                 EffectExprKind::Pure(PureExprKind::Variable(variable))
-                    if matches!(variable.binder(), BinderId::Resolved { .. })
+                    if variable.binder() == fake
                         && crate::types::same_type(&node.ty, &original.ty) =>
                 {
                     Some(NodeId::new(
@@ -23512,6 +23516,10 @@ mod tests {
                 _ => None,
             })
             .expect("the fixture has a same-typed ordinary global producer");
+        assert_ne!(
+            wrong_argument, original_argument,
+            "the wrong user source must be distinct"
+        );
         let swapped_use = program
             .nodes
             .iter()
@@ -23617,8 +23625,9 @@ mod tests {
                     "fake : Int -> Int\nfake value = value\n",
                     "main : Unit -> Wrap<Wrap<Int>>\nmain () = {\nlet _ = fake 0\nconvert (Wrap (Wrap 42), true)\n}\n",
                 ),
-                &[],
+                &["fake"],
             );
+            let fake = fixture.global("fake").0;
             let LinkedCoreValidationFixture {
                 directory,
                 graph,
@@ -23644,6 +23653,10 @@ mod tests {
                     fold_effect_literal_primitives(&validated).unwrap()
                 };
             }
+            Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .run_effect()
+                .expect("the same complete rebuilt donor validates before mutation");
             let leaf = program
                 .method_evidence
                 .concrete_sources()
@@ -23666,9 +23679,17 @@ mod tests {
                 EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == leaf)
                 })
                 .unwrap();
-            let fake_index = program.nodes.iter().position(|node| matches!(node.kind,
-                EffectExprKind::Pure(PureExprKind::Variable(variable)) if matches!(variable.binder(), BinderId::Resolved { .. })
-                    && crate::types::same_type(&node.ty, &program.nodes[leaf_index].ty))).unwrap();
+            let fake_index = program
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(node.kind,
+                EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == fake
+                    && crate::types::same_type(&node.ty, &program.nodes[leaf_index].ty))
+                })
+                .unwrap();
+            assert_ne!(fake, leaf);
+            assert_ne!(fake_index, leaf_index);
             let leaf_kind = program.nodes[leaf_index].kind.clone();
             program.nodes[leaf_index].kind = program.nodes[fake_index].kind.clone();
             program.nodes[fake_index].kind = leaf_kind;
@@ -23691,6 +23712,7 @@ mod tests {
     fn concrete_monomorphic_adapter_edges_reject_same_typed_global_sources_after_every_rebuild() {
         for rebuild in 0..3 {
             let fixture = concrete_monomorphic_adapter_edge_fixture();
+            let fake = fixture.global("fake").0;
             let LinkedCoreValidationFixture {
                 directory,
                 graph,
@@ -23712,7 +23734,16 @@ mod tests {
                     fold_effect_literal_primitives(&validated).expect("literal-fold rebuild")
                 };
             }
-            replace_concrete_monomorphic_adapter_edge_source_with_global(&mut program);
+            Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .run_effect()
+                .expect("the same complete rebuilt donor validates before mutation");
+            replace_concrete_monomorphic_adapter_edge_source_with_global(&mut program, fake);
+            let authority = Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect_err("the adapter edge must reject the ordinary global source");
+            assert_eq!(authority.reason(), ValidationReason::ApplicationType);
             assert!(
                 validate_effect_modules(program, &sources, &module_sources).is_err(),
                 "same-typed ordinary global source must reject after rebuild {rebuild}",
@@ -25853,7 +25884,23 @@ mod tests {
                 assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
             }
         }
-        let constructor = changed.registry.nominals()[0].id;
+        let constructor = changed
+            .registry
+            .nominals()
+            .iter()
+            .find(|nominal| {
+                nominal.id.module() == fixture.graph.entry() && nominal.spelling == "Box"
+            })
+            .expect("the user Box retains its Type -> Type kind")
+            .id;
+        assert_eq!(
+            changed
+                .registry
+                .nominal_parameters(constructor)
+                .unwrap()
+                .len(),
+            1
+        );
         let mut owners = changed.method_evidence.lexical_owners().to_vec();
         assert_eq!(owners.len(), 1);
         let mut arguments = owners[0].application.arguments().to_vec();
@@ -25959,25 +26006,60 @@ mod tests {
                         )));
                     replaced += 1;
                 }
+                EffectExprKind::Operation(crate::core::effect::EffectOperation::RegionClosure(
+                    closure,
+                )) if closure
+                    .code
+                    .function()
+                    .is_some_and(|function| function.body() == scope_id) =>
+                {
+                    let mut closure = closure.clone();
+                    let function = closure.code.function().unwrap();
+                    closure.code = crate::core::region::RegionClosureCode::Function(
+                        FunctionNode::new(function.parameter().clone(), binding.body()),
+                    );
+                    node.kind = EffectExprKind::Operation(
+                        crate::core::effect::EffectOperation::RegionClosure(closure),
+                    );
+                    replaced += 1;
+                }
                 _ => {}
             }
         }
         assert_eq!(replaced, 1);
         // Move the nominal and unused method together. N stays in scope, and
         // neither its representation nor the method type mentions run's A.
-        let old_root = moved.root;
+        let entry = moved.root;
+        let EffectExprKind::Operation(crate::core::effect::EffectOperation::Region(region)) =
+            &moved.nodes[entry.index().unwrap()].kind
+        else {
+            panic!("authenticated entry region")
+        };
+        assert!(region.entry);
+        let old_root = region.body;
+        let ty = moved.nodes[old_root.index().unwrap()].ty.clone();
+        let effects = moved.nodes[binding.initializer().index().unwrap()]
+            .effects
+            .union(&moved.nodes[old_root.index().unwrap()].effects)
+            .unwrap();
+        moved.nodes[binding_id.index().unwrap()].ty = ty.clone();
+        moved.nodes[binding_id.index().unwrap()].effects = effects.clone();
+        moved.nodes[scope_id.index().unwrap()].ty = ty;
+        moved.nodes[scope_id.index().unwrap()].effects = effects;
         moved.nodes[binding_id.index().expect("binding index")].kind =
             EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
                 BindingNode::new(binding.binder().clone(), binding.initializer(), old_root),
             )));
-        moved.root = scope_id;
-        assert_eq!(
-            validate_effect_modules(moved, &sources, &fixture.module_sources)
-                .map(|_| ())
-                .expect_err("the complete unused header must remain inside its rigid scope")
-                .reason(),
-            ValidationReason::TypeScope
-        );
+        let EffectExprKind::Operation(crate::core::effect::EffectOperation::Region(region)) =
+            &mut moved.nodes[entry.index().unwrap()].kind
+        else {
+            unreachable!()
+        };
+        region.body = scope_id;
+        let error = validate_effect_modules(moved, &sources, &fixture.module_sources)
+            .map(|_| ())
+            .expect_err("the complete unused header must remain inside its rigid scope");
+        assert_eq!(error.reason(), ValidationReason::TypeScope, "{error:?}");
     }
 
     #[test]
@@ -26046,27 +26128,55 @@ mod tests {
                         )));
                         replaced += 1;
                     }
+                    EffectExprKind::Operation(
+                        crate::core::effect::EffectOperation::RegionClosure(closure),
+                    ) if closure
+                        .code
+                        .function()
+                        .is_some_and(|function| function.body() == scope_id) =>
+                    {
+                        let mut closure = closure.clone();
+                        let function = closure.code.function().unwrap();
+                        closure.code = crate::core::region::RegionClosureCode::Function(
+                            FunctionNode::new(function.parameter().clone(), scope.body()),
+                        );
+                        node.kind = EffectExprKind::Operation(
+                            crate::core::effect::EffectOperation::RegionClosure(closure),
+                        );
+                        replaced += 1;
+                    }
                     _ => {}
                 }
             }
             assert_eq!(replaced, 1);
-            let root = moved.root;
+            let entry = moved.root;
+            let EffectExprKind::Operation(crate::core::effect::EffectOperation::Region(region)) =
+                &moved.nodes[entry.index().unwrap()].kind
+            else {
+                panic!("authenticated entry region")
+            };
+            assert!(region.entry);
+            let root = region.body;
             let ty = moved.nodes[root.index().expect("root index")].ty.clone();
+            let effects = moved.nodes[root.index().unwrap()].effects.clone();
             let scope_node = &mut moved.nodes[scope_id.index().expect("scope index")];
             crate::types::replace_type_iteratively(&mut scope_node.ty, ty);
+            scope_node.effects = effects;
             scope_node.kind = EffectExprKind::Pure(PureExprKind::Computation(
                 PureComputation::LocalNominalScope(crate::core::LocalNominalScopeNode::new(
                     scope.owner(),
                     root,
                 )),
             ));
-            moved.root = scope_id;
-            assert_eq!(
-                validate_effect_modules(moved, &sources, &fixture.module_sources)
-                    .expect_err("a captured type variable requires its enclosing abstraction")
-                    .reason(),
-                ValidationReason::TypeScope
-            );
+            let EffectExprKind::Operation(crate::core::effect::EffectOperation::Region(region)) =
+                &mut moved.nodes[entry.index().unwrap()].kind
+            else {
+                unreachable!()
+            };
+            region.body = scope_id;
+            let error = validate_effect_modules(moved, &sources, &fixture.module_sources)
+                .expect_err("a captured type variable requires its enclosing abstraction");
+            assert_eq!(error.reason(), ValidationReason::TypeScope, "{error:?}");
         }
     }
 
@@ -26628,12 +26738,14 @@ mod tests {
         assert!(exact.result.is_ok());
         assert_eq!(exact.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
 
-        let one_short = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1));
+        let short_prefix = CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1);
+        let one_short = attempt(short_prefix);
         let error = one_short
             .result
             .expect_err("one missing unit must reject before publication");
         assert_eq!(error.reason(), ValidationReason::Resource);
-        assert_eq!(one_short.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+        // Atomic refusal retains completed work without charging the rejected batch.
+        assert!((short_prefix..=CORE_VALIDATION_TYPE_WORK_LIMIT).contains(&one_short.type_work));
 
         let retry = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);
         assert!(retry.result.is_ok());
@@ -26723,53 +26835,74 @@ mod tests {
         source: NodeId,
         use_kind: ExtraCarrierUse,
     ) {
-        let old_root = program.root;
-        let old_root_index = old_root.index().expect("root index");
-        let root_type = program.nodes[old_root_index].ty.clone();
-        let root_origin = program.nodes[old_root_index].origin.clone();
-        let binder = program
-            .nodes
-            .iter()
-            .find_map(|node| match &node.kind {
-                EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) => {
-                    Some(function.parameter().clone())
-                }
-                _ => None,
-            })
-            .expect("the fixture has a function binder");
-        let node = NodeId::new(
-            program.arena,
-            u32::try_from(program.nodes.len()).expect("fixture size"),
-        );
-        let (ty, kind) = match use_kind {
-            ExtraCarrierUse::BindStorage => (
-                root_type,
-                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
-                    BindingNode::new(binder, source, old_root),
-                ))),
-            ),
-            ExtraCarrierUse::Return => (
-                Type::Function(
-                    Box::new(binder.ty().clone()),
-                    Box::new(
-                        program.nodes[source.index().expect("source index")]
-                            .ty
-                            .clone(),
-                    ),
-                ),
-                EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(FunctionNode::new(
-                    binder, source,
-                )))),
-            ),
+        let entry = program.root;
+        let EffectExprKind::Operation(crate::core::effect::EffectOperation::Region(region)) =
+            &program.nodes[entry.index().unwrap()].kind
+        else {
+            panic!("authenticated entry region")
         };
+        assert!(region.entry);
+        let old_body = region.body;
+        let body = &program.nodes[old_body.index().unwrap()];
+        let result_type = body.ty.clone();
+        let result_effects = body.effects.clone();
+        let origin = body.origin.clone().unwrap();
+        let source_type = program.nodes[source.index().unwrap()].ty.clone();
+        let source_effects = program.nodes[source.index().unwrap()].effects.clone();
+        let dialect = body.dialect;
+        let (initializer, initializer_type, initializer_effects) = match use_kind {
+            ExtraCarrierUse::BindStorage => (source, source_type, source_effects),
+            ExtraCarrierUse::Return => {
+                // Retain the distinct Return incoming edge. The authority
+                // subtest below checks that edge before ordinary node typing.
+                let parameter = TypedBinder::new(
+                    program.arena,
+                    BinderId::Generated(u32::MAX - 71),
+                    Type::Unit,
+                    origin.clone(),
+                );
+                let ty = Type::function_computation(
+                    Type::Unit,
+                    crate::types::ComputationType::new(source_type, source_effects),
+                );
+                let returned = node_id(program.arena, program.nodes.len()).unwrap();
+                program.nodes.push(StoredNode {
+                    dialect,
+                    effects: EffectRow::empty(),
+                    ty: ty.clone(),
+                    origin: Some(origin.clone()),
+                    kind: EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(
+                        FunctionNode::new(parameter, source),
+                    ))),
+                });
+                (returned, ty, EffectRow::empty())
+            }
+        };
+        let extra = node_id(program.arena, program.nodes.len()).unwrap();
         program.nodes.push(StoredNode {
-            dialect: DialectId::PURE,
-            effects: EffectRow::empty(),
-            ty,
-            origin: root_origin,
-            kind,
+            dialect,
+            effects: initializer_effects.union(&result_effects).unwrap(),
+            ty: result_type,
+            origin: Some(origin.clone()),
+            kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                BindingNode::new(
+                    TypedBinder::new(
+                        program.arena,
+                        BinderId::Generated(u32::MAX - 72),
+                        initializer_type,
+                        origin,
+                    ),
+                    initializer,
+                    old_body,
+                ),
+            ))),
         });
-        program.root = node;
+        let EffectExprKind::Operation(crate::core::effect::EffectOperation::Region(region)) =
+            &mut program.nodes[entry.index().unwrap()].kind
+        else {
+            unreachable!()
+        };
+        region.body = extra;
     }
 
     #[test]
@@ -26783,7 +26916,24 @@ mod tests {
                 .find(|anchor| matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { .. }))
                 .expect("the fixture has an adapter")
                 .node;
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .unwrap()
+                .run_effect()
+                .expect("the complete donor validates before an extra use");
             add_extra_carrier_use_for_test(&mut fixture.program, adapter, use_kind);
+            let error = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect_err("the incoming adapter edge is unauthorized");
+            assert_eq!(error.reason(), ValidationReason::NodeType);
+            assert_eq!(error.node(), Some(adapter));
+            drop(sources);
             assert!(
                 fixture.validate().is_err(),
                 "an authenticated adapter cannot be stored or returned in addition to its exact consumer",
@@ -26809,7 +26959,24 @@ mod tests {
                 _ => None,
             })
             .expect("the fixture has an abstract domain scheme variable");
+        let sources = domain
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        Validator::new_modules(&domain.program, &sources, &domain.module_sources)
+            .unwrap()
+            .run_effect()
+            .expect("the complete domain donor validates before an extra use");
         add_extra_carrier_use_for_test(&mut domain.program, source, ExtraCarrierUse::BindStorage);
+        let error = Validator::new_modules(&domain.program, &sources, &domain.module_sources)
+            .unwrap()
+            .validate_method_evidence_authority()
+            .expect_err("the incoming domain edge is unauthorized");
+        assert_eq!(error.reason(), ValidationReason::NodeType);
+        assert_eq!(error.node(), Some(source));
+        drop(sources);
         assert!(
             domain.validate().is_err(),
             "an authenticated domain scheme variable cannot gain an extra use",
@@ -26843,7 +27010,17 @@ mod tests {
                 .find(|anchor| matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { .. }))
                 .expect("the transformed fixture has an adapter")
                 .node;
+            Validator::new_modules(&transformed, &sources, &module_sources)
+                .unwrap()
+                .run_effect()
+                .expect("the rebuilt donor validates before the extra use");
             add_extra_carrier_use_for_test(&mut transformed, adapter, ExtraCarrierUse::BindStorage);
+            let error = Validator::new_modules(&transformed, &sources, &module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect_err("the rebuilt incoming edge is unauthorized");
+            assert_eq!(error.reason(), ValidationReason::NodeType);
+            assert_eq!(error.node(), Some(adapter));
             assert!(
                 validate_effect_modules(transformed, &sources, &module_sources).is_err(),
                 "fresh validation rejects an extra adapter use after every transform",
@@ -27834,6 +28011,12 @@ mod tests {
             ),
             &["identity"],
         );
+        let sources = linked_fixture_sources(&fixture);
+        Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .unwrap()
+            .run_effect()
+            .expect("the same complete donor validates before sharing");
+        drop(sources);
         let (identity, _) = fixture.global("identity");
         let abstraction = linked_global_abstraction(&fixture.program, identity);
         let abstraction_node = &fixture.program.nodes[abstraction.value() as usize];
@@ -27853,8 +28036,8 @@ mod tests {
             u32::try_from(fixture.program.nodes.len()).expect("the fixture fits one arena"),
         );
         fixture.program.nodes.push(StoredNode {
-            dialect: DialectId::PURE,
-            effects: EffectRow::empty(),
+            dialect: root_node.dialect,
+            effects: abstraction_node.effects.union(&root_node.effects).unwrap(),
             ty: root_node.ty.clone(),
             origin: root_node.origin.clone(),
             kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
@@ -27954,12 +28137,16 @@ mod tests {
             assert!(plain_parameters.is_empty());
             let second_abstraction = linked_global_abstraction(&fixture.program, second_owner);
             let registry = fixture.program.registry.as_ref();
-            let nominal_parameter = registry
-                .nominal_parameter_entries()
-                .flat_map(|(_, parameters)| parameters)
-                .next()
-                .expect("the structure fixture retains one nominal parameter")
-                .id;
+            let owner_module = first_owner.module().unwrap();
+            let holder = registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.id.module() == owner_module && nominal.spelling == "Holder")
+                .expect("the defining user Holder nominal");
+            let [nominal_parameter] = registry.nominal_parameters(holder.id).unwrap() else {
+                panic!("Holder N parameter")
+            };
+            let nominal_parameter = nominal_parameter.id;
             let row_parameters = registry
                 .global_parameter_rows()
                 .iter()
@@ -27969,7 +28156,10 @@ mod tests {
                 .type_variables()
                 .map(|parameter| parameter.id)
                 .find(|parameter| {
-                    !row_parameters.contains(parameter) && *parameter != nominal_parameter
+                    parameter.module() == Some(owner_module)
+                        && registry.type_variable(*parameter).unwrap().spelling == "I"
+                        && !row_parameters.contains(parameter)
+                        && *parameter != nominal_parameter
                 })
                 .expect("the structure fixture retains one interface-only parameter");
             let owner_module = first_owner
@@ -27988,35 +28178,41 @@ mod tests {
                 .map(|(position, (owner, _))| (*owner, position))
                 .collect::<HashMap<_, _>>();
             let original_canonical = canonical_type_variable_shape(registry);
-            assert_eq!(original_rows.len(), 2);
-            assert_eq!(original_rows[0].0, first_owner);
-            assert_eq!(original_rows[0].1, first_parameters);
-            assert_eq!(original_rows[1].0, second_owner);
-            assert_eq!(original_rows[1].1, second_parameters);
+            let first_position = original_positions[&first_owner];
+            let second_position = original_positions[&second_owner];
+            assert_ne!(first_position, second_position);
+            assert_eq!(original_rows[first_position].1, first_parameters);
+            assert_eq!(original_rows[second_position].1, second_parameters);
+            let sources = linked_fixture_sources(&fixture);
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .unwrap()
+                .run_effect()
+                .expect("the complete same-arena donor validates before each mutation");
+            drop(sources);
 
             let mut expected_rows = original_rows.clone();
             let mut expected_positions = original_positions.clone();
             let mut expected_canonical = original_canonical.clone();
             let mutation = match case {
                 Case::Empty => {
-                    expected_rows[0].1.clear();
+                    expected_rows[first_position].1.clear();
                     CoreGlobalParameterRowMutationForTest::EmptyFirstRow
                 }
                 Case::GeneratedOwner => {
-                    expected_rows[0].0 = generated_owner;
+                    expected_rows[first_position].0 = generated_owner;
                     expected_positions.remove(&first_owner);
-                    expected_positions.insert(generated_owner, 0);
+                    expected_positions.insert(generated_owner, first_position);
                     CoreGlobalParameterRowMutationForTest::ReplaceFirstOwner(generated_owner)
                 }
 
                 Case::GeneratedParameter => {
-                    expected_rows[0].1[0] = generated_parameter;
+                    expected_rows[first_position].1[0] = generated_parameter;
                     CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(
                         generated_parameter,
                     )
                 }
                 Case::ForeignParameter => {
-                    expected_rows[0].1[0] = foreign_parameter;
+                    expected_rows[first_position].1[0] = foreign_parameter;
                     CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(foreign_parameter)
                 }
                 Case::MissingCanonical => {
@@ -28026,24 +28222,24 @@ mod tests {
                     )
                 }
                 Case::NominalParameter => {
-                    expected_rows[0].1[0] = nominal_parameter;
+                    expected_rows[first_position].1[0] = nominal_parameter;
                     CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(nominal_parameter)
                 }
                 Case::DuplicateWithinRow => {
-                    expected_rows[0].1[1] = expected_rows[0].1[0];
+                    expected_rows[first_position].1[1] = expected_rows[first_position].1[0];
                     CoreGlobalParameterRowMutationForTest::DuplicateFirstParameter
                 }
                 Case::DuplicateAcrossRows => {
-                    expected_rows[1].1[0] = expected_rows[0].1[0];
+                    expected_rows[second_position].1[0] = expected_rows[first_position].1[0];
                     CoreGlobalParameterRowMutationForTest::DuplicateAcrossRows
                 }
                 Case::WrongPosition => {
-                    expected_positions.insert(first_owner, 1);
-                    expected_positions.insert(second_owner, 0);
+                    expected_positions.insert(first_owner, second_position);
+                    expected_positions.insert(second_owner, first_position);
                     CoreGlobalParameterRowMutationForTest::SwapFirstOwnerPositions
                 }
                 Case::DuplicateOwner => {
-                    expected_rows[1].0 = first_owner;
+                    expected_rows[second_position].0 = first_owner;
                     expected_positions.remove(&second_owner);
                     expected_positions.insert(generated_owner, usize::MAX);
                     CoreGlobalParameterRowMutationForTest::DuplicateFirstOwner {
@@ -28051,10 +28247,14 @@ mod tests {
                     }
                 }
                 Case::MissingRow => {
-                    let (removed_owner, _) = expected_rows
-                        .pop()
-                        .expect("the structure fixture has a last row");
+                    let (removed_owner, _) = expected_rows.remove(second_position);
+                    assert_eq!(removed_owner, second_owner);
                     expected_positions.remove(&removed_owner);
+                    for (position, (owner, _)) in
+                        expected_rows.iter().enumerate().skip(second_position)
+                    {
+                        expected_positions.insert(*owner, position);
+                    }
                     CoreGlobalParameterRowMutationForTest::RemoveLastRow
                 }
                 Case::ExtraUnconsumedRow => {
@@ -28075,7 +28275,10 @@ mod tests {
             assert!(
                 Arc::get_mut(&mut fixture.program.registry)
                     .expect("each unchecked fixture uniquely owns its registry")
-                    .corrupt_global_parameter_rows_for_core_test(mutation)
+                    .corrupt_global_parameter_rows_for_core_test(
+                        [first_owner, second_owner],
+                        mutation
+                    )
             );
 
             let registry = fixture.program.registry.as_ref();
@@ -28227,13 +28430,16 @@ mod tests {
     struct CompleteModuleValidationWork {
         ordinary_registry: usize,
         row_structure: usize,
+        method_authority: usize,
         envelopes: usize,
         graph: usize,
         ordinary_binders: usize,
         initializer_owners: usize,
         resolved_matching: usize,
         generated_matching: usize,
+        final_carrier_rows: usize,
         node_types: usize,
+        identity_discovery: usize,
         term_scopes: usize,
         type_scopes: usize,
     }
@@ -28242,13 +28448,16 @@ mod tests {
         fn total(&self) -> usize {
             self.ordinary_registry
                 + self.row_structure
+                + self.method_authority
                 + self.envelopes
                 + self.graph
                 + self.ordinary_binders
                 + self.initializer_owners
                 + self.resolved_matching
                 + self.generated_matching
+                + self.final_carrier_rows
                 + self.node_types
+                + self.identity_discovery
                 + self.term_scopes
                 + self.type_scopes
         }
@@ -28399,7 +28608,22 @@ mod tests {
         );
         let generated_origin = generated_origin(owner_source, generated_origin_depth);
 
-        let mut builder = CoreBuilder::with_registry(Arc::clone(&fixture.program.registry));
+        // This is an isolated manual Pure donor, whose only resolved scheme
+        // owner is relay. Retain that owner's original canonical F record;
+        // the separately checked Source program keeps its complete registry.
+        let canonical = fixture
+            .program
+            .registry
+            .type_variable(resolved_parameter)
+            .unwrap()
+            .clone();
+        let registry = crate::resolved::ResolvedRegistry::default()
+            .with_image_global_parameters(
+                vec![(owner, vec![canonical])],
+                &mut crate::types::TypeWorkBudget::default(),
+            )
+            .expect("the manual Pure owner retains its original canonical parameter");
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
         builder
             .reserve_resolved_binders([owner])
             .expect("the authentic resolved owner reserves once");
@@ -28524,7 +28748,9 @@ mod tests {
             .expect("row structure is part of registry work");
 
         previous = validator.type_work.get();
-        let authenticated = HashSet::new();
+        let authenticated = validator.validate_method_evidence_authority()?;
+        let method_authority = validator.type_work.get() - previous;
+        previous = validator.type_work.get();
         validator.validate_envelopes(&authenticated)?;
         let envelopes = validator.type_work.get() - previous;
 
@@ -28549,6 +28775,23 @@ mod tests {
         );
 
         previous = validator.type_work.get();
+        validator.validate_method_evidence_type_owners(&type_binders)?;
+        // Mirror the full Pure path. This donor has no TypeApplication or
+        // method evidence, but all seven final type carriers are still walked.
+        for (index, node) in validator.program.nodes.iter().enumerate() {
+            assert!(!matches!(
+                node.kind,
+                PureExprKind::Computation(PureComputation::TypeApplication(_))
+            ));
+            validator.validate_final_carrier_rows(
+                OwnerValidationRoot::TypeRows(&node.ty),
+                &type_binders,
+                node_id(validator.program.arena, index)?,
+            )?;
+        }
+        let final_carrier_rows = validator.type_work.get() - previous;
+
+        previous = validator.type_work.get();
         validator.validate_node_types(&nominal_parameter_owners, &type_binders, &authenticated)?;
         let node_types = validator.type_work.get() - previous;
 
@@ -28560,16 +28803,36 @@ mod tests {
         validator.validate_type_scopes()?;
         let type_scopes = validator.type_work.get() - previous;
 
+        previous = validator.type_work.get();
+        assert!(
+            validator
+                .authenticated_abstract_nominals
+                .borrow()
+                .is_empty()
+        );
+        let mut work = TypeWorkBudget::with_limit(
+            validator
+                .type_work_limit
+                .saturating_sub(validator.type_work.get()),
+        );
+        let present = validator.program.registry.has_cell_type_identity(&mut work);
+        validator.charge_type_work(work.used())?;
+        assert!(!present.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?);
+        let identity_discovery = validator.type_work.get() - previous;
+
         Ok(CompleteModuleValidationWork {
             ordinary_registry,
             row_structure: terms.row_structure(),
+            method_authority,
             envelopes,
             graph,
             ordinary_binders,
             initializer_owners: terms.initializer_owners,
             resolved_matching: terms.resolved_matching(),
             generated_matching: terms.generated_matching(),
+            final_carrier_rows,
             node_types,
+            identity_discovery,
             term_scopes,
             type_scopes,
         })
@@ -28585,7 +28848,9 @@ mod tests {
         const K_G: usize = 3;
         // Every supplied module/source pair is visited before the canonical
         // global parameter record and row authentication.
-        const RESERVED_SOURCE_SCAN_WORK: usize = 2;
+        const SOURCE_PAIR_COUNT: usize = 4;
+        const FOREIGN_SOURCE_BYTES: usize = 216;
+        const RESERVED_SOURCE_SCAN_WORK: usize = SOURCE_PAIR_COUNT + FOREIGN_SOURCE_BYTES;
         const CANONICAL_REGISTRY_RECORDS: usize = RESERVED_SOURCE_SCAN_WORK + R;
         const ROW_STRUCTURE: usize = 2 * S + 2 * R;
         // The seven stored envelopes contain 42 Type/binder-Kind cells:
@@ -28611,7 +28876,9 @@ mod tests {
         const GENERATED_VARIABLE_NODE_WORK: usize = 3;
         const GENERATED_FUNCTION_NODE_WORK: usize = 8;
         const GENERATED_ABSTRACTION_NODE_WORK: usize = 18;
-        const RECURSIVE_ROOT_NODE_WORK: usize = 34;
+        // The one recursive member additionally pays its five-cell canonical
+        // closure-initializer classification before the original 34 cells.
+        const RECURSIVE_ROOT_NODE_WORK: usize = 5 + 34;
         const NODE_KIND_AND_TYPE_WORK: usize = RESOLVED_VARIABLE_NODE_WORK
             + RESOLVED_FUNCTION_NODE_WORK
             + RESOLVED_ABSTRACTION_NODE_WORK
@@ -28627,20 +28894,33 @@ mod tests {
         const EXPECTED: CompleteModuleValidationWork = CompleteModuleValidationWork {
             ordinary_registry: CANONICAL_REGISTRY_RECORDS,
             row_structure: ROW_STRUCTURE,
+            // Four seven-node carrier/owner/use reservations/scans, one
+            // recursive-member visit, and six ordinary child edges. There
+            // are no method anchors or retained carriers in this donor.
+            method_authority: 4 * 7 + 1 + 6,
             envelopes: ENVELOPE_TYPE_AND_KIND_CELLS,
             graph: GRAPH_TYPE_WORK,
             ordinary_binders: BINDER_TYPE_AND_KIND_CELLS,
             initializer_owners: O,
             resolved_matching: RESOLVED_MATCHING,
             generated_matching: GENERATED_MATCHING,
+            // Root scheduling plus Type child edges: 3/7/8 for the
+            // resolved carriers and 1/3/4/4 for generated/root carriers.
+            final_carrier_rows: 3 + 7 + 8 + 1 + 3 + 4 + 4,
             node_types: NODE_KIND_AND_TYPE_WORK,
+            // Empty nominal/lexical/abstract/effect inventories plus one query.
+            identity_discovery: 1,
             term_scopes: TERM_SCOPE_TYPE_WORK,
             type_scopes: TYPE_SCOPE_WORK,
         };
 
         assert_eq!(CORE_VALIDATION_TYPE_WORK_LIMIT, 983_040);
         let fixture = linked_complete_validation_fixture(1, 0, 1);
-        assert_eq!(fixture.module_sources.len(), RESERVED_SOURCE_SCAN_WORK);
+        assert_eq!(fixture.module_sources.len(), SOURCE_PAIR_COUNT);
+        assert_eq!(
+            crate::module::foreign_builtin_source_text().len(),
+            FOREIGN_SOURCE_BYTES
+        );
         let sources = linked_fixture_sources(&fixture);
         let prelude = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the canonical prelude fixture initializes");
@@ -28668,7 +28948,10 @@ mod tests {
         );
 
         let exact_work = EXPECTED.total();
-        assert_eq!(exact_work, 266);
+        assert_eq!(
+            exact_work,
+            266 - 2 + RESERVED_SOURCE_SCAN_WORK + 5 + 35 + 30 + 1
+        );
         let mut exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the exact module/source relation is canonical");
         exact
@@ -29179,6 +29462,12 @@ mod tests {
             ),
             &["first", "second"],
         );
+        let sources = linked_fixture_sources(&fixture);
+        Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .unwrap()
+            .run_effect()
+            .expect("the same complete donor validates before sharing");
+        drop(sources);
         let (first, _) = fixture.global("first");
         let (second, _) = fixture.global("second");
         let first_abstraction = linked_global_abstraction(&fixture.program, first);
@@ -29219,9 +29508,17 @@ mod tests {
             .clone()
             .expect("the linked group has provenance");
         fixture.program.nodes.push(StoredNode {
-            dialect: DialectId::PURE,
-            effects: EffectRow::empty(),
-            ty: Type::Tuple(Box::new([Type::Unit, Type::Unit])),
+            dialect: fixture.program.nodes[group_index].dialect,
+            effects: fixture.program.nodes[second_abstraction.index().unwrap()]
+                .effects
+                .union(&fixture.program.nodes[old_body.index().unwrap()].effects)
+                .unwrap(),
+            ty: Type::Tuple(Box::new([
+                fixture.program.nodes[second_abstraction.index().unwrap()]
+                    .ty
+                    .clone(),
+                fixture.program.nodes[old_body.index().unwrap()].ty.clone(),
+            ])),
             origin: Some(connector_origin),
             kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Tuple(
                 super::super::data::TupleNode::new(vec![second_abstraction, old_body]),
@@ -29488,6 +29785,17 @@ mod tests {
                     return None;
                 }
                 let mut current = abstraction.body();
+                if let Some((_, closure)) = crate::core::region::closure_initializer::<
+                    EffectOperationFamily,
+                >(current, |id| {
+                    fixture
+                        .program
+                        .nodes
+                        .get(id.index().ok()?)
+                        .map(|node| &node.kind)
+                }) {
+                    current = closure.code.body();
+                }
                 while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
                     application,
                 ))) = &fixture.program.nodes[current.index().ok()?].kind
@@ -31459,7 +31767,11 @@ mod tests {
         use crate::{core::UnvalidatedEffectProgram, elaborate::EffectElaborator};
 
         const WIDTH: usize = 32;
-        fn fixture() -> (UnvalidatedEffectProgram, SourceFile) {
+        fn fixture() -> (
+            UnvalidatedEffectProgram,
+            Vec<SourceFile>,
+            Vec<(ModuleId, SourceId)>,
+        ) {
             let operations = (0..WIDTH)
                 .map(|ordinal| format!("op{ordinal} : Unit -> Unit"))
                 .collect::<Vec<_>>()
@@ -31477,7 +31789,16 @@ mod tests {
                 ),
             );
             let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("wide graph");
-            let source = graph.module(graph.entry()).unwrap().source().clone();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source().clone())
+                .collect();
+            let relations = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect();
             let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry())
                 .expect("wide linked program");
             let linked = validate_linked_facts_for_test(linked).expect("wide checked program");
@@ -31486,19 +31807,26 @@ mod tests {
             let typed = elaborator
                 .synthesize_effect_module_program(&linked)
                 .expect("wide effect lowering");
-            (elaborator.finish(typed.node).expect("effect Core"), source)
+            (
+                elaborator.finish(typed.node).expect("effect Core"),
+                sources,
+                relations,
+            )
         }
 
-        let (program, source) = fixture();
-        let mut measured = Validator::new(&program, &[&source]);
+        let (program, sources, relations) = fixture();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let mut measured = Validator::new_modules(&program, &refs, &relations).unwrap();
         measured.run_effect().expect("wide effect Core validates");
         let exact_work = measured.type_work.get();
         assert!(exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
 
-        let (program, source) = fixture();
-        let mut short = Validator::new(&program, &[&source]);
+        let (program, sources, relations) = fixture();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let mut short = Validator::new_modules(&program, &refs, &relations).unwrap();
+        let short_prefix = CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1);
         short
-            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1))
+            .charge_type_work(short_prefix)
             .expect("one-short precharge");
         assert_eq!(
             short
@@ -31507,11 +31835,13 @@ mod tests {
                 .reason(),
             ValidationReason::Resource,
         );
-        assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        // Atomic refusal retains completed work without charging the rejected batch.
+        assert!((short_prefix..=CORE_VALIDATION_TYPE_WORK_LIMIT).contains(&short.type_work.get()));
 
         for _ in 0..2 {
-            let (program, source) = fixture();
-            let mut retry = Validator::new(&program, &[&source]);
+            let (program, sources, relations) = fixture();
+            let refs = sources.iter().collect::<Vec<_>>();
+            let mut retry = Validator::new_modules(&program, &refs, &relations).unwrap();
             retry
                 .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work)
                 .expect("exact precharge");
@@ -31537,7 +31867,11 @@ mod tests {
             ),
         );
         let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("effect graph");
-        let source = graph.module(graph.entry()).unwrap().source().clone();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
         let module_sources = graph
             .modules()
             .iter()
@@ -31553,11 +31887,17 @@ mod tests {
             .expect("effect lowering");
         let mut program = elaborator.finish(typed.node).expect("effect Core");
         drop(linked);
-        Validator::new_modules(&program, &[&source], &module_sources)
+        Validator::new_modules(&program, &sources, &module_sources)
             .expect("the canonical module relation should initialize")
             .run_effect()
             .expect("untampered effectful local representation should authenticate");
-        let effect = program.registry.effects()[0].id;
+        let effect = program
+            .registry
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module() == graph.entry() && effect.spelling == "Ask")
+            .expect("the original user Ask effect remains registered")
+            .id;
         assert!(
             Arc::get_mut(&mut program.registry)
                 .expect("the unchecked effect Core owns its registry")
@@ -31566,7 +31906,7 @@ mod tests {
                 )
         );
 
-        let error = Validator::new_modules(&program, &[&source], &module_sources)
+        let error = Validator::new_modules(&program, &sources, &module_sources)
             .expect("the canonical module relation should initialize")
             .run_effect()
             .expect_err("forged local representation effect metadata must reject");

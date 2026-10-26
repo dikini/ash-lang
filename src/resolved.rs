@@ -21235,17 +21235,27 @@ impl ResolvedRegistry {
     #[cfg(test)]
     pub(crate) fn corrupt_global_parameter_rows_for_core_test(
         &mut self,
+        owners: [BinderId; 2],
         mutation: CoreGlobalParameterRowMutationForTest,
     ) -> bool {
+        let Some(first_position) = self.global_parameter_positions.get(&owners[0]).copied() else {
+            return false;
+        };
+        let Some(second_position) = self.global_parameter_positions.get(&owners[1]).copied() else {
+            return false;
+        };
+        if first_position == second_position {
+            return false;
+        }
         match mutation {
             CoreGlobalParameterRowMutationForTest::EmptyFirstRow => {
-                let Some(row) = self.global_parameter_rows.first_mut() else {
+                let Some(row) = self.global_parameter_rows.get_mut(first_position) else {
                     return false;
                 };
                 row.parameters = Box::new([]);
             }
             CoreGlobalParameterRowMutationForTest::ReplaceFirstOwner(owner) => {
-                let Some(row) = self.global_parameter_rows.first_mut() else {
+                let Some(row) = self.global_parameter_rows.get_mut(first_position) else {
                     return false;
                 };
                 let previous = row.owner;
@@ -21261,7 +21271,7 @@ impl ResolvedRegistry {
             CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(parameter) => {
                 let Some(first) = self
                     .global_parameter_rows
-                    .first_mut()
+                    .get_mut(first_position)
                     .and_then(|row| row.parameters.first_mut())
                 else {
                     return false;
@@ -21269,7 +21279,7 @@ impl ResolvedRegistry {
                 *first = parameter;
             }
             CoreGlobalParameterRowMutationForTest::DuplicateFirstParameter => {
-                let Some(row) = self.global_parameter_rows.first_mut() else {
+                let Some(row) = self.global_parameter_rows.get_mut(first_position) else {
                     return false;
                 };
                 let [first, second, ..] = row.parameters.as_mut() else {
@@ -21278,22 +21288,23 @@ impl ResolvedRegistry {
                 *second = *first;
             }
             CoreGlobalParameterRowMutationForTest::DuplicateAcrossRows => {
-                let [first, second, ..] = self.global_parameter_rows.as_mut() else {
+                let Some(parameter) = self.global_parameter_rows[first_position]
+                    .parameters
+                    .first()
+                    .copied()
+                else {
                     return false;
                 };
-                let Some(parameter) = first.parameters.first().copied() else {
-                    return false;
-                };
-                let Some(replaced) = second.parameters.first_mut() else {
+                let Some(replaced) = self.global_parameter_rows[second_position]
+                    .parameters
+                    .first_mut()
+                else {
                     return false;
                 };
                 *replaced = parameter;
             }
             CoreGlobalParameterRowMutationForTest::SwapFirstOwnerPositions => {
-                let [first, second, ..] = self.global_parameter_rows.as_ref() else {
-                    return false;
-                };
-                let (first_owner, second_owner) = (first.owner, second.owner);
+                let (first_owner, second_owner) = (owners[0], owners[1]);
                 let Some(first_position) =
                     self.global_parameter_positions.get(&first_owner).copied()
                 else {
@@ -21310,24 +21321,20 @@ impl ResolvedRegistry {
                     .insert(second_owner, first_position);
             }
             CoreGlobalParameterRowMutationForTest::DuplicateFirstOwner { filler } => {
-                let [first, second, ..] = self.global_parameter_rows.as_mut() else {
-                    return false;
-                };
                 if self.global_parameter_positions.contains_key(&filler) {
                     return false;
                 }
-                let duplicate = first.owner;
-                let replaced = second.owner;
-                self.global_parameter_positions.remove(&replaced);
-                second.owner = duplicate;
+                self.global_parameter_positions.remove(&owners[1]);
+                self.global_parameter_rows[second_position].owner = owners[0];
                 self.global_parameter_positions.insert(filler, usize::MAX);
             }
             CoreGlobalParameterRowMutationForTest::RemoveLastRow => {
                 let mut rows = std::mem::take(&mut self.global_parameter_rows).into_vec();
-                let Some(removed) = rows.pop() else {
-                    return false;
-                };
+                let removed = rows.remove(second_position);
                 self.global_parameter_positions.remove(&removed.owner);
+                for (position, row) in rows.iter().enumerate().skip(second_position) {
+                    self.global_parameter_positions.insert(row.owner, position);
+                }
                 self.global_parameter_rows = rows.into_boxed_slice();
             }
             CoreGlobalParameterRowMutationForTest::AppendRow { owner, parameter } => {

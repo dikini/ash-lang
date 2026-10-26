@@ -41,12 +41,21 @@ removing unused backward-prefix reconstruction from escape checks (37.49%
 Source saving, all 78 focused capture tests passing). Source `10000*S` and Core
 `25000*S` apply the existing 25% fitting rule; other owners/defaults are
 unchanged. Normal policy passes all 114 focused driver, policy, capture,
-reporting and observer checks. The latest full-library inventory is 1,543 pass /
-52 fail across 1,595 executed names: 11 existing failed names restored since the
+reporting and observer checks. The latest full-library inventory is 1,560 pass /
+35 fail across 1,595 executed names: 17 existing failed names restored since the
 prior draft and no new failures. The earlier private Source capture test was
 renamed to assert its required Effect lifetime summaries, with the unchanged Pure
 exact/short/retry contract passing separately; the rename is not counted as a
-restored old name. Source pattern fixtures retain complete Effect components;
+restored old name. The current 35 failures are the library backlog only. After
+this draft checkpoint's publication/readback, the sole developer runs a serialized
+all-feature integration-only inventory with no fail-fast before further ledger
+migration; the final full workspace gate remains pending. Core fixture repairs
+retain full provenance and actual user owners, separate the manual Pure donor's
+structural phases, and preserve original deep-stack, row and rejection-anchor
+assertions. Closure mutations follow stored code and preserve entry ownership;
+extra Return use is an incoming-authority negative, not a claim of ordinary
+profile-typed closure admission. Atomic whole-validation refusal preserves its
+paid prefix without consuming an unaffordable bulk debit. Source pattern fixtures retain complete Effect components;
 import and row mutations target actual user identities, with honest donors
 validated before corruption and all service metadata preserved. The shared
 repairs select defining user nominal/summary owners, preserve complete dependency
