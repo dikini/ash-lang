@@ -214,13 +214,32 @@ pub struct ObservedValue {
 pub(crate) struct ObservedHeap {
     registry: Arc<ResolvedRegistry>,
     cells: Box<[HeapCell]>,
+    root_completion: Option<super::machine::HostRootCompletion>,
+}
+
+impl Drop for ObservedHeap {
+    fn drop(&mut self) {
+        if let Some(root) = &mut self.root_completion {
+            root.close(&mut self.cells);
+        }
+    }
 }
 
 impl ObservedHeap {
+    #[cfg(test)]
     pub(crate) fn new(registry: Arc<ResolvedRegistry>, cells: Vec<HeapCell>) -> Arc<Self> {
+        Self::with_root_completion(registry, cells, None)
+    }
+
+    pub(super) fn with_root_completion(
+        registry: Arc<ResolvedRegistry>,
+        cells: Vec<HeapCell>,
+        root_completion: Option<super::machine::HostRootCompletion>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             registry,
             cells: cells.into_boxed_slice(),
+            root_completion,
         })
     }
 
@@ -232,6 +251,13 @@ impl ObservedHeap {
     #[cfg(test)]
     pub(crate) fn cells_mut_for_test(&mut self) -> &mut [HeapCell] {
         &mut self.cells
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_root_completion_for_test(
+        &mut self,
+    ) -> Option<super::machine::HostRootCompletion> {
+        self.root_completion.take()
     }
 
     #[cfg(test)]

@@ -100,14 +100,16 @@ completion remain required, followed by the connected R-core gate. This changes 
 [PR #151](https://github.com/dikini/ash-lang/pull/151) retained integer storage at
 `df79789134d680f4288b48c0081c6c74c6bf4de9`; 216 distinct focused cases transfer by
 reviewed-tree equality. This is partial R3 acceptance, not a full R-core gate.
-[PR #152](https://github.com/dikini/ash-lang/pull/152) implements actual supplied
-closure captures under the accepted
+[PR #152](https://github.com/dikini/ash-lang/pull/152) retains actual supplied
+closure captures at `0f2cc97b22b0ee3f14ded9118275cc83c80497ee` on the milestone,
+with independent whole-PR review, exact retained verification and author/PM
+partial acceptance complete, under the accepted
 [creation-timing amendment](../../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26).
 Ordinary and authenticated deferred records reuse capture metadata, recursive
 slots, Value storage and the host adapter. Direct type views forward the same
 record; deferred evidence applications remain ordered and delayed. Focused checks
 cover local/transitive imported ownership, mixed cycles, member order and recursive
-group suspension. This candidate repairs constructor/header/evidence rows; Source
+group suspension. The retained slice repairs constructor/header/evidence rows; Source
 placement and recursion suites pass. Same-arena callback/replay checks and measured private-worker stack headroom
 preserve the original assertions. Exact capture-quota checks pass. The
 deep registration fixture resolves its lexical capture; measured completion
@@ -120,8 +122,8 @@ consumers, scope and complete rows; each full validator rejects NodeType at the
 exact unauthorized Adapter or abstract-domain scheme after the unmutated donor
 validates. Selected final evidence contains 384 distinct passing test names;
 blocked legacy fixture assertions are not passing evidence. Legacy Pure callback
-fixtures cover isolated preflight/disposal only. Independent completed-slice review
-and retained verification remain pending. Two existing observer tests pass after
+fixtures cover isolated preflight/disposal only. This is partial closure acceptance,
+not whole R3 acceptance. Two existing observer tests pass after
 the cfg-only syntax census adds traversal of existing region operands and bodies.
 All 134 default dependency/configuration pins remain equal, transferring the
 normal 382 passing names; the observer contributes two fresh names.
@@ -129,7 +131,7 @@ The generated-native Score attempt exposes the unchanged method-evidence image
 profile's concrete-adapter exclusion. This slice adds no catalog codec: actual
 host supplied-slot/prefix-order evidence and shared native generic/mixed backing
 checks remain distinct from the isolated Adapter carrier wire roundtrip. No full
-Score image/native pass, closure acceptance or current Main semantics are claimed.
+Score image/native pass, whole construction acceptance or current Main semantics are claimed.
 No additional environment/storage framework is authorized.
 
 All original R3–R5 criteria, remaining recursive evidence, completion/discharge,
@@ -194,6 +196,22 @@ freeing, rollback or foreign retained-owner status protocol is added.
 Account for metadata, scratch, captured state and teardown as well as payload.
 Validate exact/short/retry and deep iterative disposal without changing existing
 ledgers or introducing uncharged fallback work.
+
+The current R4 slice transfers the fixed host root records to the existing
+ObservedHeap shared owner after complete authentication/work preparation. Last
+owner disposal clears Rust representation fields before backing and logical
+records; post-transfer evaluation failure uses the existing disposal scope.
+No source finalizer, retained machine, heap-owning back-edge or new registry is
+introduced. Focused owner/preparation/disposal and existing construction/control
+checks precede independent slice review. The live-A/unrelated-B parameter case
+passes source and identity/fold Core reconstruction through the existing seams;
+private representation/escape/request/backpatch negatives preserve the origin
+and actual-dependency chain. No new owner-discharge checker is added. This does
+not certify close-service/removed-backend correspondence. Required owner-position
+H/J Console normal/cleanup, backend rejection/action-local admission and shared
+allocator isolation remain connected R4 evidence. Full close/composition and
+root-owned R-core verification remain separate obligations; all whole criteria
+stay open.
 
 ### R5 — connected milestone and Main gate (#70)
 

@@ -1,7 +1,7 @@
 # TASK-0055: Lexical regions
 
 - ID: `TASK-0055`
-- Status: active — partial R3 implementation
+- Status: active — partial R3 retention and R4 completion
 - Related: [CP-0025](../proposals/CP-0025-lexical-region-construction.md) (accepted for transition),
   [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md),
   [DN-0055](../design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md),
@@ -143,7 +143,10 @@ R3–R5 product acceptance is claimed.
 
 [PR #152](https://github.com/dikini/ash-lang/pull/152) carries the accepted
 [closure timing amendment](../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26)
-and the active partial closure implementation. Ordinary creation now uses the
+and the partial closure implementation retained at
+`0f2cc97b22b0ee3f14ded9118275cc83c80497ee` on the milestone. Its tree equals
+reviewed `f8bee32878764f4beed45b3d7e4d32f4c8fae66c`; independent whole-PR review,
+retained verification and author/PM partial acceptance are complete. Ordinary creation now uses the
 existing supplied Value slots and common callable reader; initial source lifetime,
 outer-selection and polymorphic-view checks pass. Generated evidence wrappers
 retain complete allocation rows and exact capture authentication. Record-only
@@ -153,7 +156,7 @@ only at type application. Focused checks cover Score capture storage, local and
 transitive imported ownership, mixed function/data cycles, source-order creation,
 recursive-group resume/discard, and independent capture/layout/row refusals.
 Handler-row recomputation and lexical evidence blocks retain actual creation rows.
-This candidate also repairs constructor creation rows, inline function-header
+The retained slice also repairs constructor creation rows, inline function-header
 row expansion and full-row evidence validation. Source placement and recursion
 suites pass. Callback preflight fixtures now execute in their validated arena;
 replay checks recognize exact structured work refusals. Two private disposal
@@ -181,8 +184,8 @@ fresh full gate. The feature-gated syntax census now visits existing region
 provider/selection operands and bodies; both observer tests reach and pass their
 changed coefficient assertions. Its cfg-only repair preserves all 134 default
 compiler dependency/configuration pins, allowing the normal 382 passing names to
-transfer; the observer adds two fresh names. Independent completed-slice review
-remains pending. Legacy Pure callback fixtures cover isolated preflight/disposal,
+transfer; the observer adds two fresh names. This retains partial closure
+acceptance, not whole construction acceptance. Legacy Pure callback fixtures cover isolated preflight/disposal,
 not supplied storage.
 
 A generated-native Score attempt stops in the unchanged image profile: its
@@ -192,15 +195,15 @@ not extend that profile. Host supplied-slot execution and prefix-before-argument
 discard cover the deferred behavior; the isolated Adapter carrier wire test is
 not a complete source-free Score image or native execution. Native generic and
 mixed-cycle checks use the same shared storage adapter. Their final results belong
-to the frozen checkpoint receipt. Closure acceptance and remaining recursive
-initialization/capture/abandonment evidence still require independent review. No executable
+to the frozen checkpoint receipt. Remaining connected construction/completion
+evidence still requires its checkpoint gate. No executable
 memory-read-to-Bytes producer exists at the current slim-FFI boundary, whose
 native replies are Address or Unit; its borrowed Bytes argument uses the common
 reader. The native checks distinguish custom supplied-byte construction/read,
 a root-host Bytes argument kept live through a native call, and exact rejection
 of an explicit-region payload sent through an unprotected outward request. The
 last case preserves the existing lexical payload rule; this delivery adds no
-source native-interpretation syntax. This candidate does not complete
+source native-interpretation syntax. This partial delivery does not complete
 ordinary-construction acceptance.
 The host root retains backing through the existing observed heap, but
 observation-before-root-release ordering remains pending. Target-specific discharge correspondence/regression audit, full close/composition,
@@ -211,6 +214,35 @@ connected R-core and all R3–R5 acceptance remain pending. Existing issues
 [#68](https://github.com/dikini/ash-lang/issues/68) and
 [#70](https://github.com/dikini/ash-lang/issues/70) retain their review,
 verification, integration and author-acceptance obligations.
+
+The active R4 candidate transfers only the fixed host entry's completion records
+to the existing shared observed heap. It authenticates the runtime host pair,
+owner, concrete locations and layouts and charges close preparation before
+consuming the boundary. Last-owner disposal clears current Rust representation
+fields while all root backing remains live, frees backing and then retires the
+logical records. An error before observation publication disposes that pending
+owner inside the evaluator's existing disposal scope; no new scope hides teardown
+failure. Outside that scope, final host disposal retains ordinary host OOM
+assumptions. The owner stores no source callback, saved evaluator, heap back-edge
+or additional registry; bare RegionFunction clones acquire no heap ownership.
+The bounded target-discharge regression keeps a live outer A through a helper
+parameter and unrelated inner B. The original source evaluates to Unit; identity
+and literal-fold reconstruction both pass full independent Core validation and
+execution. Existing private-constructor, escape, request-payload and outer-Cell
+backpatch negatives retain the view-origin and dependency boundaries. These
+checks follow the existing explicit view/actual-dependency/owner-invocation chain;
+no admitted missing-owner example warrants another checker. They do not complete
+close-service/removed-backend correspondence. Owner-position H/J Console behavior
+for normal and allocation-only cleanup, required-backend rejection, action-local
+interpreter admission and shared allocator isolation still need the connected
+R4 composition evidence.
+
+Five focused root checks cover structured exact/short/retry, forged pair/record
+rejection, shared Evaluation lifetime/weak expiry, repeated close, post-transfer
+primary plus teardown failure, and ambient-scope failure visibility. Existing
+Observation/value/parts accessors retain the same shared owner. Independent R4
+review and retention remain pending. The connected R-core full all-target/all-feature
+checkpoint remains root-owned; later R5/final/Main gates remain separate.
 
 Keep implementation tight: reuse existing Ash mechanisms and libraries, prefer
 removing duplicate machinery, and seek constructive planner/reviewer scrutiny
@@ -238,6 +270,12 @@ support. Slim FFI establishes ABI calls, not native memory validity or region
 ownership. Ordinary Ash binding contracts carry those assumptions. Required
 supplied storage must back actual objects, buffers and closures; quota-only
 accounting is insufficient.
+
+A focused default-library Clippy attempt during the R4 root slice reports 16
+diagnostics whose enclosing functions or files are byte-equal to retained
+`0f2cc97b22b0ee3f14ded9118275cc83c80497ee`. Test linting is not established by
+that failed command. These lints join the connected R-core migration inventory;
+they are not repaired or waived by the partial root delivery.
 
 The constructor-focused sweep also exposed 22 dependency-setup and four
 positional-inventory fixtures that assume implicit builtin modules are absent.

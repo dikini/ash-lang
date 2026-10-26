@@ -8,6 +8,7 @@ pub(super) use instantiation::Instantiation;
 #[path = "region.rs"]
 mod region;
 use region::BackingRecord;
+pub(super) use region::HostRootCompletion;
 
 #[cfg(test)]
 #[path = "machine_test_hooks.rs"]
@@ -814,6 +815,7 @@ pub struct Machine<'runtime> {
     trace: Vec<TraceEvent>,
     effect_trace: Option<Vec<EffectTraceEvent>>,
     heap: Vec<HeapCell>,
+    root_completion: Option<HostRootCompletion>,
     capture_limit: usize,
     captured_cells: usize,
     instantiation_work: TypeWorkBudget,
@@ -826,6 +828,14 @@ pub struct Machine<'runtime> {
     next_registration: u32,
     #[cfg(test)]
     work_trace: Option<WorkTrace>,
+}
+
+impl Drop for Machine<'_> {
+    fn drop(&mut self) {
+        if let Some(root) = &mut self.root_completion {
+            root.close(&mut self.heap);
+        }
+    }
 }
 
 impl<'runtime> Machine<'runtime> {
@@ -841,6 +851,7 @@ impl<'runtime> Machine<'runtime> {
             trace: Vec::new(),
             effect_trace: None,
             heap: Vec::new(),
+            root_completion: None,
             capture_limit: 0,
             captured_cells: 0,
             instantiation_work: TypeWorkBudget::unbounded(),
@@ -875,6 +886,7 @@ impl<'runtime> Machine<'runtime> {
             trace: Vec::new(),
             effect_trace: Some(Vec::new()),
             heap: Vec::new(),
+            root_completion: None,
             capture_limit,
             captured_cells: 0,
             instantiation_work: TypeWorkBudget::unbounded(),
@@ -966,6 +978,16 @@ impl<'runtime> Machine<'runtime> {
                     self.apply(transition);
                 }
                 Control::Return(value) => {
+                    if let Some(Frame::RegionBoundary { node, .. }) = self.frames.last()
+                        && self
+                            .region_scope(*node)
+                            .ok_or(RuntimeFailure::InvalidControlState)?
+                            .entry
+                    {
+                        self.retain_root_completion()?;
+                        self.control = Some(Control::Return(value));
+                        continue;
+                    }
                     if matches!(self.frames.last(), Some(Frame::RegionBoundary { .. })) {
                         // Closing replaces one owner frame with completion and
                         // release frames. Reserve before moving that owner.
@@ -979,9 +1001,10 @@ impl<'runtime> Machine<'runtime> {
                         {
                             return Err(RuntimeFailure::InvalidControlState);
                         }
-                        let heap = ObservedHeap::new(
+                        let heap = ObservedHeap::with_root_completion(
                             Arc::clone(self.program.registry()),
                             std::mem::take(&mut self.heap),
+                            self.root_completion.take(),
                         );
                         let value = match value {
                             Value::Location(root) => {
