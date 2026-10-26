@@ -487,10 +487,41 @@ impl Machine<'_> {
         &mut self,
         value: &Value,
     ) -> Result<(crate::eval::Closure, Option<NodeId>), RuntimeFailure> {
+        if let Value::Function(function) = value {
+            return Ok((function.clone(), None));
+        }
+        let (code, environment, abstraction) = self.read_stored_callable(value)?;
+        let Some(ExecutableNode::Effect(expression)) = code.program.node(code.node) else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &expression.kind
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let function = closure
+            .code
+            .function()
+            .ok_or(RuntimeFailure::UnexpectedFunctionValue)?;
+        Ok((
+            crate::eval::Closure {
+                parameter: function.parameter().id(),
+                body: function.body(),
+                program: code.program.clone(),
+                environment,
+                origin: expression.origin.clone(),
+            },
+            abstraction,
+        ))
+    }
+
+    pub(super) fn read_stored_callable(
+        &mut self,
+        value: &Value,
+    ) -> Result<(crate::eval::value::ClosureCode, Environment, Option<NodeId>), RuntimeFailure>
+    {
         let (record, view) = match value {
             Value::RegionFunction(callable) => (callable.record, callable.instantiation.as_ref()),
             Value::Location(record) => (*record, None),
-            Value::Function(function) => return Ok((function.clone(), None)),
             _ => return Err(RuntimeFailure::UnexpectedFunctionValue),
         };
         let location = packed_tuple_location(&self.heap, record, &mut self.instantiation_work)?;
@@ -533,13 +564,8 @@ impl Machine<'_> {
             )?;
         }
         Ok((
-            crate::eval::Closure {
-                parameter: closure.function.parameter().id(),
-                body: closure.function.body(),
-                program: code.program.clone(),
-                environment,
-                origin: expression.origin.clone(),
-            },
+            code.clone(),
+            environment,
             match value {
                 Value::RegionFunction(view) => view.abstraction.or(code.abstraction),
                 _ => code.abstraction,
@@ -1492,7 +1518,7 @@ mod tests {
                 "main : Unit -> (Int, Int)\nmain () = {\n",
                 "let answer = region<R> outer {\nlet kept = region<S> inner {\n",
                 "let local = (1, 2)\nlet ignored = match local {\n(a, b) => a + b\n}\n",
-                "using outer {\n(20, 22)\n}\n}\nmatch kept {\n(a, b) => a + b\n}\n}\n",
+                "using outer {\n(20, 22)\n}\n}\nmatch kept {\n(a, b) => match (a + b) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n",
                 "(answer, 1)\n}\n",
             ),
         )
@@ -1514,6 +1540,51 @@ mod tests {
                 ))
                 .count(),
             3
+        );
+        let inner = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Region(scope))
+                    if !scope.entry && matches!(node.ty, Type::Tuple(_)) =>
+                {
+                    Some(scope)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+            crate::core::PureComputation::Match(provider),
+        )) = &program.node(inner.provider).unwrap().kind
+        else {
+            panic!("provider keeps its checked pair projection");
+        };
+        let [arm] = provider.arms() else {
+            panic!("one provider pair");
+        };
+        let EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+            crate::core::PureComputation::Tuple(pair),
+        )) = &program.node(arm.body()).unwrap().kind
+        else {
+            panic!("provider adapters remain an ordinary pair");
+        };
+        let adapters = pair
+            .elements()
+            .iter()
+            .map(|field| {
+                let (node, closure) =
+                    crate::core::region::closure_initializer::<
+                        crate::core::effect::EffectOperationFamily,
+                    >(*field, |node| program.node(node).map(|node| &node.kind))
+                    .unwrap();
+                assert!(closure.code.function().is_some());
+                node
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            adapters.len(),
+            2,
+            "inner allocate/release adapters are created under outer"
         );
         let evaluation = evaluate_effect(program).unwrap();
         assert_eq!(evaluation.value.to_string(), "(42, 1)");
@@ -1542,14 +1613,25 @@ mod tests {
                 previous = Some(field[0]);
             }
         }
+        for adapter in &adapters {
+            assert_eq!(
+                evaluation
+                    .trace
+                    .iter()
+                    .filter(|event| **event == TraceEvent::Enter(*adapter))
+                    .count(),
+                1,
+                "each provider closure is initialized once"
+            );
+        }
         let cells = evaluation.heap.cells_for_test();
         assert_eq!(
             cells
                 .iter()
                 .filter(|cell| matches!(cell, HeapCell::Uninitialized))
                 .count(),
-            2,
-            "both declared owners retire their supplied arrays"
+            2 + adapters.len(),
+            "both tuple arrays and the inner provider's two outer-owned closure records retire"
         );
         let fields = cells
             .iter()
@@ -1665,13 +1747,18 @@ mod tests {
                     return None;
                 };
                 let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
-                    &program.node(closure.function.body()).unwrap().kind
+                    &program.node(closure.code.body()).unwrap().kind
                 else {
                     return None;
                 };
-                (variable.binder() == closure.function.parameter().id()
-                    && matches!(closure.function.parameter().ty(), Type::Variable(_)))
-                .then_some(index)
+                closure
+                    .code
+                    .function()
+                    .is_some_and(|function| {
+                        variable.binder() == function.parameter().id()
+                            && matches!(function.parameter().ty(), Type::Variable(_))
+                    })
+                    .then_some(index)
             })
             .expect("generic identity closure");
         assert_eq!(evaluation.heap.cells_for_test().iter().filter(|cell| {

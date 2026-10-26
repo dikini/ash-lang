@@ -594,3 +594,87 @@ fn closure_body_explicit_selection_keeps_its_captured_region_identity() {
         "42"
     );
 }
+
+const SCORE_CAPTURE_DECLARATIONS: &str = concat!(
+    "type Option<A> =\nNone\n| Some(A)\n",
+    "interface Score<A> {\nscore<X> : (A, X) -> Int\n}\n",
+    "impl Score<Int> {\nscore (value, ignored) = value\n}\n",
+    "impl Score<Option<A>> where Score<A> {\nscore (None, ignored) = 4\n",
+    "score (Some(value), ignored) = {\nlet empty : Option<A> = None\n",
+    "score((empty, ignored)) * 10 + score((value, ignored))\n}\n}\n",
+);
+
+const SCORE_CAPTURE_OWNER_MAIN: &str = concat!(
+    "main : Unit -> Bool\nmain () = region<A> outer {\n",
+    "let escaped : Unit -> Int = region<R> inner {\n",
+    "let selected : (Option<Int>, Bool) -> Int = score\n",
+    "using outer {\nlet wrapper : Unit -> Int = fn(ignored) {\n",
+    "selected((Some(2), true))\n}\nwrapper\n}\n}\n(escaped ()) == 42\n}\n",
+);
+
+#[test]
+fn selected_polymorphic_method_capture_keeps_its_materialization_owner() {
+    let source = format!("{SCORE_CAPTURE_DECLARATIONS}{SCORE_CAPTURE_OWNER_MAIN}");
+    let failure = run_result(&source).unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source resource escape, got {diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn selected_polymorphic_method_materialized_in_outer_region_survives_inner_close() {
+    let source = format!("{SCORE_CAPTURE_DECLARATIONS}{SCORE_CAPTURE_OWNER_MAIN}");
+    let positive = source.replace("= score\n", "= using outer {\nscore\n}\n");
+    assert_eq!(run(&positive), "true");
+}
+
+fn run_imported_score(source: &str) -> Result<ash::driver::Observation, ash::driver::FileFailure> {
+    let directory = std::env::temp_dir().join(format!(
+        "ash-region-method-{}-{}",
+        std::process::id(),
+        NEXT_SOURCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&directory).unwrap();
+    let declarations = SCORE_CAPTURE_DECLARATIONS
+        .replace("type Option", "pub type Option")
+        .replace("interface Score", "pub interface Score")
+        .replace("impl Score", "pub impl Score");
+    fs::write(directory.join("methods.ash"), declarations).unwrap();
+    let entry = directory.join("entry.ash");
+    fs::write(&entry, format!("import methods (Option, None, Some, Score, score)\nimport methods (impl Score)\n{source}")).unwrap();
+    let result = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    });
+    fs::remove_dir_all(directory).unwrap();
+    result
+}
+
+#[test]
+fn imported_selected_method_capture_keeps_its_materialization_owner() {
+    let failure = run_imported_score(SCORE_CAPTURE_OWNER_MAIN).unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected imported source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected imported source escape, got {diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn imported_selected_method_outer_placement_survives_inner_close() {
+    let positive = SCORE_CAPTURE_OWNER_MAIN.replace("= score\n", "= using outer {\nscore\n}\n");
+    assert_eq!(
+        run_imported_score(&positive).unwrap().value_display(),
+        "true"
+    );
+}

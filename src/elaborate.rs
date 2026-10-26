@@ -2859,7 +2859,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     // Addresses identify only immutably borrowed source occurrences during one
     // module synthesis. They are never dereferenced or retained in Core.
     lexical_capture_uses: Vec<LexicalCaptureUse>,
-    method_capture_uses: Vec<(NodeId, usize, MethodId)>,
+    method_capture_uses: Vec<(NodeId, usize, MethodId, Option<NodeId>)>,
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
     global_capture_uses: Vec<(NodeId, RequirementId, usize)>,
 
@@ -5945,7 +5945,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut routes = Vec::new();
         let mut adapters = Vec::new();
         for index in 0..self.method_capture_uses.len() {
-            let (node, slot, method) = self.method_capture_uses[index];
+            let (node, slot, method, context) = self.method_capture_uses[index];
             let (selection, arguments) = publication
                 .capture_selection(slot, Some(method), &mut self.type_work)
                 .map_err(|failure| selection_failure(failure, None))?;
@@ -5969,6 +5969,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 method,
                 requirement: None,
                 arguments,
+                context,
             });
         }
         for index in 0..self.global_capture_uses.len() {
@@ -5986,7 +5987,35 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     method,
                     requirement: Some(requirement),
                     arguments: 0,
+                    context: None,
                 });
+            }
+        }
+        // Selected imported methods have checked declarations but no local
+        // initializer/Variable node. Retain their full Source callable type for
+        // the same physical capture preparation used by completed local roots.
+        for implementation in imported.implementations() {
+            for method in &implementation.fact.methods {
+                self.type_work
+                    .charge(routes.len() + adapters.len())
+                    .map_err(|()| type_resource())?;
+                let selected = routes.iter().any(|route| matches!(route.target,
+                    crate::core::capture::MethodTarget::Binder(binder) | crate::core::capture::MethodTarget::Adapter { binder, .. } if binder == method.binder))
+                    || adapters.iter().any(|adapter| adapter.binder == method.binder);
+                if !selected {
+                    continue;
+                }
+                let parameters =
+                    F::project_parameters(&method.scheme.type_parameters, &mut self.type_work)
+                        .map_err(|()| type_resource())?;
+                let body = self.pure_core_type(&method.scheme.value_type)?;
+                let ty = if parameters.is_empty() {
+                    body
+                } else {
+                    retain_implementation_capture_type(body, &parameters, &mut self.type_work)?
+                };
+                self.builder
+                    .variable(method.binder, ty, method.origin.clone())?;
             }
         }
         Ok((routes, adapters))
@@ -6344,12 +6373,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 core_ty,
                 occurrence.origin.clone(),
             )?;
+            let method_node = node;
+            let mut context_value = None;
+            if F::EFFECTS
+                && let Some(api) = self.active_region_api()?
+            {
+                let (context, value, query) = self.saved_region_context(api, span)?;
+                context_value = Some(value);
+                let result_type = self.pure_core_type(&ty)?;
+                node = self.builder.binding(
+                    context,
+                    query,
+                    node,
+                    result_type,
+                    occurrence.origin.clone(),
+                )?;
+            }
             self.type_work.charge(1).map_err(|()| type_resource())?;
             self.method_capture_uses
                 .try_reserve(1)
                 .map_err(|_| type_resource())?;
-            self.method_capture_uses
-                .push((node, occurrence.evidence[0].storage_id(), method));
+            self.method_capture_uses.push((
+                method_node,
+                occurrence.evidence[0].storage_id(),
+                method,
+                context_value,
+            ));
 
             let TypeFact {
                 ty: fact_ty,
@@ -6360,7 +6409,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Ok(TypedNode {
                 node,
                 ty: ty.into_inner(),
-                effects: EffectRow::empty(),
+                effects: self
+                    .builder
+                    .clone_node_effects_with_budget(node, &mut self.type_work)?,
                 provenance,
             })
         })();
@@ -6500,7 +6551,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let provenance = self.at_span_provenance(&ty, declaration_span)?;
         Ok(TypedNode {
             node: selected.node,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(selected.node, &mut self.type_work)?,
             provenance,
             ty: ty.into_inner(),
         })
@@ -7985,9 +8038,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         Box::new(scheme_body),
                                     ));
                                     let abstraction_type = self.clone_type(&scheme)?;
+                                    let capture_type = self.clone_type(&current.ty)?;
+                                    let captured = if adapter_edge_ordinal == 0 {
+                                        current.node
+                                    } else {
+                                        self.construct_adapter_captures(
+                                            current.node,
+                                            capture_type,
+                                            origin.clone(),
+                                        )?
+                                    };
                                     let abstraction = self.builder.type_abstraction(
                                         adapter_parameters,
-                                        current.node,
+                                        captured,
                                         abstraction_type,
                                         origin.clone(),
                                     )?;

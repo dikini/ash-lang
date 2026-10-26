@@ -287,6 +287,8 @@ struct EvidenceIndex {
 pub(super) struct Graph {
     expressions: Vec<Expr>,
     globals: Vec<(usize, usize)>,
+    // Local source-method proxy bodies are compiled by the ordinary control builder.
+    pub(super) method_proxies: Vec<(usize, usize, BinderId)>,
     // Empty for ordinary analysis. The single fallible private carrier avoids
     // enlarging every ordinary graph/result stack frame with auxiliary vectors.
     sources: Vec<Span>,
@@ -331,6 +333,7 @@ pub(super) fn observed_control_call_graph_for_test() -> Graph {
             },
         ],
         globals: vec![(2, 1)],
+        method_proxies: Vec::new(),
         sources: vec![span; 5],
         exports: Vec::new(),
         positions: HashMap::from([(1, 3)]),
@@ -1283,7 +1286,10 @@ impl Graph {
                         captures.try_reserve(1).map_err(|_| Failure::Resource)?;
                         captures.push(context);
                     }
-                    index(terminal)
+                    match closure.code {
+                        crate::core::region::RegionClosureCode::Function(_) => index(terminal),
+                        crate::core::region::RegionClosureCode::Adapter { body } => index(body),
+                    }
                 } else {
                     index(abstraction.body())
                 };
@@ -1297,15 +1303,24 @@ impl Graph {
                         F::pure(&nodes[index(abstraction.body())].kind)
                     {
                         let metadata = self.push(metadata, source, budget)?;
+                        charge(budget, 1)?;
+                        self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        self.targets.insert(metadata, id);
                         Expr::Bind {
                             binder: self.symbol(symbols, binding.binder().id(), source, budget)?,
                             initializer: index(binding.initializer()),
                             body: metadata,
                         }
                     } else {
+                        charge(budget, 1)?;
+                        self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        self.targets.insert(id, id);
                         metadata
                     }
                 } else {
+                    charge(budget, 1)?;
+                    self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    self.targets.insert(id, id);
                     metadata
                 }
             }
@@ -1366,14 +1381,16 @@ impl Graph {
                         F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?,
                     ));
                 }
-                // Strict children are visited for their scopes and calls,
-                // but arithmetic returns a copied scalar.
+                // Visit strict primitive operands without retaining their
+                // ownership in the independent result. Region arithmetic uses
+                // its explicit RegionBuffer construction instead.
                 let scalar = self.push(Expr::Scalar, source, budget)?;
+                let sink = self.push(Expr::Slot, source, budget)?;
                 let mut bindings = Vec::new();
                 bindings
                     .try_reserve(children.len())
                     .map_err(|_| Failure::Resource)?;
-                bindings.extend(children.into_iter().map(|child| (scalar, child)));
+                bindings.extend(children.into_iter().map(|child| (sink, child)));
                 Expr::Recursive {
                     bindings,
                     body: scalar,
@@ -1463,18 +1480,23 @@ impl Graph {
             },
             Some(EffectOperation::Registration(scope)) => Expr::Forward(index(scope.body)),
             Some(EffectOperation::RegionValueRequest(_)) => Expr::Scalar,
-            Some(EffectOperation::RegionClosure(closure)) => self.function_expression(
-                &closure.function,
-                id,
-                nodes,
-                symbols,
-                types,
-                methods,
-                adapters,
-                headers,
-                Some(index(closure.context)),
-                budget,
-            )?,
+            Some(EffectOperation::RegionClosure(closure)) if closure.code.function().is_some() => {
+                self.function_expression(
+                    closure.code.function().ok_or(Failure::Invalid)?,
+                    id,
+                    nodes,
+                    symbols,
+                    types,
+                    methods,
+                    adapters,
+                    headers,
+                    Some(index(closure.context)),
+                    budget,
+                )?
+            }
+            Some(EffectOperation::RegionClosure(closure)) => {
+                Expr::Forward(index(closure.code.body()))
+            }
             Some(EffectOperation::RegionBuffer(buffer)) => {
                 use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
                 let owner = index(buffer.context);
@@ -1703,6 +1725,7 @@ impl Graph {
         let mut graph = Self {
             expressions: Vec::new(),
             globals: Vec::new(),
+            method_proxies: Vec::new(),
             sources: Vec::new(),
             exports: Vec::new(),
             positions: HashMap::new(),
@@ -1822,6 +1845,68 @@ impl Graph {
                 graph.expressions[id] = Expr::Evidence {
                     value,
                     bindings: evidence,
+                };
+            }
+            for method in methods.at(id, budget)? {
+                let (Some(context), super::MethodTarget::Adapter { value, binder }) =
+                    (method.context, method.target)
+                else {
+                    continue;
+                };
+                if method.requirement.is_some()
+                    || adapters
+                        .get(value)
+                        .ok_or(Failure::Invalid)?
+                        .prerequisites
+                        .is_empty()
+                {
+                    continue;
+                }
+                let original = std::mem::replace(&mut graph.expressions[id], Expr::Slot);
+                let selected = graph.push(original, source, budget)?;
+                let saved = graph.push(Expr::Slot, source, budget)?;
+                let parameter = graph.push(Expr::Slot, source, budget)?;
+                let call = graph.push(
+                    Expr::Call {
+                        function: saved,
+                        arguments: copy_slice(&[parameter], budget)?,
+                        scalar: scalar(
+                            nodes[id]
+                                .ty
+                                .function_view()
+                                .ok_or(Failure::Invalid)?
+                                .value(),
+                        ),
+                        type_application: false,
+                    },
+                    source,
+                    budget,
+                )?;
+                let wrapper = graph.push(
+                    Expr::Function {
+                        parameters: copy_slice(&[parameter], budget)?,
+                        body: call,
+                        captures: copy_slice(&[saved, index(context)], budget)?,
+                    },
+                    source,
+                    budget,
+                )?;
+                charge(budget, 1)?;
+                graph
+                    .targets
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                graph.targets.insert(wrapper, id);
+                charge(budget, 1)?;
+                graph
+                    .method_proxies
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                graph.method_proxies.push((id, call, binder));
+                graph.expressions[id] = Expr::Bind {
+                    binder: saved,
+                    initializer: selected,
+                    body: wrapper,
                 };
             }
         }
@@ -1973,6 +2058,27 @@ impl Graph {
             .try_reserve(1)
             .map_err(|_| Failure::Resource)?;
         self.positions.insert(code, expression);
+        Ok(())
+    }
+
+    pub(super) fn append_export_initializers(
+        &self,
+        offset: usize,
+        roots: &mut Vec<usize>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, self.exports.len())?;
+        roots
+            .try_reserve(self.exports.len())
+            .map_err(|_| Failure::Resource)?;
+        for &(_, initializer) in &self.exports {
+            charge(budget, 1)?;
+            let code = initializer.checked_add(1).ok_or(Failure::Resource)?;
+            if self.positions.get(&code) != Some(&initializer) {
+                return Err(Failure::Invalid);
+            }
+            roots.push(code.checked_add(offset).ok_or(Failure::Resource)?);
+        }
         Ok(())
     }
 
@@ -4240,10 +4346,9 @@ impl<'a> Analysis<'a> {
             };
             charge(budget, 1)?;
             let body_slot = *self.indices.get(&(body, context)).ok_or(Failure::Invalid)?;
-            if self
-                .dependencies(body_slot, budget)?
-                .contains(&Atom::Resource(expression, context))
-            {
+            let dependencies = self.dependencies(body_slot, budget)?;
+
+            if dependencies.contains(&Atom::Resource(expression, context)) {
                 return Err(Failure::Escape {
                     source: self.graph.sources[body],
                     acquisition: source,
@@ -4258,6 +4363,7 @@ impl<'a> Analysis<'a> {
                 && let Some(&body_slot) = self.indices.get(&(body, context))
             {
                 let dependencies = self.dependencies(body_slot, budget)?;
+
                 charge(budget, dependencies.len())?;
                 if dependencies.contains(&Atom::Resource(expression, context)) {
                     return Err(Failure::Escape {
@@ -4295,9 +4401,9 @@ impl<'a> Analysis<'a> {
             if let Expr::Resource { body, .. } = self.graph.expressions[expression]
                 && let Some(&body) = self.indices.get(&(body, context))
             {
-                let body_retains_owner = self
-                    .dependencies(body, budget)?
-                    .contains(&Atom::Resource(expression, context));
+                let dependencies = self.dependencies(body, budget)?;
+                let body_retains_owner =
+                    dependencies.contains(&Atom::Resource(expression, context));
                 if !body_retains_owner {
                     continue;
                 }
@@ -5398,6 +5504,7 @@ mod tests {
             sources: vec![span; expressions.len()],
             expressions,
             globals: Vec::new(),
+            method_proxies: Vec::new(),
             exports: Vec::new(),
             positions: HashMap::new(),
             targets: HashMap::new(),

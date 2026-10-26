@@ -92,7 +92,7 @@ This also covers the intrinsic replies from `BytesAt`, `StringFromUtf8` and
 `BytesAppendByte`. Independent review and retained verification cover 125 distinct
 focused cases by exact tree equality; no new build or full gate is claimed. Large-Int digits,
 closure storage, remaining recursive initialization/abandonment evidence,
-target-specific discharge, observation-before-root-release ordering and full
+target-specific discharge correspondence/regression audit, observation-before-root-release ordering and full
 completion remain required, followed by the connected R-core gate. This changes no original criterion or required product evidence.
 
 ### Current: closure storage and creation timing
@@ -100,12 +100,16 @@ completion remain required, followed by the connected R-core gate. This changes 
 [PR #151](https://github.com/dikini/ash-lang/pull/151) retained integer storage at
 `df79789134d680f4288b48c0081c6c74c6bf4de9`; 216 distinct focused cases transfer by
 reviewed-tree equality. This is partial R3 acceptance, not a full R-core gate.
-The next slice implements actual supplied closure capture storage. Its bounded
-[creation-timing amendment](../../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26)
-was accepted after independent contract review, not as current Main behavior;
-the initial ordinary-closure residency and native allocation tests are red. Reuse existing capture metadata, recursive
-slots, typed Value storage and the host adapter. Do not execute adapters eagerly
-or introduce another environment/storage framework.
+[PR #152](https://github.com/dikini/ash-lang/pull/152) implements actual supplied
+closure captures under the accepted
+[creation-timing amendment](../../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26).
+Ordinary and authenticated deferred records reuse capture metadata, recursive
+slots, Value storage and the host adapter. Direct type views forward the same
+record; deferred evidence applications remain ordered and delayed. Focused local
+and imported ownership checks pass. Mixed recursive cases, independent Core/image
+boundaries and full affected regressions remain pending; no closure acceptance or
+current Main semantics are claimed. No additional environment/storage framework
+is authorized.
 
 All original R3–R5 criteria, remaining recursive evidence, completion/discharge,
 fixture migrations and the connected R-core gate stay pending. The separate

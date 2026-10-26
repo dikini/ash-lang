@@ -512,7 +512,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             visit(&region.access);
         }
         if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind {
-            visit(closure.function.parameter());
+            if let Some(function) = closure.code.function() {
+                visit(function.parameter());
+            }
         }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
@@ -555,9 +557,11 @@ impl CoreOperationFamily for EffectOperationFamily {
                 None
             }
             EffectOperation::RegionClosure(closure) => {
-                visit(super::dialect::OperationTypeMetadata::Type(
-                    closure.function.parameter().ty(),
-                ));
+                if let Some(function) = closure.code.function() {
+                    visit(super::dialect::OperationTypeMetadata::Type(
+                        function.parameter().ty(),
+                    ));
+                }
                 None
             }
             EffectOperation::RegionAllocate(_)
@@ -624,11 +628,12 @@ impl CoreOperationFamily for EffectOperationFamily {
                 return Ok(());
             }
             EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
-                charge(1)?;
-                closure
-                    .function
-                    .parameter_mut()
-                    .rewrite_type(&mut |ty| rewrite(ty))?;
+                if let super::region::RegionClosureCode::Function(function) = &mut closure.code {
+                    charge(1)?;
+                    function
+                        .parameter_mut()
+                        .rewrite_type(&mut |ty| rewrite(ty))?;
+                }
                 return Ok(());
             }
             EffectExprKind::Operation(EffectOperation::Request(request)) => &mut request.effect,
@@ -739,7 +744,7 @@ impl CoreOperationFamily for EffectOperationFamily {
                 } else if index == closure.captures.len() + 1 {
                     Some(closure.storage)
                 } else if index == closure.captures.len() + 2 {
-                    Some(closure.function.body())
+                    Some(closure.code.body())
                 } else {
                     None
                 }
@@ -788,7 +793,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             ) => {}
 
             EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
-                closure.function.discard_metadata();
+                if let super::region::RegionClosureCode::Function(function) = closure.code {
+                    function.discard_metadata();
+                }
             }
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));

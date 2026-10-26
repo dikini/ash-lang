@@ -147,10 +147,16 @@ and the active partial closure implementation. Ordinary creation now uses the
 existing supplied Value slots and common callable reader; initial source lifetime,
 outer-selection and polymorphic-view checks pass. Generated evidence wrappers
 retain complete allocation rows and exact capture authentication. Record-only
-forwarding shares immutable views; native second-record resume/discard checks pass.
-A real generic prerequisite adapter still retains a host term environment and is
-an explicit failing case. Its deferred capture carrier, mixed recursion, remaining
-independent Core boundaries and full affected regressions remain pending. Closure capture storage and
+forwarding shares immutable views. Earlier native second-record resume/discard
+checks remain development evidence; a refresh against the delayed carrier is pending.
+Authenticated deferred adapters now retain term captures in the same supplied
+record and enter their ordered evidence applications only at type application.
+The actual Score storage case and local/imported selected-method ownership pairs
+pass focused checks; an outer-created method remains usable after inner close.
+Finite callable summaries retain stored function targets, and imported creation
+queries use ordinary initialization discovery. Remaining mixed recursion,
+independent Core forgery/image boundaries and full affected regressions remain
+pending. Closure capture storage and
 remaining recursive initialization/capture/abandonment evidence are still required. No executable
 memory-read-to-Bytes producer exists at the current slim-FFI boundary, whose
 native replies are Address or Unit; its borrowed Bytes argument uses the common
@@ -161,7 +167,7 @@ last case preserves the existing lexical payload rule; this delivery adds no
 source native-interpretation syntax. This retained partial delivery does not complete
 ordinary-construction acceptance.
 The host root retains backing through the existing observed heap, but
-observation-before-root-release ordering remains pending. Target-specific discharge, full close/composition,
+observation-before-root-release ordering remains pending. Target-specific discharge correspondence/regression audit, full close/composition,
 connected R-core and all R3–R5 acceptance remain pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
 [#66](https://github.com/dikini/ash-lang/issues/66),

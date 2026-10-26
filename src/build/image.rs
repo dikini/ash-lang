@@ -336,7 +336,7 @@ enum NodeTag {
         api: u32,
         context: u32,
         storage: u32,
-        parameter: u32,
+        parameter: Option<u32>,
         body: u32,
         captures: Slice,
     },
@@ -1660,7 +1660,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x18";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x19";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -7596,8 +7596,12 @@ impl Encoder<'_> {
                     api: self.module(closure.api)?,
                     context: self.node(closure.context)?,
                     storage: self.node(closure.storage)?,
-                    parameter: self.encode_binder(closure.function.parameter())?,
-                    body: self.node(closure.function.body())?,
+                    parameter: closure
+                        .code
+                        .function()
+                        .map(|function| self.encode_binder(function.parameter()))
+                        .transpose()?,
+                    body: self.node(closure.code.body())?,
                     captures: Slice::of(&self.image.node_children, start)?,
                 })
             }
@@ -8758,15 +8762,22 @@ impl Decoder<'_> {
                 for value in captures.get(&self.image.node_children)? {
                     push(&mut values, *get(nodes, *value)?, self.work)?;
                 }
-                let parameter = self.binder(builder, parameter)?;
+                let code = match parameter {
+                    Some(parameter) => crate::core::region::RegionClosureCode::Function(
+                        crate::core::function::FunctionNode::new(
+                            self.binder(builder, parameter)?,
+                            *get(nodes, body)?,
+                        ),
+                    ),
+                    None => crate::core::region::RegionClosureCode::Adapter {
+                        body: *get(nodes, body)?,
+                    },
+                };
                 let closure = crate::core::region::RegionClosureNode {
                     api,
                     context: *get(nodes, context)?,
                     storage: *get(nodes, storage)?,
-                    function: crate::core::function::FunctionNode::new(
-                        parameter,
-                        *get(nodes, body)?,
-                    ),
+                    code,
                     captures: values.into_boxed_slice(),
                 };
                 return builder
@@ -9061,12 +9072,18 @@ impl Decoder<'_> {
                     let row = self.structural(*row)?.row()?;
                     push(&mut rows, row, self.work)?;
                 }
+                let computation_row =
+                    crate::types::clone_effect_row_with_budget(&effects, self.work)
+                        .map_err(|_| ImageFailure::Resource)?;
                 builder.with_caller_type_work(self.work, |builder| {
-                    builder.type_application_with_row_arguments(
-                        function,
-                        restored.into_vec(),
-                        rows,
+                    builder.type_application_with_effects(
+                        crate::core::type_ops::TypeApplicationNode::new_with_row_arguments(
+                            function,
+                            restored.into_vec(),
+                            rows,
+                        ),
                         ty.into_inner(),
+                        computation_row,
                         origin.take(),
                     )
                 })?

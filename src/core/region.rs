@@ -92,7 +92,28 @@ pub struct RegionClosureNode {
     pub(crate) context: NodeId,
     pub(crate) captures: Box<[NodeId]>,
     pub(crate) storage: NodeId,
-    pub(crate) function: super::function::FunctionNode,
+    pub(crate) code: RegionClosureCode,
+}
+
+/// Code only. Both alternatives retain term captures in the same supplied slots.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RegionClosureCode {
+    Function(super::function::FunctionNode),
+    Adapter { body: NodeId },
+}
+impl RegionClosureCode {
+    pub(crate) fn body(&self) -> NodeId {
+        match self {
+            Self::Function(function) => function.body(),
+            Self::Adapter { body } => *body,
+        }
+    }
+    pub(crate) fn function(&self) -> Option<&super::function::FunctionNode> {
+        match self {
+            Self::Function(function) => Some(function),
+            Self::Adapter { .. } => None,
+        }
+    }
 }
 
 /// Reconstruct owner effects from its children and the fixed pair's full rows.

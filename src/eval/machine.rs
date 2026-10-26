@@ -1058,7 +1058,7 @@ impl<'runtime> Machine<'runtime> {
                 let stored = if let Some(record) = record {
                     match packed_tuple_location(&self.heap, record, &mut self.instantiation_work) {
                         Ok(location) => self.heap[location].stored_fields().is_some_and(|fields| {
-                            matches!(fields.first(), Some(Value::ClosureCode(_)))
+                            matches!(fields.first(), Some(Value::ClosureCode(code)) if matches!(code.program.node(code.node), Some(ExecutableNode::Effect(expression)) if matches!(&expression.kind, EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) if closure.code.function().is_some())))
                         }),
                         Err(RuntimeFailure::UninitializedLocation) => false,
                         Err(failure) => return Err(failure),
@@ -1795,20 +1795,29 @@ impl<'runtime> Machine<'runtime> {
                 self.control = Some(Control::Evaluate(abstraction.body(), environment));
             }
             value @ (Value::RegionFunction(_) | Value::Location(_)) => {
-                let (callable, abstraction) = self.read_callable_metadata(&value)?;
+                let (code, mut environment, abstraction) = self.read_stored_callable(&value)?;
                 let abstraction = abstraction.ok_or(RuntimeFailure::InvalidControlState)?;
                 let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-                    pure_expression(&callable.program, abstraction)?
+                    pure_expression(&code.program, abstraction)?
                 else {
                     return Err(RuntimeFailure::InvalidControlState);
                 };
-                let instantiation = callable.environment.instantiation.apply_view(
+                let instantiation = environment.instantiation.apply_view(
                     caller,
                     abstraction.parameters(),
                     application.arguments(),
                     application.row_arguments(),
                     &mut self.instantiation_work,
                 )?;
+                if let Some(ExecutableNode::Effect(expression)) = code.program.node(code.node)
+                    && let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+                        &expression.kind
+                    && let crate::core::region::RegionClosureCode::Adapter { body } = closure.code
+                {
+                    environment.instantiation = instantiation;
+                    self.control = Some(Control::Evaluate(body, environment));
+                    return Ok(());
+                }
                 let record = match value {
                     Value::RegionFunction(function) => function.record,
                     Value::Location(location) => location,

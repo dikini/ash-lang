@@ -2592,6 +2592,39 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.method_evidence_anchor_keys
             .try_reserve(1)
             .map_err(|_| BuildError::TypeWorkExceeded)?;
+        // Prepare the authenticated polymorphic-method prefix row before
+        // publishing its expectation/anchor. Ordinary type views stay pure.
+        let row_node = node.index()?;
+        let computation_row = if !F::REQUIRES_EMPTY_ROWS
+            && matches!(role, MethodEvidenceAnchorRole::Instantiation { .. })
+        {
+            self.type_work
+                .charge(self.registry.effects().len())
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+            if let Some(api) = self
+                .registry
+                .effects()
+                .iter()
+                .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            {
+                Some(
+                    F::effect_row(&self.nodes[row_node].effects)
+                        .union_with_budget(
+                            &EffectRow::singleton(crate::types::EffectInstance::new(
+                                api.default_alloc(),
+                                Box::new([]),
+                            )),
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| BuildError::TypeWorkExceeded)?
+                        .map_err(|_| BuildError::InvalidPayload)?,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let (interface, arguments) = application.into_parts();
         let admitted = self.admit_owner_arguments(arguments)?;
         self.method_evidence_anchor_keys.insert(anchor_key);
@@ -2606,6 +2639,9 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             expectation,
         });
         self.consumed_method_evidence[expectation] = true;
+        if let Some(row) = computation_row {
+            self.nodes[row_node].effects = F::store_effects(row);
+        }
         Ok(())
     }
 
@@ -3354,6 +3390,17 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             )),
             argument_rewrite || result_rewrite,
         )
+    }
+
+    pub(crate) fn type_application_with_effects(
+        &mut self,
+        application: TypeApplicationNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        let kind = PureExprKind::Computation(PureComputation::TypeApplication(application));
+        self.push_explicit_kind(ty, effects, origin, || F::from_pure(kind))
     }
 
     /// Adds a primitive operation with an unchecked result annotation.

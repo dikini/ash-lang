@@ -96,7 +96,9 @@ impl TransformFamily for EffectOperationFamily {
             binders.push(scope.access.id());
         }
         if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind {
-            binders.push(closure.function.parameter().id());
+            if let Some(function) = closure.code.function() {
+                binders.push(function.parameter().id());
+            }
         }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
@@ -161,12 +163,22 @@ impl TransformFamily for EffectOperationFamily {
                 )
             }
             EffectOperation::RegionClosure(closure) => {
-                let parameter = closure.function.parameter();
-                let parameter_type = copy_type(builder, parameter.ty())?;
-                let parameter_id = copy_binder_id(builder, parameter.id())?;
-                let parameter_origin = copy_origin(builder, parameter.origin())?;
-                let parameter =
-                    builder.resolved_binder(parameter_id, parameter_type, parameter_origin)?;
+                let code = if let Some(function) = closure.code.function() {
+                    let parameter = function.parameter();
+                    let parameter_type = copy_type(builder, parameter.ty())?;
+                    let parameter_id = copy_binder_id(builder, parameter.id())?;
+                    let parameter_origin = copy_origin(builder, parameter.origin())?;
+                    let parameter =
+                        builder.resolved_binder(parameter_id, parameter_type, parameter_origin)?;
+                    super::region::RegionClosureCode::Function(super::function::FunctionNode::new(
+                        parameter,
+                        remap(remapped, closure.code.body())?,
+                    ))
+                } else {
+                    super::region::RegionClosureCode::Adapter {
+                        body: remap(remapped, closure.code.body())?,
+                    }
+                };
                 builder.charge_effect_metadata(closure.captures.len())?;
                 let mut captures = Vec::new();
                 captures
@@ -181,10 +193,7 @@ impl TransformFamily for EffectOperationFamily {
                         context: remap(remapped, closure.context)?,
                         storage: remap(remapped, closure.storage)?,
                         captures: captures.into_boxed_slice(),
-                        function: super::function::FunctionNode::new(
-                            parameter,
-                            remap(remapped, closure.function.body())?,
-                        ),
+                        code,
                     }),
                     ty.into_inner(),
                     effects,
@@ -1023,6 +1032,21 @@ fn rebuild_nonfold_node<F: TransformFamily>(
             let ty = IterativeTypeOwner::new(copy_type(builder, expression.ty())?);
             let function = remap(remapped, node.function())?;
 
+            if !F::REQUIRES_EMPTY_ROWS {
+                let effects = copy_expression_row(builder, expression)?;
+                return builder
+                    .type_application_with_effects(
+                        super::type_ops::TypeApplicationNode::new_with_row_arguments(
+                            function,
+                            arguments.into_vec(),
+                            row_arguments,
+                        ),
+                        ty.into_inner(),
+                        effects,
+                        origin,
+                    )
+                    .map_err(TransformError::from);
+            }
             builder
                 .type_application_with_row_arguments(
                     function,

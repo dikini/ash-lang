@@ -36,7 +36,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .find_map(|effect| RegionApi::for_module(effect.id.module())))
     }
 
-    fn saved_region_context(
+    pub(super) fn saved_region_context(
         &mut self,
         api: RegionApi,
         span: Span,
@@ -75,6 +75,37 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if !F::EFFECTS || self.active_region_api()?.is_none() {
             return Ok(self.builder.function(parameter, body, ty, origin)?);
         }
+        self.construct_closure_code(
+            crate::core::region::RegionClosureCode::Function(
+                crate::core::function::FunctionNode::new(parameter, body),
+            ),
+            ty,
+            origin,
+        )
+    }
+
+    pub(super) fn construct_adapter_captures(
+        &mut self,
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, TypeError> {
+        if !F::EFFECTS || self.active_region_api()?.is_none() {
+            return Ok(body);
+        }
+        self.construct_closure_code(
+            crate::core::region::RegionClosureCode::Adapter { body },
+            ty,
+            origin,
+        )
+    }
+
+    fn construct_closure_code(
+        &mut self,
+        code: crate::core::region::RegionClosureCode,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, TypeError> {
         let span = origin.primary_span();
         let api = self.region_api_at(span)?;
         let (context, context_value, query) = self.saved_region_context(api, span)?;
@@ -114,7 +145,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 context: context_value,
                 captures: Box::new([]),
                 storage,
-                function: crate::core::function::FunctionNode::new(parameter, body),
+                code,
             }),
         )?;
         self.pending_region_closures.push((closure, request));
