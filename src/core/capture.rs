@@ -1182,11 +1182,33 @@ pub(crate) fn prepare_region_closure(
             // Capture that binder, never rerun its initializer or the obsolete
             // source placeholder that selection replaced.
             charge(budget, roots.len())?;
-            if let Some((_, root)) = roots.iter().find(|(candidate, _)| *candidate == binder) {
-                let declaration = &builder.nodes[index(*root)];
-                let ty = crate::types::clone_type_with_budget(&declaration.ty, budget)
+            let mut declaration = roots
+                .iter()
+                .find(|(candidate, _)| *candidate == binder)
+                .map(|(_, root)| {
+                    let node = &builder.nodes[index(*root)];
+                    (&node.ty, node.origin.as_ref())
+                });
+            if declaration.is_none() {
+                // Local lexical evidence also has a completed typed declaration,
+                // even when its selected method has no literal Variable use.
+                for candidate in &builder.nodes {
+                    charge(budget, 1)?;
+                    if let super::effect::EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::Bind(binding),
+                    )) = &candidate.kind
+                        && binding.binder().id() == binder
+                    {
+                        declaration =
+                            Some((binding.binder().ty(), Some(binding.binder().origin())));
+                        break;
+                    }
+                }
+            }
+            if let Some((ty, origin)) = declaration {
+                let ty = crate::types::clone_type_with_budget(ty, budget)
                     .map_err(|()| Failure::Resource)?;
-                let origin = declaration.origin.clone().ok_or(Failure::Invalid)?;
+                let origin = origin.cloned().ok_or(Failure::Invalid)?;
                 found = Some(builder.variable(binder, ty, origin).map_err(
                     |error| match error {
                         super::BuildError::TypeWorkExceeded => Failure::Resource,

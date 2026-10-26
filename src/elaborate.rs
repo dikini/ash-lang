@@ -14461,11 +14461,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let provenance = self.at_span_provenance(&ty, declaration_span)?;
                 values.push(TypedNode {
                     node,
-                    effects: if !has_payload && region_api.is_some() {
-                        allocation
-                    } else {
-                        EffectRow::empty()
-                    },
+                    effects: self
+                        .builder
+                        .clone_node_effects_with_budget(node, &mut self.type_work)?,
                     provenance,
                     ty: ty.into_inner(),
                 });
@@ -15127,6 +15125,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     | ElaboratedDeclaration::Recursive {
                         effects, origin, ..
                     } => Some(self.union_effects(effects, &body.effects, origin.primary_span())?),
+                    ElaboratedDeclaration::Evidence {
+                        members, origin, ..
+                    } => {
+                        let span = origin.primary_span();
+                        let mut effects =
+                            self.union_effects(&EffectRow::empty(), &body.effects, span)?;
+                        for (_, initializer) in members {
+                            self.type_work.charge(1).map_err(|()| type_resource())?;
+                            let creation = self.builder.clone_node_effects_with_budget(
+                                *initializer,
+                                &mut self.type_work,
+                            )?;
+                            effects = self.union_effects(&creation, &effects, span)?;
+                        }
+                        Some(effects)
+                    }
                     _ => None,
                 }
             } else {

@@ -105,11 +105,21 @@ closure captures under the accepted
 [creation-timing amendment](../../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26).
 Ordinary and authenticated deferred records reuse capture metadata, recursive
 slots, Value storage and the host adapter. Direct type views forward the same
-record; deferred evidence applications remain ordered and delayed. Focused local
-and imported ownership checks pass. Mixed recursive cases, independent Core/image
-boundaries and full affected regressions remain pending; no closure acceptance or
-current Main semantics are claimed. No additional environment/storage framework
-is authorized.
+record; deferred evidence applications remain ordered and delayed. Focused checks
+cover local/transitive imported ownership, mixed cycles, member order and recursive
+group suspension. Current WIP repairs constructor/header/evidence rows; Source
+placement and recursion suites pass. Machine replay/discard, small-stack and exact
+capture-quota checks remain open. The deep registration fixture now resolves its
+lexical method capture but exhausts the unchanged 4,113,200 Source allowance;
+work attribution precedes any policy decision. Legacy Pure callback fixtures
+cover isolated preflight/disposal only. Final affected checks and independent
+review remain pending.
+The generated-native Score attempt exposes the unchanged method-evidence image
+profile's concrete-adapter exclusion. This slice adds no catalog codec: actual
+host supplied-slot/prefix-order evidence and shared native generic/mixed backing
+checks remain distinct from the isolated Adapter carrier wire roundtrip. No full
+Score image/native pass, closure acceptance or current Main semantics are claimed.
+No additional environment/storage framework is authorized.
 
 All original R3–R5 criteria, remaining recursive evidence, completion/discharge,
 fixture migrations and the connected R-core gate stay pending. The separate

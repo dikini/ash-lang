@@ -22629,7 +22629,7 @@ pub struct ResolvedInlineOperationalHeader {
     pub parameters: Vec<ResolvedTypedPattern>,
     /// Declared result type.
     pub result_type: ResolvedType,
-    /// Declared result effect row, or the canonical empty row when omitted.
+    /// Declared result row after the ordinary allocation-default expansion.
     pub result_effects: EffectRow,
     /// Source provenance for result-row arguments in resolver encounter order.
     pub result_effect_argument_provenance: Box<[ResolvedTypeProvenance]>,

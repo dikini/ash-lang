@@ -147,17 +147,31 @@ and the active partial closure implementation. Ordinary creation now uses the
 existing supplied Value slots and common callable reader; initial source lifetime,
 outer-selection and polymorphic-view checks pass. Generated evidence wrappers
 retain complete allocation rows and exact capture authentication. Record-only
-forwarding shares immutable views. Earlier native second-record resume/discard
-checks remain development evidence; a refresh against the delayed carrier is pending.
-Authenticated deferred adapters now retain term captures in the same supplied
-record and enter their ordered evidence applications only at type application.
-The actual Score storage case and local/imported selected-method ownership pairs
-pass focused checks; an outer-created method remains usable after inner close.
-Finite callable summaries retain stored function targets, and imported creation
-queries use ordinary initialization discovery. Remaining mixed recursion,
-independent Core forgery/image boundaries and full affected regressions remain
-pending. Closure capture storage and
-remaining recursive initialization/capture/abandonment evidence are still required. No executable
+forwarding shares immutable views. Authenticated deferred adapters retain term
+captures in the same supplied record and enter their ordered evidence applications
+only at type application. Focused checks cover Score capture storage, local and
+transitive imported ownership, mixed function/data cycles, source-order creation,
+recursive-group resume/discard, and independent capture/layout/row refusals.
+Handler-row recomputation and lexical evidence blocks retain actual creation rows.
+The current WIP also repairs constructor creation rows, inline function-header
+row expansion and full-row evidence validation. Source placement and recursion
+suites pass, but affected Machine checks remain open: callback replay/discard
+fixtures, two small-stack aborts and exact capture quotas. The original 1,024-level
+registration case now resolves its lexical method capture and exhausts the normal
+Source allowance of 4,113,200 work units; attribution is pending, with limits
+unchanged. Isolated legacy callback preflight/disposal fixtures use independently
+validated Pure closures and are not supplied-storage evidence. Final affected
+regressions and independent completed-slice review remain pending.
+
+A generated-native Score attempt stops in the unchanged image profile: its
+registry inventory omits method/head quantifiers, and the method-evidence codec
+explicitly excludes concrete implementation owners/adapters. This delivery does
+not extend that profile. Host supplied-slot execution and prefix-before-argument
+discard cover the deferred behavior; the isolated Adapter carrier wire test is
+not a complete source-free Score image or native execution. Native generic and
+mixed-cycle checks use the same shared storage adapter. Their final results belong
+to the frozen checkpoint receipt. Closure acceptance and remaining recursive
+initialization/capture/abandonment evidence still require independent review. No executable
 memory-read-to-Bytes producer exists at the current slim-FFI boundary, whose
 native replies are Address or Unit; its borrowed Bytes argument uses the common
 reader. The native checks distinguish custom supplied-byte construction/read,

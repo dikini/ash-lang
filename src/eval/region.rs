@@ -1730,6 +1730,84 @@ mod tests {
     }
 
     #[test]
+    fn deferred_method_prefix_finishes_before_source_argument_discard() {
+        let source = concat!(
+            "type Option<A> =\nNone\n| Some(A)\ninterface Score<A> {\nscore<X> : (A, X) -> Int\n}\n",
+            "impl Score<Int> {\nscore (value, ignored) = value\n}\nimpl Score<Option<A>> where Score<A> {\nscore (None, ignored) = 4\nscore (Some(value), ignored) = {\nlet empty : Option<A> = None\nscore((empty, ignored)) * 10 + score((value, ignored))\n}\n}\n",
+            "effect Argument {\nget : Unit -> (Option<Int>, Bool)\n}\nmain : Unit -> Int\nmain () = region<R> r {\nhandle score(perform Argument.get ()) with Argument {\nget ignored => {\nlet done = discard\n42\n}\n}\n}\n",
+        );
+        let (program, _, _) =
+            crate::core::validate::generic_cell_source_fixture_for_test(source, None);
+        let argument = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Argument")
+            .unwrap()
+            .id;
+        let region = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Region(region)) if !region.entry => {
+                    Some(region)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "42");
+        let start = evaluation
+            .trace
+            .iter()
+            .position(|event| *event == TraceEvent::Enter(region.body))
+            .unwrap();
+        let argument = evaluation.trace.iter().position(|event| {
+            let TraceEvent::Enter(node) = *event;
+            matches!(&program.node(node).unwrap().kind, EffectExprKind::Operation(EffectOperation::Request(request)) if request.operation().owner() == argument)
+        }).unwrap();
+        let records = evaluation.trace[start..argument]
+            .iter()
+            .filter_map(|event| {
+                let TraceEvent::Enter(node) = *event;
+                let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+                    &program.node(node).unwrap().kind
+                else {
+                    return None;
+                };
+                Some(closure)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            records.len(),
+            2,
+            "adapter capture record and prerequisite-produced function finish before the source argument"
+        );
+        assert!(matches!(
+            records[0].code,
+            crate::core::region::RegionClosureCode::Adapter { .. }
+        ));
+        let function = records[1]
+            .code
+            .function()
+            .expect("prerequisite term application creates the actual method function");
+        assert!(
+            !evaluation
+                .trace
+                .contains(&TraceEvent::Enter(function.body())),
+            "argument discard never enters the source method body"
+        );
+        assert_eq!(
+            evaluation
+                .effect_trace()
+                .iter()
+                .filter(|event| matches!(event, EffectTraceEvent::Discard(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn mixed_recursive_group_creates_functions_before_guarded_data_in_member_order() {
         let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
             concat!(

@@ -4346,6 +4346,74 @@ mod tests {
         Value::Integer(Integer::parse_decimal(value).unwrap())
     }
 
+    enum LegacyCallback {
+        Cleanup,
+        Increment,
+        Constant,
+    }
+
+    // These isolated preflight and legacy Environment disposal fixtures need a
+    // host closure, not Source creation or supplied-region storage evidence.
+    fn legacy_callback_fixture(kind: LegacyCallback) -> Value {
+        let source = SourceFile::new("legacy-callback.ash", "()").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let mut builder = CoreBuilder::new();
+        let domain = if matches!(kind, LegacyCallback::Increment) {
+            Type::Int
+        } else {
+            Type::Unit
+        };
+        let result = if matches!(kind, LegacyCallback::Cleanup) {
+            Type::Unit
+        } else {
+            Type::Int
+        };
+        let parameter = builder.binder(domain.clone(), origin.clone()).unwrap();
+        let body = match kind {
+            LegacyCallback::Cleanup => builder.unit(Type::Unit, origin.clone()).unwrap(),
+            LegacyCallback::Constant => builder
+                .integer(
+                    Integer::parse_decimal("7").unwrap(),
+                    Type::Int,
+                    origin.clone(),
+                )
+                .unwrap(),
+            LegacyCallback::Increment => {
+                let left = builder
+                    .variable(parameter.id(), Type::Int, origin.clone())
+                    .unwrap();
+                let right = builder
+                    .integer(
+                        Integer::parse_decimal("1").unwrap(),
+                        Type::Int,
+                        origin.clone(),
+                    )
+                    .unwrap();
+                builder
+                    .primitive(
+                        crate::core::Primitive::Add,
+                        left,
+                        right,
+                        Type::Int,
+                        origin.clone(),
+                    )
+                    .unwrap()
+            }
+        };
+        let root = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(domain), Box::new(result)),
+                origin,
+            )
+            .unwrap();
+        let program = validate(builder.finish(root).unwrap(), &[&source]).unwrap();
+        let value = Machine::new(&program).run().unwrap().value;
+        assert!(matches!(value, Value::Function(_)));
+        value
+    }
+
     fn cleanup_fixture() -> (
         ValidatedEffectProgram,
         crate::core::effect::CleanupScopeNode,
@@ -4355,14 +4423,10 @@ mod tests {
             effect_program("main : Unit -> Int\nmain () = cleanup fn(ignored) {\n()\n} {\n42\n}\n");
         let mut pending = vec![program.root()];
         let mut scope = None;
-        let mut bindings = Vec::new();
         while let Some(node) = pending.pop() {
             let expression = program.node(node).unwrap();
             match &expression.kind {
                 EffectExprKind::Operation(EffectOperation::Cleanup(found)) => scope = Some(*found),
-                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
-                    bindings.push((binding.binder().id(), binding.initializer()))
-                }
                 _ => {}
             }
             pending.extend(
@@ -4371,22 +4435,7 @@ mod tests {
             );
         }
         let scope = scope.unwrap();
-        let initializer = bindings
-            .into_iter()
-            .find(|(binder, _)| *binder == scope.callback)
-            .unwrap()
-            .1;
-        let executable = ExecutableProgram::Effect(program.shared());
-        let transition = dispatch_entry(
-            &executable,
-            initializer,
-            Environment::new(),
-            &mut Vec::new(),
-        )
-        .unwrap();
-        let Control::Return(callback) = transition.control else {
-            panic!("ordinary callback")
-        };
+        let callback = legacy_callback_fixture(LegacyCallback::Cleanup);
         let environment = Environment::new().extend(scope.callback, callback).unwrap();
         (program, scope, environment)
     }
@@ -4870,27 +4919,7 @@ mod tests {
         else {
             unreachable!()
         };
-        let initializer =
-            nodes
-                .iter()
-                .find_map(|node| match &program.node(*node).unwrap().kind {
-                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
-                        binding,
-                    ))) if binding.binder().id() == scope.callback => Some(binding.initializer()),
-                    _ => None,
-                })
-                .unwrap();
-        let executable = ExecutableProgram::Effect(program.shared());
-        let transition = dispatch_entry(
-            &executable,
-            initializer,
-            Environment::new(),
-            &mut Vec::new(),
-        )
-        .unwrap();
-        let Control::Return(callback) = transition.control else {
-            panic!("ordinary callback value")
-        };
+        let callback = legacy_callback_fixture(LegacyCallback::Increment);
         let environment = Environment::new().extend(scope.callback, callback).unwrap();
         (program, node, environment)
     }
@@ -5694,9 +5723,7 @@ mod tests {
 
     #[test]
     fn generic_cell_function_copy_charges_origin_before_retaining_metadata() {
-        let program =
-            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
-        let Value::Function(mut function) = Machine::new_effect(&program).run().unwrap().value
+        let Value::Function(mut function) = legacy_callback_fixture(LegacyCallback::Constant)
         else {
             panic!("function fixture")
         };
@@ -6114,9 +6141,7 @@ mod tests {
         let program = effect_program(
             "import @builtin.generic_cell as Cell\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,(Unit -> Int)> c = initial {\nlet action = Cell.read c\naction ()\n}\n",
         );
-        let callable =
-            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
-        let Value::Function(template) = Machine::new_effect(&callable).run().unwrap().value else {
+        let Value::Function(template) = legacy_callback_fixture(LegacyCallback::Constant) else {
             panic!("function")
         };
         std::thread::Builder::new()
@@ -6308,9 +6333,7 @@ mod tests {
         let program = effect_program(
             "import @builtin.generic_cell as Cell\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,(Unit -> Int)> c = initial {\nlet action = Cell.read c\naction ()\n}\n",
         );
-        let callable =
-            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
-        let Value::Function(template) = Machine::new_effect(&callable).run().unwrap().value else {
+        let Value::Function(template) = legacy_callback_fixture(LegacyCallback::Constant) else {
             panic!("function")
         };
         let mut frontier = (0..512).map(|_| Environment::new()).collect::<Vec<_>>();
@@ -8373,8 +8396,10 @@ mod tests {
         let evaluation = evaluate_effect(&program)
             .expect("the identity-free closure should execute after its scope returns");
         assert!(matches!(evaluation.value, Value::SmallInteger(42)));
+        // Compare the erased payload with the same ordinary conversion
+        // function creation, which CP-0025 also requires for the newtype wrapper.
         let erased = effect_program(
-            "make : Unit -> (Unit -> Int)\nmake () = {\nlet offset = 41\nfn(ignored) {\noffset + 1\n}\n}\nmain : Unit -> Int\nmain () = make()()\n",
+            "make : Unit -> (Unit -> Int)\nmake () = {\nlet wrap : Int -> Int = fn(value) {\nvalue\n}\nlet offset = wrap 41\nfn(ignored) {\noffset + 1\n}\n}\nmain : Unit -> Int\nmain () = make()()\n",
         );
         let erased = evaluate_effect(&erased).unwrap();
         assert_eq!(erased.value.to_string(), "42");

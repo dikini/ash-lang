@@ -130,7 +130,9 @@ fn custom_region_stores_nullary_and_payload_nominal_records_in_supplied_backing(
     let source = ENTRY
         .replace("provider<R> :", "type Item =\nEmpty\n| Full(Int)\nprovider<R> :")
         .replace(TUPLE_BODY, "let empty = Empty\n        match Full 42 {\n            Full(value) => value\n            Empty => 0\n        }");
-    run_native("nominal", &source, b"maar");
+    // Empty and Full are two records; evaluating Full's ordinary constructor
+    // wrapper creates its own supplied closure record before the payload record.
+    run_native("nominal", &source, b"maaar");
 }
 
 #[test]
@@ -303,6 +305,19 @@ fn recursive_closure_group_discard_at_second_record_does_not_replay_first() {
         &suspended_entry(&body, 2, Some(2)),
         b"mar",
     );
+}
+
+#[test]
+fn supplied_generic_closure_views_share_their_capture_record() {
+    run_native("generic-closure-views", &ENTRY.replace(TUPLE_BODY,
+        "let captured = 42\nlet identity = fn(value) {\nlet copied = captured\nvalue\n}\nlet answer = identity 42\nmatch identity true {\ntrue => answer\nfalse => 0\n}"), b"mar");
+}
+
+#[test]
+fn supplied_mixed_recursive_closures_keep_the_guarded_cycle() {
+    run_native("mixed-recursive-closure", &ENTRY.replace(TUPLE_BODY,
+        "let rec first : Stream = Next(42, read, again)\nand read : Unit -> Int = fn(ignored) {\nmatch first {\nNext(value, ignored, also_ignored) => value\n}\n}\nand again : Unit -> Int = fn(ignored) {\nread ()\n}\nlet alias = first\nmatch alias {\nNext(value, head, tail) => match (head ()) == 42 {\ntrue => match (tail ()) == value {\ntrue => 42\nfalse => 0\n}\nfalse => 0\n}\n}")
+        .replace("provider<R> :", "type Stream = Next(Int, Unit -> Int, Unit -> Int)\nprovider<R> :"), b"maaaaar");
 }
 
 #[test]

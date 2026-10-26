@@ -613,6 +613,22 @@ const SCORE_CAPTURE_OWNER_MAIN: &str = concat!(
 );
 
 #[test]
+fn polymorphic_method_prefix_row_survives_handler_clause_recomputation() {
+    let source = format!(
+        "{SCORE_CAPTURE_DECLARATIONS}effect Ask {{\nget : Unit -> Int\n}}\nmain : Unit -> Int\nmain () = handle perform Ask.get () with Ask {{\nget ignored => {{\nlet answer = score((Some(2), true))\nresume answer\n}}\n}}\n"
+    );
+    assert_eq!(run(&source), "42");
+}
+
+#[test]
+fn abstract_polymorphic_method_prefix_row_survives_handler_clause_recomputation() {
+    let source = format!(
+        "{SCORE_CAPTURE_DECLARATIONS}effect Tick {{\ngo : Unit -> Unit\n}}\nforward<A> : A -> Int where Score<A>\nforward value = handle {{\nlet ignored = perform Tick.go ()\n0\n}} with Tick {{\ngo ignored => {{\nlet answer = score((value, true))\nlet resumed = resume ()\nanswer\n}}\n}}\nmain : Unit -> Int\nmain () = forward(Some(2))\n"
+    );
+    assert_eq!(run(&source), "42");
+}
+
+#[test]
 fn selected_polymorphic_method_capture_keeps_its_materialization_owner() {
     let source = format!("{SCORE_CAPTURE_DECLARATIONS}{SCORE_CAPTURE_OWNER_MAIN}");
     let failure = run_result(&source).unwrap_err();

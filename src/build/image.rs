@@ -3699,6 +3699,72 @@ mod tests {
     }
 
     #[test]
+    fn deferred_capture_carrier_wire_preserves_all_explicit_operands() {
+        let tree = SourceTree::new();
+        tree.write("entry.ash", "main : Unit -> (Unit -> Int)\nmain () = {\nlet captured = 42\nfn(ignored) {\ncaptured\n}\n}\n");
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut image = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let index = image.nodes.iter().position(|node| matches!(node.tag, NodeTag::RegionClosure { captures, .. } if captures.len > 0)).unwrap();
+        let NodeTag::RegionClosure {
+            api,
+            context,
+            storage,
+            body,
+            captures,
+            ..
+        } = image.nodes[index].tag
+        else {
+            unreachable!()
+        };
+        let expected_captures = captures.get(&image.node_children).unwrap().to_vec();
+        // Isolate the existing delayed-code carrier wire alternative. This is
+        // not an admitted Score program or a native method-catalog image.
+        image.nodes[index].tag = NodeTag::RegionClosure {
+            api,
+            context,
+            storage,
+            body,
+            captures,
+            parameter: None,
+        };
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let NodeTag::RegionClosure {
+            api: actual_api,
+            context: actual_context,
+            storage: actual_storage,
+            body: actual_body,
+            captures: actual_captures,
+            parameter,
+        } = decoded.nodes[index].tag
+        else {
+            panic!("delayed capture carrier tag");
+        };
+        assert_eq!(
+            (
+                actual_api,
+                actual_context,
+                actual_storage,
+                actual_body,
+                parameter
+            ),
+            (api, context, storage, body, None)
+        );
+        assert_eq!(
+            actual_captures.get(&decoded.node_children).unwrap(),
+            expected_captures
+        );
+    }
+
+    #[test]
     fn byte_storage_image_restores_literal_and_utf8_result_without_sources() {
         assert_region_image(concat!(
             "import @builtin.regions as Region\nimport @builtin.string as Text\nimport @builtin.bytes as B\n",

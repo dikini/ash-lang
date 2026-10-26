@@ -20396,6 +20396,261 @@ mod tests {
     }
 
     #[test]
+    fn region_closure_body_cannot_capture_a_handler_continuation() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            "effect Ask {\nget : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = handle perform Ask.get () with Ask {\nget ignored => {\nlet saved : Unit -> Unit = fn(ignored) {\n()\n}\nresume ()\n}\n}\n",
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+        let resume = copied
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Operation(EffectOperation::Resume(_))
+                )
+            })
+            .unwrap();
+        let resume = node_id(copied.arena, resume).unwrap();
+        let index = copied.nodes.iter().position(|node| {
+            matches!(&node.kind, EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) if closure.code.function().is_some_and(|function| matches!(&copied.nodes[function.body().index().unwrap()].kind, EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(_))))) && node.ty.function_view().is_some_and(|function| function.value() == &Type::Unit))
+        }).unwrap();
+        let id = node_id(copied.arena, index).unwrap();
+        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+            &copied.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        let function = closure.code.function().unwrap();
+        let parameter = function.parameter().clone();
+        let original_body = function.body();
+        let body = node_id(copied.arena, copied.nodes.len()).unwrap();
+        let original = &copied.nodes[original_body.index().unwrap()];
+        let origin = original.origin.clone().unwrap();
+        let retained = TypedBinder::new(
+            copied.arena,
+            BinderId::Generated(u32::MAX - 60),
+            Type::Unit,
+            origin.clone(),
+        );
+        // Keep the old Unit body reachable; the only new free capability is the
+        // existing handler's resume, after that harmless strict computation.
+        copied.nodes.push(StoredNode {
+            dialect: original.dialect,
+            ty: Type::Unit,
+            effects: copied.nodes[resume.index().unwrap()].effects.clone(),
+            origin: Some(origin),
+            kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                super::super::binding::BindingNode::new(retained, original_body, resume),
+            ))),
+        });
+        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+            &mut copied.nodes[index].kind
+        else {
+            unreachable!()
+        };
+        closure.code = super::super::region::RegionClosureCode::Function(
+            super::super::function::FunctionNode::new(parameter, body),
+        );
+        let failure = super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+        assert_eq!(
+            failure.cause,
+            Some(ValidationCause::CapturedContinuation),
+            "{failure:?}; selected={id:?}"
+        );
+        assert_eq!(failure.node, Some(id));
+    }
+
+    #[test]
+    fn region_closure_capture_layout_is_checked_independently() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            "main : Unit -> Int\nmain () = {\nlet left = 20\nlet right = 22\nlet saved : Unit -> Int = fn(ignored) {\nleft + right\n}\nsaved ()\n}\n",
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        let closure_index = donor
+            .nodes()
+            .iter()
+            .position(|node| {
+                let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &node.kind
+                else {
+                    return false;
+                };
+                closure.captures.len() == 2
+                    && closure
+                        .captures
+                        .iter()
+                        .all(|capture| donor.node(*capture).unwrap().ty == Type::Int)
+            })
+            .expect("two exact lexical integer captures");
+        for mutation in [
+            "missing", "extra", "order", "binder", "type", "request", "context",
+        ] {
+            let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+            let id = node_id(copied.arena, closure_index).unwrap();
+            let EffectExprKind::Operation(EffectOperation::RegionClosure(original)) =
+                &copied.nodes[closure_index].kind
+            else {
+                unreachable!()
+            };
+            let mut closure = original.clone();
+            let first = closure.captures[0].index().unwrap();
+            let second = closure.captures[1].index().unwrap();
+            match mutation {
+                "missing" => closure.captures = Box::new([closure.captures[0]]),
+                "extra" => {
+                    closure.captures = Box::new([
+                        closure.captures[0],
+                        closure.captures[1],
+                        closure.captures[0],
+                    ])
+                }
+                "order" => closure.captures.swap(0, 1),
+                "binder" => copied.nodes[first].kind = copied.nodes[second].kind.clone(),
+                "type" => copied.nodes[first].ty = Type::Bool,
+                "request" | "context" => {
+                    let storage = closure.storage.index().unwrap();
+                    let EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) =
+                        &copied.nodes[storage].kind
+                    else {
+                        unreachable!()
+                    };
+                    let request = allocation.request.index().unwrap();
+                    if mutation == "request" {
+                        let EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) =
+                            &mut copied.nodes[request].kind
+                        else {
+                            unreachable!()
+                        };
+                        request.fields += 1;
+                    } else {
+                        let context = node_id(copied.arena, copied.nodes.len()).unwrap();
+                        let original = &copied.nodes[closure.context.index().unwrap()];
+                        let duplicate = StoredNode {
+                            dialect: original.dialect,
+                            ty: original.ty.clone(),
+                            effects: original.effects.clone(),
+                            origin: original.origin.clone(),
+                            kind: original.kind.clone(),
+                        };
+                        copied.nodes.push(duplicate);
+                        let EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) =
+                            &mut copied.nodes[storage].kind
+                        else {
+                            unreachable!()
+                        };
+                        allocation.context = context;
+                    }
+                }
+                _ => unreachable!(),
+            }
+            copied.nodes[closure_index].kind =
+                EffectExprKind::Operation(EffectOperation::RegionClosure(closure));
+            let expected = if mutation == "type" {
+                node_id(copied.arena, first).unwrap()
+            } else {
+                id
+            };
+            let failure =
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+            assert_eq!(failure.reason, ValidationReason::NodeType, "{mutation}");
+            assert_eq!(failure.node, Some(expected), "{mutation}");
+        }
+    }
+
+    #[test]
+    fn deferred_adapter_core_rejects_legacy_storage_and_noncanonical_prefix_rows() {
+        use super::super::effect::EffectExprKind;
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            concat!(
+                "type Option<A> =\nNone\n| Some(A)\ninterface Score<A> {\nscore<X> : (A, X) -> Int\n}\n",
+                "impl Score<Int> {\nscore (value, ignored) = value\n}\n",
+                "impl Score<Option<A>> where Score<A> {\nscore (None, ignored) = 4\nscore (Some(value), ignored) = {\nlet empty : Option<A> = None\nscore((empty, ignored)) * 10 + score((value, ignored))\n}\n}\n",
+                "effect Other {\ntouch : Unit -> Unit\n}\nforward<A> : A -> Int where Score<A>\nforward value = score((value, true))\nmain : Unit -> Int\nmain () = forward(Some(2))\n",
+            ),
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        for mutation in ["legacy", "wider", "missing"] {
+            let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+            let (anchor_index, _terminal, delayed) = copied
+                .method_evidence_anchors
+                .iter()
+                .find_map(|anchor| {
+                    if !matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { .. }) {
+                        return None;
+                    }
+                    let EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeAbstraction(abstraction),
+                    )) = &copied.nodes[anchor.node.index().unwrap()].kind
+                    else {
+                        return None;
+                    };
+                    let (terminal, closure) = super::super::region::closure_initializer::<
+                        super::super::effect::EffectOperationFamily,
+                    >(abstraction.body(), |node| {
+                        copied.nodes.get(node.index().ok()?).map(|node| &node.kind)
+                    })?;
+                    let super::super::region::RegionClosureCode::Adapter { body } = closure.code
+                    else {
+                        return None;
+                    };
+                    Some((anchor.node.index().unwrap(), terminal, body))
+                })
+                .expect("authenticated stored adapter with prerequisite term applications");
+            let expected = match mutation {
+                "legacy" => {
+                    let EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeAbstraction(abstraction),
+                    )) = &copied.nodes[anchor_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    let parameters = abstraction.parameters().to_vec();
+                    copied.nodes[anchor_index].kind = EffectExprKind::Pure(
+                        PureExprKind::Computation(PureComputation::TypeAbstraction(
+                            super::super::type_ops::TypeAbstractionNode::new(parameters, delayed),
+                        )),
+                    );
+                    (ValidationReason::NodeType, Some(delayed))
+                }
+                "wider" => {
+                    let other = copied
+                        .registry
+                        .effects()
+                        .iter()
+                        .find(|effect| effect.spelling == "Other")
+                        .unwrap()
+                        .id;
+                    copied.nodes[delayed.index().unwrap()].effects =
+                        EffectRow::singleton(EffectInstance::new(other, Box::new([])));
+                    (ValidationReason::EffectRow, Some(delayed))
+                }
+                "missing" => {
+                    let node = copied
+                        .method_evidence_anchors
+                        .iter()
+                        .find(|anchor| {
+                            matches!(anchor.role, MethodEvidenceAnchorRole::Instantiation { .. })
+                        })
+                        .unwrap()
+                        .node;
+                    copied.nodes[node.index().unwrap()].effects = EffectRow::empty();
+                    (ValidationReason::EffectRow, Some(node))
+                }
+                _ => unreachable!(),
+            };
+            let failure =
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+            assert_eq!((failure.reason, failure.node), expected, "{mutation}");
+        }
+    }
+
+    #[test]
     fn integer_region_core_rejects_legacy_producers_and_missing_rows() {
         use super::super::effect::{EffectExprKind, EffectOperation};
         use super::super::region::RegionBufferOperation;
