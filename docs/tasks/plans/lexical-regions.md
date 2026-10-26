@@ -26,8 +26,9 @@ the accepted R2 contract and final matching bounded R1 proof are retained.
 Focused interface and scoped-evidence migrations now pass all 44 and 53 original
 tests respectively. The module-newtype and local-newtype targets now pass 23
 and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 original
-tests. Their 15 and 11 newly restored names are disjoint from the prior 322,
-giving 348 staged restorations; repeated passes are counted once. Two constructor
+tests. Functions now passes all 19 original tests; its 14 restored names are
+disjoint from the prior 348, giving 362 staged restorations. Repeated passes are
+counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
 These selected observations do not refresh Library9 (1,560/35) or Integration69
 (1,276/504). The scoped controls retain exact
@@ -46,6 +47,17 @@ witnesses retain their original controls after actual-entry/provenance repair.
 Primitive admission now checks only preceding dependencies; its deliberate Pure
 scalar pipeline, exact trace, huge integers, poisoning and manual closure remain.
 No Source rule, API, runtime limit or production policy changed in this slice.
+
+Function Source Core controls retain exact original binders, owned callable
+subtrees, parameter identities, source spans and causal origins, with complete
+own-graph canonical allocation rows. Returned capture checks identify the exact
+offset binder through public child edges and execute the same function body;
+public rendering/debug remains opaque. The application trace retains all twelve
+original semantic role IDs and adds two actual Source closure-creation IDs. Its
+exact fifteen-event sequence includes main's once-created increment capture
+before entry and the later ordinary lookup, preserving function/argument/body
+order. Raw trace evidence remains; no creation is treated as administration.
+The deliberate Pure diagnostics and structural arrow rendering are unchanged.
 
 First-class constructor positives use existing inferred local functions because
 CP-0025 default-expands explicit callable annotations while erased constructor
