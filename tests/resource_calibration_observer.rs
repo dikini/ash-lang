@@ -100,11 +100,11 @@ fn pure_and_effect_observation_preserve_results_and_report_selected_capacities_o
             let observed = records(&on);
             for (phase, normal, multiplier) in [
                 ("resolution", ash::types::TYPE_WORK_LIMIT, 1),
-                ("source-checking", 2600 * source_bytes, 1),
+                ("source-checking", 3900 * source_bytes, 1),
                 ("module-linking", ash::types::TYPE_WORK_LIMIT, 1),
                 ("linked-interface", ash::types::TYPE_WORK_LIMIT, 1),
                 ("final-elaboration", 800 * source_bytes, 1),
-                ("independent-effect-core", 5300 * source_bytes, 3),
+                ("independent-effect-core", 6200 * source_bytes, 3),
             ] {
                 let endpoints = observed
                     .iter()

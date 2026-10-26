@@ -5,7 +5,7 @@ use crate::{module::ModuleId, source::SourceFile, types::TypeWorkBudget};
 use std::sync::Arc;
 
 const PREPARATION_PER_CELL: usize = 850;
-const STARTUP_PER_BYTE: usize = 65;
+const STARTUP_PER_BYTE: usize = 118;
 
 fn preparation_total(source_bytes: usize, main_nodes: usize) -> Result<usize, ()> {
     source_bytes
@@ -68,18 +68,18 @@ mod tests {
         assert!(preparation_total(usize::MAX, 1).is_err());
         assert!(preparation_total(usize::MAX / PREPARATION_PER_CELL + 1, 0).is_err());
         assert!(startup(usize::MAX, 1).is_err());
-        assert!(startup(usize::MAX / 65 + 1, 0).is_err());
-        assert_eq!(startup(10, 20).unwrap().limit(), 1950);
+        assert!(startup(usize::MAX / 118 + 1, 0).is_err());
+        assert_eq!(startup(10, 20).unwrap().limit(), 3540);
         assert_eq!(startup(0, 0).unwrap().limit(), 0);
         for prefix in [0, 11, 150] {
             for _ in 0..2 {
                 let mut startup_work = startup(10, 20).unwrap();
                 startup_work.charge(prefix).unwrap();
-                startup_work.charge(1950 - prefix - 1).unwrap();
-                assert_eq!((startup_work.used(), startup_work.limit()), (1949, 1950));
+                startup_work.charge(3540 - prefix - 1).unwrap();
+                assert_eq!((startup_work.used(), startup_work.limit()), (3539, 3540));
                 startup_work.charge(1).unwrap();
                 assert!(startup_work.charge(1).is_err());
-                assert_eq!((startup_work.used(), startup_work.limit()), (1950, 1950));
+                assert_eq!((startup_work.used(), startup_work.limit()), (3540, 3540));
             }
             let mut short = TypeWorkBudget::with_limit(prefix + 1);
             short.charge(prefix).unwrap();

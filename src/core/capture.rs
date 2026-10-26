@@ -599,6 +599,7 @@ pub(crate) struct MethodUse {
     pub(crate) method: crate::interface::MethodId,
     pub(crate) requirement: Option<crate::interface::RequirementId>,
     pub(crate) arguments: usize,
+    pub(crate) context: Option<NodeId>,
 }
 
 /// Original method records and their immutable lexical-reference projection.
@@ -1101,6 +1102,143 @@ fn capture_projections<F: CoreOperationFamily>(
     charge(budget, result.free_values.len())?;
     result.free_values.retain(|binder| !bound.contains(binder));
     Ok(result)
+}
+
+/// Reuse the ordinary function projection for physical term-capture operands.
+/// Selected method routes are supplied by the existing completed-module phase.
+pub(in crate::core) fn closure_capture_binders<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    code: &super::region::RegionClosureCode,
+    methods: &[MethodUse],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<BinderId>, Failure> {
+    let methods = MethodUses::new(methods, budget)?;
+    let parameter = code.function().map(|function| function.parameter().id());
+    let projected = capture_projections(
+        nodes,
+        index(code.body()),
+        parameter.as_slice(),
+        &methods,
+        &[],
+        budget,
+    )?;
+    let mut seen = HashSet::new();
+    let mut binders = Vec::new();
+    charge(budget, projected.free_values.len())?;
+    seen.try_reserve(projected.free_values.len())
+        .map_err(|_| Failure::Resource)?;
+    binders
+        .try_reserve(projected.free_values.len())
+        .map_err(|_| Failure::Resource)?;
+    for binder in projected.free_values {
+        if seen.insert(binder) {
+            binders.push(binder);
+        }
+    }
+    Ok(binders)
+}
+
+pub(crate) fn prepare_region_closure(
+    builder: &mut CoreBuilder<super::effect::EffectOperationFamily>,
+    node: NodeId,
+    request: NodeId,
+    methods: &[MethodUse],
+    roots: &[(BinderId, NodeId)],
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    let super::effect::EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+        &builder.nodes[index(node)].kind
+    else {
+        return Err(Failure::Invalid);
+    };
+    let binders = closure_capture_binders(&builder.nodes, &closure.code, methods, budget)?;
+    let fields = binders.len().checked_add(1).ok_or(Failure::Resource)?;
+    fields
+        .checked_mul(core::mem::size_of::<crate::eval::Value>())
+        .filter(|bytes| *bytes <= isize::MAX as usize)
+        .ok_or(Failure::Resource)?;
+    let mut captures = Vec::new();
+    charge(budget, binders.len())?;
+    captures
+        .try_reserve_exact(binders.len())
+        .map_err(|_| Failure::Resource)?;
+    for binder in binders {
+        let mut found = None;
+        for (ordinal, candidate) in builder.nodes.iter().enumerate() {
+            charge(budget, 1)?;
+            if matches!(&candidate.kind, super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == binder)
+            {
+                found = Some(
+                    builder
+                        .node_at_ordinal(node, ordinal)
+                        .map_err(|_| Failure::Invalid)?,
+                );
+                break;
+            }
+        }
+        if found.is_none() {
+            // Source method selection can name an authenticated completed
+            // callable without a literal Variable occurrence in its body.
+            // Capture that binder, never rerun its initializer or the obsolete
+            // source placeholder that selection replaced.
+            charge(budget, roots.len())?;
+            let mut declaration = roots
+                .iter()
+                .find(|(candidate, _)| *candidate == binder)
+                .map(|(_, root)| {
+                    let node = &builder.nodes[index(*root)];
+                    (&node.ty, node.origin.as_ref())
+                });
+            if declaration.is_none() {
+                // Local lexical evidence also has a completed typed declaration,
+                // even when its selected method has no literal Variable use.
+                for candidate in &builder.nodes {
+                    charge(budget, 1)?;
+                    if let super::effect::EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::Bind(binding),
+                    )) = &candidate.kind
+                        && binding.binder().id() == binder
+                    {
+                        declaration =
+                            Some((binding.binder().ty(), Some(binding.binder().origin())));
+                        break;
+                    }
+                }
+            }
+            if let Some((ty, origin)) = declaration {
+                let ty = crate::types::clone_type_with_budget(ty, budget)
+                    .map_err(|()| Failure::Resource)?;
+                let origin = origin.cloned().ok_or(Failure::Invalid)?;
+                found = Some(builder.variable(binder, ty, origin).map_err(
+                    |error| match error {
+                        super::BuildError::TypeWorkExceeded => Failure::Resource,
+                        _ => Failure::Invalid,
+                    },
+                )?);
+            }
+        }
+        captures.push(found.ok_or(Failure::Invalid)?);
+    }
+    if !matches!(
+        &builder.nodes[index(request)].kind,
+        super::effect::EffectExprKind::Operation(EffectOperation::RegionValueRequest(_))
+    ) {
+        return Err(Failure::Invalid);
+    }
+    charge(budget, 2)?;
+    let super::effect::EffectExprKind::Operation(EffectOperation::RegionValueRequest(layout)) =
+        &mut builder.nodes[index(request)].kind
+    else {
+        return Err(Failure::Invalid);
+    };
+    layout.fields = fields;
+    let super::effect::EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+        &mut builder.nodes[index(node)].kind
+    else {
+        return Err(Failure::Invalid);
+    };
+    closure.captures = captures.into_boxed_slice();
+    Ok(())
 }
 
 #[derive(Default)]
@@ -1826,7 +1964,7 @@ fn compile<F: CoreOperationFamily>(
     data: &mut value::Graph,
     budget: &mut TypeWorkBudget,
 ) -> Result<(SummaryGraph, Vec<usize>), Failure> {
-    compile_with_boundary(nodes, values, imported, operation, data, None, budget)
+    compile_with_boundary(nodes, values, &[], imported, operation, data, None, budget)
 }
 
 // Import copying completes before per-node control construction, so its
@@ -1835,9 +1973,13 @@ fn compile<F: CoreOperationFamily>(
 fn import_capture_control(
     graph: &mut SummaryGraph,
     imported: &ImportedCallables<'_>,
+    roots: &mut Vec<usize>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
     for (import, target_offset, code_offset, type_offset) in &imported.graphs {
+        if let Some(data) = &import.data {
+            data.append_global_initializers(*code_offset, roots, budget)?;
+        }
         graph
             .code
             .try_reserve(import.code.len())
@@ -1915,6 +2057,25 @@ fn compile_pure_capture_control<F: CoreOperationFamily>(
             roots.push(index(function.body()) + 1);
             Control::Return
         }
+        PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) => {
+            let delayed = super::region::closure_initializer::<F>(abstraction.body(), |node| {
+                nodes.get(index(node)).map(|node| &node.kind)
+            })
+            .and_then(|(_, closure)| match closure.code {
+                super::region::RegionClosureCode::Adapter { body } => Some(body),
+                _ => None,
+            });
+            graph.callables.positions[id] = Some(Callable {
+                body: delayed.map_or(0, |body| index(body) + 1),
+                ty: clone_type_with_budget(&node.ty, budget).map_err(|_| Failure::Resource)?,
+                result: values[delayed.map_or(id, index)].copy(budget)?,
+            });
+            if let Some(body) = delayed {
+                roots.try_reserve(1).map_err(|_| Failure::Resource)?;
+                roots.push(index(body) + 1);
+            }
+            Control::Sequence(copy_slice(&[index(abstraction.body()) + 1], budget)?)
+        }
         PureExprKind::Computation(PureComputation::Match(matching)) => {
             let mut arms = Vec::new();
             arms.try_reserve(matching.arms().len())
@@ -1990,10 +2151,40 @@ fn compile_pure_capture_control<F: CoreOperationFamily>(
                 sequence.push(graph.code.len());
                 data.position(graph.code.len(), id, budget)?;
                 graph.code.push(Control::Call {
+                    prefix: None,
                     value: values[actual].copy(budget)?,
                     ty,
                     source,
                 });
+            }
+            if let PureComputation::TypeApplication(application) = pure {
+                charge(budget, F::effect_row(&node.effects).known().len())?;
+                if let Some(effect) = F::effect_row(&node.effects).known().iter().find(|effect| {
+                    crate::resolved::RegionApi::for_module(effect.effect().module())
+                        .is_some_and(|api| effect.effect() == api.default_alloc())
+                }) {
+                    let actual = index(application.function());
+                    graph
+                        .types
+                        .0
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    let ty = graph.types.0.len();
+                    graph.types.0.push(
+                        clone_type_with_budget(&nodes[actual].ty, budget)
+                            .map_err(|_| Failure::Resource)?,
+                    );
+                    let prefix = Request::effect(effect, source, budget)?;
+                    graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    sequence.push(graph.code.len());
+                    data.position(graph.code.len(), id, budget)?;
+                    graph.code.push(Control::Call {
+                        value: values[actual].copy(budget)?,
+                        ty,
+                        source,
+                        prefix: Some(prefix),
+                    });
+                }
             }
             Control::Sequence(sequence)
         }
@@ -2057,6 +2248,17 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             children.extend(buffer.operand.map(|id| index(id) + 1));
             children.extend(buffer.right.map(|id| index(id) + 1));
             children.push(service);
+            Control::Sequence(children)
+        }
+        Some(EffectOperation::RegionClosure(closure)) => {
+            let mut children = Vec::new();
+            charge(budget, closure.captures.len() + 2)?;
+            children
+                .try_reserve_exact(closure.captures.len() + 2)
+                .map_err(|_| Failure::Resource)?;
+            children.push(index(closure.context) + 1);
+            children.extend(closure.captures.iter().map(|child| index(*child) + 1));
+            children.push(index(closure.storage) + 1);
             Control::Sequence(children)
         }
         Some(EffectOperation::RegionTuple(tuple)) => {
@@ -2262,6 +2464,7 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
 fn compile_with_boundary<F: CoreOperationFamily>(
     nodes: &[StoredNode<F>],
     values: &[Value],
+    globals: &[(BinderId, NodeId)],
     imported: &ImportedCallables<'_>,
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
     data: &mut value::Graph,
@@ -2294,8 +2497,9 @@ fn compile_with_boundary<F: CoreOperationFamily>(
         .try_reserve(nodes.len() + imported.callables.len())
         .map_err(|_| Failure::Resource)?;
     graph.callables.positions.resize_with(nodes.len(), || None);
+    let mut roots = Vec::new();
     if !imported.graphs.is_empty() {
-        import_capture_control(&mut graph, imported, budget)?;
+        import_capture_control(&mut graph, imported, &mut roots, budget)?;
     }
     let mut owners = HashMap::new();
     for (id, node) in nodes.iter().enumerate() {
@@ -2311,7 +2515,6 @@ fn compile_with_boundary<F: CoreOperationFamily>(
             }
         }
     }
-    let mut roots = Vec::new();
     let mut children = std::collections::HashSet::new();
     for (id, node) in nodes.iter().enumerate() {
         charge(budget, 1)?;
@@ -2319,6 +2522,16 @@ fn compile_with_boundary<F: CoreOperationFamily>(
             continue;
         }
         let source = node.origin.as_ref().ok_or(Failure::Invalid)?.primary_span();
+        if let Some(EffectOperation::RegionClosure(closure)) = operation(&node.kind) {
+            let result = values[index(closure.code.body())].copy(budget)?;
+            graph.callables.positions[id] = Some(Callable {
+                body: index(closure.code.body()) + 1,
+                ty: clone_type_with_budget(&node.ty, budget).map_err(|_| Failure::Resource)?,
+                result,
+            });
+            roots.try_reserve(1).map_err(|_| Failure::Resource)?;
+            roots.push(index(closure.code.body()) + 1);
+        }
         let code = match F::pure(&node.kind) {
             Some(
                 pure @ (PureExprKind::Value(PureValue::Intrinsic(_) | PureValue::Function(_))
@@ -2343,6 +2556,61 @@ fn compile_with_boundary<F: CoreOperationFamily>(
             children.try_reserve(1).map_err(|_| Failure::Resource)?;
             children.insert(index(F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?) + 1);
         }
+    }
+    for (id, expression, binder) in copy_slice(&data.method_proxies, budget)? {
+        charge(budget, globals.len())?;
+        let selected = if let Some((_, initializer)) =
+            globals.iter().find(|(candidate, _)| *candidate == binder)
+        {
+            values[index(*initializer)].copy(budget)?
+        } else {
+            charge(budget, 1)?;
+            imported
+                .values
+                .get(&binder)
+                .ok_or(Failure::Invalid)?
+                .copy(budget)?
+        };
+        let [target] = selected.targets.as_slice() else {
+            return Err(Failure::Invalid);
+        };
+        if selected.unknown || !selected.parameters.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        let result = graph.callables.get(*target, budget)?.result.copy(budget)?;
+        let mut argument = Value::default();
+        argument.parameter(id, budget)?;
+        let result = result.instantiate(*target, &argument, budget)?;
+        let body = graph.code.len();
+        data.position(body, expression, budget)?;
+        graph
+            .types
+            .0
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        let ty = graph.types.0.len();
+        graph
+            .types
+            .0
+            .push(clone_type_with_budget(&nodes[id].ty, budget).map_err(|_| Failure::Resource)?);
+        graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+        graph.code.push(Control::Call {
+            value: selected,
+            ty,
+            prefix: None,
+            source: nodes[id]
+                .origin
+                .as_ref()
+                .ok_or(Failure::Invalid)?
+                .primary_span(),
+        });
+        graph.callables.positions[id] = Some(Callable {
+            body,
+            ty: clone_type_with_budget(&nodes[id].ty, budget).map_err(|_| Failure::Resource)?,
+            result,
+        });
+        // This synthetic body only delegates to an already rooted checked
+        // method. Real calls enter it through its ordinary Callable slot.
     }
     loop {
         let mut changed = false;
@@ -2686,6 +2954,12 @@ fn build_capture_graph<F: CoreOperationFamily>(
             }
             has_discard |= matches!(operation(&node.kind), Some(EffectOperation::Discard(_)));
         }
+        if let Some(EffectOperation::RegionClosure(closure)) = operation(&node.kind)
+            && let Some(function) = closure.code.function()
+        {
+            parameters.try_reserve(1).map_err(|_| Failure::Resource)?;
+            parameters.insert(function.parameter().id(), id);
+        }
         match F::pure(&node.kind) {
             Some(PureExprKind::Value(PureValue::Function(function))) => {
                 parameters.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -2737,7 +3011,7 @@ fn build_capture_graph<F: CoreOperationFamily>(
         nodes, globals, imports, &imported, operation, methods, adapters, domain, budget,
     )?;
     let (mut graph, roots) = compile_with_boundary(
-        nodes, &values, &imported, operation, &mut data, domain, budget,
+        nodes, &values, globals, &imported, operation, &mut data, domain, budget,
     )?;
     graph.data = Some(Arc::new(data));
     Ok(Some(BuiltCaptureGraph {
@@ -2855,10 +3129,16 @@ fn solve_capture_values<F: CoreOperationFamily>(
                             ) {
                                 continue;
                             }
-                            let Some(PureExprKind::Value(PureValue::Function(function))) =
-                                F::pure(&nodes[*target].kind)
-                            else {
-                                return Err(Failure::Invalid);
+                            let function = match F::pure(&nodes[*target].kind) {
+                                Some(PureExprKind::Value(PureValue::Function(function))) => {
+                                    function
+                                }
+                                _ => match operation(&nodes[*target].kind) {
+                                    Some(EffectOperation::RegionClosure(closure)) => {
+                                        closure.code.function().ok_or(Failure::Invalid)?
+                                    }
+                                    _ => return Err(Failure::Invalid),
+                                },
                             };
                             let result = values[index(function.body())].instantiate(
                                 *target,
@@ -2871,6 +3151,15 @@ fn solve_capture_values<F: CoreOperationFamily>(
                     _ => {}
                 },
                 _ => match operation(&node.kind) {
+                    Some(EffectOperation::RegionClosure(closure))
+                        if closure.code.function().is_some() =>
+                    {
+                        value
+                            .targets
+                            .try_reserve(1)
+                            .map_err(|_| Failure::Resource)?;
+                        value.targets.push(id);
+                    }
                     Some(EffectOperation::Cleanup(scope)) => {
                         value = values[index(scope.body)].copy(budget)?;
                     }
@@ -5070,6 +5359,7 @@ mod tests {
                 method: MethodId::new(interface, 0),
                 requirement: None,
                 arguments: 0,
+                context: None,
             },
             MethodUse {
                 node: second,
@@ -5077,6 +5367,7 @@ mod tests {
                 method: MethodId::new(interface, 1),
                 requirement: Some(requirement),
                 arguments: 1,
+                context: None,
             },
             MethodUse {
                 node: first,
@@ -5084,6 +5375,7 @@ mod tests {
                 method: MethodId::new(interface, 2),
                 requirement: Some(requirement),
                 arguments: 2,
+                context: None,
             },
             MethodUse {
                 node: first,
@@ -5091,6 +5383,7 @@ mod tests {
                 method: MethodId::new(interface, 3),
                 requirement: Some(RequirementId::new(RequirementOwner::Global(binder), 1)),
                 arguments: 3,
+                context: None,
             },
         ];
         let mut construction_short = TypeWorkBudget::with_limit(3 * methods.len() - 1);

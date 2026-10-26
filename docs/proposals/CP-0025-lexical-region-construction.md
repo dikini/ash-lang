@@ -63,6 +63,51 @@ When `= provider` is omitted, elaborate the selected host-backed default provide
 
 Ordinary blocks and function calls acquire no regions. The closest enclosing live selection supplies the default. A closure's own record resides where it was created; calling it does not move/recreate that record. Its fresh constructions use the caller's selection unless its body explicitly selects another region. Actual captured dependencies remain unchanged.
 
+### Closure creation timing (accepted amendment, 2026-10-26)
+
+Accepted by the task's acceptance owner after independent review on 2026-10-26.
+This authorizes implementation, not current Main behavior. The existing finite
+proof retains its generic owned-record and local admission assumptions; this
+amendment adds no theorem about closure lowering or creation timing.
+
+This amendment changes closure materialization timing from current Main; the
+historical PR #146 exact-body evidence does not cover it. Evaluating an ordinary
+function expression creates its closure record and actual captures once in the
+selected region. Constructor/newtype and other generated wrappers create such
+records only when actually lowered to ordinary `Function`. Erased newtype
+conversions and code-only constructor or intrinsic values gain no closure record. Allocation and refusal occur
+at that creation step. Copying, looking up or calling the resulting function does
+not recreate its record. Calls retain the closure's lexical values and type/effect
+instantiation while fresh body construction uses the caller's selected allocation
+context. Captured explicit region access retains its original identity.
+
+At each dynamic recursive-group entry, reserve the existing recursive identities
+and uninitialized data slots. Materialize direct ordinary function members once,
+in source member order, before executing the existing source-order guarded data
+and alias initializer sequence; enter the group body afterward. Function templates
+remain code metadata, and lookup returns the corresponding stored callable.
+Pending group construction retains its progress across capture/resume without
+repeating completed function-member allocation or initialization; refusal adds no
+group rollback. The generated root encloses module groups before
+this construction begins.
+
+For an admitted type abstraction that directly materializes a function, create
+its generic record when evaluating the abstraction, retaining actual term
+captures and lexical metadata with the generalized parameters still unbound.
+Type application evaluates its function operand and binds ordinary type and
+complete row arguments to an immutable instantiated view of that record, without
+mutating it or sibling views; type instantiation alone does not allocate or
+recreate the underlying record. Preserve alias/variable and constructor
+forwarding without copying, transparent type wrappers and the current rank-1
+whitelist. Authenticated prerequisite-evidence term applications retain their
+existing declaration order before source arguments; genuinely new `Function`
+results allocate at those term-creation sites, with their allocation effects and
+placement accounted for explicitly. Do not eagerly execute adapter spines at
+group entry or admit arbitrary computations under type abstraction.
+An authenticated deferred type abstraction with retained term captures creates
+its capture record once when evaluated, without executing its delayed body;
+forwarding an existing stored record remains allocation-free.
+
 ### Root configuration and completion
 
 The generated entry wrapper establishes one host-backed root before ordinary program construction. Its configuration is host entry parameters/static configuration metadata, with defined default parameters when omitted. This proposal does not admit arbitrary source computation before any region exists. Custom source regions/providers are constructed under an already live enclosing region.
@@ -114,7 +159,7 @@ The region Core boundary includes provider evaluation, allocate and release rows
 
 The region owns the saved release member separately from those body handlers. Its normal or abandoned close invokes that member through the existing owned-completion rules. Required backend interpretations must survive or be installed ordinarily inside the release action. A closure containing an effect request does not capture its handler.
 
-Existing tuple/constructor/function/recursive Core shapes supply layout and evaluation order. Their allocation sites lower to: evaluate the required children; form a private Request; perform the explicit allocation request; validate the returned storage facts for the saved layout; initialize locally; expose the completed value. No allocator receives the source fields or captured values. Newtype conversions still erase.
+Existing tuple/constructor/function/recursive Core shapes supply layout and evaluation order, with the closure creation points refined by the [timing amendment](#closure-creation-timing-accepted-amendment-2026-10-26). Their allocation sites lower to: evaluate the required children; form a private Request; perform the explicit allocation request; validate the returned storage facts for the saved layout; initialize locally; expose the completed value. No allocator receives the source fields or captured values. Newtype conversions still erase.
 
 A request has logical fields `(usable_bytes, alignment)` in a private immediate runtime descriptor, using checked implementation-size quantities, with no Ash tuple/BigInt allocation needed to form or copy it. Binding the request to an invocation attaches the explicit selected owner/driver reference as private call metadata; it does not add source payload fields or arbitrary user authority. That metadata carries its actual owner dependency and is validated against the saved requested activation. Independent requirements may reach that owner's admitted interpreter; younger construction fields still stay local. Alignment must be nonzero and supported by the selected implementation; overflow and unsupported layouts are not successful storage requests. No source fixed-width integer family is introduced. Any source-facing inspection/conversion follows ordinary value/effect rules, not an exemption making arbitrary Int/error construction free.
 
@@ -159,7 +204,7 @@ A normally returning release action establishes the physical reclamation promise
 
 ### Recursion and cleanup
 
-Recursive groups keep current guardedness. Preallocated data slots are private/uninitialized; direct-function templates and slot locations enter the recursive environment; guarded initializers run in source order; each completed member stores its alias. The group body begins after initialization. Recursive fields may refer to slots through the already admitted constructors/tuples/delayed function bodies, but cannot force or transport unfinished access through forbidden forms. There is no new whole-group transaction or same-region-only restriction. Abandonment exposes no unfinished graph; earlier published values remain valid.
+Recursive groups keep current guardedness. Under the [timing amendment](#closure-creation-timing-accepted-amendment-2026-10-26), each dynamic entry reserves recursive identities/private data slots and materializes direct function records in source member order before guarded data/alias initialization runs in its existing source order; each completed data member stores its alias. The group body begins after initialization. Recursive fields may refer to slots through the already admitted constructors/tuples/delayed function bodies, but cannot force or transport unfinished access through forbidden forms. There is no new whole-group transaction or same-region-only restriction. Abandonment exposes no unfinished graph; earlier published values remain valid.
 
 Data cycles do not form resource-owner cycles. Bulk release does not recursively chase cyclic references to decide which same-region object to free. The strict older-owner rule for retained Cell contents is unchanged.
 

@@ -7167,6 +7167,37 @@ impl Resolver {
             let instance = EffectInstance::new_kinded(effect, retained.into_boxed_slice());
             resolved_instances.push((instance, written.span, roots.into_boxed_slice()));
         }
+        if let Some(api) = self
+            .builtin_region
+            .and_then(crate::resolved::RegionApi::for_module)
+        {
+            self.type_work
+                .charge(resolved_instances.len().saturating_add(1))
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        owner,
+                        "default effect expansion exceeded its budget",
+                    )
+                })?;
+            if !resolved_instances
+                .iter()
+                .any(|(instance, _, _)| instance.effect() == api.default_alloc())
+            {
+                resolved_instances.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        owner,
+                        "default effect expansion could not be reserved",
+                    )
+                })?;
+                resolved_instances.push((
+                    EffectInstance::new(api.default_alloc(), Box::new([])),
+                    owner,
+                    Box::new([]),
+                ));
+            }
+        }
         let tail = row
             .tail
             .as_ref()
@@ -8455,7 +8486,7 @@ impl Resolver {
                             self.resolve_type(&operational.header.result_type)?,
                         );
                         let (
-                            result_effects,
+                            mut result_effects,
                             result_effect_argument_provenance,
                             result_effect_argument_roots,
                         ) = operational
@@ -8476,6 +8507,23 @@ impl Resolver {
                                     Vec::new().into_boxed_slice(),
                                 )
                             });
+                        if operational.header.result_effects.is_none()
+                            && let Some(api) = self
+                                .builtin_region
+                                .and_then(crate::resolved::RegionApi::for_module)
+                        {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    operational.header.span,
+                                    "default effect expansion exceeded its budget",
+                                )
+                            })?;
+                            result_effects = EffectRow::singleton(EffectInstance::new(
+                                api.default_alloc(),
+                                Box::new([]),
+                            ));
+                        }
                         if !matches!(body.kind, ResolvedExprKind::Block(_)) {
                             return Err(error(
                                 ResolveReason::InternalState,

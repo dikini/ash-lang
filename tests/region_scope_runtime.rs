@@ -60,6 +60,37 @@ fn ordinary_construction_without_selection_uses_generated_root() {
 }
 
 #[test]
+fn ordinary_closure_records_cannot_escape_their_creation_region() {
+    for body in ["42", "captured"] {
+        let source = format!(
+            "main : Unit -> (Unit -> Int)\nmain () = region<R> owner {{\nlet captured = 42\nlet function : Unit -> Int = fn(ignored) {{\n{body}\n}}\nfunction\n}}\n"
+        );
+        let failure = run_result(&source).unwrap_err();
+        let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+            panic!("expected source lifetime rejection, got {failure:?}");
+        };
+        let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+            diagnostic.failure()
+        else {
+            panic!("expected source resource escape, got {diagnostic:?}");
+        };
+        assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+    }
+}
+
+#[test]
+fn ordinary_closure_explicitly_created_in_outer_region_survives_inner_close() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = region<R> outer {\n",
+            "let function : Unit -> Int = region<S> inner {\nusing outer {\n",
+            "let captured = 42\nlet saved : Unit -> Int = fn(ignored) {\ncaptured\n}\nsaved\n}\n}\nfunction ()\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
 fn generated_root_does_not_hide_unrelated_outstanding_effects() {
     let failure = run_result("effect Console {\nwrite : Unit -> Unit\n}\nmain : Unit -> Unit ! {Console}\nmain () = perform Console.write ()\n").unwrap_err();
     let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
@@ -481,4 +512,228 @@ fn integer_imported_summaries_preserve_actual_residency() {
         }
     }
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn polymorphic_closure_views_keep_independent_type_instantiations() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = {\n",
+            "let identity = fn(value) {\nvalue\n}\n",
+            "let integer = identity 42\nlet boolean = identity true\n",
+            "match boolean {\ntrue => integer\nfalse => 0\n}\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
+fn polymorphic_closure_aliases_forward_without_changing_sibling_views() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = {\n",
+            "let identity = fn(value) {\nvalue\n}\nlet forwarded = identity\n",
+            "let answer = forwarded 42\n",
+            "match identity true {\ntrue => answer\nfalse => 0\n}\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
+fn polymorphic_closure_creation_keeps_its_region_residency() {
+    let failure = run_result(concat!(
+        "main : Unit -> Int\nmain () = {\nlet escaped = region<R> owner {\n",
+        "let identity = fn(value) {\nvalue\n}\nidentity\n}\nescaped 42\n}\n",
+    ))
+    .unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source resource escape, got {diagnostic:?}");
+    };
+    assert_eq!(
+        error.reason,
+        ash::elaborate::TypeReason::ResourceEscape,
+        "{diagnostic:?}"
+    );
+}
+
+#[test]
+fn closure_body_fresh_construction_uses_the_callers_selected_region() {
+    let failure = run_result(concat!(
+        "main : Unit -> Int\nmain () = region<A> outer {\n",
+        "let make : Unit -> (Int, Int) = fn(ignored) {\n(20, 22)\n}\n",
+        "let pair = region<B> inner {\nmake ()\n}\n",
+        "match pair {\n(left, right) => 42\n}\n}\n",
+    ))
+    .unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source resource escape, got {diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn closure_body_explicit_selection_keeps_its_captured_region_identity() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = region<A> outer {\n",
+            "let make : Unit -> (Int, Int) = fn(ignored) {\nusing outer {\n(20, 22)\n}\n}\n",
+            "let pair = region<B> inner {\nmake ()\n}\n",
+            "match pair {\n(left, right) => match (left + right) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n",
+        )),
+        "42"
+    );
+}
+
+const SCORE_CAPTURE_DECLARATIONS: &str = concat!(
+    "type Option<A> =\nNone\n| Some(A)\n",
+    "interface Score<A> {\nscore<X> : (A, X) -> Int\n}\n",
+    "impl Score<Int> {\nscore (value, ignored) = value\n}\n",
+    "impl Score<Option<A>> where Score<A> {\nscore (None, ignored) = 4\n",
+    "score (Some(value), ignored) = {\nlet empty : Option<A> = None\n",
+    "score((empty, ignored)) * 10 + score((value, ignored))\n}\n}\n",
+);
+
+const SCORE_CAPTURE_OWNER_MAIN: &str = concat!(
+    "main : Unit -> Bool\nmain () = region<A> outer {\n",
+    "let escaped : Unit -> Int = region<R> inner {\n",
+    "let selected : (Option<Int>, Bool) -> Int = score\n",
+    "using outer {\nlet wrapper : Unit -> Int = fn(ignored) {\n",
+    "selected((Some(2), true))\n}\nwrapper\n}\n}\n(escaped ()) == 42\n}\n",
+);
+
+#[test]
+fn polymorphic_method_prefix_row_survives_handler_clause_recomputation() {
+    let source = format!(
+        "{SCORE_CAPTURE_DECLARATIONS}effect Ask {{\nget : Unit -> Int\n}}\nmain : Unit -> Int\nmain () = handle perform Ask.get () with Ask {{\nget ignored => {{\nlet answer = score((Some(2), true))\nresume answer\n}}\n}}\n"
+    );
+    assert_eq!(run(&source), "42");
+}
+
+#[test]
+fn abstract_polymorphic_method_prefix_row_survives_handler_clause_recomputation() {
+    let source = format!(
+        "{SCORE_CAPTURE_DECLARATIONS}effect Tick {{\ngo : Unit -> Unit\n}}\nforward<A> : A -> Int where Score<A>\nforward value = handle {{\nlet ignored = perform Tick.go ()\n0\n}} with Tick {{\ngo ignored => {{\nlet answer = score((value, true))\nlet resumed = resume ()\nanswer\n}}\n}}\nmain : Unit -> Int\nmain () = forward(Some(2))\n"
+    );
+    assert_eq!(run(&source), "42");
+}
+
+#[test]
+fn selected_polymorphic_method_capture_keeps_its_materialization_owner() {
+    let source = format!("{SCORE_CAPTURE_DECLARATIONS}{SCORE_CAPTURE_OWNER_MAIN}");
+    let failure = run_result(&source).unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source resource escape, got {diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn selected_polymorphic_method_materialized_in_outer_region_survives_inner_close() {
+    let source = format!("{SCORE_CAPTURE_DECLARATIONS}{SCORE_CAPTURE_OWNER_MAIN}");
+    let positive = source.replace("= score\n", "= using outer {\nscore\n}\n");
+    assert_eq!(run(&positive), "true");
+}
+
+fn run_imported_score(
+    source: &str,
+    through_facade: bool,
+) -> Result<ash::driver::Observation, ash::driver::FileFailure> {
+    let directory = std::env::temp_dir().join(format!(
+        "ash-region-method-{}-{}",
+        std::process::id(),
+        NEXT_SOURCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&directory).unwrap();
+    let declarations = SCORE_CAPTURE_DECLARATIONS
+        .replace("type Option", "pub type Option")
+        .replace("interface Score", "pub interface Score")
+        .replace("impl Score", "pub impl Score");
+    fs::write(directory.join("methods.ash"), declarations).unwrap();
+    let entry = directory.join("entry.ash");
+    let imports = if through_facade {
+        fs::write(
+            directory.join("facade.ash"),
+            concat!(
+                "pub import methods (Option, None, Some)\n",
+                "import methods (Score, score)\nimport methods (impl Score)\n",
+                "pub pick : Unit -> ((Option<Int>, Bool) -> Int)\npick () = score\n",
+            ),
+        )
+        .unwrap();
+        "import facade (Option, None, Some, pick)\n"
+    } else {
+        "import methods (Option, None, Some, Score, score)\nimport methods (impl Score)\n"
+    };
+    fs::write(&entry, format!("{imports}{source}")).unwrap();
+    let result = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    });
+    fs::remove_dir_all(directory).unwrap();
+    result
+}
+
+#[test]
+fn imported_selected_method_capture_keeps_its_materialization_owner() {
+    let failure = run_imported_score(SCORE_CAPTURE_OWNER_MAIN, false).unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected imported source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected imported source escape, got {diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn imported_selected_method_outer_placement_survives_inner_close() {
+    let positive = SCORE_CAPTURE_OWNER_MAIN.replace("= score\n", "= using outer {\nscore\n}\n");
+    assert_eq!(
+        run_imported_score(&positive, false)
+            .unwrap()
+            .value_display(),
+        "true"
+    );
+}
+
+#[test]
+fn transitive_selected_method_capture_keeps_its_materialization_owner() {
+    let source = SCORE_CAPTURE_OWNER_MAIN.replace("= score\n", "= pick(())\n");
+    let failure = run_imported_score(&source, true).unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected transitive source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected transitive source escape, got {diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn transitive_selected_method_outer_placement_survives_inner_close() {
+    let source = SCORE_CAPTURE_OWNER_MAIN.replace("= score\n", "= using outer {\npick(())\n}\n");
+    assert_eq!(
+        run_imported_score(&source, true).unwrap().value_display(),
+        "true"
+    );
 }

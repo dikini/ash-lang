@@ -36,7 +36,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .find_map(|effect| RegionApi::for_module(effect.id.module())))
     }
 
-    fn saved_region_context(
+    pub(super) fn saved_region_context(
         &mut self,
         api: RegionApi,
         span: Span,
@@ -63,6 +63,118 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             )),
         )?;
         Ok((context, context_value, query))
+    }
+
+    pub(super) fn construct_function(
+        &mut self,
+        parameter: TypedBinder,
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, TypeError> {
+        if !F::EFFECTS || self.active_region_api()?.is_none() {
+            return Ok(self.builder.function(parameter, body, ty, origin)?);
+        }
+        self.construct_closure_code(
+            crate::core::region::RegionClosureCode::Function(
+                crate::core::function::FunctionNode::new(parameter, body),
+            ),
+            ty,
+            origin,
+        )
+    }
+
+    pub(super) fn construct_adapter_captures(
+        &mut self,
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, TypeError> {
+        if !F::EFFECTS || self.active_region_api()?.is_none() {
+            return Ok(body);
+        }
+        self.construct_closure_code(
+            crate::core::region::RegionClosureCode::Adapter { body },
+            ty,
+            origin,
+        )
+    }
+
+    fn construct_closure_code(
+        &mut self,
+        code: crate::core::region::RegionClosureCode,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, TypeError> {
+        let span = origin.primary_span();
+        let api = self.region_api_at(span)?;
+        let (context, context_value, query) = self.saved_region_context(api, span)?;
+        let row = EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+        let request = self.push_effect_core(
+            Type::Nominal(api.request()),
+            EffectRow::empty(),
+            Origin::Source(span),
+            EffectOperation::RegionValueRequest(crate::core::region::RegionValueRequestNode {
+                api: api.module(),
+                fields: 1,
+            }),
+        )?;
+        let allocation_row = self.core_effect_row(&row)?;
+        let storage = self.push_effect_core(
+            Type::Nominal(api.storage_view()),
+            allocation_row,
+            Origin::Source(span),
+            EffectOperation::RegionAllocate(RegionAllocateNode {
+                api: api.module(),
+                context: context_value,
+                request,
+            }),
+        )?;
+        let result_type = self.clone_type(&ty)?;
+        let creation_row = self.core_effect_row(&row)?;
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        self.pending_region_closures
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        let closure = self.push_effect_core(
+            ty,
+            creation_row,
+            origin,
+            EffectOperation::RegionClosure(crate::core::region::RegionClosureNode {
+                api: api.module(),
+                context: context_value,
+                captures: Box::new([]),
+                storage,
+                code,
+            }),
+        )?;
+        self.pending_region_closures.push((closure, request));
+        Ok(self
+            .builder
+            .binding(context, query, closure, result_type, Origin::Source(span))?)
+    }
+
+    pub(super) fn prepare_region_closures(
+        &mut self,
+        methods: &[crate::core::capture::MethodUse],
+        roots: &[(BinderId, NodeId)],
+    ) -> Result<(), TypeError> {
+        let Some(builder) = F::effect_builder(&mut self.builder) else {
+            return Ok(());
+        };
+        for &(node, request) in &self.pending_region_closures {
+            crate::core::capture::prepare_region_closure(
+                builder,
+                node,
+                request,
+                methods,
+                roots,
+                &mut self.type_work,
+            )
+            .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
+        }
+        self.pending_region_closures.clear();
+        Ok(())
     }
 
     pub(super) fn initialize_region_buffer(
@@ -121,9 +233,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             span,
         )?;
         let ty = self.clone_type(ty)?;
-        Ok(self
-            .builder
-            .function(parameter, body, ty, Origin::Source(span))?)
+        self.construct_function(parameter, body, ty, Origin::Source(span))
     }
 
     pub(super) fn initialize_region_tuple(
@@ -575,9 +685,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let signature =
             Type::function_computation(domain, crate::types::ComputationType::new(result, row));
         let core_type = self.clone_type(&signature)?;
-        let node = self
-            .builder
-            .function(parameter, body.node, core_type, Origin::Source(span))?;
+        let node =
+            self.construct_function(parameter, body.node, core_type, Origin::Source(span))?;
         Ok((node, signature))
     }
 
@@ -683,7 +792,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 unit,
             )),
         )?;
-        let scope_rows = clone_effect_row_with_budget(&rows, &mut self.type_work)
+        let mut scope_rows = clone_effect_row_with_budget(&rows, &mut self.type_work)
             .map_err(|()| type_resource())?;
         let rows = self.union_effects(&rows, &preceding_row, progress.span)?;
         let preceding_binder = self.builder.binder(
@@ -697,6 +806,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let provider =
             self.adapt_provider(&progress.provider, &preceding_binder, api, progress.span)?;
+        let adapter_effects = self
+            .builder
+            .clone_node_effects_with_budget(provider, &mut self.type_work)?;
+        scope_rows = self.union_effects(&scope_rows, &adapter_effects, progress.span)?;
+        let rows = self.union_effects(&rows, &adapter_effects, progress.span)?;
         let owner_type = self.clone_type(&body.ty)?;
         let owner_effects = self.core_effect_row(&scope_rows)?;
         let node = self.push_effect_core(

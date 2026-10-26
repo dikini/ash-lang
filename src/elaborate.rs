@@ -2837,6 +2837,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     row_inference_solutions: RowInferenceSolutionMap,
     row_inference_obligations: RowInferenceSolutionMap,
     cleanup_rows: cleanup_rows::CleanupRows,
+    pending_region_closures: Vec<(NodeId, NodeId)>,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
@@ -2858,7 +2859,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     // Addresses identify only immutably borrowed source occurrences during one
     // module synthesis. They are never dereferenced or retained in Core.
     lexical_capture_uses: Vec<LexicalCaptureUse>,
-    method_capture_uses: Vec<(NodeId, usize, MethodId)>,
+    method_capture_uses: Vec<(NodeId, usize, MethodId, Option<NodeId>)>,
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
     global_capture_uses: Vec<(NodeId, RequirementId, usize)>,
 
@@ -3017,6 +3018,12 @@ impl CoreLoweringFamily for EffectOperationFamily {
             EffectOperation::RegionTuple(tuple) => {
                 builder.region_operation(EffectOperation::RegionTuple(tuple), ty, effects, origin)
             }
+            EffectOperation::RegionClosure(closure) => builder.region_operation(
+                EffectOperation::RegionClosure(closure),
+                ty,
+                effects,
+                origin,
+            ),
             EffectOperation::NativeInterpret(boundary) => {
                 let (body, interpretations) = boundary.into_parts();
                 builder.native_interpret(body, interpretations, ty, effects, origin)
@@ -3292,6 +3299,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3429,6 +3437,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3551,6 +3560,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3793,6 +3803,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let requirements =
             self.lower_evidence_requirements(&scheme.requirements, lowering, owner)?;
 
+        let evidence_creation_row = if F::EFFECTS {
+            self.active_region_api()?.map(|api| {
+                EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])))
+            })
+        } else {
+            None
+        };
         let mut core_body = IterativeTypeOwner::new(self.pure_core_type(&value_type)?);
         for requirement in requirements.iter().rev() {
             for method in requirement.methods.iter().rev() {
@@ -3800,10 +3817,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let domain = self.pure_core_type(&method.ty)?;
-                core_body = IterativeTypeOwner::new(Type::Function(
-                    Box::new(domain),
-                    Box::new(core_body.into_inner()),
-                ));
+                core_body = IterativeTypeOwner::new(if let Some(row) = &evidence_creation_row {
+                    Type::function_computation(
+                        domain,
+                        ComputationType::new(
+                            core_body.into_inner(),
+                            clone_effect_row_with_budget(row, &mut self.type_work)
+                                .map_err(|()| type_resource())?,
+                        ),
+                    )
+                } else {
+                    Type::Function(Box::new(domain), Box::new(core_body.into_inner()))
+                });
             }
         }
         if let Some(source_parameters) = source_type_parameters.as_deref() {
@@ -3973,6 +3998,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -5214,8 +5240,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ));
             if generated_parameters.is_empty() {
                 return self
-                    .builder
-                    .function(
+                    .construct_function(
                         parameter,
                         conversion,
                         function_type.into_inner(),
@@ -5224,7 +5249,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .map_err(Into::into);
             }
             let retained_function_type = self.clone_type(&function_type)?;
-            let function = self.builder.function(
+            let function = self.construct_function(
                 parameter,
                 conversion,
                 retained_function_type,
@@ -5920,7 +5945,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut routes = Vec::new();
         let mut adapters = Vec::new();
         for index in 0..self.method_capture_uses.len() {
-            let (node, slot, method) = self.method_capture_uses[index];
+            let (node, slot, method, context) = self.method_capture_uses[index];
             let (selection, arguments) = publication
                 .capture_selection(slot, Some(method), &mut self.type_work)
                 .map_err(|failure| selection_failure(failure, None))?;
@@ -5944,6 +5969,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 method,
                 requirement: None,
                 arguments,
+                context,
             });
         }
         for index in 0..self.global_capture_uses.len() {
@@ -5961,7 +5987,35 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     method,
                     requirement: Some(requirement),
                     arguments: 0,
+                    context: None,
                 });
+            }
+        }
+        // Selected imported methods have checked declarations but no local
+        // initializer/Variable node. Retain their full Source callable type for
+        // the same physical capture preparation used by completed local roots.
+        for implementation in imported.implementations() {
+            for method in &implementation.fact.methods {
+                self.type_work
+                    .charge(routes.len() + adapters.len())
+                    .map_err(|()| type_resource())?;
+                let selected = routes.iter().any(|route| matches!(route.target,
+                    crate::core::capture::MethodTarget::Binder(binder) | crate::core::capture::MethodTarget::Adapter { binder, .. } if binder == method.binder))
+                    || adapters.iter().any(|adapter| adapter.binder == method.binder);
+                if !selected {
+                    continue;
+                }
+                let parameters =
+                    F::project_parameters(&method.scheme.type_parameters, &mut self.type_work)
+                        .map_err(|()| type_resource())?;
+                let body = self.pure_core_type(&method.scheme.value_type)?;
+                let ty = if parameters.is_empty() {
+                    body
+                } else {
+                    retain_implementation_capture_type(body, &parameters, &mut self.type_work)?
+                };
+                self.builder
+                    .variable(method.binder, ty, method.origin.clone())?;
             }
         }
         Ok((routes, adapters))
@@ -6319,12 +6373,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 core_ty,
                 occurrence.origin.clone(),
             )?;
+            let method_node = node;
+            let mut context_value = None;
+            if F::EFFECTS
+                && let Some(api) = self.active_region_api()?
+            {
+                let (context, value, query) = self.saved_region_context(api, span)?;
+                context_value = Some(value);
+                let result_type = self.pure_core_type(&ty)?;
+                node = self.builder.binding(
+                    context,
+                    query,
+                    node,
+                    result_type,
+                    occurrence.origin.clone(),
+                )?;
+            }
             self.type_work.charge(1).map_err(|()| type_resource())?;
             self.method_capture_uses
                 .try_reserve(1)
                 .map_err(|_| type_resource())?;
-            self.method_capture_uses
-                .push((node, occurrence.evidence[0].storage_id(), method));
+            self.method_capture_uses.push((
+                method_node,
+                occurrence.evidence[0].storage_id(),
+                method,
+                context_value,
+            ));
 
             let TypeFact {
                 ty: fact_ty,
@@ -6335,7 +6409,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Ok(TypedNode {
                 node,
                 ty: ty.into_inner(),
-                effects: EffectRow::empty(),
+                effects: self
+                    .builder
+                    .clone_node_effects_with_budget(node, &mut self.type_work)?,
                 provenance,
             })
         })();
@@ -6475,7 +6551,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let provenance = self.at_span_provenance(&ty, declaration_span)?;
         Ok(TypedNode {
             node: selected.node,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(selected.node, &mut self.type_work)?,
             provenance,
             ty: ty.into_inner(),
         })
@@ -6698,12 +6776,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let binder_id = binder.id();
             let domain = IterativeTypeOwner::new(self.clone_type(binder.ty())?);
             let codomain = self.clone_type(&function.ty)?;
-            let ty = IterativeTypeOwner::new(Type::Function(
-                Box::new(domain.into_inner()),
-                Box::new(codomain),
-            ));
+            let ty = IterativeTypeOwner::new(if F::EFFECTS {
+                Type::function_computation(
+                    domain.into_inner(),
+                    ComputationType::new(
+                        codomain,
+                        clone_effect_row_with_budget(&function.effects, &mut self.type_work)
+                            .map_err(|()| type_resource())?,
+                    ),
+                )
+            } else {
+                Type::Function(Box::new(domain.into_inner()), Box::new(codomain))
+            });
             let core_ty = self.clone_type(&ty)?;
-            let node = self.builder.function(
+            let node = self.construct_function(
                 binder,
                 function.node,
                 core_ty,
@@ -6726,6 +6812,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 drop(application);
             }
             function.set_node(node);
+            function.replace_effects(
+                self.builder
+                    .clone_node_effects_with_budget(node, &mut self.type_work)?,
+            );
             function.replace_type(ty.into_inner());
             let provenance = self.at_span_provenance(&function.ty, cause.primary_span())?;
             function.set_provenance(provenance);
@@ -7278,10 +7368,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         occurrence: usize,
     ) -> Result<TypedNode, TypeError> {
         let function = TypedNodeOwner::new(function);
-        let Type::Function(domain, codomain) = &function.ty else {
-            return Err(invalid_state());
-        };
-        let polymorphic = matches!(domain.as_ref(), Type::Forall(_, _));
+        let signature = function.ty.function_view().ok_or_else(invalid_state)?;
+        let (domain, codomain) = (signature.domain(), signature.value());
+        let polymorphic = matches!(domain, Type::Forall(_, _));
         if polymorphic {
             let producer_matches = match argument.producer {
                 PolymorphicEvidenceProducer::Abstract { .. } => {
@@ -7415,7 +7504,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty: ty.into_inner(),
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(node, &mut self.type_work)?,
             provenance,
         })
     }
@@ -7947,9 +8038,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         Box::new(scheme_body),
                                     ));
                                     let abstraction_type = self.clone_type(&scheme)?;
+                                    let capture_type = self.clone_type(&current.ty)?;
+                                    let captured = if adapter_edge_ordinal == 0 {
+                                        current.node
+                                    } else {
+                                        self.construct_adapter_captures(
+                                            current.node,
+                                            capture_type,
+                                            origin.clone(),
+                                        )?
+                                    };
                                     let abstraction = self.builder.type_abstraction(
                                         adapter_parameters,
-                                        current.node,
+                                        captured,
                                         abstraction_type,
                                         origin.clone(),
                                     )?;
@@ -13345,12 +13446,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 let core_ty = self.pure_core_type(&ty)?;
                 let node =
-                    self.builder
-                        .function(binder, body.node, core_ty, origin.into_inner())?;
+                    self.construct_function(binder, body.node, core_ty, origin.into_inner())?;
                 values.push(TypedNode {
                     node,
                     ty: ty.into_inner(),
-                    effects: EffectRow::empty(),
+                    effects: self
+                        .builder
+                        .clone_node_effects_with_budget(node, &mut self.type_work)?,
                     provenance,
                 });
             }
@@ -14359,11 +14461,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let provenance = self.at_span_provenance(&ty, declaration_span)?;
                 values.push(TypedNode {
                     node,
-                    effects: if !has_payload && region_api.is_some() {
-                        allocation
-                    } else {
-                        EffectRow::empty()
-                    },
+                    effects: self
+                        .builder
+                        .clone_node_effects_with_budget(node, &mut self.type_work)?,
                     provenance,
                     ty: ty.into_inner(),
                 });
@@ -15025,6 +15125,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     | ElaboratedDeclaration::Recursive {
                         effects, origin, ..
                     } => Some(self.union_effects(effects, &body.effects, origin.primary_span())?),
+                    ElaboratedDeclaration::Evidence {
+                        members, origin, ..
+                    } => {
+                        let span = origin.primary_span();
+                        let mut effects =
+                            self.union_effects(&EffectRow::empty(), &body.effects, span)?;
+                        for (_, initializer) in members {
+                            self.type_work.charge(1).map_err(|()| type_resource())?;
+                            let creation = self.builder.clone_node_effects_with_budget(
+                                *initializer,
+                                &mut self.type_work,
+                            )?;
+                            effects = self.union_effects(&creation, &effects, span)?;
+                        }
+                        Some(effects)
+                    }
                     _ => None,
                 }
             } else {
@@ -15915,7 +16031,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ),
             ));
             let core_type = self.clone_type(&next_type)?;
-            body = self.builder.function(
+            body = self.construct_function(
                 binder,
                 body,
                 core_type,
@@ -15924,6 +16040,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     reason: GeneratedReason::FunctionLowering,
                 },
             )?;
+            body_effects = self
+                .builder
+                .clone_node_effects_with_budget(body, &mut self.type_work)?;
             function_type = next_type;
         }
         application_types.0.reverse();
@@ -18241,7 +18360,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ComputationType::new(body_type.into_inner(), effects),
             ));
             let core_ty = self.clone_type(&ty)?;
-            body_node = self.builder.function(
+            body_node = self.construct_function(
                 parameter,
                 body_node,
                 core_ty,
@@ -18264,7 +18383,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node: body_node,
             ty: original_function_type,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(body_node, &mut self.type_work)?,
             provenance,
         })
     }
@@ -18436,7 +18557,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             body.set_node(node);
         }
         let core_function_type = self.pure_core_type(&function_type.ty)?;
-        let node = self.builder.function(
+        let node = self.construct_function(
             parameter,
             body.node,
             core_function_type,
@@ -18449,7 +18570,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty: function_type.ty,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(node, &mut self.type_work)?,
             provenance: function_type.provenance,
         })
     }

@@ -1157,7 +1157,7 @@ where
         })?;
     let source_normal_limit = checking_type_work.limit();
     // Preserve the existing explicit diagnostic feature, with the paid census
-    // already in the same ledger. Ordinary builds retain exactly 2600*S.
+    // already in the same ledger. Ordinary builds retain exactly 3900*S.
     checking_type_work
         .finish_sizing(crate::calibration::limit(
             source_normal_limit,
@@ -2436,7 +2436,7 @@ mod tests {
         assert_eq!(counted_bytes, bytes);
         assert_eq!(
             (work.used(), work.limit()),
-            (graph.modules().len() + 1, 2600 * bytes)
+            (graph.modules().len() + 1, 3900 * bytes)
         );
         let sources = graph
             .modules()
@@ -2450,7 +2450,7 @@ mod tests {
             ),
             (
                 crate::compiler_work::CompilationPhase::IndependentCore,
-                5300,
+                6200,
             ),
         ] {
             let (work, counted_bytes) =

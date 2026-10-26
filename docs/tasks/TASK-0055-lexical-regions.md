@@ -109,7 +109,7 @@ focused cases transfer by exact tree equality. No new build or full gate is clai
 
 [PR #150](https://github.com/dikini/ash-lang/pull/150) retained the integer
 admission clarification at `5ce3f2943b1efad1f7c0b7a001da43cb06d8d842` before
-product work. The current integer candidate uses private inline `i128` values
+product work. The retained integer implementation uses private inline `i128` values
 and selected supplied byte backing for larger sign/magnitude digits. Literal,
 addition and multiplication preparation reuse the existing explicit context,
 ordered operands, request and initialization path. Actual Cell values and
@@ -117,7 +117,7 @@ summaries preserve digit ownership; unknown Int no longer becomes independent
 merely from its type. Mathematical results remain unbounded, while local
 arithmetic escape follows the accepted conservative restriction.
 
-Legacy Cell analysis exposed a closure-context join. The candidate distinguishes
+Legacy Cell analysis exposed a closure-context join. The implementation distinguishes
 invocations and handler dispatches with a finite projection of existing creation
 paths, preserving exact capture coordinates, caller/focus parents, oldest-callee
 invocation recurrence and class-sensitive dispatch recurrence. The
@@ -129,29 +129,81 @@ return 42. The original staged 256 KiB stress pipeline also preserves 24 unique
 acquisitions and exact reverse release order. A separate whole-public-driver
 256 KiB abort remains unclassified; the staged result does not clear it.
 
-[PR #151](https://github.com/dikini/ash-lang/pull/151) remains an unaccepted
-implementation checkpoint. The dispatch repair also restores the original
+[PR #151](https://github.com/dikini/ash-lang/pull/151) retained the partial Int
+delivery at `df79789134d680f4288b48c0081c6c74c6bf4de9`, with author and
+independent retained acceptance complete. Its 216 distinct focused cases transfer
+by exact reviewed-tree equality; no fresh build or full gate is claimed. The dispatch repair also restores the original
 1,024-level registration stress, including its 256 KiB runtime worker, callback
 counts, exact refusal/retry and teardown assertions. Startup fitting uses complete
 restore-stage costs; later native admission retains the same cumulative meter.
-Focused runtime, image and native checks are recorded with their exact inputs for
-independent review. The representative bindings helper now checks its actual
+Focused runtime, image and native checks passed independent exact-head review. The representative bindings helper now checks its actual
 entry and passes all ten cases. Other module-fixture setup failures remain
 separate; unreached numeric assertions are not verified. No full R-core gate or
 R3–R5 product acceptance is claimed.
 
-Accepted large-Int delivery, closure capture storage and remaining recursive
-initialization/capture/abandonment evidence are still required. No executable
+[PR #152](https://github.com/dikini/ash-lang/pull/152) carries the accepted
+[closure timing amendment](../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26)
+and the active partial closure implementation. Ordinary creation now uses the
+existing supplied Value slots and common callable reader; initial source lifetime,
+outer-selection and polymorphic-view checks pass. Generated evidence wrappers
+retain complete allocation rows and exact capture authentication. Record-only
+forwarding shares immutable views. Authenticated deferred adapters retain term
+captures in the same supplied record and enter their ordered evidence applications
+only at type application. Focused checks cover Score capture storage, local and
+transitive imported ownership, mixed function/data cycles, source-order creation,
+recursive-group resume/discard, and independent capture/layout/row refusals.
+Handler-row recomputation and lexical evidence blocks retain actual creation rows.
+This candidate also repairs constructor creation rows, inline function-header
+row expansion and full-row evidence validation. Source placement and recursion
+suites pass. Callback preflight fixtures now execute in their validated arena;
+replay checks recognize exact structured work refusals. Two private disposal
+workers preserve all depths/assertions with measured 128 KiB headroom; production
+stack settings are unchanged. The original 1,024-level registration fixture
+resolved its lexical method capture, then exceeded the previous Source allowance.
+One bounded diagnostic completed at Source 4,886,806 and Core 7,763,338 units over
+1,582 bytes; the existing fitting rule selects Source `3900S` and Core `6200S`.
+Normal-policy deep registration, coefficient and exact capture-quota checks
+pass. Machine's remaining four failures and capture's ten failures match the
+separately pinned prior fixture debt; their blocked assertions are not verified.
+A supported recursive image exceeded `65B`; all nine flows completed under a
+bounded `130B` diagnostic, selecting `118B` by the existing fitting rule. Normal nine-flow restoration, fresh native 21-case execution and affected
+source/Core checks pass. Existing Pure method-carrier fixtures stop before their
+assertions at an Effect lowering boundary; this remains separate from passing
+Effect donor guards. Two current Effect Score negatives now preserve the
+transformed donor's original evidence anchors, consumers and complete rows while
+adding an ordinary same-scope strict Bind use. The full donor validates first;
+the Adapter scheme and abstract-domain scheme Variable are then each rejected
+with NodeType at the exact unauthorized scheme. The selected final evidence
+contains 384 distinct passing test names, including those two negatives, while
+preserving the fourteen inherited Machine/capture failures and two obsolete Pure
+fixture setup failures as unverified behavior. This is focused evidence, not a
+fresh full gate. The feature-gated syntax census now visits existing region
+provider/selection operands and bodies; both observer tests reach and pass their
+changed coefficient assertions. Its cfg-only repair preserves all 134 default
+compiler dependency/configuration pins, allowing the normal 382 passing names to
+transfer; the observer adds two fresh names. Independent completed-slice review
+remains pending. Legacy Pure callback fixtures cover isolated preflight/disposal,
+not supplied storage.
+
+A generated-native Score attempt stops in the unchanged image profile: its
+registry inventory omits method/head quantifiers, and the method-evidence codec
+explicitly excludes concrete implementation owners/adapters. This delivery does
+not extend that profile. Host supplied-slot execution and prefix-before-argument
+discard cover the deferred behavior; the isolated Adapter carrier wire test is
+not a complete source-free Score image or native execution. Native generic and
+mixed-cycle checks use the same shared storage adapter. Their final results belong
+to the frozen checkpoint receipt. Closure acceptance and remaining recursive
+initialization/capture/abandonment evidence still require independent review. No executable
 memory-read-to-Bytes producer exists at the current slim-FFI boundary, whose
 native replies are Address or Unit; its borrowed Bytes argument uses the common
 reader. The native checks distinguish custom supplied-byte construction/read,
 a root-host Bytes argument kept live through a native call, and exact rejection
 of an explicit-region payload sent through an unprotected outward request. The
 last case preserves the existing lexical payload rule; this delivery adds no
-source native-interpretation syntax. This retained partial delivery does not complete
+source native-interpretation syntax. This candidate does not complete
 ordinary-construction acceptance.
 The host root retains backing through the existing observed heap, but
-observation-before-root-release ordering remains pending. Target-specific discharge, full close/composition,
+observation-before-root-release ordering remains pending. Target-specific discharge correspondence/regression audit, full close/composition,
 connected R-core and all R3–R5 acceptance remain pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
 [#66](https://github.com/dikini/ash-lang/issues/66),

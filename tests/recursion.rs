@@ -30,6 +30,14 @@ fn global_presentations_share_recursive_scope_and_evaluate() {
 }
 
 #[test]
+fn inline_function_open_row_uses_the_same_default_as_arrow_annotations() {
+    let observation = run(
+        "fn invoke<E : EffectRow>(action : Unit -> Unit ! {| E}) -> Unit ! {| E} {\naction ()\n}\naction : Unit -> Unit\naction () = ()\nmain : Unit -> Unit\nmain () = invoke action\n",
+    );
+    assert_eq!(observation.value().to_string(), "()");
+}
+
+#[test]
 fn implementation_method_recurses_through_current_evidence() {
     let observation = run(
         "type Counter =\nStop\n| More(Counter)\n\ninterface Countdown<A> {\ncountdown : A -> Int\n}\n\nimpl Countdown<Counter> {\ncountdown Stop = 42\ncountdown (More(rest)) = countdown rest\n}\n\nmain : Unit -> Int\nmain () = countdown(More(More(Stop)))\n",

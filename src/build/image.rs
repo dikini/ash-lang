@@ -332,6 +332,14 @@ enum NodeTag {
         storage: u32,
         fields: Slice,
     },
+    RegionClosure {
+        api: u32,
+        context: u32,
+        storage: u32,
+        parameter: Option<u32>,
+        body: u32,
+        captures: Slice,
+    },
     RegionBinding {
         module: u32,
         operation: u8,
@@ -1652,7 +1660,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x17";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x19";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2172,6 +2180,22 @@ impl Wire for NodeTag {
                 api.write(writer)?;
                 fields.write(writer)
             }
+            Self::RegionClosure {
+                api,
+                context,
+                storage,
+                parameter,
+                body,
+                captures,
+            } => {
+                38u8.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                storage.write(writer)?;
+                parameter.write(writer)?;
+                body.write(writer)?;
+                captures.write(writer)
+            }
             Self::RegionTuple {
                 constructor,
                 api,
@@ -2422,6 +2446,14 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            38 => Self::RegionClosure {
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                storage: Wire::read(reader)?,
+                parameter: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+                captures: Wire::read(reader)?,
+            },
             37 => Self::IntegerMagnitude {
                 negative: Wire::read(reader)?,
                 bytes: Wire::read(reader)?,
@@ -3330,6 +3362,7 @@ impl Decoder<'_> {
             NodeTag::Region { .. }
             | NodeTag::RegionValueRequest { .. }
             | NodeTag::RegionTuple { .. }
+            | NodeTag::RegionClosure { .. }
             | NodeTag::RegionBuffer { .. }
             | NodeTag::RegionAllocate { .. }
             | NodeTag::CellScope { .. }
@@ -3650,6 +3683,85 @@ mod tests {
             "let rec ones : Stream = Next(21, ones)\nmatch ones {\n",
             "Next(first, rest) => match rest {\nNext(second, ignored) => match (first + second) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n}\n",
         ));
+    }
+
+    #[test]
+    fn mixed_recursive_closure_image_preserves_captures_and_guarded_cycle() {
+        assert_region_image(concat!(
+            "import @builtin.regions as Region\n",
+            "type Stream = Next(Int, Unit -> Int, Unit -> Int)\n",
+            "main : Unit -> Int\nmain () = region<R> r {\n",
+            "let rec first : Stream = Next(42, read, again)\n",
+            "and read : Unit -> Int = fn(ignored) {\nmatch first {\nNext(value, ignored, also_ignored) => value\n}\n}\n",
+            "and again : Unit -> Int = fn(ignored) {\nread ()\n}\nlet alias = first\n",
+            "match alias {\nNext(value, head, tail) => match (head ()) == 42 {\ntrue => match (tail ()) == value {\ntrue => 42\nfalse => 0\n}\nfalse => 0\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn deferred_capture_carrier_wire_preserves_all_explicit_operands() {
+        let tree = SourceTree::new();
+        tree.write("entry.ash", "main : Unit -> (Unit -> Int)\nmain () = {\nlet captured = 42\nfn(ignored) {\ncaptured\n}\n}\n");
+        let compiled = compile_path(tree.configuration()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut image = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let index = image.nodes.iter().position(|node| matches!(node.tag, NodeTag::RegionClosure { captures, .. } if captures.len > 0)).unwrap();
+        let NodeTag::RegionClosure {
+            api,
+            context,
+            storage,
+            body,
+            captures,
+            ..
+        } = image.nodes[index].tag
+        else {
+            unreachable!()
+        };
+        let expected_captures = captures.get(&image.node_children).unwrap().to_vec();
+        // Isolate the existing delayed-code carrier wire alternative. This is
+        // not an admitted Score program or a native method-catalog image.
+        image.nodes[index].tag = NodeTag::RegionClosure {
+            api,
+            context,
+            storage,
+            body,
+            captures,
+            parameter: None,
+        };
+        let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let NodeTag::RegionClosure {
+            api: actual_api,
+            context: actual_context,
+            storage: actual_storage,
+            body: actual_body,
+            captures: actual_captures,
+            parameter,
+        } = decoded.nodes[index].tag
+        else {
+            panic!("delayed capture carrier tag");
+        };
+        assert_eq!(
+            (
+                actual_api,
+                actual_context,
+                actual_storage,
+                actual_body,
+                parameter
+            ),
+            (api, context, storage, body, None)
+        );
+        assert_eq!(
+            actual_captures.get(&decoded.node_children).unwrap(),
+            expected_captures
+        );
     }
 
     #[test]
@@ -7553,6 +7665,25 @@ impl Encoder<'_> {
                     bytes,
                 })
             }
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                let start = self.image.node_children.len();
+                for capture in &closure.captures {
+                    let value = self.node(*capture)?;
+                    push(&mut self.image.node_children, value, self.work)?;
+                }
+                Ok(NodeTag::RegionClosure {
+                    api: self.module(closure.api)?,
+                    context: self.node(closure.context)?,
+                    storage: self.node(closure.storage)?,
+                    parameter: closure
+                        .code
+                        .function()
+                        .map(|function| self.encode_binder(function.parameter()))
+                        .transpose()?,
+                    body: self.node(closure.code.body())?,
+                    captures: Slice::of(&self.image.node_children, start)?,
+                })
+            }
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
                 let start = self.image.node_children.len();
                 for field in &tuple.fields {
@@ -8697,6 +8828,48 @@ impl Decoder<'_> {
                     })
                     .map_err(ImageFailure::from);
             }
+            NodeTag::RegionClosure {
+                api,
+                context,
+                storage,
+                parameter,
+                body,
+                captures,
+            } => {
+                let api = *get(&self.modules, api)?;
+                let mut values = Vec::new();
+                for value in captures.get(&self.image.node_children)? {
+                    push(&mut values, *get(nodes, *value)?, self.work)?;
+                }
+                let code = match parameter {
+                    Some(parameter) => crate::core::region::RegionClosureCode::Function(
+                        crate::core::function::FunctionNode::new(
+                            self.binder(builder, parameter)?,
+                            *get(nodes, body)?,
+                        ),
+                    ),
+                    None => crate::core::region::RegionClosureCode::Adapter {
+                        body: *get(nodes, body)?,
+                    },
+                };
+                let closure = crate::core::region::RegionClosureNode {
+                    api,
+                    context: *get(nodes, context)?,
+                    storage: *get(nodes, storage)?,
+                    code,
+                    captures: values.into_boxed_slice(),
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionClosure(closure),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
             NodeTag::RegionTuple {
                 constructor,
                 api,
@@ -8978,12 +9151,18 @@ impl Decoder<'_> {
                     let row = self.structural(*row)?.row()?;
                     push(&mut rows, row, self.work)?;
                 }
+                let computation_row =
+                    crate::types::clone_effect_row_with_budget(&effects, self.work)
+                        .map_err(|_| ImageFailure::Resource)?;
                 builder.with_caller_type_work(self.work, |builder| {
-                    builder.type_application_with_row_arguments(
-                        function,
-                        restored.into_vec(),
-                        rows,
+                    builder.type_application_with_effects(
+                        crate::core::type_ops::TypeApplicationNode::new_with_row_arguments(
+                            function,
+                            restored.into_vec(),
+                            rows,
+                        ),
                         ty.into_inner(),
+                        computation_row,
                         origin.take(),
                     )
                 })?

@@ -385,6 +385,16 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                         pending.push(Visit::Expr(&resource.initializer, scope));
                         pending.push(Visit::Block(&resource.body, scope));
                     }
+                    SurfaceExprKind::Region(region) => {
+                        if let Some(provider) = &region.provider {
+                            pending.push(Visit::Expr(provider, scope));
+                        }
+                        pending.push(Visit::Block(&region.body, scope));
+                    }
+                    SurfaceExprKind::RegionSelection(selection) => {
+                        pending.push(Visit::Expr(&selection.region, scope));
+                        pending.push(Visit::Block(&selection.body, scope));
+                    }
                     SurfaceExprKind::Hook(hook) => {
                         pending.push(Visit::Effect(&hook.effect, 1));
                         pending.push(Visit::Block(&hook.body, scope));

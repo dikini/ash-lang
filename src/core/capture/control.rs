@@ -242,6 +242,7 @@ pub(super) enum Control {
         value: Value,
         ty: usize,
         source: Span,
+        prefix: Option<Request>,
     },
     Request(Request),
     Handler {
@@ -277,7 +278,11 @@ pub(super) struct Clause {
 impl Control {
     pub(super) fn requests(&self) -> impl Iterator<Item = &Request> {
         let single = match self {
-            Self::Request(request)
+            Self::Call {
+                prefix: Some(request),
+                ..
+            }
+            | Self::Request(request)
             | Self::Handler {
                 effect: request, ..
             }
@@ -391,13 +396,22 @@ impl Control {
                     Self::Choice(copy)
                 }
             }
-            Self::Call { value, ty, source } => {
+            Self::Call {
+                value,
+                ty,
+                source,
+                prefix,
+            } => {
                 let mut value = value.copy(budget)?;
                 value.relocate(target_offset, budget)?;
                 Self::Call {
                     value,
                     ty: ty + type_offset,
                     source: *source,
+                    prefix: prefix
+                        .as_ref()
+                        .map(|request| request.copy(budget))
+                        .transpose()?,
                 }
             }
             Self::Request(request) => Self::Request(request.copy(budget)?),
@@ -465,6 +479,19 @@ pub(super) fn query_required(
                 | Control::Registration { .. }
                 | Control::Cleanup { .. }
         ) {
+            return Ok(true);
+        }
+        // A saved allocation context can feed a published global callable even
+        // when the initializer contains no local resource boundary.
+        if let Control::Request(request) = &graph.code[code]
+            && let Some(operation) = request.operation
+            && let Some(api) = crate::resolved::RegionApi::for_module(operation.owner().module())
+            && operation == crate::types::OperationId::new(api.default_alloc(), 1)
+            && request.opaque_row.is_none()
+            && request.effect.as_ref().is_some_and(|effect| {
+                effect.effect() == api.default_alloc() && effect.arguments().is_empty()
+            })
+        {
             return Ok(true);
         }
         graph.code[code].children(graph, &mut pending, budget)?;
@@ -2711,7 +2738,13 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let code = state.position.code;
-        let Control::Call { value, ty, source } = &self.graph.code[code] else {
+        let Control::Call {
+            value,
+            ty,
+            source,
+            prefix,
+        } = &self.graph.code[code]
+        else {
             return Err(Failure::Invalid);
         };
         let (successors, publication) = if let Some(data) = &mut self.data {
@@ -2764,6 +2797,10 @@ impl<'a> Analysis<'a> {
             unknown,
             returns,
         } = successors;
+        let prefix = prefix
+            .as_ref()
+            .map(|request| request.copy(budget))
+            .transpose()?;
         let ty = *ty;
         let source = *source;
         for (target, value_context) in targets {
@@ -2783,6 +2820,26 @@ impl<'a> Analysis<'a> {
             self.returned(state.copy(budget)?, pending, visited, budget)?;
         }
         if unknown {
+            if let Some(prefix) = prefix {
+                let label = self.intern_label(prefix, budget)?;
+                let port = self
+                    .data
+                    .as_mut()
+                    .map(|data| data.port(code, state.value_context, budget))
+                    .transpose()?;
+                self.requested(
+                    &state,
+                    Event {
+                        code,
+                        label,
+                        unknown: true,
+                        port,
+                    },
+                    pending,
+                    visited,
+                    budget,
+                )?;
+            }
             let mut ty_owner = TypeArguments(Vec::new());
             ty_owner.0.try_reserve(1).map_err(|_| Failure::Resource)?;
             ty_owner
@@ -5150,6 +5207,7 @@ mod tests {
             code: vec![
                 Control::Return,
                 Control::Call {
+                    prefix: None,
                     value: Value {
                         targets: vec![0; WIDTH],
                         unknown: false,
@@ -5228,6 +5286,7 @@ mod tests {
             code: vec![
                 Control::Return,
                 Control::Call {
+                    prefix: None,
                     value: Value::default(),
                     ty: 0,
                     source: span,
@@ -6740,6 +6799,7 @@ mod tests {
             .into(),
             types: TypeArguments(vec![actual]),
             code: vec![Control::Call {
+                prefix: None,
                 value: Value {
                     targets: vec![0],
                     unknown: false,
@@ -6899,16 +6959,19 @@ mod tests {
             code: vec![
                 Control::Return,
                 Control::Call {
+                    prefix: None,
                     value: Value::default(),
                     ty: 0,
                     source: span,
                 },
                 Control::Call {
+                    prefix: None,
                     value: Value::default(),
                     ty: 1,
                     source: span,
                 },
                 Control::Call {
+                    prefix: None,
                     value: Value::default(),
                     ty: 2,
                     source: span,
@@ -7004,6 +7067,7 @@ mod tests {
                     .into(),
                     types: TypeArguments(vec![actual]),
                     code: vec![Control::Call {
+                        prefix: None,
                         value: Value::default(),
                         ty: 0,
                         source: span,
@@ -7091,6 +7155,7 @@ mod tests {
             .into(),
             types: TypeArguments(vec![Type::Function(Box::new(pure()), Box::new(Type::Int))]),
             code: vec![Control::Call {
+                prefix: None,
                 value: Value::default(),
                 ty: 0,
                 source: span,
@@ -8151,11 +8216,13 @@ mod tests {
                 ]),
                 code: vec![
                     Control::Call {
+                        prefix: None,
                         value: Value::default(),
                         ty: 0,
                         source: span,
                     },
                     Control::Call {
+                        prefix: None,
                         value: Value::default(),
                         ty: 1,
                         source: span,
@@ -8237,6 +8304,7 @@ mod tests {
             code: vec![
                 Control::Return,
                 Control::Call {
+                    prefix: None,
                     value: Value {
                         targets: vec![0],
                         unknown: false,

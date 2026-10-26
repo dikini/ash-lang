@@ -2592,6 +2592,22 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.method_evidence_anchor_keys
             .try_reserve(1)
             .map_err(|_| BuildError::TypeWorkExceeded)?;
+        // Prepare the authenticated polymorphic-method prefix row before
+        // publishing its expectation/anchor. Ordinary type views stay pure.
+        let row_node = node.index()?;
+        let computation_row = if !F::REQUIRES_EMPTY_ROWS
+            && matches!(role, MethodEvidenceAnchorRole::Instantiation { .. })
+        {
+            let prefix = self.method_prefix_effects()?;
+            Some(
+                F::effect_row(&self.nodes[row_node].effects)
+                    .union_with_budget(&prefix, &mut self.type_work)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?
+                    .map_err(|_| BuildError::InvalidPayload)?,
+            )
+        } else {
+            None
+        };
         let (interface, arguments) = application.into_parts();
         let admitted = self.admit_owner_arguments(arguments)?;
         self.method_evidence_anchor_keys.insert(anchor_key);
@@ -2606,6 +2622,9 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             expectation,
         });
         self.consumed_method_evidence[expectation] = true;
+        if let Some(row) = computation_row {
+            self.nodes[row_node].effects = F::store_effects(row);
+        }
         Ok(())
     }
 
@@ -3356,6 +3375,17 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         )
     }
 
+    pub(crate) fn type_application_with_effects(
+        &mut self,
+        application: TypeApplicationNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        let kind = PureExprKind::Computation(PureComputation::TypeApplication(application));
+        self.push_explicit_kind(ty, effects, origin, || F::from_pure(kind))
+    }
+
     /// Adds a primitive operation with an unchecked result annotation.
     pub fn primitive(
         &mut self,
@@ -4036,12 +4066,36 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         ))
     }
 
+    fn method_prefix_effects(&mut self) -> Result<EffectRow, BuildError> {
+        if F::REQUIRES_EMPTY_ROWS {
+            return Ok(EffectRow::empty());
+        }
+        self.type_work
+            .charge(self.registry.effects().len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        Ok(self
+            .registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .map_or_else(EffectRow::empty, |api| {
+                EffectRow::singleton(crate::types::EffectInstance::new(
+                    api.default_alloc(),
+                    Box::new([]),
+                ))
+            }))
+    }
+
     pub(super) fn infer_pure_effects_at(&mut self, index: usize) -> Result<EffectRow, BuildError> {
         let kind = F::pure(&self.nodes.get(index).ok_or(BuildError::InvalidNodeId)?.kind)
             .ok_or(BuildError::InvalidPayload)?;
         if F::REQUIRES_EMPTY_ROWS || !matches!(kind, PureExprKind::Computation(_)) {
             return Ok(EffectRow::empty());
         }
+        let type_application = matches!(
+            kind,
+            PureExprKind::Computation(PureComputation::TypeApplication(_))
+        );
         let child_count = kind.child_count();
         let application_function = match kind {
             PureExprKind::Computation(PureComputation::Apply(application)) => {
@@ -4068,6 +4122,21 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 )
                 .map_err(|()| BuildError::TypeWorkExceeded)?
                 .map_err(|_| BuildError::InvalidPayload)?;
+        }
+        if type_application {
+            self.type_work
+                .charge(self.method_evidence_anchors.len())
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+            if self.method_evidence_anchors.iter().any(|anchor| {
+                anchor.node.index() == Ok(index)
+                    && matches!(anchor.role, MethodEvidenceAnchorRole::Instantiation { .. })
+            }) {
+                let prefix = self.method_prefix_effects()?;
+                effects = effects
+                    .union_with_budget(&prefix, &mut self.type_work)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?
+                    .map_err(|_| BuildError::InvalidPayload)?;
+            }
         }
         if let Some(function) = application_function {
             let function = self

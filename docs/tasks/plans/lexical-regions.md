@@ -92,28 +92,50 @@ This also covers the intrinsic replies from `BytesAt`, `StringFromUtf8` and
 `BytesAppendByte`. Independent review and retained verification cover 125 distinct
 focused cases by exact tree equality; no new build or full gate is claimed. Large-Int digits,
 closure storage, remaining recursive initialization/abandonment evidence,
-target-specific discharge, observation-before-root-release ordering and full
+target-specific discharge correspondence/regression audit, observation-before-root-release ordering and full
 completion remain required, followed by the connected R-core gate. This changes no original criterion or required product evidence.
 
-### Current: integer storage checkpoint
+### Current: closure storage and creation timing
 
-[PR #150](https://github.com/dikini/ash-lang/pull/150) retained the
-[integer admission clarification](../../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission)
-at `5ce3f294` before product work. The current candidate reuses byte storage for
-large digits and keeps small values inline. Existing actual-value equations now
-cover legacy Cell contents; finite creation classes distinguish invocation and
-handler-dispatch contexts while preserving exact capture coordinates, existing
-invocation recurrence and class-sensitive dispatch recurrence.
+[PR #151](https://github.com/dikini/ash-lang/pull/151) retained integer storage at
+`df79789134d680f4288b48c0081c6c74c6bf4de9`; 216 distinct focused cases transfer by
+reviewed-tree equality. This is partial R3 acceptance, not a full R-core gate.
+[PR #152](https://github.com/dikini/ash-lang/pull/152) implements actual supplied
+closure captures under the accepted
+[creation-timing amendment](../../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26).
+Ordinary and authenticated deferred records reuse capture metadata, recursive
+slots, Value storage and the host adapter. Direct type views forward the same
+record; deferred evidence applications remain ordered and delayed. Focused checks
+cover local/transitive imported ownership, mixed cycles, member order and recursive
+group suspension. This candidate repairs constructor/header/evidence rows; Source
+placement and recursion suites pass. Same-arena callback/replay checks and measured private-worker stack headroom
+preserve the original assertions. Exact capture-quota checks pass. The
+deep registration fixture resolves its lexical capture; measured completion
+selects Source `3900S`/Core `6200S` by the existing fitting rule. Normal-policy
+deep registration and coefficient checks pass. Remaining Machine/capture
+failures match separately recorded fixture debt. Image fitting selects `118B`
+after the bounded nine-flow completion measurement; normal nine-flow/native execution and affected source/Core refresh pass.
+Two current Effect Score extra-use negatives preserve the original anchors,
+consumers, scope and complete rows; each full validator rejects NodeType at the
+exact unauthorized Adapter or abstract-domain scheme after the unmutated donor
+validates. Selected final evidence contains 384 distinct passing test names;
+blocked legacy fixture assertions are not passing evidence. Legacy Pure callback
+fixtures cover isolated preflight/disposal only. Independent completed-slice review
+and retained verification remain pending. Two existing observer tests pass after
+the cfg-only syntax census adds traversal of existing region operands and bodies.
+All 134 default dependency/configuration pins remain equal, transferring the
+normal 382 passing names; the observer contributes two fresh names.
+The generated-native Score attempt exposes the unchanged method-evidence image
+profile's concrete-adapter exclusion. This slice adds no catalog codec: actual
+host supplied-slot/prefix-order evidence and shared native generic/mixed backing
+checks remain distinct from the isolated Adapter carrier wire roundtrip. No full
+Score image/native pass, closure acceptance or current Main semantics are claimed.
+No additional environment/storage framework is authorized.
 
-The approved Source/Core and startup coefficient recalibrations preserve
-canonical input counting and separate cumulative phase owners. Normal source execution and the
-original staged 256 KiB stress checks pass with the exact 24-owner release
-assertions. The separate whole-public-driver 256 KiB abort is unclassified.
-The original 1,024-level registration runtime/refusal/retry stress also passes
-with its 256 KiB worker. Finish the final focused refresh and independent review
-before partial retention; do not count setup-blocked numeric outputs or the
-rejected raw-key trial as verification. All original R3–R5 criteria, remaining representations,
-completion/discharge and the connected R-core gate stay pending.
+All original R3–R5 criteria, remaining recursive evidence, completion/discharge,
+fixture migrations and the connected R-core gate stay pending. The separate
+whole-public-driver 256 KiB abort remains unclassified; the retained original
+staged stress results do not clear it.
 
 ## Ordered deliveries
 

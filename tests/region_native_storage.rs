@@ -117,11 +117,22 @@ fn custom_region_initializes_and_reads_its_native_backing_before_paired_release(
 }
 
 #[test]
+fn custom_region_stores_ordinary_closure_captures_in_supplied_backing() {
+    let source = ENTRY.replace(
+        TUPLE_BODY,
+        "let captured = 42\n        let callback : Unit -> Int = fn(ignored) {\n            captured\n        }\n        callback ()",
+    );
+    run_native("closure", &source, b"mar");
+}
+
+#[test]
 fn custom_region_stores_nullary_and_payload_nominal_records_in_supplied_backing() {
     let source = ENTRY
         .replace("provider<R> :", "type Item =\nEmpty\n| Full(Int)\nprovider<R> :")
         .replace(TUPLE_BODY, "let empty = Empty\n        match Full 42 {\n            Full(value) => value\n            Empty => 0\n        }");
-    run_native("nominal", &source, b"maar");
+    // Empty and Full are two records; evaluating Full's ordinary constructor
+    // wrapper creates its own supplied closure record before the payload record.
+    run_native("nominal", &source, b"maaar");
 }
 
 #[test]
@@ -250,6 +261,63 @@ fn suspended_entry(body: &str, allocations: usize, discard_at: Option<usize>) ->
         .replace(TUPLE_BODY,body)
         .replace("    region<R> owner =", "    resource cell<C> ticks = 0 {\n    let result = handle (region<R> owner =")
         .replace("\n    }\n}\n", &format!("\n    }}) with Pause {{\nnext ignored => {{\nlet next = (Cell.read ticks) + 1\nlet _ = Cell.write (ticks, next)\n{handler}\n}}\n}}\nmatch (Cell.read ticks) == {expected} {{\ntrue => result\nfalse => 0\n}}\n}}\n}}\n"))
+}
+
+const CLOSURE_GROUP_BODY: &str = "let first : Unit -> Int = fn(ignored) {\n42\n}\n        let second : Unit -> Int = fn(ignored) {\nfirst ()\n}\n        second ()";
+
+#[test]
+fn closure_creation_resume_keeps_completed_capture_records() {
+    run_native(
+        "closure-resume",
+        &suspended_entry(CLOSURE_GROUP_BODY, 2, None),
+        b"maar",
+    );
+}
+
+#[test]
+fn closure_creation_discard_at_second_record_does_not_replay_the_first() {
+    run_native(
+        "closure-discard",
+        &suspended_entry(CLOSURE_GROUP_BODY, 2, Some(2)),
+        b"mar",
+    );
+}
+
+#[test]
+fn recursive_closure_group_resume_keeps_completed_member_records() {
+    let body = CLOSURE_GROUP_BODY
+        .replace("let first", "let rec first")
+        .replace("let second", "and second");
+    run_native(
+        "recursive-closure-resume",
+        &suspended_entry(&body, 2, None),
+        b"maar",
+    );
+}
+
+#[test]
+fn recursive_closure_group_discard_at_second_record_does_not_replay_first() {
+    let body = CLOSURE_GROUP_BODY
+        .replace("let first", "let rec first")
+        .replace("let second", "and second");
+    run_native(
+        "recursive-closure-discard",
+        &suspended_entry(&body, 2, Some(2)),
+        b"mar",
+    );
+}
+
+#[test]
+fn supplied_generic_closure_views_share_their_capture_record() {
+    run_native("generic-closure-views", &ENTRY.replace(TUPLE_BODY,
+        "let captured = 42\nlet identity = fn(value) {\nlet copied = captured\nvalue\n}\nlet answer = identity 42\nmatch identity true {\ntrue => answer\nfalse => 0\n}"), b"mar");
+}
+
+#[test]
+fn supplied_mixed_recursive_closures_keep_the_guarded_cycle() {
+    run_native("mixed-recursive-closure", &ENTRY.replace(TUPLE_BODY,
+        "let rec first : Stream = Next(42, read, again)\nand read : Unit -> Int = fn(ignored) {\nmatch first {\nNext(value, ignored, also_ignored) => value\n}\n}\nand again : Unit -> Int = fn(ignored) {\nread ()\n}\nlet alias = first\nmatch alias {\nNext(value, head, tail) => match (head ()) == 42 {\ntrue => match (tail ()) == value {\ntrue => 42\nfalse => 0\n}\nfalse => 0\n}\n}")
+        .replace("provider<R> :", "type Stream = Next(Int, Unit -> Int, Unit -> Int)\nprovider<R> :"), b"maaaaar");
 }
 
 #[test]

@@ -4,7 +4,7 @@ use std::{error::Error, fmt, sync::Arc};
 
 #[path = "instantiation.rs"]
 mod instantiation;
-use instantiation::Instantiation;
+pub(super) use instantiation::Instantiation;
 #[path = "region.rs"]
 mod region;
 use region::BackingRecord;
@@ -555,7 +555,17 @@ impl Error for RuntimeFailure {}
 #[derive(Debug)]
 enum Frame {
     RegionBuffer(region::BufferProgress),
+    RegionForwarding {
+        abstraction: NodeId,
+        application: Option<NodeId>,
+        environment: Environment,
+    },
+    RegionAbstraction {
+        abstraction: NodeId,
+        closure: NodeId,
+    },
     RegionTuple {
+        abstraction: Option<NodeId>,
         node: NodeId,
         environment: Environment,
         context: Option<ActivationKey>,
@@ -1024,14 +1034,87 @@ impl<'runtime> Machine<'runtime> {
         disposal::check()?;
         match frame {
             Frame::RegionBuffer(progress) => self.return_region_buffer(progress, value)?,
+            Frame::ApplyFunction {
+                argument,
+                caller_environment,
+            } if matches!(value, Value::RegionFunction(_) | Value::Location(_)) => {
+                let function = Value::Function(self.read_callable(&value)?);
+                self.apply(return_application_function(
+                    argument,
+                    caller_environment,
+                    function,
+                )?);
+            }
+            Frame::RegionForwarding {
+                abstraction,
+                application,
+                environment,
+            } => {
+                let record = match &value {
+                    Value::RegionFunction(view) => Some(view.record),
+                    Value::Location(location) => Some(*location),
+                    _ => None,
+                };
+                let stored = if let Some(record) = record {
+                    match packed_tuple_location(&self.heap, record, &mut self.instantiation_work) {
+                        Ok(location) => self.heap[location].stored_fields().is_some_and(|fields| {
+                            matches!(fields.first(), Some(Value::ClosureCode(code)) if matches!(code.program.node(code.node), Some(ExecutableNode::Effect(expression)) if matches!(&expression.kind, EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) if closure.code.function().is_some())))
+                        }),
+                        Err(RuntimeFailure::UninitializedLocation) => false,
+                        Err(failure) => return Err(failure),
+                    }
+                } else {
+                    false
+                };
+                if stored {
+                    if let Some(application) = application {
+                        self.return_type_application(
+                            application,
+                            &environment.instantiation,
+                            value,
+                        )?;
+                    } else {
+                        self.control = Some(Control::Return(value));
+                    }
+                    let Some(Control::Return(value)) = self.control.take() else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let mut view = match value {
+                        Value::RegionFunction(view) => view,
+                        Value::Location(record) => crate::eval::value::RegionFunction {
+                            record,
+                            instantiation: None,
+                            abstraction: None,
+                        },
+                        _ => return Err(RuntimeFailure::InvalidControlState),
+                    };
+                    view.abstraction = Some(abstraction);
+                    self.control = Some(Control::Return(Value::RegionFunction(view)));
+                } else {
+                    self.control = Some(Control::Return(Value::Polymorphic {
+                        abstraction,
+                        environment,
+                    }));
+                }
+            }
+            Frame::RegionAbstraction { .. } => return Err(RuntimeFailure::InvalidControlState),
             Frame::RegionTuple {
+                abstraction,
                 node,
                 environment,
                 context,
                 next,
                 fields,
             } => {
-                self.return_region_tuple(node, environment, context, next, fields, value)?;
+                self.return_region_tuple(
+                    node,
+                    abstraction,
+                    environment,
+                    context,
+                    next,
+                    fields,
+                    value,
+                )?;
             }
             Frame::RegionPreceding { node, environment } => {
                 self.prepare_region_provider(node, environment, value)?
@@ -1122,6 +1205,15 @@ impl<'runtime> Machine<'runtime> {
                     .ok_or(RuntimeFailure::InvalidControlState)?;
                 self.frames.append(&mut segment.frames);
                 self.control = Some(Control::Return(value));
+            }
+            Frame::ApplyArgument {
+                function: function @ (Value::RegionFunction(_) | Value::Location(_)),
+            } => {
+                let function = self.read_callable(&function)?;
+                self.control = Some(Control::Evaluate(
+                    function.body,
+                    function.environment.extend(function.parameter, value)?,
+                ));
             }
             Frame::ApplyArgument {
                 function: Value::RegionBackingFunction(owner),
@@ -1403,9 +1495,7 @@ impl<'runtime> Machine<'runtime> {
         let callback = environment
             .lookup(scope.callback, &self.program)
             .ok_or(RuntimeFailure::MissingBinding)?;
-        if !matches!(callback, Value::Function(_)) {
-            return Err(RuntimeFailure::UnexpectedFunctionValue);
-        }
+        self.read_callable(&callback)?;
         let live = self
             .live_cleanups
             .checked_add(1)
@@ -1679,8 +1769,9 @@ impl<'runtime> Machine<'runtime> {
         caller: &Instantiation,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
+        let program = self.program.clone();
         let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
-            pure_expression(&self.program, node)?
+            pure_expression(&program, node)?
         else {
             return Err(RuntimeFailure::InvalidControlState);
         };
@@ -1703,9 +1794,44 @@ impl<'runtime> Machine<'runtime> {
                 )?;
                 self.control = Some(Control::Evaluate(abstraction.body(), environment));
             }
-            value @ (Value::ConstructorFunction(_) | Value::Location(_)) => {
-                self.control = Some(Control::Return(value))
+            value @ (Value::RegionFunction(_) | Value::Location(_)) => {
+                let (code, mut environment, abstraction) = self.read_stored_callable(&value)?;
+                let abstraction = abstraction.ok_or(RuntimeFailure::InvalidControlState)?;
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    pure_expression(&code.program, abstraction)?
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let instantiation = environment.instantiation.apply_view(
+                    caller,
+                    abstraction.parameters(),
+                    application.arguments(),
+                    application.row_arguments(),
+                    &mut self.instantiation_work,
+                )?;
+                if let Some(ExecutableNode::Effect(expression)) = code.program.node(code.node)
+                    && let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+                        &expression.kind
+                    && let crate::core::region::RegionClosureCode::Adapter { body } = closure.code
+                {
+                    environment.instantiation = instantiation;
+                    self.control = Some(Control::Evaluate(body, environment));
+                    return Ok(());
+                }
+                let record = match value {
+                    Value::RegionFunction(function) => function.record,
+                    Value::Location(location) => location,
+                    _ => return Err(RuntimeFailure::InvalidControlState),
+                };
+                self.control = Some(Control::Return(Value::RegionFunction(
+                    crate::eval::value::RegionFunction {
+                        record,
+                        instantiation: Some(instantiation),
+                        abstraction: None,
+                    },
+                )));
             }
+            value @ Value::ConstructorFunction(_) => self.control = Some(Control::Return(value)),
             _ => return Err(RuntimeFailure::InvalidControlState),
         }
         Ok(())
@@ -2753,6 +2879,7 @@ fn dispatch_entry(
                     EffectOperation::Region(_)
                     | EffectOperation::RegionAllocate(_)
                     | EffectOperation::RegionTuple(_)
+                    | EffectOperation::RegionClosure(_)
                     | EffectOperation::RegionBuffer(_)
                     | EffectOperation::RegionValueRequest(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
@@ -2839,11 +2966,49 @@ fn dispatch_entry(
             Transition::direct(Control::Evaluate(scope.body(), environment))
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
-            if matches!(program, ExecutableProgram::Effect(_)) {
-                Transition::direct(Control::Return(Value::Polymorphic {
-                    abstraction: node,
-                    environment,
-                }))
+            if let ExecutableProgram::Effect(effect) = program {
+                if let Some((closure, _)) = crate::core::region::closure_initializer::<
+                    crate::core::EffectOperationFamily,
+                >(operation.body(), |node| {
+                    effect.node(node).map(|node| &node.kind)
+                }) {
+                    Transition::suspend(
+                        Control::Evaluate(operation.body(), environment),
+                        Frame::RegionAbstraction {
+                            abstraction: node,
+                            closure,
+                        },
+                    )
+                } else {
+                    let forwarding = match pure_expression(program, operation.body())? {
+                        PureExprKind::Variable(_) => Some((operation.body(), None)),
+                        PureExprKind::Computation(PureComputation::TypeApplication(
+                            application,
+                        )) if matches!(
+                            pure_expression(program, application.function())?,
+                            PureExprKind::Variable(_)
+                        ) =>
+                        {
+                            Some((application.function(), Some(operation.body())))
+                        }
+                        _ => None,
+                    };
+                    if let Some((base, application)) = forwarding {
+                        Transition::suspend(
+                            Control::Evaluate(base, environment.clone()),
+                            Frame::RegionForwarding {
+                                abstraction: node,
+                                application,
+                                environment,
+                            },
+                        )
+                    } else {
+                        Transition::direct(Control::Return(Value::Polymorphic {
+                            abstraction: node,
+                            environment,
+                        }))
+                    }
+                }
             } else {
                 enter_type_abstraction(operation, environment)
             }
@@ -2973,6 +3138,10 @@ fn enter_recursive_binding(
 ) -> Result<Transition, RuntimeFailure> {
     let mut members = Vec::with_capacity(group.members().len());
     let mut pending = Vec::new();
+    let mut functions = Vec::new();
+    functions
+        .try_reserve_exact(group.members().len())
+        .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
     for member in group.members() {
         let initializer_origin = match program
             .node(member.initializer())
@@ -2983,12 +3152,30 @@ fn enter_recursive_binding(
         };
         let mut erased_initializer = member.initializer();
         loop {
-            let expression = pure_expression(program, erased_initializer)?;
-            let PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) = expression
+            let Ok(PureExprKind::Computation(PureComputation::TypeAbstraction(operation))) =
+                pure_expression(program, erased_initializer)
             else {
                 break;
             };
             erased_initializer = operation.body();
+        }
+        let stored = if let ExecutableProgram::Effect(effect) = program {
+            crate::core::region::closure_initializer::<crate::core::EffectOperationFamily>(
+                erased_initializer,
+                |node| effect.node(node).map(|node| &node.kind),
+            )
+        } else {
+            None
+        };
+        if stored.is_some() {
+            let location = allocate_heap(heap, HeapCell::Uninitialized)?;
+            functions.push((location, member.initializer()));
+            let kind = RecursiveMemberKind::Data { location };
+            members.push(RecursiveMemberTemplate {
+                binder: member.binder().id(),
+                kind,
+            });
+            continue;
         }
         let erased = pure_expression(program, erased_initializer)?;
         let kind = match erased {
@@ -3021,6 +3208,8 @@ fn enter_recursive_binding(
         });
     }
     let environment = environment.extend_recursive(members)?;
+    functions.extend(pending);
+    let pending = functions;
     if let Some((_, initializer)) = pending.first().copied() {
         Ok(Transition::suspend(
             Control::Evaluate(initializer, environment.clone()),
@@ -3185,8 +3374,14 @@ fn return_recursive_initialization(
     value: Value,
     heap: &mut [HeapCell],
 ) -> Result<Transition, RuntimeFailure> {
-    let Value::Location(value_location) = value else {
-        return Err(RuntimeFailure::UnexpectedRecursiveBinding);
+    let value_location = match value {
+        Value::Location(location) => location,
+        Value::RegionFunction(function)
+            if function.instantiation.is_none() && function.abstraction.is_none() =>
+        {
+            function.record
+        }
+        _ => return Err(RuntimeFailure::UnexpectedRecursiveBinding),
     };
     let (slot, _) = pending
         .get(next)
@@ -3255,6 +3450,7 @@ fn return_application_function(
     if !matches!(
         function,
         Value::Function(_)
+            | Value::RegionFunction(_)
             | Value::ConstructorFunction(_)
             | Value::Intrinsic(_)
             | Value::RegionHostFunction { .. }
@@ -3853,7 +4049,7 @@ mod tests {
     pub(super) fn is_work_exhaustion(failure: super::RuntimeFailure) -> bool {
         use super::{ResourceFailureCause, RuntimeFailure, RuntimeResource};
         matches!(failure, RuntimeFailure::Report(report)
-            if report.primary.reason_code() == "runtime.environment-capacity"
+            if matches!(report.primary.reason_code(), "runtime.environment-capacity" | "runtime.work-budget-exhausted")
             && report.teardown.is_none()
             && report.primary.resource().is_some_and(|details|
                 details.cause == ResourceFailureCause::WorkBudgetExhausted
@@ -4150,36 +4346,127 @@ mod tests {
         Value::Integer(Integer::parse_decimal(value).unwrap())
     }
 
+    enum LegacyCallback {
+        Increment,
+        Constant,
+    }
+
+    // These isolated preflight and legacy Environment disposal fixtures need a
+    // host closure, not Source creation or supplied-region storage evidence.
+    fn legacy_callback_fixture(kind: LegacyCallback) -> Value {
+        let source = SourceFile::new("legacy-callback.ash", "()").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let mut builder = CoreBuilder::new();
+        let domain = if matches!(kind, LegacyCallback::Increment) {
+            Type::Int
+        } else {
+            Type::Unit
+        };
+        let result = Type::Int;
+        let parameter = builder.binder(domain.clone(), origin.clone()).unwrap();
+        let body = match kind {
+            LegacyCallback::Constant => builder
+                .integer(
+                    Integer::parse_decimal("7").unwrap(),
+                    Type::Int,
+                    origin.clone(),
+                )
+                .unwrap(),
+            LegacyCallback::Increment => {
+                let left = builder
+                    .variable(parameter.id(), Type::Int, origin.clone())
+                    .unwrap();
+                let right = builder
+                    .integer(
+                        Integer::parse_decimal("1").unwrap(),
+                        Type::Int,
+                        origin.clone(),
+                    )
+                    .unwrap();
+                builder
+                    .primitive(
+                        crate::core::Primitive::Add,
+                        left,
+                        right,
+                        Type::Int,
+                        origin.clone(),
+                    )
+                    .unwrap()
+            }
+        };
+        let root = builder
+            .function(
+                parameter,
+                body,
+                Type::Function(Box::new(domain), Box::new(result)),
+                origin,
+            )
+            .unwrap();
+        let program = validate(builder.finish(root).unwrap(), &[&source]).unwrap();
+        let value = Machine::new(&program).run().unwrap().value;
+        assert!(matches!(value, Value::Function(_)));
+        value
+    }
+
     fn cleanup_fixture() -> (
         ValidatedEffectProgram,
         crate::core::effect::CleanupScopeNode,
         Environment,
     ) {
-        let program =
-            effect_program("main : Unit -> Int\nmain () = cleanup fn(ignored) {\n()\n} {\n42\n}\n");
-        let mut pending = vec![program.root()];
-        let mut scope = None;
-        let mut bindings = Vec::new();
-        while let Some(node) = pending.pop() {
-            let expression = program.node(node).unwrap();
-            match &expression.kind {
-                EffectExprKind::Operation(EffectOperation::Cleanup(found)) => scope = Some(*found),
-                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
-                    bindings.push((binding.binder().id(), binding.initializer()))
-                }
-                _ => {}
-            }
-            pending.extend(
-                (0..expression.kind.child_count())
-                    .filter_map(|index| expression.kind.child_at(index)),
-            );
-        }
-        let scope = scope.unwrap();
-        let initializer = bindings
-            .into_iter()
-            .find(|(binder, _)| *binder == scope.callback)
-            .unwrap()
-            .1;
+        // This fixture executes its callback, so code and owner share one
+        // independently validated, region-free Effect arena.
+        let source = SourceFile::new("cleanup-preflight.ash", "()").unwrap();
+        let span = source.span(ByteRange::new(0, 2).unwrap()).unwrap();
+        let origin = Origin::Source(span);
+        let mut builder =
+            EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+        let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        let parameter = builder.binder(Type::Unit, origin.clone()).unwrap();
+        let callback_binder = builder
+            .binder(function_type.clone(), origin.clone())
+            .unwrap();
+        let callback_body = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let initializer = builder
+            .function(
+                parameter,
+                callback_body,
+                function_type.clone(),
+                origin.clone(),
+            )
+            .unwrap();
+        let function = builder
+            .variable(callback_binder.id(), function_type, origin.clone())
+            .unwrap();
+        let argument = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let action = builder
+            .application(function, argument, Type::Unit, origin.clone())
+            .unwrap();
+        let body = builder
+            .integer(
+                Integer::parse_decimal("42").unwrap(),
+                Type::Int,
+                origin.clone(),
+            )
+            .unwrap();
+        let scope = crate::core::effect::CleanupScopeNode {
+            callback: callback_binder.id(),
+            body,
+            action,
+            span,
+            action_span: span,
+        };
+        let cleanup = builder
+            .cleanup_scope(
+                scope,
+                Type::Int,
+                crate::types::EffectRow::empty(),
+                origin.clone(),
+            )
+            .unwrap();
+        let root = builder
+            .binding(callback_binder, initializer, cleanup, Type::Int, origin)
+            .unwrap();
+        let program = validate_effect(builder.finish(root).unwrap(), &[&source]).unwrap();
         let executable = ExecutableProgram::Effect(program.shared());
         let transition = dispatch_entry(
             &executable,
@@ -4189,7 +4476,7 @@ mod tests {
         )
         .unwrap();
         let Control::Return(callback) = transition.control else {
-            panic!("ordinary callback")
+            panic!("same-arena pure callback")
         };
         let environment = Environment::new().extend(scope.callback, callback).unwrap();
         (program, scope, environment)
@@ -4674,27 +4961,7 @@ mod tests {
         else {
             unreachable!()
         };
-        let initializer =
-            nodes
-                .iter()
-                .find_map(|node| match &program.node(*node).unwrap().kind {
-                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
-                        binding,
-                    ))) if binding.binder().id() == scope.callback => Some(binding.initializer()),
-                    _ => None,
-                })
-                .unwrap();
-        let executable = ExecutableProgram::Effect(program.shared());
-        let transition = dispatch_entry(
-            &executable,
-            initializer,
-            Environment::new(),
-            &mut Vec::new(),
-        )
-        .unwrap();
-        let Control::Return(callback) = transition.control else {
-            panic!("ordinary callback value")
-        };
+        let callback = legacy_callback_fixture(LegacyCallback::Increment);
         let environment = Environment::new().extend(scope.callback, callback).unwrap();
         (program, node, environment)
     }
@@ -5498,9 +5765,7 @@ mod tests {
 
     #[test]
     fn generic_cell_function_copy_charges_origin_before_retaining_metadata() {
-        let program =
-            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
-        let Value::Function(mut function) = Machine::new_effect(&program).run().unwrap().value
+        let Value::Function(mut function) = legacy_callback_fixture(LegacyCallback::Constant)
         else {
             panic!("function fixture")
         };
@@ -5915,16 +6180,16 @@ mod tests {
 
     #[test]
     fn generic_cell_admitted_function_origin_and_deep_environment_dispose_on_small_stack() {
+        // Fixed debug evaluator frames need headroom: 64 KiB failed at the
+        // first return; 128 KiB preserves all depths and disposal assertions.
         let program = effect_program(
             "import @builtin.generic_cell as Cell\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,(Unit -> Int)> c = initial {\nlet action = Cell.read c\naction ()\n}\n",
         );
-        let callable =
-            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
-        let Value::Function(template) = Machine::new_effect(&callable).run().unwrap().value else {
+        let Value::Function(template) = legacy_callback_fixture(LegacyCallback::Constant) else {
             panic!("function")
         };
         std::thread::Builder::new()
-            .stack_size(64 * 1024)
+            .stack_size(128 * 1024)
             .spawn(move || {
                 let node = resource_node(&program);
                 for mode in 0..4 {
@@ -6112,9 +6377,7 @@ mod tests {
         let program = effect_program(
             "import @builtin.generic_cell as Cell\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,(Unit -> Int)> c = initial {\nlet action = Cell.read c\naction ()\n}\n",
         );
-        let callable =
-            effect_program("main : Unit -> (Unit -> Int)\nmain () = fn(ignored) {\n7\n}\n");
-        let Value::Function(template) = Machine::new_effect(&callable).run().unwrap().value else {
+        let Value::Function(template) = legacy_callback_fixture(LegacyCallback::Constant) else {
             panic!("function")
         };
         let mut frontier = (0..512).map(|_| Environment::new()).collect::<Vec<_>>();
@@ -6668,26 +6931,54 @@ mod tests {
 
         // Two retained Ask frames coexist with four frames for the explicit
         // allocation-context request while preparing the arithmetic reply.
-        let evaluation = Machine::new_effect_with_capture_limit(&program, 6)
-            .run()
-            .expect("exact quota should serve both sequential requests");
-        assert_eq!(evaluation.value.to_string(), "3");
-        assert_eq!(
-            evaluation
+        let ask = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Ask")
+            .unwrap()
+            .id;
+        let default = program
+            .registry()
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .unwrap()
+            .default_alloc();
+        for _ in 0..2 {
+            let evaluation = Machine::new_effect_with_capture_limit(&program, 6)
+                .run()
+                .expect("exact quota should serve both sequential requests");
+            assert_eq!(evaluation.value.to_string(), "3");
+            let requests = evaluation
                 .effect_trace()
                 .iter()
-                .filter(|event| matches!(event, EffectTraceEvent::Request(_)))
-                .count(),
-            4
-        );
-        assert_eq!(
-            evaluation
-                .effect_trace()
-                .iter()
-                .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
-                .count(),
-            4
-        );
+                .filter_map(|event| match event {
+                    EffectTraceEvent::Request(operation) => Some(*operation),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            // Main creation and both arithmetic replies query the selected
+            // context; the two business requests remain ordinary Ask calls.
+            assert_eq!(
+                requests,
+                [
+                    OperationId::new(default, 1),
+                    OperationId::new(ask, 0),
+                    OperationId::new(default, 1),
+                    OperationId::new(ask, 0),
+                    OperationId::new(default, 1)
+                ]
+            );
+            assert_eq!(
+                evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
+                    .count(),
+                5
+            );
+        }
     }
 
     #[test]
@@ -6700,9 +6991,13 @@ mod tests {
             "handle (perform Ask.ask () + 100) with Ask {\n",
             "ask ignored => {\nlet _ = discard\nfirst + 1\n}\n}\n}\n",
         ));
-        assert!(matches!(
-            Machine::new_effect_with_capture_limit(&program, 3).run(),
-            Err(failure) if is_configured_capacity(failure, RuntimeFailure::CapturedControlCapacity, RuntimeResource::FrameStorage)
+        let short = Machine::new_effect_with_capture_limit(&program, 3)
+            .run()
+            .unwrap_err();
+        assert!(is_configured_capacity(
+            short,
+            RuntimeFailure::CapturedControlCapacity,
+            RuntimeResource::FrameStorage
         ));
         for _ in 0..2 {
             let evaluation = Machine::new_effect_with_capture_limit(&program, 4)
@@ -6954,8 +7249,10 @@ mod tests {
 
     #[test]
     fn deep_discard_success_and_malformed_failure_drop_on_a_small_stack() {
+        // 64 KiB failed during fixture validation before deep state existed;
+        // 128 KiB passed the unchanged construction/capture/discard assertions.
         std::thread::Builder::new()
-            .stack_size(64 * 1024)
+            .stack_size(128 * 1024)
             .spawn(|| {
                 const DEPTH: usize = 32_768;
                 let handler = HandlerId::new(0);
@@ -8177,8 +8474,10 @@ mod tests {
         let evaluation = evaluate_effect(&program)
             .expect("the identity-free closure should execute after its scope returns");
         assert!(matches!(evaluation.value, Value::SmallInteger(42)));
+        // Compare the erased payload with the same ordinary conversion
+        // function creation, which CP-0025 also requires for the newtype wrapper.
         let erased = effect_program(
-            "make : Unit -> (Unit -> Int)\nmake () = {\nlet offset = 41\nfn(ignored) {\noffset + 1\n}\n}\nmain : Unit -> Int\nmain () = make()()\n",
+            "make : Unit -> (Unit -> Int)\nmake () = {\nlet wrap : Int -> Int = fn(value) {\nvalue\n}\nlet offset = wrap 41\nfn(ignored) {\noffset + 1\n}\n}\nmain : Unit -> Int\nmain () = make()()\n",
         );
         let erased = evaluate_effect(&erased).unwrap();
         assert_eq!(erased.value.to_string(), "42");

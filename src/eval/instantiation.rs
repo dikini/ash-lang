@@ -12,7 +12,7 @@ use crate::types::{
 };
 
 #[derive(Clone, Default)]
-pub(super) struct Instantiation(Option<Arc<Bindings>>);
+pub(in crate::eval) struct Instantiation(Option<Arc<Bindings>>);
 
 #[derive(Default)]
 struct Bindings {
@@ -187,6 +187,39 @@ impl Instantiation {
         work: &mut TypeWorkBudget,
     ) -> Result<Self, RuntimeFailure> {
         self.apply_in_phase(caller, parameters, arguments, row_arguments, work, None)
+    }
+
+    /// Compose only newly bound view formals into prior view ranges.
+    pub(super) fn apply_view(
+        &self,
+        caller: &Self,
+        parameters: &[(TypeVariableId, Kind)],
+        arguments: &[Type],
+        row_arguments: &[EffectRow],
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        let new = Self::default().apply(caller, parameters, arguments, row_arguments, work)?;
+        let mut result = self.apply(caller, parameters, arguments, row_arguments, work)?;
+        let bindings = Arc::get_mut(
+            result
+                .0
+                .as_mut()
+                .ok_or(RuntimeFailure::InvalidControlState)?,
+        )
+        .ok_or(RuntimeFailure::InvalidControlState)?;
+        if let (Some(previous), Some(new_bindings)) = (&self.0, &new.0) {
+            for (parameter, ty) in &previous.types {
+                if !new_bindings.types.contains_key(parameter) {
+                    bindings.insert_type(*parameter, new.ty(ty, work)?);
+                }
+            }
+            for (parameter, row) in &previous.rows {
+                if !new_bindings.rows.contains_key(parameter) {
+                    bindings.insert_row(*parameter, new.row(row, work)?);
+                }
+            }
+        }
+        Ok(result)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -642,6 +675,119 @@ mod tests {
         );
         assert!(empty.0.is_none());
         assert_eq!(Instantiation::activation(&instance(identity)), None);
+    }
+
+    #[test]
+    fn forwarding_views_compose_only_new_formals_and_retry_without_mutation() {
+        let empty = Instantiation::default();
+        let a = TypeVariableId::generated(10);
+        let b = TypeVariableId::generated(11);
+        let lexical = TypeVariableId::generated(12);
+        let mut work = TypeWorkBudget::unbounded();
+        let original = empty
+            .apply(
+                &empty,
+                &[(a, Kind::Type), (lexical, Kind::Type)],
+                &[Type::Variable(b), Type::Bool],
+                &[],
+                &mut work,
+            )
+            .unwrap();
+        // The caller's unrelated lexical binding must not rewrite the old view.
+        let caller = empty
+            .apply(
+                &empty,
+                &[(lexical, Kind::Type)],
+                &[Type::Int],
+                &[],
+                &mut work,
+            )
+            .unwrap();
+        let parameters = [(b, Kind::Type)];
+        let mut measured = TypeWorkBudget::unbounded();
+        let view = original
+            .apply_view(&caller, &parameters, &[Type::Int], &[], &mut measured)
+            .unwrap();
+        let used = measured.used();
+        assert_eq!(view.ty(&Type::Variable(a), &mut work).unwrap(), Type::Int);
+        assert_eq!(
+            view.ty(&Type::Variable(lexical), &mut work).unwrap(),
+            Type::Bool
+        );
+        assert_eq!(
+            original.ty(&Type::Variable(a), &mut work).unwrap(),
+            Type::Variable(b)
+        );
+        assert!(
+            original
+                .apply_view(
+                    &caller,
+                    &parameters,
+                    &[Type::Int],
+                    &[],
+                    &mut TypeWorkBudget::with_limit(used - 1)
+                )
+                .is_err()
+        );
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(used);
+            let sibling = original
+                .apply_view(&caller, &parameters, &[Type::Int], &[], &mut exact)
+                .unwrap();
+            assert_eq!(exact.used(), used);
+            assert_eq!(
+                sibling.ty(&Type::Variable(a), &mut work).unwrap(),
+                Type::Int
+            );
+        }
+        assert_eq!(
+            original.ty(&Type::Variable(a), &mut work).unwrap(),
+            Type::Variable(b)
+        );
+    }
+
+    #[test]
+    fn forwarding_views_substitute_complete_rows_and_preserve_activations() {
+        use crate::{
+            module::ModuleId,
+            types::{EffectId, EffectRowVariable},
+        };
+        let empty = Instantiation::default();
+        let old = TypeVariableId::generated(20);
+        let new = TypeVariableId::generated(21);
+        let owner = TypeVariableId::generated(22);
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let mut work = TypeWorkBudget::unbounded();
+        let lexical = empty
+            .acquire(owner, ActivationKey(7), &mut work, None)
+            .unwrap();
+        let row = EffectRow::open(EffectRowVariable::rigid(new), Box::new([]));
+        let original = lexical
+            .apply(&empty, &[(old, Kind::EffectRow)], &[], &[row], &mut work)
+            .unwrap();
+        let instance = EffectInstance::new(effect, Box::new([Type::Variable(owner)]));
+        let actual = EffectRow::singleton(instance.clone());
+        let view = original
+            .apply_view(
+                &lexical,
+                &[(new, Kind::EffectRow)],
+                &[],
+                &[actual],
+                &mut work,
+            )
+            .unwrap();
+        let query = EffectRow::open(EffectRowVariable::rigid(old), Box::new([]));
+        let result = view.row(&query, &mut work).unwrap();
+        assert_eq!(result.known().len(), 1);
+        assert_eq!(
+            Instantiation::activation(&result.known()[0]),
+            Some(ActivationKey(7))
+        );
+        assert!(original.row(&query, &mut work).unwrap().tail().is_some());
+        assert_eq!(
+            Instantiation::activation(&view.effect(&instance, &mut work, None).unwrap()),
+            Some(ActivationKey(7))
+        );
     }
 
     #[test]

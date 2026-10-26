@@ -1224,15 +1224,22 @@ fn validate_global_scheme<'a>(
                 budget,
                 span,
             )?;
-            let Type::Function(domain, codomain) = &checked.scheme.value_type else {
+            let Some(function) = checked.scheme.value_type.function_view() else {
                 return Err(unknown(span));
             };
+            let (domain, codomain) = (function.domain(), function.value());
+            let rows_match = crate::types::same_effect_rows_with_charge(
+                function.effects().unwrap_or(&EffectRow::empty()),
+                &global.header.result_effects,
+                |work| budget.charge(work),
+            )
+            .map_err(|()| resource(span))?;
             let domain_matches = match global.header.parameters.as_slice() {
                 [parameter] => {
                     same_type_charged(domain, &parameter.annotation.ty, budget, parameter.span)?
                 }
                 parameters if parameters.len() >= 2 => {
-                    let Type::Tuple(elements) = domain.as_ref() else {
+                    let Type::Tuple(elements) = domain else {
                         return Err(unknown(span));
                     };
                     if elements.len() != parameters.len() {
@@ -1255,7 +1262,8 @@ fn validate_global_scheme<'a>(
                 }
                 _ => false,
             };
-            domain_matches
+            rows_match
+                && domain_matches
                 && same_type_charged(
                     codomain,
                     &global.header.result_type.ty,

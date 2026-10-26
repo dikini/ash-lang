@@ -375,6 +375,17 @@ impl Machine<'_> {
         Some(tuple)
     }
 
+    fn region_closure(&self, node: NodeId) -> Option<&crate::core::region::RegionClosureNode> {
+        let ExecutableNode::Effect(expression) = self.program.node(node)? else {
+            return None;
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &expression.kind
+        else {
+            return None;
+        };
+        Some(closure)
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "one explicit tuple initializer frame is moved through the existing machine"
@@ -382,24 +393,35 @@ impl Machine<'_> {
     pub(super) fn return_region_tuple(
         &mut self,
         node: NodeId,
+        abstraction: Option<NodeId>,
         environment: Environment,
         mut context: Option<ActivationKey>,
         next: usize,
         mut fields: Vec<Value>,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
-        let tuple = self
-            .region_tuple(node)
-            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let (operands, storage_node, constructor, closure) =
+            if let Some(tuple) = self.region_tuple(node) {
+                (
+                    tuple.fields.as_ref(),
+                    tuple.storage,
+                    tuple.constructor,
+                    false,
+                )
+            } else if let Some(closure) = self.region_closure(node) {
+                (closure.captures.as_ref(), closure.storage, None, true)
+            } else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
         let following = if next == 0 {
             let Value::RegionView(owner) = value else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             context = Some(owner);
-            tuple.fields.first().copied().or(Some(tuple.storage))
-        } else if next <= tuple.fields.len() {
+            operands.first().copied().or(Some(storage_node))
+        } else if next <= operands.len() {
             fields.push(value);
-            Some(tuple.fields.get(next).copied().unwrap_or(tuple.storage))
+            Some(operands.get(next).copied().unwrap_or(storage_node))
         } else {
             let Value::RegionStorage(storage) = value else {
                 return Err(RuntimeFailure::InvalidControlState);
@@ -407,15 +429,39 @@ impl Machine<'_> {
             if Some(storage.invocation.owner) != context {
                 return Err(RuntimeFailure::InvalidControlState);
             }
-            if let Some(constructor) = tuple.constructor {
+            if let Some(constructor) = constructor {
                 fields.insert(0, Value::ConstructorTag(constructor));
             }
+            if closure {
+                fields.insert(
+                    0,
+                    Value::ClosureCode(crate::eval::value::ClosureCode {
+                        abstraction,
+                        node,
+                        program: self.program.clone(),
+                        instantiation: environment.instantiation.clone(),
+                    }),
+                );
+            }
             let initialized = self.initialize_region_tuple(storage, fields)?;
+            let initialized = if closure {
+                let Value::Location(record) = initialized else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                Value::RegionFunction(crate::eval::value::RegionFunction {
+                    record,
+                    instantiation: None,
+                    abstraction: None,
+                })
+            } else {
+                initialized
+            };
             self.control = Some(Control::Return(initialized));
             return Ok(());
         };
         if let Some(following) = following {
             self.frames.push(Frame::RegionTuple {
+                abstraction,
                 node,
                 environment: environment.clone(),
                 context,
@@ -427,6 +473,104 @@ impl Machine<'_> {
             return Err(RuntimeFailure::InvalidControlState);
         }
         Ok(())
+    }
+
+    pub(super) fn read_callable(
+        &mut self,
+        value: &Value,
+    ) -> Result<crate::eval::Closure, RuntimeFailure> {
+        self.read_callable_metadata(value)
+            .map(|(callable, _)| callable)
+    }
+
+    pub(super) fn read_callable_metadata(
+        &mut self,
+        value: &Value,
+    ) -> Result<(crate::eval::Closure, Option<NodeId>), RuntimeFailure> {
+        if let Value::Function(function) = value {
+            return Ok((function.clone(), None));
+        }
+        let (code, environment, abstraction) = self.read_stored_callable(value)?;
+        let Some(ExecutableNode::Effect(expression)) = code.program.node(code.node) else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &expression.kind
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let function = closure
+            .code
+            .function()
+            .ok_or(RuntimeFailure::UnexpectedFunctionValue)?;
+        Ok((
+            crate::eval::Closure {
+                parameter: function.parameter().id(),
+                body: function.body(),
+                program: code.program.clone(),
+                environment,
+                origin: expression.origin.clone(),
+            },
+            abstraction,
+        ))
+    }
+
+    pub(super) fn read_stored_callable(
+        &mut self,
+        value: &Value,
+    ) -> Result<(crate::eval::value::ClosureCode, Environment, Option<NodeId>), RuntimeFailure>
+    {
+        let (record, view) = match value {
+            Value::RegionFunction(callable) => (callable.record, callable.instantiation.as_ref()),
+            Value::Location(record) => (*record, None),
+            _ => return Err(RuntimeFailure::UnexpectedFunctionValue),
+        };
+        let location = packed_tuple_location(&self.heap, record, &mut self.instantiation_work)?;
+        let fields = self
+            .heap
+            .get(location)
+            .and_then(HeapCell::stored_fields)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let Some(Value::ClosureCode(code)) = fields.first() else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let Some(ExecutableNode::Effect(expression)) = code.program.node(code.node) else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &expression.kind
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if fields.len() != closure.captures.len() + 1 {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_effect_work(
+            &mut self.instantiation_work,
+            fields.len(),
+            RuntimePhase::Access,
+        )?;
+        let mut environment = Environment::new();
+        environment.instantiation = view.unwrap_or(&code.instantiation).clone();
+        for (capture, value) in closure.captures.iter().zip(&fields[1..]) {
+            let Some(ExecutableNode::Effect(expression)) = code.program.node(*capture) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &expression.kind else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            environment = environment.extend_in_phase(
+                variable.binder(),
+                value.clone(),
+                RuntimePhase::Access,
+            )?;
+        }
+        Ok((
+            code.clone(),
+            environment,
+            match value {
+                Value::RegionFunction(view) => view.abstraction.or(code.abstraction),
+                _ => code.abstraction,
+            },
+        ))
     }
 
     pub(super) fn enter_region(
@@ -466,6 +610,32 @@ impl Machine<'_> {
             self.control = Some(Control::Evaluate(context, environment.clone()));
             return Ok(true);
         }
+        if let Some(closure) = self.region_closure(node) {
+            let (context, count) = (closure.context, closure.captures.len() + 1);
+            let mut fields = Vec::new();
+            reserve_control(&mut fields, count, RuntimeResource::HeapCells, true)?;
+            reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
+            let abstraction = match self.frames.last() {
+                Some(Frame::RegionAbstraction {
+                    abstraction,
+                    closure,
+                }) if *closure == node => Some(*abstraction),
+                _ => None,
+            };
+            if abstraction.is_some() {
+                self.frames.pop();
+            }
+            self.frames.push(Frame::RegionTuple {
+                abstraction,
+                node,
+                environment: environment.clone(),
+                context: None,
+                next: 0,
+                fields,
+            });
+            self.control = Some(Control::Evaluate(context, environment.clone()));
+            return Ok(true);
+        }
         if let Some(tuple) = self.region_tuple(node) {
             let (context, count) = (
                 tuple.context,
@@ -475,6 +645,7 @@ impl Machine<'_> {
             reserve_control(&mut fields, count, RuntimeResource::HeapCells, true)?;
             reserve_control(&mut self.frames, 1, RuntimeResource::FrameStorage, false)?;
             self.frames.push(Frame::RegionTuple {
+                abstraction: None,
                 node,
                 environment: environment.clone(),
                 context: None,
@@ -683,11 +854,19 @@ impl Machine<'_> {
         {
             return Err(RuntimeFailure::InvalidControlState);
         }
+        let captured_len = self.frames.len() - index - 1;
         let retained = self
             .captured_cells
-            .checked_add(self.frames.len() - index - 1)
+            .checked_add(captured_len)
             .filter(|count| *count <= self.capture_limit)
-            .ok_or(RuntimeFailure::CapturedControlCapacity)?;
+            .ok_or_else(|| {
+                control_failure(
+                    ResourceFailureCause::ConfiguredCapacity,
+                    RuntimeResource::FrameStorage,
+                    Some(captured_len),
+                    Some(self.capture_limit.saturating_sub(self.captured_cells)),
+                )
+            })?;
         let mut segment = Vec::new();
         segment
             .try_reserve_exact(self.frames.len() - index - 1)
@@ -1347,7 +1526,7 @@ mod tests {
                 "main : Unit -> (Int, Int)\nmain () = {\n",
                 "let answer = region<R> outer {\nlet kept = region<S> inner {\n",
                 "let local = (1, 2)\nlet ignored = match local {\n(a, b) => a + b\n}\n",
-                "using outer {\n(20, 22)\n}\n}\nmatch kept {\n(a, b) => a + b\n}\n}\n",
+                "using outer {\n(20, 22)\n}\n}\nmatch kept {\n(a, b) => match (a + b) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n",
                 "(answer, 1)\n}\n",
             ),
         )
@@ -1369,6 +1548,51 @@ mod tests {
                 ))
                 .count(),
             3
+        );
+        let inner = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Region(scope))
+                    if !scope.entry && matches!(node.ty, Type::Tuple(_)) =>
+                {
+                    Some(scope)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+            crate::core::PureComputation::Match(provider),
+        )) = &program.node(inner.provider).unwrap().kind
+        else {
+            panic!("provider keeps its checked pair projection");
+        };
+        let [arm] = provider.arms() else {
+            panic!("one provider pair");
+        };
+        let EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+            crate::core::PureComputation::Tuple(pair),
+        )) = &program.node(arm.body()).unwrap().kind
+        else {
+            panic!("provider adapters remain an ordinary pair");
+        };
+        let adapters = pair
+            .elements()
+            .iter()
+            .map(|field| {
+                let (node, closure) =
+                    crate::core::region::closure_initializer::<
+                        crate::core::effect::EffectOperationFamily,
+                    >(*field, |node| program.node(node).map(|node| &node.kind))
+                    .unwrap();
+                assert!(closure.code.function().is_some());
+                node
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            adapters.len(),
+            2,
+            "inner allocate/release adapters are created under outer"
         );
         let evaluation = evaluate_effect(program).unwrap();
         assert_eq!(evaluation.value.to_string(), "(42, 1)");
@@ -1397,14 +1621,25 @@ mod tests {
                 previous = Some(field[0]);
             }
         }
+        for adapter in &adapters {
+            assert_eq!(
+                evaluation
+                    .trace
+                    .iter()
+                    .filter(|event| **event == TraceEvent::Enter(*adapter))
+                    .count(),
+                1,
+                "each provider closure is initialized once"
+            );
+        }
         let cells = evaluation.heap.cells_for_test();
         assert_eq!(
             cells
                 .iter()
                 .filter(|cell| matches!(cell, HeapCell::Uninitialized))
                 .count(),
-            2,
-            "both declared owners retire their supplied arrays"
+            2 + adapters.len(),
+            "both tuple arrays and the inner provider's two outer-owned closure records retire"
         );
         let fields = cells
             .iter()
@@ -1422,6 +1657,336 @@ mod tests {
         assert_eq!(fields[0].to_string(), "42");
         assert_eq!(fields[1].to_string(), "1");
     }
+    #[test]
+    fn polymorphic_evidence_captures_have_no_persistent_host_environment() {
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            concat!(
+                "type Box<A> = Box(A)\n",
+                "interface Functor<F : Type -> Type> {\nmap<A, B> : (A -> B, F<A>) -> F<B>\n}\n",
+                "impl Functor<Box> {\nmap (function, Box(value)) = Box(function(value))\n}\n",
+                "to_bool : Int -> Bool\nto_bool value = value == 42\n",
+                "to_int : Bool -> Int\nto_int true = 42\nto_int false = 0\n",
+                "map_pair<F : Type -> Type> : (F<Int>, F<Bool>) -> (F<Bool>, F<Int>) where Functor<F>\n",
+                "map_pair (numbers, flags) = (map((to_bool, numbers)), map((to_int, flags)))\n",
+                "main : Unit -> (Box<Bool>, Box<Int>)\nmain () = map_pair((Box(42), Box(true)))\n",
+            ),
+            None,
+        );
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "(Box(true), Box(42))");
+        for cell in evaluation.heap.cells_for_test() {
+            let Some(fields) = cell.stored_fields() else {
+                continue;
+            };
+            for value in fields {
+                if let Value::Polymorphic {
+                    abstraction,
+                    environment,
+                } = value
+                {
+                    let EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeAbstraction(metadata),
+                    )) = &program.node(*abstraction).unwrap().kind
+                    else {
+                        panic!("retained abstraction");
+                    };
+                    assert!(
+                        environment.is_empty(),
+                        "a supplied capture slot hides {} host environment entries; abstraction={abstraction:?}; body={:?}",
+                        environment.len(),
+                        program.node(metadata.body()).unwrap().kind
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prerequisite_adapter_captures_have_no_persistent_host_environment() {
+        let source = concat!(
+            "type Option<A> =\nNone\n| Some(A)\n",
+            "interface Score<A> {\nscore<X> : (A, X) -> Int\n}\n",
+            "impl Score<Int> {\nscore (value, ignored) = value\n}\n",
+            "impl Score<Option<A>> where Score<A> {\nscore (None, ignored) = 4\n",
+            "score (Some(value), ignored) = {\nlet empty : Option<A> = None\n",
+            "score((empty, ignored)) * 10 + score((value, ignored))\n}\n}\n",
+            "forward<A> : A -> Int where Score<A>\nforward value = score((value, true))\n",
+            "main : Unit -> Int\nmain () = forward(Some(2))\n",
+        );
+        let (program, _, _) =
+            crate::core::validate::generic_cell_source_fixture_for_test(source, None);
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "42");
+        for cell in evaluation.heap.cells_for_test() {
+            let Some(fields) = cell.stored_fields() else {
+                continue;
+            };
+            for value in fields {
+                if let Value::Polymorphic {
+                    abstraction,
+                    environment,
+                } = value
+                {
+                    assert!(
+                        environment.is_empty(),
+                        "deferred adapter {abstraction:?} hides {} term captures",
+                        environment.len()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deferred_method_prefix_finishes_before_source_argument_discard() {
+        let source = concat!(
+            "type Option<A> =\nNone\n| Some(A)\ninterface Score<A> {\nscore<X> : (A, X) -> Int\n}\n",
+            "impl Score<Int> {\nscore (value, ignored) = value\n}\nimpl Score<Option<A>> where Score<A> {\nscore (None, ignored) = 4\nscore (Some(value), ignored) = {\nlet empty : Option<A> = None\nscore((empty, ignored)) * 10 + score((value, ignored))\n}\n}\n",
+            "effect Argument {\nget : Unit -> (Option<Int>, Bool)\n}\nmain : Unit -> Int\nmain () = region<R> r {\nhandle score(perform Argument.get ()) with Argument {\nget ignored => {\nlet done = discard\n42\n}\n}\n}\n",
+        );
+        let (program, _, _) =
+            crate::core::validate::generic_cell_source_fixture_for_test(source, None);
+        let argument = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Argument")
+            .unwrap()
+            .id;
+        let region = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Region(region)) if !region.entry => {
+                    Some(region)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "42");
+        let start = evaluation
+            .trace
+            .iter()
+            .position(|event| *event == TraceEvent::Enter(region.body))
+            .unwrap();
+        let argument = evaluation.trace.iter().position(|event| {
+            let TraceEvent::Enter(node) = *event;
+            matches!(&program.node(node).unwrap().kind, EffectExprKind::Operation(EffectOperation::Request(request)) if request.operation().owner() == argument)
+        }).unwrap();
+        let records = evaluation.trace[start..argument]
+            .iter()
+            .filter_map(|event| {
+                let TraceEvent::Enter(node) = *event;
+                let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
+                    &program.node(node).unwrap().kind
+                else {
+                    return None;
+                };
+                Some(closure)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            records.len(),
+            2,
+            "adapter capture record and prerequisite-produced function finish before the source argument"
+        );
+        assert!(matches!(
+            records[0].code,
+            crate::core::region::RegionClosureCode::Adapter { .. }
+        ));
+        let function = records[1]
+            .code
+            .function()
+            .expect("prerequisite term application creates the actual method function");
+        assert!(
+            !evaluation
+                .trace
+                .contains(&TraceEvent::Enter(function.body())),
+            "argument discard never enters the source method body"
+        );
+        assert_eq!(
+            evaluation
+                .effect_trace()
+                .iter()
+                .filter(|event| matches!(event, EffectTraceEvent::Discard(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn mixed_recursive_group_creates_functions_before_guarded_data_in_member_order() {
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            concat!(
+                "type Stream = Next(Int, Unit -> Int, Unit -> Int)\n",
+                "main : Unit -> Bool\nmain () = region<R> r {\n",
+                "let rec first : Stream = Next(42, read, again)\n",
+                "and read : Unit -> Int = fn(ignored) {\nmatch first {\nNext(value, ignored, also_ignored) => value\n}\n}\n",
+                "and again : Unit -> Int = fn(ignored) {\nread ()\n}\nlet alias = first\n",
+                "match alias {\nNext(value, head, tail) => match (head ()) == 42 {\ntrue => (tail ()) == value\nfalse => false\n}\n}\n}\n",
+            ),
+            None,
+        );
+        let group = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::RecursiveBind(group),
+                )) if group.members().len() == 3
+                    && matches!(group.members()[0].binder().ty(), Type::Nominal(_)) =>
+                {
+                    Some(group)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let functions = group
+            .members()
+            .iter()
+            .filter_map(|member| {
+                crate::core::region::closure_initializer::<
+                        crate::core::effect::EffectOperationFamily,
+                    >(member.initializer(), |node| {
+                        program.node(node).map(|node| &node.kind)
+                    })
+                    .map(|(node, _)| node)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(functions.len(), 2);
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "true");
+        let entered = |node| {
+            evaluation
+                .trace
+                .iter()
+                .enumerate()
+                .filter_map(|(index, event)| (*event == TraceEvent::Enter(node)).then_some(index))
+                .collect::<Vec<_>>()
+        };
+        let first = entered(functions[0]);
+        let second = entered(functions[1]);
+        let data = entered(group.members()[0].initializer());
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(data.len(), 1);
+        assert!(
+            first[0] < second[0] && second[0] < data[0],
+            "functions materialize once in member order before the first guarded data initializer"
+        );
+    }
+
+    #[test]
+    fn type_views_share_records_and_dynamic_function_creation_is_fresh() {
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            "main : Unit -> Int\nmain () = {\nlet identity = fn(value) {\nvalue\n}\nlet answer = identity 42\nmatch identity true {\ntrue => answer\nfalse => 0\n}\n}\n",
+            None,
+        );
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "42");
+        let identity = program
+            .nodes()
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| {
+                let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &node.kind
+                else {
+                    return None;
+                };
+                let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                    &program.node(closure.code.body()).unwrap().kind
+                else {
+                    return None;
+                };
+                closure
+                    .code
+                    .function()
+                    .is_some_and(|function| {
+                        variable.binder() == function.parameter().id()
+                            && matches!(function.parameter().ty(), Type::Variable(_))
+                    })
+                    .then_some(index)
+            })
+            .expect("generic identity closure");
+        assert_eq!(evaluation.heap.cells_for_test().iter().filter(|cell| {
+            cell.stored_fields().is_some_and(|fields| matches!(fields.first(), Some(Value::ClosureCode(code)) if code.node.value() as usize == identity))
+        }).count(), 1, "both type views share one created record");
+
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            "main : Unit -> ((Unit -> Int), (Unit -> Int))\nmain () = {\nlet make : Unit -> (Unit -> Int) = fn(ignored) {\nlet rec read : Unit -> Int = fn(ignored) {\n42\n}\nread\n}\n(make (), make ())\n}\n",
+            None,
+        );
+        let evaluation = evaluate_effect(&program).unwrap();
+        let cells = evaluation.heap.cells_for_test();
+        let fields = cells
+            .iter()
+            .filter_map(HeapCell::tuple_fields)
+            .find(|fields| {
+                fields.len() == 2
+                    && fields
+                        .iter()
+                        .all(|value| matches!(value, Value::RegionFunction(_) | Value::Location(_)))
+            })
+            .expect("result tuple containing both stored callables");
+        let record = |value: &Value| match value {
+            Value::RegionFunction(function) => function.record,
+            Value::Location(record) => {
+                packed_tuple_location(cells, *record, &mut TypeWorkBudget::unbounded()).unwrap()
+            }
+            _ => panic!("stored callable view"),
+        };
+        assert_ne!(
+            record(&fields[0]),
+            record(&fields[1]),
+            "each dynamic group entry creates fresh records"
+        );
+    }
+
+    #[test]
+    fn callable_reads_captures_from_the_supplied_record_slots() {
+        let path = std::env::temp_dir().join(format!(
+            "ash-region-capture-slots-{}.ash",
+            std::process::id()
+        ));
+        std::fs::write(&path, concat!(
+            "main : Unit -> (Unit -> Int)\nmain () = {\n",
+            "let captured = 42\nlet callback : Unit -> Int = fn(ignored) {\ncaptured\n}\ncallback\n}\n",
+        )).unwrap();
+        let compiled = crate::driver::compile_path(crate::driver::RunConfiguration {
+            entry: path.clone(),
+            roots: crate::module::ModuleRoots::empty(),
+        })
+        .unwrap();
+        std::fs::remove_file(path).unwrap();
+        let (program, _) = compiled.effect_build_input().unwrap();
+        let mut evaluation = evaluate_effect(program).unwrap();
+        let Value::RegionFunction(function) = &evaluation.value else {
+            panic!("stored callable");
+        };
+        let record = function.record;
+        let cells = Arc::get_mut(&mut evaluation.heap)
+            .expect("unique observation owner")
+            .cells_mut_for_test();
+        let HeapCell::Tuple(fields) = &mut cells[record] else {
+            panic!("supplied Value slots");
+        };
+        assert_eq!(fields.len(), 2);
+        assert!(matches!(&fields[0], Value::ClosureCode(_)));
+        assert!(matches!(&fields[1], Value::SmallInteger(42)));
+        // A retained host Environment would still return 42. The shared
+        // callable reader must obtain the actual captured Value from its slot.
+        fields[1] = Value::SmallInteger(43);
+        let mut machine = Machine::new_effect(program);
+        machine.heap = cells
+            .iter_mut()
+            .map(|cell| std::mem::replace(cell, HeapCell::Uninitialized))
+            .collect();
+        let callable = machine.read_callable(&evaluation.value).unwrap();
+        machine.control = Some(Control::Evaluate(callable.body, callable.environment));
+        assert_eq!(machine.run().unwrap().value.to_string(), "43");
+    }
+
     #[test]
     fn rust_owned_native_fields_are_released_before_provider_call_and_survive_short_work() {
         use crate::eval::{NativeTupleAdapter, NativeTupleStorage};
