@@ -497,6 +497,7 @@ struct Request {
     effect: Option<Arc<EffectInstance>>,
     opaque_row: Option<Arc<EffectRow>>,
     ambiguous_instance: bool,
+    region_service: bool,
     source: Span,
     operation: Option<crate::types::OperationId>,
 }
@@ -507,6 +508,7 @@ impl Request {
             effect: None,
             opaque_row: None,
             ambiguous_instance: false,
+            region_service: false,
             source,
             operation: None,
         }
@@ -531,6 +533,7 @@ impl Request {
             effect: self.effect.as_ref().map(Arc::clone),
             opaque_row: self.opaque_row.as_ref().map(Arc::clone),
             ambiguous_instance: self.ambiguous_instance,
+            region_service: self.region_service,
             source: self.source,
             operation: self.operation,
         })
@@ -2223,6 +2226,7 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 budget,
             )?;
             request.operation = Some(crate::types::OperationId::new(api.default_alloc(), 0));
+            request.region_service = true;
             graph.code.push(Control::Request(request));
             let service = if matches!(&buffer.operation,RegionBufferOperation::Intrinsic(intrinsic) if matches!(intrinsic.operation(),Intrinsic::BytesAppendByte {..}|Intrinsic::StringFromUtf8 {..}))
             {
@@ -2282,16 +2286,101 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
         )?),
         Some(EffectOperation::Region(scope)) => {
             let api = crate::resolved::RegionApi::for_module(scope.api).ok_or(Failure::Invalid)?;
-            graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+            // The lifetime Resource remains outside the ordinary one-shot
+            // service handler, including while its required cleanup runs.
+            charge(budget, 7)?;
+            graph.code.try_reserve(7).map_err(|_| Failure::Resource)?;
             let owner = graph.code.len();
+            let service = owner + 1;
+            let call = owner + 2;
+            let resumed = owner + 3;
+            let clause = owner + 4;
+            let completion = owner + 5;
+            let release_call = owner + 6;
+            let effect = EffectInstance::new(api.default_alloc(), Box::new([]));
+            let mut selected = Request::effect(&effect, source, budget)?;
+            selected.region_service = true;
+            selected.operation = Some(crate::types::OperationId::new(api.default_alloc(), 0));
             data.position(owner, id, budget)?;
-            graph.code.push(Control::Resource {
-                body: index(scope.body) + 1,
-                effect: Request::effect(
-                    &EffectInstance::new(api.default_alloc(), Box::new([])),
+            data.region_service(
+                id,
+                service,
+                call,
+                resumed,
+                clause,
+                completion,
+                release_call,
+                budget,
+            )?;
+            let Type::Tuple(pair) = &nodes[index(scope.provider)].ty else {
+                return Err(Failure::Invalid);
+            };
+            let [allocate, release] = pair.as_ref() else {
+                return Err(Failure::Invalid);
+            };
+            graph
+                .types
+                .0
+                .try_reserve(2)
+                .map_err(|_| Failure::Resource)?;
+            let ty = graph.types.0.len();
+            graph
+                .types
+                .0
+                .push(clone_type_with_budget(allocate, budget).map_err(|_| Failure::Resource)?);
+            let release_type = graph.types.0.len();
+            graph
+                .types
+                .0
+                .push(clone_type_with_budget(release, budget).map_err(|_| Failure::Resource)?);
+            let clauses = copy_slice(
+                &[Clause {
+                    operation: selected.operation,
+                    body: clause,
+                    owner: service,
                     source,
-                    budget,
-                )?,
+                }],
+                budget,
+            )?;
+            graph.code.push(Control::Resource {
+                body: completion,
+                effect: Request::effect(&effect, source, budget)?,
+            });
+            graph.code.push(Control::Handler {
+                body: index(scope.body) + 1,
+                effect: selected,
+                clauses,
+            });
+            graph.code.push(Control::Call {
+                value: Value {
+                    unknown: true,
+                    ..Value::default()
+                },
+                ty,
+                source,
+                prefix: None,
+            });
+            graph.code.push(Control::Resume {
+                owner: service,
+                value: 0,
+            });
+            graph
+                .code
+                .push(Control::Sequence(copy_slice(&[call, resumed], budget)?));
+            graph.code.push(Control::Cleanup {
+                body: service,
+                action: release_call,
+                row_type: release_type,
+                source,
+            });
+            graph.code.push(Control::Call {
+                value: Value {
+                    unknown: true,
+                    ..Value::default()
+                },
+                ty: release_type,
+                source,
+                prefix: None,
             });
             Control::Sequence(copy_slice(
                 &[index(scope.preceding) + 1, index(scope.provider) + 1, owner],
@@ -2310,6 +2399,7 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 budget,
             )?;
             request.operation = Some(crate::types::OperationId::new(api.default_alloc(), 0));
+            request.region_service = true;
             graph.code.push(Control::Request(request));
             Control::Sequence(copy_slice(
                 &[

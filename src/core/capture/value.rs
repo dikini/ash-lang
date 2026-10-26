@@ -17,6 +17,7 @@ use crate::{
 };
 
 type CellOperand = (Vec<(usize, usize)>, Option<usize>);
+type RegionTargets = (Vec<(usize, usize)>, bool, bool);
 
 #[derive(Debug)]
 enum Expr {
@@ -85,6 +86,7 @@ enum Expr {
     Request {
         operand: usize,
         scalar: bool,
+        descriptor: Option<usize>,
     },
     Resume {
         operand: usize,
@@ -232,9 +234,14 @@ impl Expr {
                 body: body + offset,
                 source: *source,
             },
-            Self::Request { operand, scalar } => Self::Request {
+            Self::Request {
+                operand,
+                scalar,
+                descriptor,
+            } => Self::Request {
                 operand: operand + offset,
                 scalar: *scalar,
+                descriptor: descriptor.map(|value| value + offset),
             },
             Self::Resume { operand } => Self::Resume {
                 operand: operand + offset,
@@ -1588,6 +1595,7 @@ impl Graph {
             Some(EffectOperation::RegionAllocate(allocation)) => Expr::Request {
                 operand: index(allocation.context),
                 scalar: false,
+                descriptor: Some(index(allocation.request)),
             },
             Some(EffectOperation::Resource(resource)) => {
                 resource.acquisition.api().ok_or(Failure::Invalid)?;
@@ -1615,6 +1623,7 @@ impl Graph {
                     budget,
                 )?,
             Some(EffectOperation::Request(request)) => Expr::Request {
+                descriptor: None,
                 operand: index(request.operand()),
                 scalar: scalar(&node.ty),
             },
@@ -2036,6 +2045,117 @@ impl Graph {
         Ok(graph)
     }
 
+    /// Build the existing handler/call/resume equations for one region owner.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each synthetic control position retains its corresponding existing value equation"
+    )]
+    pub(super) fn region_service(
+        &mut self,
+        region: usize,
+        handler: usize,
+        call: usize,
+        resumed: usize,
+        clause: usize,
+        completion: usize,
+        release_call: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let source = self.sources[region];
+        let Expr::Resource {
+            initializer,
+            handle,
+            body,
+            ..
+        } = self.expressions[region]
+        else {
+            return Err(Failure::Invalid);
+        };
+        let input = self.push(Expr::Slot, source, budget)?;
+        let function = self.push(
+            Expr::Project {
+                value: initializer,
+                field: 0,
+                constructor: None,
+            },
+            source,
+            budget,
+        )?;
+        let arguments = copy_slice(&[input], budget)?;
+        let invocation = self.push(
+            Expr::Call {
+                function,
+                arguments,
+                scalar: false,
+                type_application: false,
+            },
+            source,
+            budget,
+        )?;
+        let resume = self.push(
+            Expr::Resume {
+                operand: invocation,
+            },
+            source,
+            budget,
+        )?;
+        let captures = copy_slice(&[initializer, handle], budget)?;
+        let mut clauses = Vec::new();
+        charge(budget, 1)?;
+        clauses.try_reserve(1).map_err(|_| Failure::Resource)?;
+        clauses.push(DataClause {
+            input,
+            bindings: Vec::new(),
+            body: resume,
+            captures,
+        });
+        let service = self.push(
+            Expr::Handler {
+                body,
+                clauses,
+                cell_owner: Some(handle),
+            },
+            source,
+            budget,
+        )?;
+        self.position(handler, service, budget)?;
+        self.position(call, invocation, budget)?;
+        self.position(resumed, resume, budget)?;
+        self.position(clause, resume, budget)?;
+        let function = self.push(
+            Expr::Project {
+                value: initializer,
+                field: 1,
+                constructor: None,
+            },
+            source,
+            budget,
+        )?;
+        let unit = self.push(Expr::Scalar, source, budget)?;
+        let arguments = copy_slice(&[unit], budget)?;
+        let release = self.push(
+            Expr::Call {
+                function,
+                arguments,
+                scalar: true,
+                type_application: false,
+            },
+            source,
+            budget,
+        )?;
+        // CloseBegin saves the body's result before release. Actual release
+        // completion is required by Control::Cleanup, not this value equation.
+        let close = self.push(Expr::Forward(service), source, budget)?;
+        // The lifetime check and focused restore must observe the same saved
+        // result as the control Resource's completion, through service/resume.
+        let Expr::Resource { body, .. } = &mut self.expressions[region] else {
+            return Err(Failure::Invalid);
+        };
+        *body = close;
+        self.position(completion, close, budget)?;
+        self.position(release_call, release, budget)
+    }
+
     pub(super) fn position_region_request(
         &mut self,
         code: usize,
@@ -2044,10 +2164,12 @@ impl Graph {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let source = self.sources[expression];
+        let descriptor = self.push(Expr::Scalar, source, budget)?;
         let request = self.push(
             Expr::Request {
                 operand: context,
                 scalar: false,
+                descriptor: Some(descriptor),
             },
             source,
             budget,
@@ -3532,6 +3654,7 @@ impl<'a> Analysis<'a> {
             success,
             handle,
             identity,
+            initializer,
             body,
             ..
         } = self.graph.expressions[expression]
@@ -3577,6 +3700,10 @@ impl<'a> Analysis<'a> {
         for input in self.graph.free_inputs(expression, budget)? {
             query.freeze_slot(input, creation, context, budget)?;
         }
+        // Entry is after initializer completion. Reuse that exact value and
+        // its creation coordinates; replaying its effects cannot rebuild it
+        // inside this fresh lifetime query (notably a region provider pair).
+        query.freeze_slot(initializer, creation, context, budget)?;
         for input in [handle, identity] {
             let input = query.slot(input, context, budget)?;
             query.atom(input, Atom::Resource(expression, context), budget)?;
@@ -3781,7 +3908,16 @@ impl<'a> Analysis<'a> {
         )?;
         let input = self.slot(clause.input, context, budget)?;
         match self.graph.expressions[request_expression] {
-            Expr::Request { operand, .. } => self.link(input, operand, request_context, budget)?,
+            Expr::Request {
+                operand,
+                descriptor,
+                ..
+            } => self.link(
+                input,
+                descriptor.unwrap_or(operand),
+                request_context,
+                budget,
+            )?,
             Expr::Call { .. } => self.atom(input, Atom::Unknown, budget)?,
             _ => return Err(Failure::Invalid),
         }
@@ -4170,6 +4306,36 @@ impl<'a> Analysis<'a> {
         Ok((!owners.is_empty()).then_some(owners))
     }
 
+    pub(super) fn region_targets(
+        &mut self,
+        request: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<RegionTargets, Failure> {
+        let (expression, context) = self.slots[request].key;
+        let Expr::Request { operand, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let operand = self.slot(operand, context, budget)?;
+        self.close(budget)?;
+        let mut targets = Vec::new();
+        let mut unknown = false;
+        let mut host = false;
+        for atom in &self.slots[operand].atoms {
+            charge(budget, 1)?;
+            if let Atom::Resource(owner, creation) = atom {
+                targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                targets.push((*owner, *creation));
+            } else if matches!(atom, Atom::Free) {
+                // The authenticated entry's independent RegionView has no
+                // lexical Resource owner. Other symbolic views stay unknown.
+                host = true;
+            } else if !matches!(atom, Atom::MetadataNeutral) {
+                unknown = true;
+            }
+        }
+        Ok((targets, unknown, host))
+    }
+
     pub(super) fn cell_operands(
         &mut self,
         request: usize,
@@ -4309,10 +4475,16 @@ impl<'a> Analysis<'a> {
         };
         let mut operands = Vec::new();
         match &self.graph.expressions[expression] {
-            Expr::Request { operand, .. } => {
+            Expr::Request {
+                operand,
+                descriptor,
+                ..
+            } => {
                 charge(budget, 1)?;
                 operands.try_reserve(1).map_err(|_| Failure::Resource)?;
-                operands.push(*operand);
+                // Explicit region requests transport the independent request
+                // descriptor. The view remains their target authority.
+                operands.push(descriptor.unwrap_or(*operand));
             }
             Expr::Call {
                 function,
@@ -5105,8 +5277,15 @@ impl<'a> Analysis<'a> {
                 }
                 SetupOutcome::FixedSetupReady
             }
-            Expr::Request { operand, .. } => {
+            Expr::Request {
+                operand,
+                descriptor,
+                ..
+            } => {
                 self.slot(*operand, context, budget)?;
+                if let Some(descriptor) = descriptor {
+                    self.slot(*descriptor, context, budget)?;
+                }
                 SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Resume { operand } => {
@@ -7915,6 +8094,9 @@ mod tests {
         assert!(fresh.capture_topology_indices.is_empty());
         assert!(fresh.specialization_transfers.is_empty());
         assert!(fresh.callable_transfers.is_empty());
+        // A Resource entry follows completion of this initializer.
+        analysis.slot(4, creation_a, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
         let (focused, _) = analysis.focused(9, creation_a, &mut work).unwrap();
         assert!(focused.capture_topologies.is_empty());
         assert!(focused.capture_topology_indices.is_empty());
@@ -9830,6 +10012,7 @@ mod tests {
             Expr::Slot,
             Expr::Slot,
             Expr::Request {
+                descriptor: None,
                 operand: 0,
                 scalar: true,
             },
@@ -10842,6 +11025,10 @@ mod tests {
         assert!(analysis.watched_pairs().contains(&(other_source, other)));
         assert!(!analysis.watched_pairs().contains(&(other_source, evidence)));
 
+        // Establish the completed initializer required by Resource entry.
+        analysis.current = None;
+        let initializer = analysis.slot(4, 0, &mut work).unwrap();
+        analysis.evaluate(initializer, &mut work).unwrap();
         let (mut focused, context) = analysis.focused(174, 0, &mut work).unwrap();
         for original in 0..analysis.slots.len() {
             assert!(focused.slots[original].terminal);

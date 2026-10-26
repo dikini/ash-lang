@@ -1785,6 +1785,7 @@ impl<'a> Analysis<'a> {
         for (id, previous) in self.labels.iter().enumerate() {
             charge(budget, 1)?;
             if previous.ambiguous_instance == label.ambiguous_instance
+                && previous.region_service == label.region_service
                 && same_effect(previous.effect.as_deref(), label.effect.as_deref(), budget)?
                 && match (&previous.opaque_row, &label.opaque_row) {
                     (None, None) => true,
@@ -2427,7 +2428,7 @@ impl<'a> Analysis<'a> {
         let mut pending = VecDeque::new();
         let mut visited = HashSet::new();
         let mut calls: Vec<ObservedCall> = Vec::new();
-        let mut cell_requests = HashSet::new();
+        let mut value_requests = HashSet::new();
         let mut observed_calls = HashMap::new();
         let mut revision = self
             .data
@@ -2498,19 +2499,19 @@ impl<'a> Analysis<'a> {
                         self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
                     }
                     Control::Request(request) => {
-                        if request
-                            .effect
-                            .as_ref()
-                            .is_some_and(|effect| effect.effect().module().is_builtin_resource())
+                        if request.region_service
+                            || request.effect.as_ref().is_some_and(|effect| {
+                                effect.effect().module().is_builtin_resource()
+                            })
                         {
                             state.charge_key(budget)?;
-                            if !cell_requests.contains(&state) {
-                                cell_requests
+                            if !value_requests.contains(&state) {
+                                value_requests
                                     .try_reserve(1)
                                     .map_err(|_| Failure::Resource)?;
                                 let saved = state.copy(budget)?;
                                 state.charge_key(budget)?;
-                                cell_requests.insert(saved);
+                                value_requests.insert(saved);
                             }
                         }
                         let label = self.label(code, state.context, budget)?;
@@ -2585,8 +2586,8 @@ impl<'a> Analysis<'a> {
                 break;
             }
             revision = data.revision();
-            // Only calls choose control successors from growing value facts.
-            // Replay them directly; ordinary enqueue would suppress visited states.
+            // Calls and explicit-owner requests choose successors from growing
+            // value facts. Replay directly; enqueue would suppress visited states.
             charge(budget, calls.len())?;
             pending
                 .try_reserve(calls.len())
@@ -2594,11 +2595,11 @@ impl<'a> Analysis<'a> {
             for call in &calls {
                 pending.push_back(call.state.copy(budget)?);
             }
-            charge(budget, cell_requests.len())?;
+            charge(budget, value_requests.len())?;
             pending
-                .try_reserve(cell_requests.len())
+                .try_reserve(value_requests.len())
                 .map_err(|_| Failure::Resource)?;
-            for request in &cell_requests {
+            for request in &value_requests {
                 pending.push_back(request.copy(budget)?);
             }
         }
@@ -3482,7 +3483,8 @@ impl<'a> Analysis<'a> {
         (
             code,
             context,
-            (self.is_cell(frame) || self.is_cell_handler(frame)).then_some(frame),
+            (self.is_cell(frame) || self.is_cell_handler(frame)
+                || matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service)).then_some(frame),
         )
     }
 
@@ -3510,6 +3512,8 @@ impl<'a> Analysis<'a> {
         // shared structural work counter a second time.
         let mut matching = HashMap::new();
         let mut cell_operands = None;
+        let mut region_targets = None;
+        let explicit_region = matches!(&self.graph.code[event.code], Control::Request(request) if request.region_service);
         charge(budget, state.heap.len())?;
         for edge in &state.heap {
             if let Frame::Handler { code, context, .. }
@@ -3532,6 +3536,48 @@ impl<'a> Analysis<'a> {
                     }
                     matching.try_reserve(1).map_err(|_| Failure::Resource)?;
                     matching.insert(self.boundary_match_key(edge.frame), (possible, outward));
+                    continue;
+                }
+                let region_handler = matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service);
+                if explicit_region || region_handler {
+                    let mut relation = (false, true);
+                    if explicit_region && region_handler {
+                        if region_targets.is_none() {
+                            region_targets = Some(
+                                self.data
+                                    .as_mut()
+                                    .ok_or(Failure::Invalid)?
+                                    .region_targets(event.port.ok_or(Failure::Invalid)?, budget)?,
+                            );
+                        }
+                        let (Frame::Handler { value_context, .. }
+                        | Frame::RemovedHandler { value_context, .. }) = edge.frame
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        let owners = self
+                            .data
+                            .as_mut()
+                            .ok_or(Failure::Invalid)?
+                            .handler_cell_owners(code, value_context, budget)?;
+                        let (targets, unknown, host) =
+                            region_targets.as_ref().ok_or(Failure::Invalid)?;
+                        if let Some(owners) = owners {
+                            relation = (*unknown, *unknown || *host || targets.is_empty());
+                            for target in targets {
+                                charge(budget, owners.len() + 1)?;
+                                let matches = owners.contains(target);
+                                relation.0 |= matches;
+                                relation.1 |= !matches;
+                            }
+                        } else {
+                            // Unresolved symbolic views retain every candidate
+                            // and outward obligation; they never select nearest.
+                            relation = (true, true);
+                        }
+                    }
+                    matching.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    matching.insert(self.boundary_match_key(edge.frame), relation);
                     continue;
                 }
                 let target = self.label(code, context, budget)?;
@@ -4404,6 +4450,9 @@ impl<'a> Analysis<'a> {
                         running: false,
                         closing: Some(discard),
                     },
+                    frame @ Frame::Handler { code, .. } if matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service) => {
+                        frame
+                    }
                     Frame::Handler {
                         code,
                         context,

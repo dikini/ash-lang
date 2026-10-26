@@ -116,6 +116,35 @@ fn action_local_discard_preserves_running_completion() {
 }
 
 #[test]
+fn pending_cleanup_row_retains_saved_default_for_nested_allocating_discard() {
+    assert_eq!(
+        check(
+            r#"effect Stop {
+    stop : Unit -> Unit
+}
+main : Unit -> Int
+main () = cleanup fn(ignored) {
+    handle (cleanup fn(ignored) {
+        let pair = (20, 22)
+        let total = match pair {
+            (left, right) => left + right
+        }
+        ()
+    } {
+        perform Stop.stop ()
+    }) with Stop {
+        stop ignored => discard
+    }
+} {
+    42
+}
+"#
+        ),
+        Ok("42".into())
+    );
+}
+
+#[test]
 fn contextual_match_action_infers_latent_effects() {
     assert_eq!(
         check(

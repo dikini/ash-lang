@@ -197,21 +197,40 @@ Account for metadata, scratch, captured state and teardown as well as payload.
 Validate exact/short/retry and deep iterative disposal without changing existing
 ledgers or introducing uncharged fallback work.
 
-The current R4 slice transfers the fixed host root records to the existing
+The partial R4 root slice retained by [PR #153](https://github.com/dikini/ash-lang/pull/153)
+at `dd4137703da03ca404939ecb7b0bf14c0a6e0541` transfers the fixed host root records to the existing
 ObservedHeap shared owner after complete authentication/work preparation. Last
 owner disposal clears Rust representation fields before backing and logical
 records; post-transfer evaluation failure uses the existing disposal scope.
 No source finalizer, retained machine, heap-owning back-edge or new registry is
 introduced. Focused owner/preparation/disposal and existing construction/control
-checks precede independent slice review. The live-A/unrelated-B parameter case
+checks passed independent review, retention and partial author acceptance. The
+live-A/unrelated-B parameter case
 passes source and identity/fold Core reconstruction through the existing seams;
 private representation/escape/request/backpatch negatives preserve the origin
 and actual-dependency chain. No new owner-discharge checker is added. This does
-not certify close-service/removed-backend correspondence. Required owner-position
-H/J Console normal/cleanup, backend rejection/action-local admission and shared
-allocator isolation remain connected R4 evidence. Full close/composition and
-root-owned R-core verification remain separate obligations; all whole criteria
-stay open.
+not certify close-service/removed-backend correspondence by itself.
+
+The connected composition candidate adds the accepted explicit cleanup Unit
+query/saved-view adapter for DefaultAlloc-bearing or open invocations, preserving
+the original direct form for closed invocations without DefaultAlloc. Pending
+cleanup-equation rows finalize locally after solving; retargeting preserves exact
+outward rows and the callback parent chain. It authenticates its exact Core
+relationships and reconstructs actual allocate/release calls at the existing Resource owner
+position through ordinary handler/call/resume/required-cleanup equations. Existing
+provider adapters retain the preceding context; public removed-backend checking
+is preserved. Its synthetic completion forwards the saved body result independently
+of release, and focused entry freezes the already-completed initializer through
+the existing input cut. Explicit request replay follows growing owner facts;
+payload checks distinguish the transported descriptor from target-view authority.
+Unchanged Source regressions check both escaping results and valid outer-placed
+methods. Focused Source/native/Core cases cover saved-owner cleanup under a
+different default, H/J normal/cleanup routing, removed allocate-only/release-only
+backends with an outer same-instance handler, action-local admission, and distinct
+region handles/block lists sharing one refcounted backend. Shared-backend evidence
+orders A close, B old-value read, B new allocation/read, then the last backend close.
+Independent review/retention/acceptance and root-owned connected R-core verification
+remain required; all whole criteria stay open.
 
 ### R5 — connected milestone and Main gate (#70)
 
