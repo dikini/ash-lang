@@ -24,13 +24,27 @@ the accepted R2 contract and final matching bounded R1 proof are retained.
 ## Current R-core progress
 
 Focused interface and scoped-evidence migrations now pass all 44 and 53 original
-tests respectively. Their six and 50 restored names are disjoint from the prior
-229 staged restorations, giving 285; these selected observations do not refresh
-Library9 (1,560/35) or Integration69 (1,276/504). The scoped controls retain exact
+tests respectively. The module-newtype and local-newtype targets now pass 23
+and 20 tests. Their 19 and 18 original restored names are disjoint from the prior
+285 staged restorations, giving 322; two constructor negatives and a private
+Core census are new coverage, not restored names. These selected observations do
+not refresh Library9 (1,560/35) or Integration69 (1,276/504). The scoped controls retain exact
 resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
 transformed effect traces still equal the original trace.
+
+First-class constructor positives use existing inferred local functions because
+CP-0025 default-expands explicit callable annotations while erased constructor
+invocation stays pure under exact row equality. Both original annotated programs
+remain verbatim negative controls (argument/result ownership); no coercion or
+product rule changed. The returned closure checks its exact lexical offset binder
+among public capture edges, complete callable type and usable result after scope
+return, rather than the historical whole-environment size. The original deep
+integration name retains 4,096 scopes/256 KiB and public Unit/escape checks. A
+separately added private driver test retains the exact Core scope census and
+execution under existing paid program owners. Its standalone Source type-work
+refusal was diagnosed at 327,680 cells; no default capacity was raised.
 
 The fixed generic-prerequisite program completes with 93 Enter events and 12
 frames; its whole Source sanity ceilings are 120/16, retaining exact method IDs,

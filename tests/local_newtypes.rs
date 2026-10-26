@@ -1,18 +1,25 @@
 use std::{
+    collections::HashSet,
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use ash::{
-    core::{PureComputation, PureExprKind, PureValue, validate_modules},
-    elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
-    eval::{Value, evaluate},
+    core::{
+        EffectExprKind, EffectOperation, EffectOperationFamily, PureComputation, PureExprKind,
+        PureValue, dialect::CoreOperationFamily, validate_effect_modules,
+    },
+    elaborate::{EffectElaborator, TypeError, TypeReason, check_module, link_modules},
+    eval::{Value, evaluate_effect},
     evidence_validation::validate_interface_evidence,
-    module::{ModuleRoots, load_module_graph},
-    resolve::{ResolveModuleError, ResolveReason, resolve_module},
-    resolved::{ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration},
-    types::{ConstructorId, NominalTypeId, Type},
+    module::{ModuleGraph, ModuleRoots, load_module_graph},
+    resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
+    resolved::{
+        CheckedModule, ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration,
+        ResolvedModule,
+    },
+    types::{ConstructorId, EffectInstance, EffectRow, NominalTypeId, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -40,17 +47,112 @@ impl Fixture {
     fn resolve(&self) -> ash::resolved::ResolvedModule {
         let graph = load_module_graph(&self.0, &ModuleRoots::empty())
             .expect("local-newtype fixture should load");
-        resolve_module(&graph.modules()[0], &[]).expect("local-newtype fixture should resolve")
+        resolve_entry(&graph).expect("local-newtype fixture should resolve")
     }
+}
+
+fn resolve_entry(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("dependency order must retain the exact target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("each checked summary must authenticate its actual dependency edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies);
+        if module.id() == graph.entry() {
+            return resolved;
+        }
+        checked.push(
+            check_module(resolved.expect("preceding dependencies should resolve"))
+                .expect("preceding dependencies should check"),
+        );
+    }
+    panic!("the graph must retain its actual entry");
+}
+
+fn checked_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("the exact dependency target precedes its importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the actual edge authenticates")
+            })
+            .collect::<Vec<_>>();
+        checked.push(
+            check_module(resolve_module(module, &dependencies).expect("the component resolves"))
+                .expect("the component checks"),
+        );
+    }
+    checked
+}
+
+fn default_row(graph: &ModuleGraph) -> EffectRow {
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        if module.id() == graph.entry() {
+            break;
+        }
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("the exact dependency target precedes its importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the actual edge authenticates")
+            })
+            .collect::<Vec<_>>();
+        checked.push(
+            check_module(resolve_module(module, &dependencies).expect("the dependency resolves"))
+                .expect("the dependency checks"),
+        );
+    }
+    let defining = checked
+        .iter()
+        .find(|module| {
+            graph
+                .module(module.module())
+                .unwrap()
+                .source()
+                .display_path()
+                == "@compiler.region"
+        })
+        .expect("the defining compiler service remains checked");
+    let effects = defining
+        .effects()
+        .iter()
+        .filter(|effect| effect.spelling == "DefaultAlloc")
+        .collect::<Vec<_>>();
+    let [effect] = effects.as_slice() else {
+        panic!("the canonical service effect is unique");
+    };
+    assert_eq!(effect.id.module(), defining.module());
+    assert!(effect.parameters.is_empty());
+    EffectRow::singleton(EffectInstance::new(effect.id, Box::new([])))
 }
 
 fn resolution_error(text: &str) -> ResolveReason {
     let fixture = Fixture::new(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("rejected local-newtype fixture should load");
-    match resolve_module(&graph.modules()[0], &[])
-        .expect_err("local-newtype fixture should fail resolution")
-    {
+    match resolve_entry(&graph).expect_err("local-newtype fixture should fail resolution") {
         ResolveModuleError::Resolution(error) => error.reason,
         ResolveModuleError::Kind(error) => {
             panic!("kind checking stole resolution ownership: {error:?}")
@@ -107,35 +209,111 @@ fn identity_free_closure_may_capture_a_local_newtype() {
     ));
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("identity-free closure fixture should load");
-    let resolved = resolve_module(&graph.modules()[0], &[])
-        .expect("identity-free closure fixture should resolve");
-    let checked = check_module(resolved).expect("identity-free closure should check");
-    let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+    let checked = checked_graph(&graph);
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .unwrap();
+    let offsets = entry
+        .registry()
+        .lexical_nominals()
+        .iter()
+        .filter(|nominal| nominal.spelling == "Offset")
+        .collect::<Vec<_>>();
+    let [offset] = offsets.as_slice() else {
+        panic!("the entry owns one Offset nominal");
+    };
+    let offset = offset.id;
+    let linked = link_modules(checked, graph.entry()).expect("fixture should link");
     let linked = validate_interface_evidence(linked).expect("fixture evidence should validate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("fixture Core namespace should fit");
+        EffectElaborator::for_module_program(&linked).expect("fixture Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("identity-free closure should elaborate");
     let unchecked = elaborator
         .finish(typed.node)
         .expect("identity-free closure Core should finish");
-    let source = graph.modules()[0].source();
-    let program = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let relation = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let program = validate_effect_modules(unchecked, &sources, &relation)
         .expect("identity-free closure Core should validate");
 
-    let evaluation = evaluate(&program).expect("identity-free closure should execute");
-    let Value::Function(closure) = evaluation.value else {
-        panic!("main should return the identity-free closure")
-    };
-    assert_eq!(
-        program.node(program.root()).unwrap().ty,
-        Type::Function(Box::new(Type::Unit), Box::new(Type::Int))
-    );
+    let evaluation = evaluate_effect(&program).expect("identity-free closure should execute");
     assert!(
-        closure.environment.len() >= 3,
-        "the closure should retain its lexical environment"
+        matches!(evaluation.value, Value::RegionFunction(_)),
+        "main returns its stored identity-free closure"
     );
+    let root_type = &program.node(program.root()).unwrap().ty;
+    let function = root_type
+        .function_view()
+        .expect("the result remains callable");
+    assert_eq!(function.domain(), &Type::Unit);
+    assert_eq!(function.value(), &Type::Int);
+    assert_eq!(function.effects(), Some(&default_row(&graph)));
+    let owned_nodes = |root| {
+        let mut pending = vec![root];
+        let mut seen = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if seen.insert(id) {
+                let node = program.node(id).unwrap();
+                pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
+            }
+        }
+        seen
+    };
+    let scopes = owned_nodes(program.root()).into_iter().filter(|id|
+        matches!(program.node(*id).unwrap().kind,
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::LocalNominalScope(scope))) if scope.owner() == offset))
+        .collect::<Vec<_>>();
+    let [scope] = scopes.as_slice() else {
+        panic!("Offset has one actual lexical scope");
+    };
+    let owned = owned_nodes(*scope);
+    let bindings = owned
+        .iter()
+        .filter_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                &program.node(*id)?.kind
+            else {
+                return None;
+            };
+            (binding.binder().ty() == &Type::Nominal(offset)).then_some(binding.binder().id())
+        })
+        .collect::<Vec<_>>();
+    let [offset_binding] = bindings.as_slice() else {
+        panic!("the scope retains one offset value binder");
+    };
+    let closures = owned
+        .iter()
+        .filter(|id| {
+            let node = program.node(**id).unwrap();
+            matches!(
+                node.kind,
+                EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+            ) && &node.ty == root_type
+        })
+        .collect::<Vec<_>>();
+    let [closure] = closures.as_slice() else {
+        panic!("the scope owns one exact returned callable");
+    };
+    let closure = program.node(**closure).unwrap();
+    let mut parameters = Vec::new();
+    EffectOperationFamily::visit_operation_binders(&closure.kind, &mut |parameter| {
+        parameters.push(parameter.ty().clone())
+    });
+    assert_eq!(parameters, [Type::Unit]);
+    assert!((0..closure.kind.child_count()).filter_map(|i| closure.kind.child_at(i)).any(|id|
+        matches!(program.node(id).unwrap().kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == *offset_binding)),
+        "the stored callable retains the exact preceding offset value");
 
     let mut pending = vec![program.root()];
     let mut scopes = 0;
@@ -144,9 +322,20 @@ fn identity_free_closure_may_capture_a_local_newtype() {
     while let Some(node) = pending.pop() {
         let expression = program.node(node).expect("reachable Core node");
         match &expression.kind {
-            PureExprKind::Value(PureValue::Constructor(_)) => ordinary_constructors += 1,
-            PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => conversions += 1,
-            PureExprKind::Computation(PureComputation::LocalNominalScope(_)) => scopes += 1,
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Constructor(_))) => {
+                ordinary_constructors += 1
+            }
+            EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::NewtypeConversion(_),
+            )) => conversions += 1,
+            EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::LocalNominalScope(_),
+            )) => scopes += 1,
+            EffectExprKind::Operation(EffectOperation::RegionTuple(_))
+                if expression.ty == Type::Nominal(offset) =>
+            {
+                ordinary_constructors += 1
+            }
             _ => {}
         }
         pending
@@ -155,6 +344,23 @@ fn identity_free_closure_may_capture_a_local_newtype() {
     assert_eq!(scopes, 1);
     assert_eq!(conversions, 2);
     assert_eq!(ordinary_constructors, 0);
+    let invoked = Fixture::new(
+        &graph
+            .module(graph.entry())
+            .unwrap()
+            .source()
+            .text()
+            .replace(
+                "main : Unit -> (Unit -> Int)\nmain () = make()\n",
+                "main : Unit -> Int\nmain () = make()()\n",
+            ),
+    );
+    let observed = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: invoked.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the captured offset remains usable after its nominal scope returns");
+    assert_eq!(observed.value_display(), "42");
 }
 
 #[test]
@@ -319,28 +525,53 @@ fn local_representation_captures_a_generic_implementation_parameter() {
 fn assert_execution(source: &str) {
     let fixture = Fixture::new(source);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).expect("fixture should load");
-    let resolved = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
-    let checked = check_module(resolved).expect("fixture should check");
-    let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("dependency order must retain the exact target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("each checked summary must authenticate its actual dependency edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the interaction component should resolve");
+        checked.push(check_module(resolved).expect("the interaction component should check"));
+    }
+    let linked = link_modules(checked, graph.entry()).expect("fixture should link");
     let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("Core namespace should fit");
+        EffectElaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("fixture should elaborate");
     let program = elaborator.finish(typed.node).expect("Core should finish");
-    let source = graph.modules()[0].source();
-    let relation = [(graph.entry(), source.id())];
-    let validated = validate_modules(program, &[source], &relation).expect("Core should validate");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let relation = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let validated =
+        validate_effect_modules(program, &sources, &relation).expect("Core should validate");
     for transformed in [
-        ash::core::transform::identity_traversal(&validated)
+        ash::core::transform::identity_effect_traversal(&validated)
             .expect("identity traversal should rebuild"),
-        ash::core::transform::fold_literal_primitives(&validated)
+        ash::core::transform::fold_effect_literal_primitives(&validated)
             .expect("literal folding should rebuild"),
     ] {
-        let validated = validate_modules(transformed, &[source], &relation)
+        let validated = validate_effect_modules(transformed, &sources, &relation)
             .expect("transformed Core should validate");
-        let observed = evaluate(&validated).expect("transformed Core should execute");
+        let observed = evaluate_effect(&validated).expect("transformed Core should execute");
         assert!(matches!(observed.value, Value::SmallInteger(value) if value.to_string() == "42"));
     }
 }
@@ -438,55 +669,24 @@ fn deep_local_nominal_scopes_accept_and_reject_on_a_small_stack() {
             let accepted = Fixture::new(&format!(
                 "main : Unit -> Unit\nmain () = {{\n    let accepted = {{\n{declarations}        ()\n    }}\n    accepted\n}}\n"
             ));
-            let graph = load_module_graph(&accepted.0, &ModuleRoots::empty())
-                .expect("deep accepted fixture should load");
-            let resolved = resolve_module(&graph.modules()[0], &[])
-                .expect("deep accepted fixture should resolve");
-            let checked = check_module(resolved).expect("deep identity-free result should check");
-            let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
-            let linked =
-                validate_interface_evidence(linked).expect("fixture evidence should validate");
-            let mut elaborator =
-                Elaborator::for_module_program(&linked).expect("deep Core namespace should fit");
-            let typed = elaborator
-                .synthesize_module_program(&linked)
-                .expect("deep local scopes should elaborate iteratively");
-            let unchecked = elaborator
-                .finish(typed.node)
-                .expect("deep local scope Core should finish");
-            let source = graph.modules()[0].source();
-            let program = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-                .expect("deep local scopes should validate iteratively");
-            let mut pending = vec![program.root()];
-            let mut scopes = 0;
-            while let Some(id) = pending.pop() {
-                let node = program.node(id).expect("reachable deep Core node");
-                if matches!(
-                    node.kind,
-                    PureExprKind::Computation(PureComputation::LocalNominalScope(_))
-                ) {
-                    scopes += 1;
-                }
-                pending.extend(
-                    (0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)),
-                );
-            }
-            assert_eq!(scopes, DEPTH);
-            assert!(matches!(
-                evaluate(&program).expect("deep local scopes should execute").value,
-                Value::Unit
-            ));
+            let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+                entry: accepted.0.clone(), roots: ModuleRoots::empty(),
+            }).unwrap_or_else(|failure| panic!("deep public acceptance: {failure:?}; work={:?}", failure.compilation_work()));
+            assert!(matches!(observation.value(), Value::Unit));
+            assert_eq!(observation.ty(), &Type::Unit);
 
             let rejected = Fixture::new(&format!(
                 "main : Unit -> Unit\nmain () = {{\n    let escaped = {{\n{declarations}        N{}(0)\n    }}\n    ()\n}}\n",
                 DEPTH - 1,
             ));
-            let error = check_module(rejected.resolve())
-                .expect_err("the deep outward local identity must be rejected");
-            let TypeError::Source(diagnostic) = error else {
-                panic!("deep escape should remain a source typing error: {error:?}")
+            let failure = ash::driver::run_path(ash::driver::RunConfiguration {
+                entry: rejected.0.clone(), roots: ModuleRoots::empty(),
+            }).expect_err("the deep outward local identity must be rejected");
+            let Some(ash::driver::PipelineFailure::Typing(TypeError::Source(diagnostic))) = failure.pipeline_failure() else {
+                panic!("deep escape should remain a source typing error: {failure:?}");
             };
             assert_eq!(diagnostic.reason, TypeReason::LocalNominalEscape);
+
         })
         .expect("the deep local-scope thread should start")
         .join()
@@ -495,7 +695,7 @@ fn deep_local_nominal_scopes_accept_and_reject_on_a_small_stack() {
 
 #[test]
 fn nested_shadowed_local_newtypes_keep_distinct_lexical_identities() {
-    let resolved = Fixture::new(concat!(
+    let fixture = Fixture::new(concat!(
         "newtype Shadow = Shadow(Int)\n\n",
         "main : Unit -> Unit\n",
         "main () = {\n",
@@ -511,8 +711,10 @@ fn nested_shadowed_local_newtypes_keep_distinct_lexical_identities() {
         "}\n\n",
         "after : Shadow -> Shadow\n",
         "after value = Shadow(value)\n",
-    ))
-    .resolve();
+    ));
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).unwrap();
+    let default_row = default_row(&graph);
+    let resolved = resolve_entry(&graph).expect("the actual entry resolves");
 
     let [module_nominal] = resolved.registry().nominals() else {
         panic!("expected one module nominal")
@@ -586,11 +788,15 @@ fn nested_shadowed_local_newtypes_keep_distinct_lexical_identities() {
     let ResolvedDefinitionKind::Equational(after) = &resolved.definitions()[1].kind else {
         panic!("expected post-block definition")
     };
-    let Type::Function(domain, codomain) = &after.interface.annotation.ty else {
-        panic!("expected post-block function annotation")
-    };
-    assert_eq!(domain.as_ref(), &Type::Nominal(module_nominal.id));
-    assert_eq!(codomain.as_ref(), &Type::Nominal(module_nominal.id));
+    let function = after
+        .interface
+        .annotation
+        .ty
+        .function_view()
+        .expect("expected post-block function annotation");
+    assert_eq!(function.domain(), &Type::Nominal(module_nominal.id));
+    assert_eq!(function.value(), &Type::Nominal(module_nominal.id));
+    assert_eq!(function.effects(), Some(&default_row));
     assert_eq!(
         constructor_head(&after.equations[0].body),
         resolved.registry().constructors()[0].id
@@ -710,7 +916,7 @@ fn local_newtype_visibility_is_strictly_sequential() {
 
 #[test]
 fn following_recursive_group_uses_local_nominal_without_absorbing_declaration() {
-    let resolved = Fixture::new(concat!(
+    let fixture = Fixture::new(concat!(
         "main : Unit -> Unit\n",
         "main () = {\n",
         "    newtype Cell = Cell(Int)\n",
@@ -719,8 +925,10 @@ fn following_recursive_group_uses_local_nominal_without_absorbing_declaration() 
         "    }\n",
         "    ()\n",
         "}\n",
-    ))
-    .resolve();
+    ));
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).unwrap();
+    let default_row = default_row(&graph);
+    let resolved = resolve_entry(&graph).expect("the actual entry resolves");
     let owner = resolved.registry().lexical_nominals()[0].id;
     let ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[0].kind else {
         panic!("expected equational main")
@@ -735,13 +943,14 @@ fn following_recursive_group_uses_local_nominal_without_absorbing_declaration() 
     let [member] = group.members.as_slice() else {
         panic!("the newtype must not become a recursive member")
     };
-    assert_eq!(
-        member.annotation.ty,
-        Type::Function(
-            Box::new(Type::Nominal(owner)),
-            Box::new(Type::Nominal(owner)),
-        )
-    );
+    let function = member
+        .annotation
+        .ty
+        .function_view()
+        .expect("the recursive member remains callable");
+    assert_eq!(function.domain(), &Type::Nominal(owner));
+    assert_eq!(function.value(), &Type::Nominal(owner));
+    assert_eq!(function.effects(), Some(&default_row));
 }
 
 #[test]

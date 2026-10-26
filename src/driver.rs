@@ -2025,6 +2025,49 @@ mod tests {
     };
 
     #[test]
+    fn deep_local_nominal_scope_census_fits_a_small_stack() {
+        const DEPTH: usize = 4_096;
+        std::thread::Builder::new().name("deep-local-nominal-census".to_owned())
+            .stack_size(256 * 1024).spawn(|| {
+                let mut declarations = String::new();
+                for index in 0..DEPTH {
+                    declarations.push_str(&format!("        newtype N{index} = N{index}(Int)\n"));
+                }
+                let accepted = TestSource::write(&format!(
+                    "main : Unit -> Unit\nmain () = {{\n    let accepted = {{\n{declarations}        ()\n    }}\n    accepted\n}}\n"
+                ));
+                // This is the original integration witness's Core census under
+                // existing paid program owners, not larger standalone defaults.
+                let compiled = compile_path(accepted.configuration())
+                    .unwrap_or_else(|failure| panic!("deep census: {failure:?}; work={:?}", failure.compilation_work()));
+                let (program, _) = compiled.effect_build_input().expect("independently validated Effect Core");
+                let mut pending = vec![program.root()];
+                let mut seen = std::collections::HashSet::new();
+                let mut scopes = 0;
+                while let Some(id) = pending.pop() {
+                    if !seen.insert(id) { continue; }
+                    let node = program.node(id).expect("reachable deep Core node");
+                    if matches!(node.kind, crate::core::EffectExprKind::Pure(
+                        crate::core::PureExprKind::Computation(crate::core::PureComputation::LocalNominalScope(_)))) {
+                        scopes += 1;
+                    }
+                    pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
+                }
+                assert_eq!(scopes, DEPTH);
+                assert!(matches!(crate::eval::evaluate_effect(program).expect("deep Core executes").value, crate::eval::Value::Unit));
+                let rejected = TestSource::write(&format!(
+                    "main : Unit -> Unit\nmain () = {{\n    let escaped = {{\n{declarations}        N{}(0)\n    }}\n    ()\n}}\n", DEPTH - 1,
+                ));
+                let failure = compile_path(rejected.configuration())
+                    .expect_err("the deep outward local identity must be rejected");
+                let Some(PipelineFailure::Typing(TypeError::Source(diagnostic))) = failure.pipeline_failure() else {
+                    panic!("deep escape stays source-owned: {failure:?}");
+                };
+                assert_eq!(diagnostic.reason, crate::elaborate::TypeReason::LocalNominalEscape);
+            }).unwrap().join().expect("deep census and teardown fit the original small stack");
+    }
+
+    #[test]
     fn nested_source_execution_and_release_fit_a_fresh_small_stack() {
         const CHILD: &str = "ASH_RESOURCE_RUNTIME_STACK_CHILD";
         if std::env::var_os(CHILD).is_none() {
