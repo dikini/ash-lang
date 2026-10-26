@@ -147,7 +147,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         result: TypedNode,
     ) -> Result<TypedNode, TypeError> {
         let mut result = TypedNodeOwner::new(result);
-        self.prepare_region_closures(&[])?;
+        self.prepare_region_closures(&[], &[])?;
         if !self.cleanup_rows.is_empty() {
             self.solve_cleanup_rows(&[], &[], &[], &[])?;
             result.replace_type(self.zonk(&result.ty)?);
@@ -163,7 +163,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         methods: &[crate::core::capture::MethodUse],
         adapters: &[crate::core::capture::MethodAdapter],
     ) -> Result<(), TypeError> {
-        self.prepare_region_closures(methods)?;
+        self.prepare_region_closures(methods, roots)?;
         if self.cleanup_rows.is_empty() {
             return Ok(());
         }

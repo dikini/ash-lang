@@ -479,6 +479,7 @@ impl fmt::Debug for Closure {
 pub struct RegionFunction {
     pub(super) record: Location,
     pub(super) instantiation: Option<super::machine::Instantiation>,
+    pub(super) abstraction: Option<NodeId>,
 }
 
 /// Code and lexical type/row metadata only; captured term Values follow in slots.

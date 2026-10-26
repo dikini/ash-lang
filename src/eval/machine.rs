@@ -555,6 +555,11 @@ impl Error for RuntimeFailure {}
 #[derive(Debug)]
 enum Frame {
     RegionBuffer(region::BufferProgress),
+    RegionForwarding {
+        abstraction: NodeId,
+        application: Option<NodeId>,
+        environment: Environment,
+    },
     RegionAbstraction {
         abstraction: NodeId,
         closure: NodeId,
@@ -1039,6 +1044,58 @@ impl<'runtime> Machine<'runtime> {
                     caller_environment,
                     function,
                 )?);
+            }
+            Frame::RegionForwarding {
+                abstraction,
+                application,
+                environment,
+            } => {
+                let record = match &value {
+                    Value::RegionFunction(view) => Some(view.record),
+                    Value::Location(location) => Some(*location),
+                    _ => None,
+                };
+                let stored = if let Some(record) = record {
+                    match packed_tuple_location(&self.heap, record, &mut self.instantiation_work) {
+                        Ok(location) => self.heap[location].stored_fields().is_some_and(|fields| {
+                            matches!(fields.first(), Some(Value::ClosureCode(_)))
+                        }),
+                        Err(RuntimeFailure::UninitializedLocation) => false,
+                        Err(failure) => return Err(failure),
+                    }
+                } else {
+                    false
+                };
+                if stored {
+                    if let Some(application) = application {
+                        self.return_type_application(
+                            application,
+                            &environment.instantiation,
+                            value,
+                        )?;
+                    } else {
+                        self.control = Some(Control::Return(value));
+                    }
+                    let Some(Control::Return(value)) = self.control.take() else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    let mut view = match value {
+                        Value::RegionFunction(view) => view,
+                        Value::Location(record) => crate::eval::value::RegionFunction {
+                            record,
+                            instantiation: None,
+                            abstraction: None,
+                        },
+                        _ => return Err(RuntimeFailure::InvalidControlState),
+                    };
+                    view.abstraction = Some(abstraction);
+                    self.control = Some(Control::Return(Value::RegionFunction(view)));
+                } else {
+                    self.control = Some(Control::Return(Value::Polymorphic {
+                        abstraction,
+                        environment,
+                    }));
+                }
             }
             Frame::RegionAbstraction { .. } => return Err(RuntimeFailure::InvalidControlState),
             Frame::RegionTuple {
@@ -1745,7 +1802,7 @@ impl<'runtime> Machine<'runtime> {
                 else {
                     return Err(RuntimeFailure::InvalidControlState);
                 };
-                let instantiation = callable.environment.instantiation.apply(
+                let instantiation = callable.environment.instantiation.apply_view(
                     caller,
                     abstraction.parameters(),
                     application.arguments(),
@@ -1761,6 +1818,7 @@ impl<'runtime> Machine<'runtime> {
                     crate::eval::value::RegionFunction {
                         record,
                         instantiation: Some(instantiation),
+                        abstraction: None,
                     },
                 )));
             }
@@ -2913,10 +2971,34 @@ fn dispatch_entry(
                         },
                     )
                 } else {
-                    Transition::direct(Control::Return(Value::Polymorphic {
-                        abstraction: node,
-                        environment,
-                    }))
+                    let forwarding = match pure_expression(program, operation.body())? {
+                        PureExprKind::Variable(_) => Some((operation.body(), None)),
+                        PureExprKind::Computation(PureComputation::TypeApplication(
+                            application,
+                        )) if matches!(
+                            pure_expression(program, application.function())?,
+                            PureExprKind::Variable(_)
+                        ) =>
+                        {
+                            Some((application.function(), Some(operation.body())))
+                        }
+                        _ => None,
+                    };
+                    if let Some((base, application)) = forwarding {
+                        Transition::suspend(
+                            Control::Evaluate(base, environment.clone()),
+                            Frame::RegionForwarding {
+                                abstraction: node,
+                                application,
+                                environment,
+                            },
+                        )
+                    } else {
+                        Transition::direct(Control::Return(Value::Polymorphic {
+                            abstraction: node,
+                            environment,
+                        }))
+                    }
                 }
             } else {
                 enter_type_abstraction(operation, environment)
@@ -3285,7 +3367,11 @@ fn return_recursive_initialization(
 ) -> Result<Transition, RuntimeFailure> {
     let value_location = match value {
         Value::Location(location) => location,
-        Value::RegionFunction(function) if function.instantiation.is_none() => function.record,
+        Value::RegionFunction(function)
+            if function.instantiation.is_none() && function.abstraction.is_none() =>
+        {
+            function.record
+        }
         _ => return Err(RuntimeFailure::UnexpectedRecursiveBinding),
     };
     let (slot, _) = pending

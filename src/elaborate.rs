@@ -3803,6 +3803,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let requirements =
             self.lower_evidence_requirements(&scheme.requirements, lowering, owner)?;
 
+        let evidence_creation_row = if F::EFFECTS {
+            self.active_region_api()?.map(|api| {
+                EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])))
+            })
+        } else {
+            None
+        };
         let mut core_body = IterativeTypeOwner::new(self.pure_core_type(&value_type)?);
         for requirement in requirements.iter().rev() {
             for method in requirement.methods.iter().rev() {
@@ -3810,10 +3817,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let domain = self.pure_core_type(&method.ty)?;
-                core_body = IterativeTypeOwner::new(Type::Function(
-                    Box::new(domain),
-                    Box::new(core_body.into_inner()),
-                ));
+                core_body = IterativeTypeOwner::new(if let Some(row) = &evidence_creation_row {
+                    Type::function_computation(
+                        domain,
+                        ComputationType::new(
+                            core_body.into_inner(),
+                            clone_effect_row_with_budget(row, &mut self.type_work)
+                                .map_err(|()| type_resource())?,
+                        ),
+                    )
+                } else {
+                    Type::Function(Box::new(domain), Box::new(core_body.into_inner()))
+                });
             }
         }
         if let Some(source_parameters) = source_type_parameters.as_deref() {
@@ -6708,10 +6723,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let binder_id = binder.id();
             let domain = IterativeTypeOwner::new(self.clone_type(binder.ty())?);
             let codomain = self.clone_type(&function.ty)?;
-            let ty = IterativeTypeOwner::new(Type::Function(
-                Box::new(domain.into_inner()),
-                Box::new(codomain),
-            ));
+            let ty = IterativeTypeOwner::new(if F::EFFECTS {
+                Type::function_computation(
+                    domain.into_inner(),
+                    ComputationType::new(
+                        codomain,
+                        clone_effect_row_with_budget(&function.effects, &mut self.type_work)
+                            .map_err(|()| type_resource())?,
+                    ),
+                )
+            } else {
+                Type::Function(Box::new(domain.into_inner()), Box::new(codomain))
+            });
             let core_ty = self.clone_type(&ty)?;
             let node = self.construct_function(
                 binder,
@@ -6736,6 +6759,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 drop(application);
             }
             function.set_node(node);
+            function.replace_effects(
+                self.builder
+                    .clone_node_effects_with_budget(node, &mut self.type_work)?,
+            );
             function.replace_type(ty.into_inner());
             let provenance = self.at_span_provenance(&function.ty, cause.primary_span())?;
             function.set_provenance(provenance);
@@ -7288,10 +7315,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         occurrence: usize,
     ) -> Result<TypedNode, TypeError> {
         let function = TypedNodeOwner::new(function);
-        let Type::Function(domain, codomain) = &function.ty else {
-            return Err(invalid_state());
-        };
-        let polymorphic = matches!(domain.as_ref(), Type::Forall(_, _));
+        let signature = function.ty.function_view().ok_or_else(invalid_state)?;
+        let (domain, codomain) = (signature.domain(), signature.value());
+        let polymorphic = matches!(domain, Type::Forall(_, _));
         if polymorphic {
             let producer_matches = match argument.producer {
                 PolymorphicEvidenceProducer::Abstract { .. } => {
@@ -7425,7 +7451,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty: ty.into_inner(),
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(node, &mut self.type_work)?,
             provenance,
         })
     }
@@ -15935,6 +15963,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     reason: GeneratedReason::FunctionLowering,
                 },
             )?;
+            body_effects = self
+                .builder
+                .clone_node_effects_with_budget(body, &mut self.type_work)?;
             function_type = next_type;
         }
         application_types.0.reverse();
@@ -18275,7 +18306,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node: body_node,
             ty: original_function_type,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(body_node, &mut self.type_work)?,
             provenance,
         })
     }

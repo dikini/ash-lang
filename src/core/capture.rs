@@ -1141,6 +1141,7 @@ pub(crate) fn prepare_region_closure(
     node: NodeId,
     request: NodeId,
     methods: &[MethodUse],
+    roots: &[(BinderId, NodeId)],
     budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
     let super::effect::EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
@@ -1171,6 +1172,25 @@ pub(crate) fn prepare_region_closure(
                         .map_err(|_| Failure::Invalid)?,
                 );
                 break;
+            }
+        }
+        if found.is_none() {
+            // Source method selection can name an authenticated completed
+            // callable without a literal Variable occurrence in its body.
+            // Capture that binder, never rerun its initializer or the obsolete
+            // source placeholder that selection replaced.
+            charge(budget, roots.len())?;
+            if let Some((_, root)) = roots.iter().find(|(candidate, _)| *candidate == binder) {
+                let declaration = &builder.nodes[index(*root)];
+                let ty = crate::types::clone_type_with_budget(&declaration.ty, budget)
+                    .map_err(|()| Failure::Resource)?;
+                let origin = declaration.origin.clone().ok_or(Failure::Invalid)?;
+                found = Some(builder.variable(binder, ty, origin).map_err(
+                    |error| match error {
+                        super::BuildError::TypeWorkExceeded => Failure::Resource,
+                        _ => Failure::Invalid,
+                    },
+                )?);
             }
         }
         captures.push(found.ok_or(Failure::Invalid)?);

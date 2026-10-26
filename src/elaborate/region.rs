@@ -126,6 +126,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     pub(super) fn prepare_region_closures(
         &mut self,
         methods: &[crate::core::capture::MethodUse],
+        roots: &[(BinderId, NodeId)],
     ) -> Result<(), TypeError> {
         let Some(builder) = F::effect_builder(&mut self.builder) else {
             return Ok(());
@@ -136,6 +137,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 node,
                 request,
                 methods,
+                roots,
                 &mut self.type_work,
             )
             .map_err(|failure| capture_failure(failure, &mut self.type_work))?;

@@ -104,6 +104,9 @@ existing declaration order before source arguments; genuinely new `Function`
 results allocate at those term-creation sites, with their allocation effects and
 placement accounted for explicitly. Do not eagerly execute adapter spines at
 group entry or admit arbitrary computations under type abstraction.
+An authenticated deferred type abstraction with retained term captures creates
+its capture record once when evaluated, without executing its delayed body;
+forwarding an existing stored record remains allocation-free.
 
 ### Root configuration and completion
 

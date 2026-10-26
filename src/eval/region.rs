@@ -451,6 +451,7 @@ impl Machine<'_> {
                 Value::RegionFunction(crate::eval::value::RegionFunction {
                     record,
                     instantiation: None,
+                    abstraction: None,
                 })
             } else {
                 initialized
@@ -539,7 +540,10 @@ impl Machine<'_> {
                 environment,
                 origin: expression.origin.clone(),
             },
-            code.abstraction,
+            match value {
+                Value::RegionFunction(view) => view.abstraction.or(code.abstraction),
+                _ => code.abstraction,
+            },
         ))
     }
 
@@ -1563,6 +1567,147 @@ mod tests {
         assert_eq!(fields[0].to_string(), "42");
         assert_eq!(fields[1].to_string(), "1");
     }
+    #[test]
+    fn polymorphic_evidence_captures_have_no_persistent_host_environment() {
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            concat!(
+                "type Box<A> = Box(A)\n",
+                "interface Functor<F : Type -> Type> {\nmap<A, B> : (A -> B, F<A>) -> F<B>\n}\n",
+                "impl Functor<Box> {\nmap (function, Box(value)) = Box(function(value))\n}\n",
+                "to_bool : Int -> Bool\nto_bool value = value == 42\n",
+                "to_int : Bool -> Int\nto_int true = 42\nto_int false = 0\n",
+                "map_pair<F : Type -> Type> : (F<Int>, F<Bool>) -> (F<Bool>, F<Int>) where Functor<F>\n",
+                "map_pair (numbers, flags) = (map((to_bool, numbers)), map((to_int, flags)))\n",
+                "main : Unit -> (Box<Bool>, Box<Int>)\nmain () = map_pair((Box(42), Box(true)))\n",
+            ),
+            None,
+        );
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "(Box(true), Box(42))");
+        for cell in evaluation.heap.cells_for_test() {
+            let Some(fields) = cell.stored_fields() else {
+                continue;
+            };
+            for value in fields {
+                if let Value::Polymorphic {
+                    abstraction,
+                    environment,
+                } = value
+                {
+                    let EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeAbstraction(metadata),
+                    )) = &program.node(*abstraction).unwrap().kind
+                    else {
+                        panic!("retained abstraction");
+                    };
+                    assert!(
+                        environment.is_empty(),
+                        "a supplied capture slot hides {} host environment entries; abstraction={abstraction:?}; body={:?}",
+                        environment.len(),
+                        program.node(metadata.body()).unwrap().kind
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prerequisite_adapter_captures_have_no_persistent_host_environment() {
+        let source = concat!(
+            "type Option<A> =\nNone\n| Some(A)\n",
+            "interface Score<A> {\nscore<X> : (A, X) -> Int\n}\n",
+            "impl Score<Int> {\nscore (value, ignored) = value\n}\n",
+            "impl Score<Option<A>> where Score<A> {\nscore (None, ignored) = 4\n",
+            "score (Some(value), ignored) = {\nlet empty : Option<A> = None\n",
+            "score((empty, ignored)) * 10 + score((value, ignored))\n}\n}\n",
+            "forward<A> : A -> Int where Score<A>\nforward value = score((value, true))\n",
+            "main : Unit -> Int\nmain () = forward(Some(2))\n",
+        );
+        let (program, _, _) =
+            crate::core::validate::generic_cell_source_fixture_for_test(source, None);
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "42");
+        for cell in evaluation.heap.cells_for_test() {
+            let Some(fields) = cell.stored_fields() else {
+                continue;
+            };
+            for value in fields {
+                if let Value::Polymorphic {
+                    abstraction,
+                    environment,
+                } = value
+                {
+                    assert!(
+                        environment.is_empty(),
+                        "deferred adapter {abstraction:?} hides {} term captures",
+                        environment.len()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn type_views_share_records_and_dynamic_function_creation_is_fresh() {
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            "main : Unit -> Int\nmain () = {\nlet identity = fn(value) {\nvalue\n}\nlet answer = identity 42\nmatch identity true {\ntrue => answer\nfalse => 0\n}\n}\n",
+            None,
+        );
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "42");
+        let identity = program
+            .nodes()
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| {
+                let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = &node.kind
+                else {
+                    return None;
+                };
+                let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                    &program.node(closure.function.body()).unwrap().kind
+                else {
+                    return None;
+                };
+                (variable.binder() == closure.function.parameter().id()
+                    && matches!(closure.function.parameter().ty(), Type::Variable(_)))
+                .then_some(index)
+            })
+            .expect("generic identity closure");
+        assert_eq!(evaluation.heap.cells_for_test().iter().filter(|cell| {
+            cell.stored_fields().is_some_and(|fields| matches!(fields.first(), Some(Value::ClosureCode(code)) if code.node.value() as usize == identity))
+        }).count(), 1, "both type views share one created record");
+
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            "main : Unit -> ((Unit -> Int), (Unit -> Int))\nmain () = {\nlet make : Unit -> (Unit -> Int) = fn(ignored) {\nlet rec read : Unit -> Int = fn(ignored) {\n42\n}\nread\n}\n(make (), make ())\n}\n",
+            None,
+        );
+        let evaluation = evaluate_effect(&program).unwrap();
+        let cells = evaluation.heap.cells_for_test();
+        let fields = cells
+            .iter()
+            .filter_map(HeapCell::tuple_fields)
+            .find(|fields| {
+                fields.len() == 2
+                    && fields
+                        .iter()
+                        .all(|value| matches!(value, Value::RegionFunction(_) | Value::Location(_)))
+            })
+            .expect("result tuple containing both stored callables");
+        let record = |value: &Value| match value {
+            Value::RegionFunction(function) => function.record,
+            Value::Location(record) => {
+                packed_tuple_location(cells, *record, &mut TypeWorkBudget::unbounded()).unwrap()
+            }
+            _ => panic!("stored callable view"),
+        };
+        assert_ne!(
+            record(&fields[0]),
+            record(&fields[1]),
+            "each dynamic group entry creates fresh records"
+        );
+    }
+
     #[test]
     fn callable_reads_captures_from_the_supplied_record_slots() {
         let path = std::env::temp_dir().join(format!(

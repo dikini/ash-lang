@@ -145,9 +145,12 @@ R3–R5 product acceptance is claimed.
 [closure timing amendment](../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26)
 and the active partial closure implementation. Ordinary creation now uses the
 existing supplied Value slots and common callable reader; initial source lifetime,
-outer-selection and direct polymorphic-view checks pass. Forwarding and
-prerequisite-adapter capture paths, mixed recursion, independent Core bypass
-checks and full affected regressions remain pending. Closure capture storage and
+outer-selection and polymorphic-view checks pass. Generated evidence wrappers
+retain complete allocation rows and exact capture authentication. Record-only
+forwarding shares immutable views; native second-record resume/discard checks pass.
+A real generic prerequisite adapter still retains a host term environment and is
+an explicit failing case. Its deferred capture carrier, mixed recursion, remaining
+independent Core boundaries and full affected regressions remain pending. Closure capture storage and
 remaining recursive initialization/capture/abandonment evidence are still required. No executable
 memory-read-to-Bytes producer exists at the current slim-FFI boundary, whose
 native replies are Address or Unit; its borrowed Bytes argument uses the common

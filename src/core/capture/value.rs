@@ -1287,10 +1287,26 @@ impl Graph {
                 } else {
                     index(abstraction.body())
                 };
-                Expr::Function {
+                let metadata = Expr::Function {
                     parameters,
                     body,
                     captures,
+                };
+                if body != index(abstraction.body()) {
+                    if let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                        F::pure(&nodes[index(abstraction.body())].kind)
+                    {
+                        let metadata = self.push(metadata, source, budget)?;
+                        Expr::Bind {
+                            binder: self.symbol(symbols, binding.binder().id(), source, budget)?,
+                            initializer: index(binding.initializer()),
+                            body: metadata,
+                        }
+                    } else {
+                        metadata
+                    }
+                } else {
+                    metadata
                 }
             }
             PureComputation::TypeApplication(application) => {

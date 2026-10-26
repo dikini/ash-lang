@@ -3857,13 +3857,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         && domain.requirement_position == domain.requirement.declaration()
                         && domain.method == anchor.method
                         && domain.method_position == domain.method.declaration()
-                        && matches!(
-                            self.program.nodes.get(anchor.node.index().unwrap_or(usize::MAX))
-                                .and_then(|node| F::pure(&node.kind)),
-                            Some(PureExprKind::Value(PureValue::Function(function)))
-                                if function.parameter().id() == binder
-                        )
-                }),
+                }) && self.callable_initializer(anchor.node)?.1.parameter().id() == binder,
                 (
                     MethodEvidenceExpectedRole::Application { domain, producer },
                     MethodEvidenceAnchorRole::Application {
@@ -4471,6 +4465,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(self.program.nodes.len())?;
         for (index, stored) in self.program.nodes.iter().enumerate() {
             let parent = node_id(self.program.arena, index)?;
+            if let Some(super::effect::EffectOperation::RegionClosure(closure)) =
+                F::region_construction(&stored.kind)
+            {
+                // These exact operands spell the ordinary implicit lexical
+                // capture. Full closure validation independently reconstructs
+                // their binder sequence, types and scopes; this grants no
+                // carrier authority to the closure or its other child edges.
+                self.charge_type_work(closure.captures.len())?;
+                owner_edges
+                    .try_reserve(closure.captures.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(parent)))?;
+                owner_edges.extend(closure.captures.iter().map(|capture| (*capture, parent)));
+            }
             if !self.program.method_evidence.lexical_owners().is_empty()
                 && let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
                     F::pure(&stored.kind)
@@ -4713,14 +4720,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 })
                 .copied()
                 .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
-            let PureExprKind::Value(PureValue::Function(function)) =
-                self.pure_kind(current.node)?
-            else {
-                return Err(ValidationError::new(
-                    ValidationReason::NodeType,
-                    Some(current.node),
-                ));
-            };
+            let (_, function) = self.callable_initializer(current.node)?;
             if let Some((next_index, _)) = domains
                 .get(domain_index.saturating_add(1))
                 .filter(|next| next.owner == domain.owner)
@@ -5514,6 +5514,25 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(replacements)
     }
 
+    fn callable_initializer(
+        &self,
+        id: NodeId,
+    ) -> Result<(NodeId, &super::function::FunctionNode), ValidationError> {
+        // Bound the existing exact context-query-prefix recognition as well as
+        // the ordinary Pure/no-region function case.
+        self.charge_type_work(8)?;
+        if let Some(PureExprKind::Value(PureValue::Function(function))) =
+            F::pure(&self.node(id)?.kind)
+        {
+            return Ok((id, function));
+        }
+        super::region::closure_initializer::<F>(id, |node| {
+            self.node(node).ok().map(|node| &node.kind)
+        })
+        .map(|(terminal, closure)| (terminal, &closure.function))
+        .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))
+    }
+
     fn validate_method_evidence_domain(
         &self,
         anchor: &MethodEvidenceAnchor,
@@ -5521,16 +5540,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         carriers: &mut HashSet<NodeId>,
     ) -> Result<(), ValidationError> {
         let stored = self.node(anchor.node)?;
-        let (
-            Type::Function(domain, codomain),
-            Some(PureExprKind::Value(PureValue::Function(function))),
-        ) = (&stored.ty, F::pure(&stored.kind))
-        else {
-            return Err(ValidationError::new(
-                ValidationReason::NodeType,
-                Some(anchor.node),
-            ));
-        };
+        let signature = stored
+            .ty
+            .function_view()
+            .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(anchor.node)))?;
+        let (domain, codomain) = (signature.domain(), signature.value());
+        let (terminal, function) = self.callable_initializer(anchor.node)?;
+        self.charge_type_work(1)?;
+        carriers
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(anchor.node)))?;
+        carriers.insert(terminal);
         let actual_interface = match anchor.owner {
             Some(MethodEvidenceOwner::Implementation(implementation))
                 if self
@@ -6001,12 +6021,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             ));
         };
         let function = self.node(application.function())?;
-        let Type::Function(domain, codomain) = &function.ty else {
-            return Err(ValidationError::new(
-                ValidationReason::ApplicationType,
-                Some(anchor.node),
-            ));
-        };
+        let signature = function.ty.function_view().ok_or_else(|| {
+            ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+        })?;
+        let (domain, codomain) = (signature.domain(), signature.value());
         let canonical = self.expected_method_scheme(anchor)?;
         let argument = self.node(application.argument())?;
         let Some(MethodEvidenceExpectedRole::Application { producer, .. }) = self
@@ -6400,12 +6418,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             ));
         };
         let function = self.node(application.function())?;
-        let Type::Function(domain, codomain) = &function.ty else {
-            return Err(ValidationError::new(
-                ValidationReason::ApplicationType,
-                Some(anchor.node),
-            ));
-        };
+        let signature = function.ty.function_view().ok_or_else(|| {
+            ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
+        })?;
+        let (domain, codomain) = (signature.domain(), signature.value());
         self.charge_type_work(anchors.len())?;
         let owner = self
             .program
@@ -6748,29 +6764,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut current = initializer.ok_or_else(|| {
             ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
         })?;
-        if let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-            self.pure_kind(current)?
+        if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+            F::pure(&self.node(current)?.kind)
         {
             current = abstraction.body();
         }
         for _ in 0..position {
             self.charge_type_work(1)?;
-            let PureExprKind::Value(PureValue::Function(function)) = self.pure_kind(current)?
-            else {
-                return Err(ValidationError::new(
-                    ValidationReason::ApplicationType,
-                    Some(anchor.node),
-                ));
-            };
+            let (_, function) = self.callable_initializer(current)?;
             current = function.body();
         }
         self.charge_type_work(1)?;
-        let PureExprKind::Value(PureValue::Function(function)) = self.pure_kind(current)? else {
-            return Err(ValidationError::new(
-                ValidationReason::ApplicationType,
-                Some(anchor.node),
-            ));
-        };
+        let (_, function) = self.callable_initializer(current)?;
         Ok(function.parameter().id())
     }
 
@@ -10340,6 +10345,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             PureValue::Boolean(boolean) => boolean.expected_type(),
             PureValue::Unit(unit) => unit.expected_type(),
             PureValue::Function(function) => {
+                if F::ALLOWS_EFFECTFUL_TYPES && self.region_enabled.get() {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
                 let body = self.node(function.body())?;
                 let Some(function_type) = node.ty.function_view() else {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
@@ -13702,13 +13710,15 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     continue;
                 }
                 definition_count += 1;
-                let Some(PureExprKind::Value(PureValue::Function(function))) =
-                    super::effect::EffectOperationFamily::pure(
-                        &self.node(binding.initializer())?.kind,
-                    )
-                else {
-                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
-                };
+                let (_, function) =
+                    self.callable_initializer(binding.initializer())
+                        .map_err(|error| {
+                            if error.reason == ValidationReason::NodeType {
+                                ValidationError::new(ValidationReason::NodeType, Some(id))
+                            } else {
+                                error
+                            }
+                        })?;
                 let super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Request(request),
                 ) = &self.node(function.body())?.kind
@@ -20092,6 +20102,85 @@ mod tests {
         let refs = sources.iter().collect::<Vec<_>>();
         let donor = super::super::validate_effect_modules(copy, &refs, &relation).unwrap();
         (donor, sources, relation)
+    }
+
+    #[test]
+    fn region_closure_core_rejects_raw_functions_but_preserves_pure_core() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            "main : Unit -> Int\nmain () = {\nlet saved : Unit -> Unit = fn(ignored) {\n()\n}\n42\n}\n",
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+        let index = copied
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+                ) && node.ty.function_view().is_some_and(|function| {
+                    function.domain() == &Type::Unit && function.value() == &Type::Unit
+                })
+            })
+            .unwrap();
+        let origin = copied.nodes[index].origin.clone().unwrap();
+        let function_type = Type::function(Type::Unit, Type::Unit);
+        let parameter = TypedBinder::new(
+            copied.arena,
+            BinderId::Generated(u32::MAX - 27),
+            Type::Unit,
+            origin.clone(),
+        );
+        let body = node_id(copied.arena, copied.nodes.len()).unwrap();
+        copied.nodes.push(StoredNode {
+            dialect: copied.nodes[index].dialect,
+            ty: Type::Unit,
+            effects: EffectRow::empty(),
+            origin: Some(origin.clone()),
+            kind: EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(
+                super::super::literal::UnitNode,
+            ))),
+        });
+        let raw = node_id(copied.arena, copied.nodes.len()).unwrap();
+        copied.nodes.push(StoredNode {
+            dialect: copied.nodes[index].dialect,
+            ty: function_type.clone(),
+            effects: EffectRow::empty(),
+            origin: Some(origin.clone()),
+            kind: EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(
+                super::super::function::FunctionNode::new(parameter, body),
+            ))),
+        });
+        let saved = node_id(copied.arena, copied.nodes.len()).unwrap();
+        copied.nodes.push(StoredNode {
+            dialect: copied.nodes[index].dialect,
+            ty: copied.nodes[index].ty.clone(),
+            effects: copied.nodes[index].effects.clone(),
+            origin: copied.nodes[index].origin.clone(),
+            kind: copied.nodes[index].kind.clone(),
+        });
+        let binder = TypedBinder::new(
+            copied.arena,
+            BinderId::Generated(u32::MAX - 28),
+            function_type.clone(),
+            origin.clone(),
+        );
+        copied.nodes[index].kind = EffectExprKind::Pure(PureExprKind::Computation(
+            PureComputation::Bind(super::super::binding::BindingNode::new(binder, raw, saved)),
+        ));
+        let failure = super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+        assert_eq!(failure.reason, ValidationReason::NodeType);
+        assert_eq!(failure.node, Some(raw));
+
+        let mut pure = CoreBuilder::new();
+        let parameter = pure.binder(Type::Unit, origin.clone()).unwrap();
+        let body = pure.unit(Type::Unit, origin.clone()).unwrap();
+        let function = pure
+            .function(parameter, body, function_type, origin)
+            .unwrap();
+        validate_modules(pure.finish(function).unwrap(), &refs, &relation).unwrap();
     }
 
     #[test]

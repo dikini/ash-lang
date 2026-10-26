@@ -526,3 +526,71 @@ fn polymorphic_closure_views_keep_independent_type_instantiations() {
         "42"
     );
 }
+
+#[test]
+fn polymorphic_closure_aliases_forward_without_changing_sibling_views() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = {\n",
+            "let identity = fn(value) {\nvalue\n}\nlet forwarded = identity\n",
+            "let answer = forwarded 42\n",
+            "match identity true {\ntrue => answer\nfalse => 0\n}\n}\n",
+        )),
+        "42"
+    );
+}
+
+#[test]
+fn polymorphic_closure_creation_keeps_its_region_residency() {
+    let failure = run_result(concat!(
+        "main : Unit -> Int\nmain () = {\nlet escaped = region<R> owner {\n",
+        "let identity = fn(value) {\nvalue\n}\nidentity\n}\nescaped 42\n}\n",
+    ))
+    .unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source resource escape, got {diagnostic:?}");
+    };
+    assert_eq!(
+        error.reason,
+        ash::elaborate::TypeReason::ResourceEscape,
+        "{diagnostic:?}"
+    );
+}
+
+#[test]
+fn closure_body_fresh_construction_uses_the_callers_selected_region() {
+    let failure = run_result(concat!(
+        "main : Unit -> Int\nmain () = region<A> outer {\n",
+        "let make : Unit -> (Int, Int) = fn(ignored) {\n(20, 22)\n}\n",
+        "let pair = region<B> inner {\nmake ()\n}\n",
+        "match pair {\n(left, right) => 42\n}\n}\n",
+    ))
+    .unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection, got {failure:?}");
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source resource escape, got {diagnostic:?}");
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn closure_body_explicit_selection_keeps_its_captured_region_identity() {
+    assert_eq!(
+        run(concat!(
+            "main : Unit -> Int\nmain () = region<A> outer {\n",
+            "let make : Unit -> (Int, Int) = fn(ignored) {\nusing outer {\n(20, 22)\n}\n}\n",
+            "let pair = region<B> inner {\nmake ()\n}\n",
+            "match pair {\n(left, right) => match (left + right) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n",
+        )),
+        "42"
+    );
+}

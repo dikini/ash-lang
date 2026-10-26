@@ -261,6 +261,26 @@ fn suspended_entry(body: &str, allocations: usize, discard_at: Option<usize>) ->
         .replace("\n    }\n}\n", &format!("\n    }}) with Pause {{\nnext ignored => {{\nlet next = (Cell.read ticks) + 1\nlet _ = Cell.write (ticks, next)\n{handler}\n}}\n}}\nmatch (Cell.read ticks) == {expected} {{\ntrue => result\nfalse => 0\n}}\n}}\n}}\n"))
 }
 
+const CLOSURE_GROUP_BODY: &str = "let first : Unit -> Int = fn(ignored) {\n42\n}\n        let second : Unit -> Int = fn(ignored) {\nfirst ()\n}\n        second ()";
+
+#[test]
+fn closure_creation_resume_keeps_completed_capture_records() {
+    run_native(
+        "closure-resume",
+        &suspended_entry(CLOSURE_GROUP_BODY, 2, None),
+        b"maar",
+    );
+}
+
+#[test]
+fn closure_creation_discard_at_second_record_does_not_replay_the_first() {
+    run_native(
+        "closure-discard",
+        &suspended_entry(CLOSURE_GROUP_BODY, 2, Some(2)),
+        b"mar",
+    );
+}
+
 #[test]
 fn buffer_allocation_suspension_retains_payload_and_envelope_progress() {
     run_native("buffer-resume", &suspended_buffer_entry(None), b"maaaaar");
