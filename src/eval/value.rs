@@ -204,6 +204,7 @@ impl Drop for NativeTupleStorage {
 pub struct ObservedValue {
     heap: Arc<ObservedHeap>,
     root: Location,
+    integer_sign: Option<bool>,
 }
 
 pub(crate) struct ObservedHeap {
@@ -241,7 +242,19 @@ impl fmt::Debug for ObservedHeap {
 
 impl ObservedValue {
     pub(crate) fn new(heap: Arc<ObservedHeap>, root: Location) -> Self {
-        Self { heap, root }
+        Self {
+            heap,
+            root,
+            integer_sign: None,
+        }
+    }
+
+    pub(crate) fn integer(heap: Arc<ObservedHeap>, root: Location, negative: bool) -> Self {
+        Self {
+            heap,
+            root,
+            integer_sign: Some(negative),
+        }
     }
 
     fn render(&self) -> String {
@@ -253,7 +266,15 @@ impl ObservedValue {
         }
         let mut output = String::new();
         let mut active = HashSet::new();
-        let mut tasks = vec![Task::Location(self.root)];
+        let mut tasks = vec![
+            self.integer_sign
+                .map_or(Task::Location(self.root), |negative| {
+                    Task::Value(Value::RegionInteger {
+                        digits: self.root,
+                        negative,
+                    })
+                }),
+        ];
         while let Some(task) = tasks.pop() {
             match task {
                 Task::Text(text) => output.push_str(text),
@@ -273,6 +294,17 @@ impl ObservedValue {
                     Value::Bytes(value) => output.push_str(&format!("{value:?}")),
                     Value::String(value) => output.push_str(&format!("{value:?}")),
 
+                    Value::SmallInteger(value) => output.push_str(&value.to_string()),
+                    Value::RegionInteger { digits, negative } => {
+                        let bytes = self
+                            .heap
+                            .cells
+                            .get(digits)
+                            .and_then(HeapCell::byte_fields)
+                            .expect("initialized integer digits")
+                            .0;
+                        output.push_str(&Integer::from_sign_magnitude(negative, bytes).to_string());
+                    }
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
@@ -505,7 +537,11 @@ pub enum Value {
     /// An opaque, non-owning access key for a live resource activation.
     ResourceHandle(ActivationKey),
 
-    /// An arbitrary-precision mathematical integer.
+    /// A private genuinely inline mathematical integer representation.
+    SmallInteger(i128),
+    /// Sign and existing region-owned digit backing; aliases never copy digits.
+    RegionInteger { digits: Location, negative: bool },
+    /// Pure/no-region compatibility representation.
     Integer(Integer),
     /// A Boolean value.
     Boolean(bool),
@@ -531,6 +567,11 @@ pub enum Value {
 }
 
 impl Value {
+    pub(crate) fn integer(value: Integer) -> Self {
+        value
+            .to_i128()
+            .map_or_else(|| Self::Integer(value), Self::SmallInteger)
+    }
     pub(crate) fn bytes(&self) -> Option<&[u8]> {
         match self {
             Self::Bytes(bytes) => Some(bytes),
@@ -554,6 +595,8 @@ impl fmt::Display for Value {
             Self::Bytes(value) => write!(formatter, "{value:?}"),
             Self::String(value) => write!(formatter, "{value:?}"),
 
+            Self::SmallInteger(value) => value.fmt(formatter),
+            Self::RegionInteger { .. } => formatter.write_str("<region-integer>"),
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),

@@ -16,6 +16,8 @@ pub foreign library RegionFixture {
     symbol InspectHost : Bytes -> Unit { name "region_inspect_host" }
 }
 "#;
+const TUPLE_BODY: &str = "match (20, 22) {\n            (left, right) => match (left + right) == 42 {\n                true => 42\n                false => 0\n            }\n        }";
+const INTEGER_BODY: &str = "let value = 9223372036854775808 * 9223372036854775808 * 4\n        match value == 340282366920938463463374607431768211456 {\n            true => 42\n            false => 0\n        }";
 const ENTRY: &str = r#"import native as Raw
 import @builtin.regions as Region
 import @builtin.foreign as F
@@ -39,7 +41,10 @@ main () = {
     let state = perform Raw.Make.call ()
     region<R> owner = (provider state) {
         match (20, 22) {
-            (left, right) => left + right
+            (left, right) => match (left + right) == 42 {
+                true => 42
+                false => 0
+            }
         }
     }
 }
@@ -115,7 +120,7 @@ fn custom_region_initializes_and_reads_its_native_backing_before_paired_release(
 fn custom_region_stores_nullary_and_payload_nominal_records_in_supplied_backing() {
     let source = ENTRY
         .replace("provider<R> :", "type Item =\nEmpty\n| Full(Int)\nprovider<R> :")
-        .replace("match (20, 22) {\n            (left, right) => left + right", "let empty = Empty\n        match Full 42 {\n            Full(value) => value\n            Empty => 0");
+        .replace(TUPLE_BODY, "let empty = Empty\n        match Full 42 {\n            Full(value) => value\n            Empty => 0\n        }");
     run_native("nominal", &source, b"maar");
 }
 
@@ -127,7 +132,7 @@ fn custom_region_stores_string_bytes_in_supplied_backing() {
             "import native as Raw\nimport @builtin.string as Text",
         )
         .replace(
-            "match (20, 22) {\n            (left, right) => left + right\n        }",
+            TUPLE_BODY,
             "Text.byte_length \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"",
         );
     run_native("string", &source, b"mar");
@@ -141,7 +146,7 @@ fn custom_region_initializes_buffer_payloads_before_intrinsic_result_records() {
             "import native as Raw\nimport @builtin.string as Text\nimport @builtin.bytes as B",
         )
         .replace(
-            "match (20, 22) {\n            (left, right) => left + right\n        }",
+            TUPLE_BODY,
             r#"let original = Text.to_utf8 "*"
         match B.append_byte (original, 42) {
             B.BytesAppended(joined) => match Text.from_utf8 joined {
@@ -169,7 +174,7 @@ fn foreign_bytes_payload_cannot_cross_an_unprotected_region_request() {
             "! {Raw.Make, Raw.Allocate, Raw.Release, Raw.Inspect}",
         )
         .replace(
-            "match (20, 22) {\n            (left, right) => left + right\n        }",
+            TUPLE_BODY,
             r#"let packed = Text.to_utf8 "**"
         let _ = perform Raw.Inspect.call packed
         42"#,
@@ -219,9 +224,16 @@ main () = {
 fn suspended_buffer_entry(discard_at: Option<usize>) -> String {
     let body = r#"let original = Text.to_utf8 "*"
         match B.append_byte (original, 42) {
-            B.BytesAppended(joined) => (B.length joined) + 40
+            B.BytesAppended(joined) => match ((B.length joined) + 40) == 42 {
+                true => 42
+                false => 0
+            }
             B.InvalidByte => 0
         }"#;
+    suspended_entry(body, 5, discard_at)
+}
+
+fn suspended_entry(body: &str, allocations: usize, discard_at: Option<usize>) -> String {
     let handler = if let Some(at) = discard_at {
         format!(
             "match next == {at} {{\ntrue => {{\nlet done = discard\n42\n}}\nfalse => resume ()\n}}"
@@ -229,13 +241,13 @@ fn suspended_buffer_entry(discard_at: Option<usize>) -> String {
     } else {
         "resume ()".to_owned()
     };
-    let expected = discard_at.unwrap_or(5);
+    let expected = discard_at.unwrap_or(allocations);
     ENTRY
         .replace("import native as Raw", "import native as Raw\nimport @builtin.string as Text\nimport @builtin.bytes as B\nimport @builtin.cell as Cell")
         .replace("provider<R> :", "effect Pause {\nnext : Unit -> Unit\n}\nprovider<R> :")
         .replace("! {Raw.Allocate}", "! {Raw.Allocate, Pause}")
         .replace("let backing = perform Raw.Allocate.call state", "let _ = perform Pause.next ()\n        let backing = perform Raw.Allocate.call state")
-        .replace("match (20, 22) {\n            (left, right) => left + right\n        }",body)
+        .replace(TUPLE_BODY,body)
         .replace("    region<R> owner =", "    resource cell<C> ticks = 0 {\n    let result = handle (region<R> owner =")
         .replace("\n    }\n}\n", &format!("\n    }}) with Pause {{\nnext ignored => {{\nlet next = (Cell.read ticks) + 1\nlet _ = Cell.write (ticks, next)\n{handler}\n}}\n}}\nmatch (Cell.read ticks) == {expected} {{\ntrue => result\nfalse => 0\n}}\n}}\n}}\n"))
 }
@@ -339,4 +351,37 @@ fn run_native(name: &str, entry: &str, expected_trace: &[u8]) {
     assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "42");
     assert_eq!(fs::read(trace).unwrap(), expected_trace);
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn custom_region_stores_large_integer_digits_in_supplied_backing() {
+    let source = ENTRY.replace(TUPLE_BODY, INTEGER_BODY);
+    run_native("integer", &source, b"maar");
+}
+
+#[test]
+fn integer_pending_digits_resume_without_replaying_arithmetic() {
+    run_native(
+        "integer-resume",
+        &suspended_entry(INTEGER_BODY, 2, None),
+        b"maar",
+    );
+}
+
+#[test]
+fn integer_pending_digits_refuse_before_backing_without_replay() {
+    run_native(
+        "integer-refuse-first",
+        &suspended_entry(INTEGER_BODY, 2, Some(1)),
+        b"mr",
+    );
+}
+
+#[test]
+fn integer_pending_digits_refuse_after_an_initialized_value() {
+    run_native(
+        "integer-refuse-second",
+        &suspended_entry(INTEGER_BODY, 2, Some(2)),
+        b"mar",
+    );
 }

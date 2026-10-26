@@ -22,6 +22,7 @@ pub(super) struct BufferProgress {
     owner: Option<ActivationKey>,
     step: u8,
     prepared: Option<PreparedBuffer>,
+    left: Option<Value>,
 }
 #[derive(Debug)]
 struct PreparedBuffer {
@@ -29,6 +30,7 @@ struct PreparedBuffer {
     string: bool,
     constructor: Option<crate::types::ConstructorId>,
     payload: Option<Value>,
+    integer_sign: Option<bool>,
 }
 
 impl Machine<'_> {
@@ -47,11 +49,9 @@ impl Machine<'_> {
         &mut self,
         node: NodeId,
         argument: Value,
+        right: Option<Value>,
     ) -> Result<PreparedBuffer, RuntimeFailure> {
-        use crate::{
-            core::{packed::Intrinsic, region::RegionBufferOperation},
-            integer::Integer,
-        };
+        use crate::core::{packed::Intrinsic, region::RegionBufferOperation};
         let operation = self
             .buffer_node(node)
             .ok_or(RuntimeFailure::InvalidControlState)?
@@ -62,6 +62,7 @@ impl Machine<'_> {
             string: false,
             constructor: None,
             payload: None,
+            integer_sign: None,
         };
         fn copy(
             bytes: &[u8],
@@ -83,6 +84,52 @@ impl Machine<'_> {
             Ok(output)
         }
         match operation {
+            RegionBufferOperation::IntegerLiteral(integer) => {
+                charge_effect_work(
+                    &mut self.instantiation_work,
+                    usize::try_from(integer.magnitude_byte_length())
+                        .map_err(|_| RuntimeFailure::HeapCapacity)?,
+                    RuntimePhase::Evaluation,
+                )?;
+                let (negative, bytes) = integer.sign_magnitude();
+                prepared.bytes = Some(bytes);
+                prepared.integer_sign = Some(negative);
+            }
+            RegionBufferOperation::IntegerArithmetic(primitive) => {
+                let left = read_integer(&argument, &self.heap, &mut self.instantiation_work)?;
+                let right = read_integer(
+                    &right.ok_or(RuntimeFailure::InvalidControlState)?,
+                    &self.heap,
+                    &mut self.instantiation_work,
+                )?;
+                let left_len = usize::try_from(left.magnitude_byte_length())
+                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                let right_len = usize::try_from(right.magnitude_byte_length())
+                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                let work = if primitive == crate::core::Primitive::Multiply {
+                    left_len.checked_mul(right_len)
+                } else {
+                    left_len.checked_add(right_len)
+                }
+                .ok_or(RuntimeFailure::HeapCapacity)?;
+                charge_effect_work(
+                    &mut self.instantiation_work,
+                    work.saturating_add(1),
+                    RuntimePhase::Evaluation,
+                )?;
+                let result = match primitive {
+                    crate::core::Primitive::Add => &left + &right,
+                    crate::core::Primitive::Multiply => &left * &right,
+                    _ => return Err(RuntimeFailure::InvalidControlState),
+                };
+                if let Some(value) = result.to_i128() {
+                    prepared.payload = Some(Value::SmallInteger(value));
+                } else {
+                    let (negative, bytes) = result.sign_magnitude();
+                    prepared.bytes = Some(bytes);
+                    prepared.integer_sign = Some(negative);
+                }
+            }
             RegionBufferOperation::StringLiteral(bytes) => {
                 prepared.bytes = Some(copy(&bytes, None, &mut self.instantiation_work)?);
                 prepared.string = true;
@@ -125,9 +172,10 @@ impl Machine<'_> {
                     let Some(fields) = self.heap[location].tuple_fields() else {
                         return Err(RuntimeFailure::InvalidControlState);
                     };
-                    let [bytes, Value::Integer(integer)] = fields else {
+                    let [bytes, integer] = fields else {
                         return Err(RuntimeFailure::InvalidControlState);
                     };
+                    let integer = read_integer(integer, &self.heap, &mut self.instantiation_work)?;
                     let (bytes, string) =
                         borrowed_bytes(bytes, &self.heap, &mut self.instantiation_work)?;
                     if string {
@@ -137,8 +185,7 @@ impl Machine<'_> {
                         Intrinsic::BytesAt { found, invalid } => {
                             if let Some(byte) = integer.to_usize().and_then(|i| bytes.get(i)) {
                                 prepared.constructor = Some(found);
-                                prepared.payload =
-                                    Some(Value::Integer(Integer::from_i64(i64::from(*byte))));
+                                prepared.payload = Some(Value::SmallInteger(i128::from(*byte)));
                             } else {
                                 prepared.constructor = Some(invalid);
                             }
@@ -183,9 +230,32 @@ impl Machine<'_> {
                 self.control = Some(Control::Evaluate(operand, environment));
                 return Ok(());
             }
-            progress.prepared = Some(self.prepare_buffer(progress.node, Value::Unit)?);
+            progress.prepared = Some(self.prepare_buffer(progress.node, Value::Unit, None)?);
         } else if progress.step == 1 {
-            progress.prepared = Some(self.prepare_buffer(progress.node, value)?);
+            if let Some(right) = self
+                .buffer_node(progress.node)
+                .ok_or(RuntimeFailure::InvalidControlState)?
+                .right
+            {
+                progress.left = Some(value);
+                progress.step = 4;
+                let environment = progress.environment.clone();
+                self.frames.push(Frame::RegionBuffer(progress));
+                self.control = Some(Control::Evaluate(right, environment));
+                return Ok(());
+            }
+            progress.prepared = Some(self.prepare_buffer(progress.node, value, None)?);
+        } else if progress.step == 4 {
+            progress.prepared = Some(
+                self.prepare_buffer(
+                    progress.node,
+                    progress
+                        .left
+                        .take()
+                        .ok_or(RuntimeFailure::InvalidControlState)?,
+                    Some(value),
+                )?,
+            );
         } else {
             let Value::RegionStorage(storage) = value else {
                 return Err(RuntimeFailure::InvalidControlState);
@@ -202,7 +272,14 @@ impl Machine<'_> {
                     .bytes
                     .take()
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                let initialized = self.initialize_region_bytes(storage, &bytes, prepared.string)?;
+                let mut initialized =
+                    self.initialize_region_bytes(storage, &bytes, prepared.string)?;
+                if let Some(negative) = prepared.integer_sign {
+                    let Value::Location(digits) = initialized else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    initialized = Value::RegionInteger { digits, negative };
+                }
                 if prepared.constructor.is_none() {
                     self.control = Some(Control::Return(initialized));
                     return Ok(());
@@ -226,6 +303,16 @@ impl Machine<'_> {
             .prepared
             .as_ref()
             .ok_or(RuntimeFailure::InvalidControlState)?;
+        if prepared.bytes.is_none() && prepared.constructor.is_none() {
+            self.control = Some(Control::Return(
+                progress
+                    .prepared
+                    .as_mut()
+                    .and_then(|p| p.payload.take())
+                    .ok_or(RuntimeFailure::InvalidControlState)?,
+            ));
+            return Ok(());
+        }
         let (usable_bytes, alignment, step) = if let Some(bytes) = &prepared.bytes {
             (bytes.len().max(1), 1, 2)
         } else {
@@ -374,6 +461,7 @@ impl Machine<'_> {
                 owner: None,
                 step: 0,
                 prepared: None,
+                left: None,
             }));
             self.control = Some(Control::Evaluate(context, environment.clone()));
             return Ok(true);
@@ -950,8 +1038,8 @@ impl Machine<'_> {
         let [
             Value::RegionRequest(request),
             Value::Address(locator),
-            Value::Integer(extent),
-            Value::Integer(alignment),
+            extent,
+            alignment,
         ] = fields.as_ref()
         else {
             return Err(RuntimeFailure::InvalidControlState);
@@ -959,10 +1047,10 @@ impl Machine<'_> {
         let invocation = request
             .invocation
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        let extent = extent
+        let extent = read_integer(extent, &self.heap, &mut self.instantiation_work)?
             .to_usize()
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        let alignment = alignment
+        let alignment = read_integer(alignment, &self.heap, &mut self.instantiation_work)?
             .to_usize()
             .ok_or(RuntimeFailure::InvalidControlState)?;
         if invocation.owner != owner

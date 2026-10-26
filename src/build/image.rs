@@ -35,7 +35,6 @@ pub(crate) enum Unsupported {
     Type,
     Intrinsic,
     ErasedTypeOperation,
-    LargeIntegerLiteral,
     EffectOperation,
 }
 
@@ -308,10 +307,15 @@ struct RecursiveMemberRecord {
 
 #[derive(Clone, Copy, Debug)]
 enum NodeTag {
+    IntegerMagnitude {
+        negative: bool,
+        bytes: Slice,
+    },
     RegionBuffer {
         api: u32,
         context: u32,
         operand: Option<u32>,
+        right: Option<u32>,
         source: u8,
         module: Option<u32>,
         operation: u8,
@@ -1252,11 +1256,20 @@ impl Encoder<'_> {
                     if let Some(value) = value.value().to_i64() {
                         NodeTag::Integer(value)
                     } else {
-                        NodeTag::UnsignedInteger(
-                            value.value().to_u64().ok_or(ImageFailure::Unsupported(
-                                Unsupported::LargeIntegerLiteral,
-                            ))?,
-                        )
+                        if let Some(unsigned) = value.value().to_u64() {
+                            NodeTag::UnsignedInteger(unsigned)
+                        } else {
+                            charge(
+                                self.work,
+                                usize::try_from(value.value().magnitude_byte_length())
+                                    .map_err(|_| ImageFailure::Resource)?,
+                            )?;
+                            let (negative, bytes) = value.value().sign_magnitude();
+                            NodeTag::IntegerMagnitude {
+                                negative,
+                                bytes: append(&mut self.image.bytes, &bytes, self.work)?,
+                            }
+                        }
                     }
                 }
                 PureValue::Boolean(value) => NodeTag::Bool(value.value()),
@@ -1639,7 +1652,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x16";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x17";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2129,10 +2142,16 @@ impl Wire for NodeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::IntegerMagnitude { negative, bytes } => {
+                37u8.write(writer)?;
+                negative.write(writer)?;
+                bytes.write(writer)
+            }
             Self::RegionBuffer {
                 api,
                 context,
                 operand,
+                right,
                 source,
                 module,
                 operation,
@@ -2142,6 +2161,7 @@ impl Wire for NodeTag {
                 api.write(writer)?;
                 context.write(writer)?;
                 operand.write(writer)?;
+                right.write(writer)?;
                 source.write(writer)?;
                 module.write(writer)?;
                 operation.write(writer)?;
@@ -2402,10 +2422,15 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            37 => Self::IntegerMagnitude {
+                negative: Wire::read(reader)?,
+                bytes: Wire::read(reader)?,
+            },
             36 => Self::RegionBuffer {
                 api: Wire::read(reader)?,
                 context: Wire::read(reader)?,
                 operand: Wire::read(reader)?,
+                right: Wire::read(reader)?,
                 source: Wire::read(reader)?,
                 module: Wire::read(reader)?,
                 operation: Wire::read(reader)?,
@@ -3445,6 +3470,20 @@ impl Decoder<'_> {
                 })
             }
 
+            NodeTag::IntegerMagnitude { negative, bytes } => {
+                let bytes = bytes.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
+                charge(self.work, bytes.len())?;
+                if bytes.last().is_none_or(|b| *b == 0) {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let value = Integer::from_sign_magnitude(negative, bytes);
+                if value.to_i64().is_some() || value.to_u64().is_some() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.integer(value, ty.into_inner(), origin.take())
+                })
+            }
             NodeTag::Integer(value) => builder.with_caller_type_work(self.work, |builder| {
                 builder.integer(Integer::from_i64(value), ty.into_inner(), origin.take())
             }),
@@ -3589,10 +3628,17 @@ mod provenance_tests;
 mod tests {
 
     #[test]
+    fn integer_region_image_preserves_inline_width_digit_storage_and_arithmetic() {
+        assert_region_image(
+            "import @builtin.regions as Region\nmain : Unit -> Int\nmain () = {\nlet wide = 18446744073709551616\nlet answer = wide * wide\nmatch answer == 340282366920938463463374607431768211456 {\ntrue => 42\nfalse => 0\n}\n}\n",
+        );
+    }
+
+    #[test]
     fn default_region_entry_image_restores_without_original_sources() {
         assert_region_image(concat!(
             "import @builtin.regions as Region\n",
-            "main : Unit -> Int\nmain () = region<R> r {\nusing r {\nmatch (20, 22) {\n(a, b) => a + b\n}\n}\n}\n",
+            "main : Unit -> Int\nmain () = region<R> r {\nusing r {\nmatch (20, 22) {\n(a, b) => match (a + b) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n}\n",
         ));
     }
 
@@ -3602,7 +3648,7 @@ mod tests {
             "import @builtin.regions as Region\n",
             "type Stream = Next(Int, Stream)\nmain : Unit -> Int\nmain () = region<R> r {\n",
             "let rec ones : Stream = Next(21, ones)\nmatch ones {\n",
-            "Next(first, rest) => match rest {\nNext(second, ignored) => first + second\n}\n}\n}\n",
+            "Next(first, rest) => match rest {\nNext(second, ignored) => match (first + second) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n}\n",
         ));
     }
 
@@ -3830,6 +3876,8 @@ mod tests {
 
     #[test]
     fn generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work() {
+        let mut default_refusal_checked = false;
+        let mut case = 0;
         for (source, helper, value) in [
             (
                 include_str!("../../tests/fixtures/generic-cell/snapshot-entry.ash"),
@@ -3877,6 +3925,7 @@ mod tests {
                 "42",
             ),
         ] {
+            case += 1;
             let (program, sources, relation) =
                 crate::core::validate::generic_cell_source_fixture_for_test(source, Some(helper));
             let program = if source.contains("90 + 9") {
@@ -3926,8 +3975,51 @@ mod tests {
                 image.admit_expected_native_facts(&expected, work)?;
                 image.restore_effect(work)
             };
-            let mut measured = TypeWorkBudget::default();
-            let restored = restore(&mut measured).unwrap();
+            let mut standalone = TypeWorkBudget::default();
+            let standalone_outcome = match restore(&mut standalone) {
+                Ok(restored) => {
+                    drop(restored);
+                    "complete"
+                }
+                Err(ImageFailure::Resource) => {
+                    default_refusal_checked = true;
+                    "resource-refusal"
+                }
+                Err(ImageFailure::Validation(error))
+                    if error.reason() == crate::core::ValidationReason::Resource =>
+                {
+                    default_refusal_checked = true;
+                    "validation-resource-refusal"
+                }
+                Err(error) => panic!("standalone image refusal must be capacity: {error:?}"),
+            };
+            eprintln!(
+                "imported-flow startup case={case} standalone={standalone_outcome} used={}/{}",
+                standalone.used(),
+                standalone.limit()
+            );
+            // Use the same startup owner as the generated runner, carrying
+            // framing, expected facts and reconstruction in one cumulative meter.
+            if case == 2 {
+                assert_eq!(standalone_outcome, "validation-resource-refusal");
+            }
+            let mut measured = super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+            let restored = restore(&mut measured).unwrap_or_else(|error| {
+                panic!(
+                    "startup image case={case} bytes={} facts={} used={}/{} error={error:?}",
+                    bytes.len(),
+                    expected.len(),
+                    measured.used(),
+                    measured.limit()
+                )
+            });
+            eprintln!(
+                "imported-flow startup case={case} bytes={} facts={} used={}/{} result={value}",
+                bytes.len(),
+                expected.len(),
+                measured.used(),
+                measured.limit()
+            );
             assert_eq!(
                 crate::eval::evaluate_effect(&restored.program)
                     .unwrap()
@@ -3944,6 +4036,10 @@ mod tests {
                 assert_eq!(exact.used(), measured.used());
             }
         }
+        assert!(
+            default_refusal_checked,
+            "the unchanged standalone allowance refuses at least one retained flow"
+        );
     }
 
     #[test]
@@ -7408,6 +7504,28 @@ impl Encoder<'_> {
             EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
                 use crate::core::region::RegionBufferOperation;
                 let (source, module, operation, bytes) = match &buffer.operation {
+                    RegionBufferOperation::IntegerLiteral(integer) => {
+                        charge(
+                            self.work,
+                            usize::try_from(integer.magnitude_byte_length())
+                                .map_err(|_| ImageFailure::Resource)?,
+                        )?;
+                        let (negative, bytes) = integer.sign_magnitude();
+                        (
+                            3,
+                            None,
+                            u8::from(negative),
+                            append(&mut self.image.bytes, &bytes, self.work)?,
+                        )
+                    }
+                    RegionBufferOperation::IntegerArithmetic(primitive) => {
+                        let operation = match primitive {
+                            crate::core::Primitive::Add => 0,
+                            crate::core::Primitive::Multiply => 1,
+                            _ => return Err(ImageFailure::InvalidRecord),
+                        };
+                        (4, None, operation, Slice { start: 0, len: 0 })
+                    }
                     RegionBufferOperation::StringLiteral(bytes) => {
                         (0, None, 0, append(&mut self.image.bytes, bytes, self.work)?)
                     }
@@ -7428,6 +7546,7 @@ impl Encoder<'_> {
                     api: self.module(buffer.api)?,
                     context: self.node(buffer.context)?,
                     operand: buffer.operand.map(|id| self.node(id)).transpose()?,
+                    right: buffer.right.map(|id| self.node(id)).transpose()?,
                     source,
                     module,
                     operation,
@@ -8482,6 +8601,7 @@ impl Decoder<'_> {
                 api,
                 context,
                 operand,
+                right,
                 source,
                 module,
                 operation,
@@ -8492,6 +8612,23 @@ impl Decoder<'_> {
                     region::{RegionBufferNode, RegionBufferOperation},
                 };
                 let operation = match (source, module, operation) {
+                    (3, None, negative @ 0..=1) => {
+                        let bytes = bytes.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
+                        charge(self.work, bytes.len())?;
+                        if bytes.last().is_none_or(|byte| *byte == 0) {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        RegionBufferOperation::IntegerLiteral(Arc::new(
+                            Integer::from_sign_magnitude(negative != 0, bytes),
+                        ))
+                    }
+                    (4, None, operation @ 0..=1) if bytes == (Slice { start: 0, len: 0 }) => {
+                        RegionBufferOperation::IntegerArithmetic(if operation == 0 {
+                            crate::core::Primitive::Add
+                        } else {
+                            crate::core::Primitive::Multiply
+                        })
+                    }
                     (0, None, 0) => {
                         let bytes = bytes.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
                         charge(self.work, bytes.len())?;
@@ -8529,6 +8666,7 @@ impl Decoder<'_> {
                     api: *get(&self.modules, api)?,
                     context: *get(nodes, context)?,
                     operand: operand.map(|id| get(nodes, id).copied()).transpose()?,
+                    right: right.map(|id| get(nodes, id).copied()).transpose()?,
                     operation,
                 };
                 return builder

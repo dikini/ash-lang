@@ -652,7 +652,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => 2,
             EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => 0,
             EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
-                1 + usize::from(buffer.operand.is_some())
+                1 + usize::from(buffer.operand.is_some()) + usize::from(buffer.right.is_some())
             }
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
                 tuple.fields.len() + 2
@@ -706,6 +706,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => match index {
                 0 => Some(buffer.context),
                 1 => buffer.operand,
+                2 => buffer.right,
                 _ => None,
             },
             EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => match index {
@@ -946,7 +947,10 @@ impl CoreBuilder<EffectOperationFamily> {
                             api.default_alloc(),
                             Box::new([]),
                         ));
-                        for child in std::iter::once(buffer.context).chain(buffer.operand) {
+                        for child in std::iter::once(buffer.context)
+                            .chain(buffer.operand)
+                            .chain(buffer.right)
+                        {
                             row = row
                                 .union_with_budget(
                                     &self

@@ -3606,41 +3606,38 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
             );
-            let present = self
-                .program
-                .registry
-                .has_generic_cell_type_identity(&mut work);
+            let present = self.program.registry.has_cell_type_identity(&mut work);
             self.charge_type_work(work.used())?;
             if !present.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
                 return Ok(());
             }
         }
-        self.generic_cell_computations().map(|_| ())
+        self.cell_computations().map(|_| ())
     }
 
-    fn generic_cell_computations(&self) -> Result<bool, ValidationError> {
+    fn cell_computations(&self) -> Result<bool, ValidationError> {
         let mut generic = false;
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
             generic |= F::resource_scope(&node.kind)
-                .is_some_and(|scope| scope.acquisition.api().is_some_and(|api| api.generic()));
+                .is_some_and(|scope| scope.acquisition.api().is_some());
             let row = F::effect_row(&node.effects);
             self.charge_type_work(row.known().len())?;
             generic |= row
                 .known()
                 .iter()
-                .any(|effect| effect.effect().module().is_builtin_generic_cell());
+                .any(|effect| effect.effect().module().is_builtin_resource());
             let mut work = TypeWorkBudget::with_limit(
                 self.type_work_limit.saturating_sub(self.type_work.get()),
             );
-            let typed = crate::resolved::generic_cell_dependency_type(&node.ty, &mut work);
+            let typed = crate::resolved::cell_dependency_type(&node.ty, &mut work);
             self.charge_type_work(work.used())?;
             generic |=
                 typed.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
         }
         for anchor in &self.program.method_evidence_anchors {
             self.charge_type_work(1)?;
-            generic |= anchor.method.interface().module().is_builtin_generic_cell();
+            generic |= anchor.method.interface().module().is_builtin_resource();
         }
         Ok(generic)
     }
@@ -10320,7 +10317,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 self.validate_intrinsic_identity(*intrinsic, id)?;
                 intrinsic.expected_type()
             }
-            PureValue::Integer(integer) => integer.expected_type(),
+            PureValue::Integer(integer) => {
+                if F::ALLOWS_EFFECTFUL_TYPES
+                    && self.region_enabled.get()
+                    && integer.value().to_i128().is_none()
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                integer.expected_type()
+            }
             PureValue::Boolean(boolean) => boolean.expected_type(),
             PureValue::Unit(unit) => unit.expected_type(),
             PureValue::Function(function) => {
@@ -10503,6 +10508,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
             }
             PureComputation::Primitive(primitive) => {
+                if F::ALLOWS_EFFECTFUL_TYPES
+                    && self.region_enabled.get()
+                    && primitive.primitive() != super::Primitive::Equal
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
                 let left = self.node(primitive.left())?;
                 let right = self.node(primitive.right())?;
                 let (left_type, right_type, result_type) = primitive.primitive().signature();
@@ -13256,7 +13267,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_type_scopes()?;
         // Ordinary authentication precedes dependency reconstruction. Generic
         // computations force that proof even in private provider preparations.
-        let has_generic = self.generic_cell_computations()?;
+        let has_generic = self.cell_computations()?;
 
         let mut has_resource = false;
         for node in &self.program.nodes {
@@ -13721,9 +13732,44 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
                 match &buffer.operation {
+                    RegionBufferOperation::IntegerLiteral(integer) => {
+                        self.charge_type_work(
+                            usize::try_from(integer.magnitude_byte_length()).map_err(|_| {
+                                ValidationError::new(ValidationReason::NodeType, Some(id))
+                            })?,
+                        )?;
+                        if integer.to_i128().is_some()
+                            || buffer.operand.is_some()
+                            || buffer.right.is_some()
+                            || node.ty != Type::Int
+                        {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        }
+                    }
+                    RegionBufferOperation::IntegerArithmetic(primitive) => {
+                        if !matches!(
+                            primitive,
+                            super::Primitive::Add | super::Primitive::Multiply
+                        ) || node.ty != Type::Int
+                        {
+                            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                        }
+                        for child in [buffer.operand, buffer.right] {
+                            if child.is_none_or(|id| {
+                                self.node(id).is_err()
+                                    || self.node(id).is_ok_and(|n| n.ty != Type::Int)
+                            }) {
+                                return Err(ValidationError::new(
+                                    ValidationReason::NodeType,
+                                    Some(id),
+                                ));
+                            }
+                        }
+                    }
                     RegionBufferOperation::StringLiteral(bytes) => {
                         self.charge_type_work(bytes.len())?;
                         if buffer.operand.is_some()
+                            || buffer.right.is_some()
                             || node.ty != Type::String
                             || std::str::from_utf8(bytes).is_err()
                         {
@@ -13732,7 +13778,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     }
                     RegionBufferOperation::Intrinsic(intrinsic) => {
                         self.validate_intrinsic_identity(*intrinsic, id)?;
-                        if !intrinsic.constructs_buffer_or_reply() {
+                        if buffer.right.is_some() || !intrinsic.constructs_buffer_or_reply() {
                             return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                         }
                         let expected = intrinsic.expected_type();
@@ -13751,7 +13797,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 }
                 let mut expected =
                     EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
-                for child in std::iter::once(buffer.context).chain(buffer.operand) {
+                for child in std::iter::once(buffer.context)
+                    .chain(buffer.operand)
+                    .chain(buffer.right)
+                {
                     expected =
                         self.union_effect_rows_charged(&expected, &self.node(child)?.effects, id)?;
                 }
@@ -14734,7 +14783,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 api.default_alloc(),
                                 Box::new([]),
                             ));
-                            for child in std::iter::once(buffer.context).chain(buffer.operand) {
+                            for child in std::iter::once(buffer.context)
+                                .chain(buffer.operand)
+                                .chain(buffer.right)
+                            {
                                 row =
                                     self.union_effect_rows_charged(&row, child_row(child)?, id)?;
                             }
@@ -19678,7 +19730,7 @@ mod tests {
         // builder does not supply that source proof or admit its finished Core.
         assert_eq!(
             builder
-                .generic_cell_dependency_origin(&mut TypeWorkBudget::with_limit(1))
+                .cell_dependency_origin(&mut TypeWorkBudget::with_limit(1))
                 .unwrap(),
             None
         );
@@ -19697,7 +19749,7 @@ mod tests {
         }
         let refs = sources.iter().collect::<Vec<_>>();
         let validator = Validator::new(&core, &refs);
-        assert!(validator.generic_cell_computations().unwrap());
+        assert!(validator.cell_computations().unwrap());
     }
 
     #[test]
@@ -19730,11 +19782,11 @@ mod tests {
         ] {
             let ty = crate::types::IterativeTypeOwner::new(ty);
             let mut work = TypeWorkBudget::default();
-            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut work).unwrap());
+            assert!(crate::resolved::cell_dependency_type(&ty, &mut work).unwrap());
             let mut short = TypeWorkBudget::with_limit(work.used() - 1);
-            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut short).is_err());
+            assert!(crate::resolved::cell_dependency_type(&ty, &mut short).is_err());
             let mut retry = TypeWorkBudget::with_limit(work.used());
-            assert!(crate::resolved::generic_cell_dependency_type(&ty, &mut retry).unwrap());
+            assert!(crate::resolved::cell_dependency_type(&ty, &mut retry).unwrap());
         }
     }
 
@@ -19898,6 +19950,88 @@ mod tests {
         let refs = sources.iter().collect::<Vec<_>>();
         let donor = super::super::validate_effect_modules(copy, &refs, &relation).unwrap();
         (donor, sources, relation)
+    }
+
+    #[test]
+    fn integer_region_core_rejects_legacy_producers_and_missing_rows() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        use super::super::region::RegionBufferOperation;
+        let (donor, sources, relation) =
+            generic_cell_source_fixture("main : Unit -> Int\nmain () = 20 + 22\n", None);
+        let refs = sources.iter().collect::<Vec<_>>();
+        for change in 0..4 {
+            let mut copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+            let index = copied.nodes.iter().position(|node| matches!(&node.kind, EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) if matches!(buffer.operation, RegionBufferOperation::IntegerArithmetic(_)))).unwrap();
+            let node = &copied.nodes[index];
+            let origin = node.origin.clone().unwrap();
+            if change == 3 {
+                copied.nodes[index].effects = EffectRow::empty();
+                let target = node_id(copied.arena, index).unwrap();
+                let error =
+                    super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+                assert_eq!(error.reason, ValidationReason::NodeType);
+                assert_eq!(error.node, Some(target));
+                continue;
+            }
+            let EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) = &node.kind
+            else {
+                unreachable!()
+            };
+            let huge =
+                crate::integer::Integer::parse_decimal("340282366920938463463374607431768211456")
+                    .unwrap();
+            let raw_kind = if change == 0 {
+                PureExprKind::Value(PureValue::Integer(crate::core::literal::IntegerNode::new(
+                    huge.clone(),
+                )))
+            } else {
+                PureExprKind::Computation(PureComputation::Primitive(
+                    crate::core::primitive::PrimitiveNode::new(
+                        if change == 1 {
+                            super::super::Primitive::Add
+                        } else {
+                            super::super::Primitive::Multiply
+                        },
+                        buffer.operand.unwrap(),
+                        buffer.right.unwrap(),
+                    ),
+                ))
+            };
+            // Pure/no-region Core retains mathematical large literals.
+            let mut pure = CoreBuilder::new();
+            let large = pure.integer(huge, Type::Int, origin.clone()).unwrap();
+            validate_modules(pure.finish(large).unwrap(), &refs, &relation).unwrap();
+            let raw = node_id(copied.arena, copied.nodes.len()).unwrap();
+            copied.nodes.push(StoredNode {
+                dialect: copied.nodes[index].dialect,
+                ty: Type::Int,
+                effects: EffectRow::empty(),
+                origin: Some(origin.clone()),
+                kind: EffectExprKind::Pure(raw_kind),
+            });
+            let saved = node_id(copied.arena, copied.nodes.len()).unwrap();
+            copied.nodes.push(StoredNode {
+                dialect: copied.nodes[index].dialect,
+                ty: Type::Int,
+                effects: copied.nodes[index].effects.clone(),
+                origin: Some(origin.clone()),
+                kind: copied.nodes[index].kind.clone(),
+            });
+            let binder = TypedBinder::new(
+                copied.arena,
+                BinderId::Generated(u32::MAX - 29),
+                Type::Int,
+                origin,
+            );
+            // Keep every explicit context/original operand reachable.
+            copied.nodes[index].kind = EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::Bind(crate::core::binding::BindingNode::new(binder, raw, saved)),
+            ));
+            let error =
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+            assert_eq!(error.reason, ValidationReason::NodeType);
+            assert_eq!(error.node, Some(raw));
+        }
     }
 
     #[test]

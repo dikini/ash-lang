@@ -12,6 +12,31 @@ pub struct Integer(num_bigint::BigInt);
 pub struct InvalidInteger;
 
 impl Integer {
+    /// Private immediate eligibility shared by checked Core and the evaluator.
+    pub(crate) fn to_i128(&self) -> Option<i128> {
+        i128::try_from(&self.0).ok()
+    }
+
+    pub(crate) fn from_i128(value: i128) -> Self {
+        Self(num_bigint::BigInt::from(value))
+    }
+
+    pub(crate) fn sign_magnitude(&self) -> (bool, Vec<u8>) {
+        let (sign, bytes) = self.0.to_bytes_le();
+        (sign == num_bigint::Sign::Minus, bytes)
+    }
+
+    pub(crate) fn from_sign_magnitude(negative: bool, bytes: &[u8]) -> Self {
+        Self(num_bigint::BigInt::from_bytes_le(
+            if negative {
+                num_bigint::Sign::Minus
+            } else {
+                num_bigint::Sign::Plus
+            },
+            bytes,
+        ))
+    }
+
     /// Returns the byte length of the unsigned magnitude encoding.
     /// This is a codec work metric, not a native ABI or memory-layout promise.
     #[must_use]

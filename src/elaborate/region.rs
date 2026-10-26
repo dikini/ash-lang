@@ -25,6 +25,17 @@ pub(super) struct SelectionProgress {
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    pub(super) fn active_region_api(&mut self) -> Result<Option<RegionApi>, TypeError> {
+        self.type_work
+            .charge(self.registry.effects().len())
+            .map_err(|()| type_resource())?;
+        Ok(self
+            .registry
+            .effects()
+            .iter()
+            .find_map(|effect| RegionApi::for_module(effect.id.module())))
+    }
+
     fn saved_region_context(
         &mut self,
         api: RegionApi,
@@ -58,6 +69,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         operation: crate::core::region::RegionBufferOperation,
         operand: Option<NodeId>,
+        right: Option<NodeId>,
         ty: &Type,
         effects: &EffectRow,
         span: Span,
@@ -74,6 +86,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 api: api.module(),
                 context: context_value,
                 operand,
+                right,
                 operation,
             }),
         )?;
@@ -102,6 +115,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 crate::core::packed::IntrinsicNode::new(intrinsic, module),
             ),
             Some(operand),
+            None,
             function.value(),
             function.effects().ok_or_else(invalid_state)?,
             span,

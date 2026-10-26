@@ -64,10 +64,34 @@ fn resolved(name: &str, text: &str) -> (SourceFile, ResolvedModule) {
     fs::write(&path, text).expect("binding fixture should be writable");
     let graph =
         load_module_graph(&path, &ModuleRoots::empty()).expect("binding module should load");
-    let source = graph.modules()[0].source().clone();
-    let resolved = resolve_module(&graph.modules()[0], &[]).expect("binding module should resolve");
-    let _ = fs::remove_dir_all(directory);
-    (source, resolved)
+    let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+    for loaded in graph.modules() {
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                ash::resolve::DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(loaded, &dependencies).expect("binding module should resolve");
+        if loaded.id() == graph.entry() {
+            let source = loaded.source().clone();
+            let _ = fs::remove_dir_all(directory);
+            return (source, resolved);
+        }
+        checked
+            .push(ash::elaborate::check_module(resolved).expect("binding dependency should check"));
+    }
+    panic!("binding entry is loaded")
 }
 
 fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
@@ -134,10 +158,10 @@ fn v003_resolves_shadowing_to_distinct_binders_and_runs_to_two() {
 
     let observation =
         run_module("v003-local-shadowing.ash", V003).expect("V-003 should run end to end");
-    let Value::Integer(value) = observation.value() else {
+    let Value::SmallInteger(value) = observation.value() else {
         panic!("expected an integer value");
     };
-    assert_eq!(*value, Integer::parse_decimal("2").expect("valid integer"));
+    assert_eq!(value.to_string(), "2");
     assert_eq!(observation.ty(), &Type::Int);
 }
 
@@ -151,10 +175,10 @@ fn annotated_primitive_binding_checks_then_enters_the_remainder_scope() {
 
     let observation =
         run_module("annotated.ash", source.text()).expect("annotated binding should run");
-    let Value::Integer(value) = observation.value() else {
+    let Value::SmallInteger(value) = observation.value() else {
         panic!("expected an integer value");
     };
-    assert_eq!(*value, Integer::parse_decimal("42").expect("valid integer"));
+    assert_eq!(value.to_string(), "42");
     assert_eq!(observation.ty(), &Type::Int);
 }
 
@@ -319,7 +343,7 @@ fn annotated_function_is_checked_from_the_binding_annotation() {
     )
     .expect("expected-typed function Core should validate");
     let evaluation = evaluate(&validated).expect("unused function binding should evaluate");
-    assert!(matches!(evaluation.value, Value::Integer(value) if value.to_string() == "1"));
+    assert!(matches!(evaluation.value, Value::SmallInteger(value) if value.to_string() == "1"));
 }
 
 #[test]
@@ -367,10 +391,10 @@ fn nested_block_initializer_restores_the_outer_context_and_core_binding_stack() 
     );
 
     let evaluation = evaluate(&validated).expect("nested bindings should evaluate");
-    let Value::Integer(value) = evaluation.value else {
+    let Value::SmallInteger(value) = evaluation.value else {
         panic!("expected an integer value");
     };
-    assert_eq!(value, Integer::parse_decimal("41").expect("valid integer"));
+    assert_eq!(value.to_string(), "41");
     assert_eq!(ty, Type::Int);
 }
 
@@ -441,10 +465,10 @@ fn long_flat_binding_machine_shares_extensions_and_drops_on_a_small_stack() {
             )
             .expect("long binding Core should validate");
             let evaluation = evaluate(&validated).expect("long binding Core should evaluate");
-            let Value::Integer(ref value) = evaluation.value else {
+            let Value::SmallInteger(ref value) = evaluation.value else {
                 panic!("expected an integer value");
             };
-            assert_eq!(value, &one);
+            assert_eq!(value.to_string(), one.to_string());
             assert_eq!(evaluation.trace.len(), BINDINGS * 2 + 1);
             drop(evaluation);
             drop(validated);

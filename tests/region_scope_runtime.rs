@@ -35,7 +35,7 @@ fn run(source: &str) -> String {
 fn declared_host_region_constructs_and_consumes_a_tuple_before_close() {
     assert_eq!(
         run(
-            "main : Unit -> Int\nmain () = region<R> r {\nlet pair = (20, 22)\nmatch pair {\n(left, right) => left + right\n}\n}\n"
+            "main : Unit -> Int\nmain () = region<R> r {\nlet pair = (20, 22)\nmatch pair {\n(left, right) => match (left + right) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n"
         ),
         "42"
     );
@@ -45,7 +45,7 @@ fn declared_host_region_constructs_and_consumes_a_tuple_before_close() {
 fn explicit_selection_constructs_under_an_enclosing_live_region() {
     assert_eq!(
         run(
-            "main : Unit -> Int\nmain () = region<R> outer {\nregion<S> inner {\nusing outer {\nlet pair = (20, 22)\nmatch pair {\n(left, right) => left + right\n}\n}\n}\n}\n"
+            "main : Unit -> Int\nmain () = region<R> outer {\nregion<S> inner {\nusing outer {\nlet pair = (20, 22)\nmatch pair {\n(left, right) => match (left + right) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n}\n}\n"
         ),
         "42"
     );
@@ -122,9 +122,9 @@ fn outer_selected_tuple_remains_readable_after_inner_close() {
         run(concat!(
             "main : Unit -> Int\nmain () = region<R> outer {\n",
             "let kept = region<S> inner {\nlet local = (1, 2)\n",
-            "let total = match local {\n(a, b) => a + b\n}\n",
+            "let total = match local {\n(a, b) => match (a + b) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n",
             "using outer {\n(20, 22)\n}\n}\n",
-            "match kept {\n(a, b) => a + b\n}\n}\n",
+            "match kept {\n(a, b) => match (a + b) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n",
         )),
         "42"
     );
@@ -313,4 +313,172 @@ fn selected_string_and_byte_copies_survive_an_inner_close() {
         )),
         "12"
     );
+}
+
+#[test]
+fn integer_immediate_literal_can_escape_its_region() {
+    assert_eq!(
+        run("main : Unit -> Int\nmain () = region<R> r {\n42\n}\n"),
+        "42"
+    );
+}
+
+#[test]
+fn integer_large_literal_retains_its_region() {
+    let failure = run_result(
+        "main : Unit -> Int\nmain () = region<R> r {\n340282366920938463463374607431768211456\n}\n",
+    )
+    .unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection")
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source lifetime rejection: {diagnostic:?}")
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn integer_local_arithmetic_is_conservatively_resident() {
+    let failure =
+        run_result("main : Unit -> Int\nmain () = region<R> r {\n20 + 22\n}\n").unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection")
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source lifetime rejection: {diagnostic:?}")
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn integer_arithmetic_can_select_the_surviving_outer_region() {
+    assert_eq!(
+        run(
+            "main : Unit -> Int\nmain () = region<R> outer {\nlet result = region<S> inner {\nusing outer {\n20 + 22\n}\n}\nmatch result == 42 {\ntrue => 42\nfalse => 0\n}\n}\n"
+        ),
+        "42"
+    );
+}
+
+#[test]
+fn integer_host_backing_preserves_large_literal_and_overflow_results() {
+    let expected = "340282366920938463463374607431768211456";
+    assert_eq!(
+        run("main : Unit -> Int\nmain () = 340282366920938463463374607431768211456\n"),
+        expected
+    );
+    assert_eq!(
+        run("main : Unit -> Int\nmain () = 9223372036854775808 * 9223372036854775808 * 4\n"),
+        expected
+    );
+    assert_eq!(
+        run("main : Unit -> Int\nmain () = 340282366920938463463374607431768211456 + 1\n"),
+        "340282366920938463463374607431768211457"
+    );
+}
+
+#[test]
+fn integer_known_call_and_projection_preserve_immediate_independence() {
+    assert_eq!(
+        run(
+            "identity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = region<R> r {\nmatch (42, 0) {\n(value, ignored) => identity value\n}\n}\n"
+        ),
+        "42"
+    );
+}
+
+#[test]
+fn integer_legacy_cell_read_preserves_stored_immediate_facts() {
+    assert_eq!(
+        run(
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<C> cell = 41 {\nCell.read cell\n}\n"
+        ),
+        "41"
+    );
+}
+
+#[test]
+fn integer_legacy_cell_read_preserves_older_digit_backing() {
+    assert_eq!(
+        run(
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {\nlet original = 340282366920938463463374607431768211456\nresource cell<C> cell = original {\nCell.read cell\n}\n}\n"
+        ),
+        "340282366920938463463374607431768211456"
+    );
+}
+
+#[test]
+fn integer_legacy_cell_rejects_younger_digit_backpatch() {
+    let failure = run_result("import @builtin.cell as Cell\nmain : Unit -> Unit\nmain () = resource cell<C> cell = 0 {\nregion<R> local {\nCell.write (cell, 340282366920938463463374607431768211456)\n}\n}\n").unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection")
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source lifetime rejection: {diagnostic:?}")
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn integer_binary_operands_resume_once_in_source_order() {
+    assert_eq!(
+        run(
+            "import @builtin.cell as Cell\neffect Tick {\nnext : Int -> Int\n}\nmain : Unit -> Int\nmain () = resource cell<C> steps = 0 {\nlet value = handle (perform Tick.next 1) * (perform Tick.next 2) with Tick {\nnext tag => {\nlet _ = Cell.write (steps, (Cell.read steps) * 10 + tag)\nresume 18446744073709551616\n}\n}\nmatch value == 340282366920938463463374607431768211456 {\ntrue => match (Cell.read steps) == 12 {\ntrue => 42\nfalse => 0\n}\nfalse => 0\n}\n}\n"
+        ),
+        "42"
+    );
+}
+
+#[test]
+fn integer_handled_request_result_preserves_digit_residency() {
+    let failure = run_result("effect Read {\nget : Unit -> Int\n}\nmain : Unit -> Int\nmain () = region<R> r {\nhandle perform Read.get () with Read {\nget ignored => resume 340282366920938463463374607431768211456\n}\n}\n").unwrap_err();
+    let ash::driver::FileFailure::Pipeline(diagnostic) = failure else {
+        panic!("expected source lifetime rejection")
+    };
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+        diagnostic.failure()
+    else {
+        panic!("expected source lifetime rejection: {diagnostic:?}")
+    };
+    assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+}
+
+#[test]
+fn integer_imported_summaries_preserve_actual_residency() {
+    let directory = std::env::temp_dir().join(format!(
+        "ash-int-summary-{}-{}",
+        std::process::id(),
+        NEXT_SOURCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("values.ash"), "pub identity : Int -> Int\nidentity value = value\npub large : Unit -> Int\nlarge () = 340282366920938463463374607431768211456\n").unwrap();
+    for (body, accepted) in [("Values.identity 42", true), ("Values.large ()", false)] {
+        let entry = directory.join("entry.ash");
+        fs::write(&entry,format!("import values as Values\nmain : Unit -> Int\nmain () = region<R> r {{\n{body}\n}}\n")).unwrap();
+        let result = run_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        });
+        if accepted {
+            assert_eq!(result.unwrap().value_display(), "42");
+        } else {
+            let ash::driver::FileFailure::Pipeline(diagnostic) = result.unwrap_err() else {
+                panic!("expected source lifetime rejection")
+            };
+            let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(error)) =
+                diagnostic.failure()
+            else {
+                panic!("expected source lifetime rejection: {diagnostic:?}")
+            };
+            assert_eq!(error.reason, ash::elaborate::TypeReason::ResourceEscape);
+        }
+    }
+    fs::remove_dir_all(directory).unwrap();
 }

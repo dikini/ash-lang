@@ -147,11 +147,14 @@ pub struct RegionBufferNode {
     pub(crate) api: ModuleId,
     pub(crate) context: NodeId,
     pub(crate) operand: Option<NodeId>,
+    pub(crate) right: Option<NodeId>,
     pub(crate) operation: RegionBufferOperation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RegionBufferOperation {
+    IntegerLiteral(std::sync::Arc<crate::integer::Integer>),
+    IntegerArithmetic(super::Primitive),
     StringLiteral(std::sync::Arc<[u8]>),
     Intrinsic(super::packed::IntrinsicNode),
 }

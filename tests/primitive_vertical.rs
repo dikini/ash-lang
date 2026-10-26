@@ -8,7 +8,6 @@ use ash::{
     core::{Primitive, PureComputation, PureExprKind, PureValue, validate},
     elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason},
     eval::{TraceEvent, Value, evaluate},
-    integer::Integer,
     module::{ModuleRoots, load_module_graph},
     resolve::resolve_module,
     resolved::{ResolvedDefinitionKind, ResolvedExpr},
@@ -292,13 +291,10 @@ fn machine_evaluates_v001_with_left_to_right_entry_events() {
     let program = validated_expression("1 + 2 * 3\n");
     let evaluation = evaluate(&program).expect("validated primitive Core should evaluate");
 
-    let Value::Integer(value) = evaluation.value else {
+    let Value::SmallInteger(value) = evaluation.value else {
         panic!("expected an integer value");
     };
-    assert_eq!(
-        value,
-        Integer::parse_decimal("7").expect("valid test integer")
-    );
+    assert_eq!(value.to_string(), "7");
     let entered = evaluation
         .trace
         .iter()

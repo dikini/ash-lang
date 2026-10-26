@@ -95,18 +95,25 @@ closure storage, remaining recursive initialization/abandonment evidence,
 target-specific discharge, observation-before-root-release ordering and full
 completion remain required, followed by the connected R-core gate. This changes no original criterion or required product evidence.
 
-### Next: integer residency clarification, then digit storage
+### Current: integer storage checkpoint
 
-First independently review [CP-0025 integer admission](../../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission):
-known immediate literals/bounded leaves remain independent, potentially large
-Add/Multiply retain selected-region residency, and unknown Int has no scalar
-exemption. This admits literal `42` across a region boundary but conservatively
-rejects local `20 + 22` escaping it. No range analysis or relocation is implied.
-Then implement actual digit bytes on the retained byte seam, preserving actual
-alias/projection/call/request summaries and replacing legacy Cell host-Integer
-clones. Required checks distinguish mathematical equality from lifetime
-admission, including explicit arithmetic escape changes. Review this contract
-checkpoint before product changes; no Rust/test/proof build belongs to it.
+[PR #150](https://github.com/dikini/ash-lang/pull/150) retained the
+[integer admission clarification](../../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission)
+at `5ce3f294` before product work. The current candidate reuses byte storage for
+large digits and keeps small values inline. Existing actual-value equations now
+cover legacy Cell contents; finite creation classes distinguish invocation and
+handler-dispatch contexts while preserving exact capture coordinates, existing
+invocation recurrence and class-sensitive dispatch recurrence.
+
+The approved Source/Core and startup coefficient recalibrations preserve
+canonical input counting and separate cumulative phase owners. Normal source execution and the
+original staged 256 KiB stress checks pass with the exact 24-owner release
+assertions. The separate whole-public-driver 256 KiB abort is unclassified.
+The original 1,024-level registration runtime/refusal/retry stress also passes
+with its 256 KiB worker. Finish the final focused refresh and independent review
+before partial retention; do not count setup-blocked numeric outputs or the
+rejected raw-key trial as verification. All original R3–R5 criteria, remaining representations,
+completion/discharge and the connected R-core gate stay pending.
 
 ## Ordered deliveries
 

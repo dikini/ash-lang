@@ -29,22 +29,28 @@ fn with_source<T>(source: &str, run: impl FnOnce(RunConfiguration) -> T) -> T {
 
 #[test]
 fn ordinary_public_execution_reports_completed_costs_without_changing_the_value() {
-    let result = with_source("main : Unit -> Int\nmain () = 42\n", |configuration| {
-        run_path(configuration).unwrap()
+    let (result, bytes) = with_source("main : Unit -> Int\nmain () = 42\n", |configuration| {
+        let graph = load_module_graph(&configuration.entry, &configuration.roots).unwrap();
+        let bytes: usize = graph
+            .modules()
+            .iter()
+            .map(|module| module.source().text().len())
+            .sum();
+        (run_path(configuration).unwrap(), bytes)
     });
     assert_eq!(result.value_display(), "42");
     let report = result.compilation_work();
     assert_eq!(
         report.source_checking.unwrap().allowance,
-        Some(800 * "main : Unit -> Int\nmain () = 42\n".len())
+        Some(2600 * bytes)
     );
     assert_eq!(
         report.final_elaboration.unwrap().allowance,
-        Some(800 * "main : Unit -> Int\nmain () = 42\n".len())
+        Some(800 * bytes)
     );
     assert_eq!(
         report.independent_core.unwrap().allowance,
-        Some(345 * "main : Unit -> Int\nmain () = 42\n".len())
+        Some(5300 * bytes)
     );
     for (cost, phase) in [
         (report.source_checking, CompilationPhase::SourceChecking),
@@ -66,7 +72,14 @@ fn effect_execution_reports_paid_canonical_totals_without_alias_credit() {
         "import @builtin.cell as Cell\nimport @builtin.cell as Alias\nmain : Unit -> Int\nmain () = resource cell<R> value = 42 {\n    Cell.read value\n}\n",
         |configuration| {
             let graph = load_module_graph(&configuration.entry, &configuration.roots).unwrap();
-            assert_eq!(graph.modules().len(), 2);
+            assert_eq!(
+                graph
+                    .modules()
+                    .iter()
+                    .filter(|module| module.source().display_path() == "@builtin.cell")
+                    .count(),
+                1
+            );
             let bytes: usize = graph
                 .modules()
                 .iter()
@@ -76,9 +89,9 @@ fn effect_execution_reports_paid_canonical_totals_without_alias_credit() {
             assert_eq!(result.value_display(), "42");
             let report = result.compilation_work();
             for (cost, coefficient) in [
-                (report.source_checking.unwrap(), 800),
+                (report.source_checking.unwrap(), 2600),
                 (report.final_elaboration.unwrap(), 800),
-                (report.independent_core.unwrap(), 345),
+                (report.independent_core.unwrap(), 5300),
             ] {
                 assert!(cost.completed);
                 assert_eq!(cost.allowance, Some(coefficient * bytes));

@@ -332,7 +332,7 @@ fn module_newtype_resource_matrix_accounts_all_new_carriers() {
     assert_eq!(conversion_count(&predecessor_core), 0);
     let before = evaluate(&predecessor_core).expect("predecessor Core should evaluate");
     let after = evaluate(&predecessor_core).expect("predecessor Core should remain reusable");
-    assert!(matches!(before.value, Value::Integer(_)));
+    assert!(matches!(before.value, Value::SmallInteger(_)));
     assert_eq!(before.value.to_string(), "42");
     assert_eq!(before.trace, after.trace);
     assert_eq!(before.trace.len(), 7);
