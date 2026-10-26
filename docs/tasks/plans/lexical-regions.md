@@ -95,25 +95,22 @@ closure storage, remaining recursive initialization/abandonment evidence,
 target-specific discharge, observation-before-root-release ordering and full
 completion remain required, followed by the connected R-core gate. This changes no original criterion or required product evidence.
 
-### Current: integer storage checkpoint
+### Current: closure storage and creation timing
 
-[PR #150](https://github.com/dikini/ash-lang/pull/150) retained the
-[integer admission clarification](../../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission)
-at `5ce3f294` before product work. The current candidate reuses byte storage for
-large digits and keeps small values inline. Existing actual-value equations now
-cover legacy Cell contents; finite creation classes distinguish invocation and
-handler-dispatch contexts while preserving exact capture coordinates, existing
-invocation recurrence and class-sensitive dispatch recurrence.
+[PR #151](https://github.com/dikini/ash-lang/pull/151) retained integer storage at
+`df79789134d680f4288b48c0081c6c74c6bf4de9`; 216 distinct focused cases transfer by
+reviewed-tree equality. This is partial R3 acceptance, not a full R-core gate.
+The next slice implements actual supplied closure capture storage. Its bounded
+[creation-timing amendment](../../proposals/CP-0025-lexical-region-construction.md#closure-creation-timing-accepted-amendment-2026-10-26)
+was accepted after independent contract review, not as current Main behavior;
+the initial ordinary-closure residency and native allocation tests are red. Reuse existing capture metadata, recursive
+slots, typed Value storage and the host adapter. Do not execute adapters eagerly
+or introduce another environment/storage framework.
 
-The approved Source/Core and startup coefficient recalibrations preserve
-canonical input counting and separate cumulative phase owners. Normal source execution and the
-original staged 256 KiB stress checks pass with the exact 24-owner release
-assertions. The separate whole-public-driver 256 KiB abort is unclassified.
-The original 1,024-level registration runtime/refusal/retry stress also passes
-with its 256 KiB worker. Finish the final focused refresh and independent review
-before partial retention; do not count setup-blocked numeric outputs or the
-rejected raw-key trial as verification. All original R3–R5 criteria, remaining representations,
-completion/discharge and the connected R-core gate stay pending.
+All original R3–R5 criteria, remaining recursive evidence, completion/discharge,
+fixture migrations and the connected R-core gate stay pending. The separate
+whole-public-driver 256 KiB abort remains unclassified; the retained original
+staged stress results do not clear it.
 
 ## Ordered deliveries
 
