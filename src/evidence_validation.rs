@@ -12630,51 +12630,71 @@ mod tests {
             LinkedGlobalParameterRowMutationForTest::DuplicateOwner,
         ];
         for mutation in mutations {
-            let mut program = linked_registry_row_program();
-            let [first_row, second_row] = program.registry().global_parameter_rows() else {
-                panic!("the linked fixture must retain exactly two global rows");
-            };
-            let original_owners = [first_row.owner(), second_row.owner()];
-            let original_parameters = [
-                first_row.parameters().to_vec(),
-                second_row.parameters().to_vec(),
-            ];
-            let empty_owner = program
+            let ValidatedInterfaceProgram {
+                source: mut program,
+                ..
+            } = validate_interface_evidence(linked_registry_row_program())
+                .expect("the same complete row donor must authenticate before corruption");
+            let pair = program
                 .groups()
                 .iter()
                 .flat_map(|group| group.schemes())
-                .find(|scheme| scheme.scheme.type_parameters.is_empty())
-                .map(|scheme| scheme.binder)
-                .expect("the linked fixture must retain an empty-scheme owner");
-            let scheme_spans = program
-                .groups()
+                .find(|scheme| scheme.spelling == "pair")
+                .expect("the defining pair owner");
+            let second = entry_group(&program)
+                .schemes()
                 .iter()
-                .flat_map(|group| group.schemes())
-                .filter(|scheme| !scheme.scheme.type_parameters.is_empty())
-                .map(|scheme| scheme.origin.primary_span())
+                .find(|scheme| scheme.spelling == "second")
+                .expect("the entry second owner");
+            let original_owners = [pair.binder, second.binder];
+            let first_span = pair.origin.primary_span();
+            let second_span = second.origin.primary_span();
+            let empty_owner = entry_group(&program)
+                .schemes()
+                .iter()
+                .find(|scheme| {
+                    scheme.spelling == "main" && scheme.scheme.type_parameters.is_empty()
+                })
+                .expect("the entry main must have an empty scheme")
+                .binder;
+            let all_rows = program.registry().global_parameter_rows();
+            let positions = original_owners.map(|owner| {
+                all_rows
+                    .iter()
+                    .position(|row| row.owner() == owner)
+                    .expect("each named user row must occur in the full registry")
+            });
+            let original_parameters =
+                positions.map(|position| all_rows[position].parameters().to_vec());
+            let original_rows = all_rows
+                .iter()
+                .map(|row| (row.owner(), row.parameters().to_vec()))
                 .collect::<Vec<_>>();
-            let [first_span, second_span] = scheme_spans.as_slice() else {
-                panic!("the linked fixture must retain exactly two non-empty schemes");
-            };
             let result_span = program.result().span;
             let expected_primary = match mutation {
                 LinkedGlobalParameterRowMutationForTest::Owner
                 | LinkedGlobalParameterRowMutationForTest::ParameterIdentity
                 | LinkedGlobalParameterRowMutationForTest::ParameterOrder
                 | LinkedGlobalParameterRowMutationForTest::RowOrder
-                | LinkedGlobalParameterRowMutationForTest::OwnerPosition => *first_span,
+                | LinkedGlobalParameterRowMutationForTest::OwnerPosition => first_span,
                 LinkedGlobalParameterRowMutationForTest::MissingRow
-                | LinkedGlobalParameterRowMutationForTest::DuplicateOwner => *second_span,
+                | LinkedGlobalParameterRowMutationForTest::DuplicateOwner => second_span,
                 LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition
                 | LinkedGlobalParameterRowMutationForTest::ExtraRow => result_span,
             };
             assert!(
-                program.corrupt_linked_global_parameter_rows_for_test(mutation),
+                program.corrupt_linked_global_parameter_rows_for_test(
+                    mutation,
+                    original_owners,
+                    empty_owner
+                ),
                 "the linked fixture must support {mutation:?}",
             );
             match mutation {
                 LinkedGlobalParameterRowMutationForTest::Owner => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len());
+                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
                     assert_eq!(rows.len(), 2);
                     assert_eq!(rows[0].owner(), empty_owner);
                     assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
@@ -12689,11 +12709,13 @@ mod tests {
                             .registry()
                             .global_parameter_row(empty_owner)
                             .expect("the replacement owner index must remain coherent"),
-                        &rows[0],
+                        rows[0],
                     ));
                 }
                 LinkedGlobalParameterRowMutationForTest::RowOrder => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len());
+                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
                     assert_eq!(rows.len(), 2);
                     assert_eq!(rows[0].owner(), original_owners[1]);
                     assert_eq!(rows[1].owner(), original_owners[0]);
@@ -12704,18 +12726,20 @@ mod tests {
                             .registry()
                             .global_parameter_row(original_owners[1])
                             .expect("the moved second owner index must remain coherent"),
-                        &rows[0],
+                        rows[0],
                     ));
                     assert!(std::ptr::eq(
                         program
                             .registry()
                             .global_parameter_row(original_owners[0])
                             .expect("the moved first owner index must remain coherent"),
-                        &rows[1],
+                        rows[1],
                     ));
                 }
                 LinkedGlobalParameterRowMutationForTest::DuplicateOwner => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len());
+                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
                     assert_eq!(rows.len(), 2);
                     assert_eq!(rows[0].owner(), original_owners[0]);
                     assert_eq!(rows[1].owner(), original_owners[0]);
@@ -12726,7 +12750,7 @@ mod tests {
                             .registry()
                             .global_parameter_row(original_owners[0])
                             .expect("the first duplicate owner position must remain authoritative"),
-                        &rows[0],
+                        rows[0],
                     ));
                     assert!(
                         program
@@ -12736,7 +12760,9 @@ mod tests {
                     );
                 }
                 LinkedGlobalParameterRowMutationForTest::ParameterIdentity => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len());
+                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
                     assert_eq!(rows.len(), 2);
                     assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
                     let replacement = rows[0].parameters()[0];
@@ -12761,18 +12787,20 @@ mod tests {
                             .registry()
                             .global_parameter_row(original_owners[0])
                             .expect("the first owner index must remain coherent"),
-                        &rows[0],
+                        rows[0],
                     ));
                     assert!(std::ptr::eq(
                         program
                             .registry()
                             .global_parameter_row(original_owners[1])
                             .expect("the second owner index must remain coherent"),
-                        &rows[1],
+                        rows[1],
                     ));
                 }
                 LinkedGlobalParameterRowMutationForTest::ParameterOrder => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len());
+                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
                     assert_eq!(rows.len(), 2);
                     assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
                     assert_eq!(
@@ -12785,18 +12813,20 @@ mod tests {
                             .registry()
                             .global_parameter_row(original_owners[0])
                             .expect("the first owner index must remain coherent"),
-                        &rows[0],
+                        rows[0],
                     ));
                     assert!(std::ptr::eq(
                         program
                             .registry()
                             .global_parameter_row(original_owners[1])
                             .expect("the second owner index must remain coherent"),
-                        &rows[1],
+                        rows[1],
                     ));
                 }
                 LinkedGlobalParameterRowMutationForTest::OwnerPosition => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len());
+                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
                     assert_eq!(rows.len(), 2);
                     assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
                     assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
@@ -12815,12 +12845,14 @@ mod tests {
                     );
                 }
                 LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len());
+                    let rows = [&all_rows[positions[0]], &all_rows[positions[1]]];
                     assert_eq!(rows.len(), 2);
                     assert_eq!([rows[0].owner(), rows[1].owner()], original_owners);
                     assert_eq!(
                         program.registry().global_parameter_position_count(),
-                        rows.len() + 1,
+                        all_rows.len() + 1,
                     );
                     assert!(
                         program
@@ -12830,7 +12862,9 @@ mod tests {
                     );
                 }
                 LinkedGlobalParameterRowMutationForTest::MissingRow => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len() - 1);
+                    let rows = [&all_rows[positions[0]]];
                     assert_eq!(rows.len(), 1);
                     assert_eq!(rows[0].owner(), original_owners[0]);
                     assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
@@ -12839,7 +12873,7 @@ mod tests {
                             .registry()
                             .global_parameter_row(original_owners[0])
                             .expect("the retained owner index must remain coherent"),
-                        &rows[0],
+                        rows[0],
                     ));
                     assert!(
                         program
@@ -12849,7 +12883,13 @@ mod tests {
                     );
                 }
                 LinkedGlobalParameterRowMutationForTest::ExtraRow => {
-                    let rows = program.registry().global_parameter_rows();
+                    let all_rows = program.registry().global_parameter_rows();
+                    assert_eq!(all_rows.len(), original_rows.len() + 1);
+                    let rows = [
+                        &all_rows[positions[0]],
+                        &all_rows[positions[1]],
+                        &all_rows[original_rows.len()],
+                    ];
                     assert_eq!(rows.len(), 3);
                     assert_eq!([rows[0].owner(), rows[1].owner()], original_owners,);
                     assert_eq!(rows[0].parameters(), original_parameters[0].as_slice());
@@ -12861,24 +12901,49 @@ mod tests {
                             .registry()
                             .global_parameter_row(original_owners[0])
                             .expect("the first owner index must remain coherent"),
-                        &rows[0],
+                        rows[0],
                     ));
                     assert!(std::ptr::eq(
                         program
                             .registry()
                             .global_parameter_row(original_owners[1])
                             .expect("the second owner index must remain coherent"),
-                        &rows[1],
+                        rows[1],
                     ));
                     assert!(std::ptr::eq(
                         program
                             .registry()
                             .global_parameter_row(empty_owner)
                             .expect("the surplus owner index must remain coherent"),
-                        &rows[2],
+                        rows[2],
                     ));
                 }
             }
+            let all_rows = program.registry().global_parameter_rows();
+            for (old_position, (owner, parameters)) in original_rows.iter().enumerate() {
+                if original_owners.contains(owner) {
+                    continue;
+                }
+                let position = if matches!(
+                    mutation,
+                    LinkedGlobalParameterRowMutationForTest::MissingRow
+                ) && old_position > positions[1]
+                {
+                    old_position - 1
+                } else {
+                    old_position
+                };
+                assert_eq!(all_rows[position].owner(), *owner);
+                assert_eq!(all_rows[position].parameters(), parameters.as_slice());
+                assert!(std::ptr::eq(
+                    program
+                        .registry()
+                        .global_parameter_row(*owner)
+                        .expect("every unrelated row index remains coherent"),
+                    &all_rows[position]
+                ));
+            }
+
             let failure = validate_interface_evidence(program)
                 .expect_err("every independent row mutation must fail before Core");
             assert_eq!(
@@ -12988,22 +13053,46 @@ mod tests {
 
     #[test]
     fn linked_registry_canonical_malformation_precedes_a_later_row_mismatch() {
-        let (mut both, base) = linked_higher_kinded_diamond_program();
+        let (both, base) = linked_higher_kinded_diamond_program();
+        let ValidatedInterfaceProgram {
+            source: mut both, ..
+        } = validate_interface_evidence(both)
+            .expect("the same complete priority donor must validate before corruption");
         let canonical_span = both
             .registry()
             .nominals()
-            .first()
+            .iter()
+            .find(|nominal| nominal.id.module() == base)
             .and_then(|nominal| both.registry().nominal_parameters(nominal.id))
             .and_then(|parameters| parameters.first())
             .map(|parameter| parameter.origin.primary_span())
             .expect("the fixture should retain a canonical nominal parameter");
-        let row_span = both
+        let base_group = both
             .groups()
             .iter()
-            .flat_map(|group| group.schemes())
-            .find(|scheme| !scheme.scheme.type_parameters.is_empty())
-            .map(|scheme| scheme.origin.primary_span())
-            .expect("the fixture should retain a non-empty checked global scheme");
+            .find(|group| group.module() == base)
+            .expect("base group");
+        let row_owners = ["expose", "relay"].map(|name| {
+            base_group
+                .schemes()
+                .iter()
+                .find(|scheme| scheme.spelling == name)
+                .expect("the defining user row")
+                .binder
+        });
+        let row_span = base_group
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.binder == row_owners[0])
+            .expect("the exact corrupted user row")
+            .origin
+            .primary_span();
+        let empty_owner = entry_group(&both)
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.spelling == "main")
+            .expect("the empty entry owner")
+            .binder;
         assert_ne!(canonical_span, row_span);
         assert!(both.corrupt_linked_carrier_for_test(
             base,
@@ -13011,6 +13100,8 @@ mod tests {
         ));
         assert!(both.corrupt_linked_global_parameter_rows_for_test(
             LinkedGlobalParameterRowMutationForTest::Owner,
+            row_owners,
+            empty_owner,
         ));
         let found = validate_interface_evidence(both)
             .expect_err("the earlier canonical failure must preempt row authentication");
@@ -14085,7 +14176,7 @@ mod tests {
             .expect("an honest dependent-only global binder must authenticate before Core");
 
         let mut no_edge = dependent_only_global_program();
-        let module = no_edge.groups()[0].module();
+        let module = no_edge.entry();
         assert!(no_edge.coherently_remove_first_interface_determination_for_test(module));
         assert_eq!(
             validate_interface_evidence(no_edge)
@@ -14095,7 +14186,7 @@ mod tests {
         );
 
         let mut missing_key = dependent_only_global_program();
-        let module = missing_key.groups()[0].module();
+        let module = missing_key.entry();
         assert!(
             missing_key.coherently_make_first_determined_global_key_only_unused_for_test(module)
         );
@@ -14916,14 +15007,17 @@ mod tests {
 
     #[test]
     fn rejects_unused_inline_and_implementation_registry_binder_mirrors_before_core() {
-        let mut inline = entry_program(concat!(
+        let ValidatedInterfaceProgram {
+            source: mut inline, ..
+        } = validate_interface_evidence(entry_program(concat!(
             "fn operational<F : Type -> Type>(value : F<Int>) -> F<Int> {\n",
             "value\n",
             "}\n\n",
             "main : Unit -> Unit\n",
             "main () = ()\n",
-        ));
-        let module = inline.groups()[0].module();
+        )))
+        .expect("the same honest inline donor must validate before mutation");
+        let module = inline.entry();
         assert!(inline.erase_first_inline_global_binder_occurrence_for_test(module));
         assert_eq!(
             validate_interface_evidence(inline)
@@ -14932,7 +15026,11 @@ mod tests {
             EvidenceValidationReason::UnknownIdentity,
         );
 
-        let mut implementation = higher_kinded_generic_program();
+        let ValidatedInterfaceProgram {
+            source: mut implementation,
+            ..
+        } = validate_interface_evidence(higher_kinded_generic_program())
+            .expect("the same honest implementation donor must validate before mutation");
         assert!(implementation.corrupt_first_linked_implementation_parameter_spelling_for_test());
         assert_eq!(
             validate_interface_evidence(implementation)

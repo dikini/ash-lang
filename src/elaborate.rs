@@ -31089,20 +31089,49 @@ mod tests {
     }
 
     #[test]
-    fn private_pure_module_keeps_unused_capture_summaries_empty() {
+    fn private_region_source_functions_retain_required_lifetime_summaries() {
         let resolved = resolved_module_fixture(
-            "private-pure-capture.ash",
+            "private-region-capture.ash",
             "hidden : Unit -> Int\nhidden () = 42\n",
             "Int",
             "hidden ()",
         );
-        let checked = check_module(resolved).expect("the private pure module checks");
+        let mut effect = EffectElaborator::for_module(&resolved)
+            .expect("the actual region-using Source family should be available");
+        let schemes = effect
+            .checked_module_schemes(resolved.definitions())
+            .unwrap();
+        assert_eq!(schemes.len(), 2);
+        for scheme in &schemes {
+            assert!(
+                resolved.export_candidate().term(&scheme.spelling).is_none(),
+                "neither private user global has a portable export consumer"
+            );
+            let function = scheme
+                .scheme
+                .value_type
+                .function_view()
+                .expect("the user function arrow");
+            let row = function
+                .effects()
+                .expect("unwritten Source arrows retain DefaultAlloc");
+            assert_eq!(row.known().len(), 1);
+            assert!(row.known()[0].effect().module().is_builtin_region());
+        }
+        assert!(
+            effect
+                .capture_publication_required(&resolved, &schemes)
+                .unwrap(),
+            "Effect functions require their local lifetime proofs without exports"
+        );
+        drop(effect);
+        let checked =
+            check_module(resolved).expect("the private region-using Source module checks");
         assert_eq!(checked.schemes().len(), 2);
         for scheme in checked.schemes() {
-            assert_eq!(
-                scheme.capture,
-                crate::core::capture::CaptureValueSummary::default(),
-                "a private pure module has no portable-summary consumer"
+            assert!(
+                scheme.capture.is_retained(),
+                "private region-using functions retain their required local lifetime summaries"
             );
         }
     }
@@ -34868,9 +34897,39 @@ mod tests {
         );
     }
 
+    fn admitted_newtype_pattern_fixture(
+        display_path: &str,
+        text: &str,
+    ) -> crate::core::effect::ValidatedEffectProgram {
+        let (resolved, sources, _, mut checked) =
+            cell_module_fixture_sources_at(display_path, text);
+        let entry = resolved.module();
+        checked.push(check_module(resolved).expect("the complete pattern entry should check"));
+        let relation = checked
+            .iter()
+            .map(|module| (module.module(), module.span().source()))
+            .collect::<Vec<_>>();
+        let linked =
+            link_modules(checked, entry).expect("the complete pattern component should link");
+        let linked = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the complete pattern component should authenticate its evidence");
+        let mut elaborator = EffectElaborator::for_module_program(&linked)
+            .expect("the pattern Effect namespace should fit");
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .expect("the complete pattern component should lower");
+        let unchecked = elaborator
+            .finish(typed.node)
+            .expect("the pattern Effect root should finish");
+        drop(linked);
+        let refs = sources.iter().collect::<Vec<_>>();
+        crate::core::validate_effect_modules(unchecked, &refs, &relation)
+            .expect("the complete pattern Effect Core should independently validate")
+    }
+
     #[test]
     fn local_parameterized_newtype_constructor_is_a_generated_unary_wrap_function() {
-        let file = ModuleFixtureFile::write(
+        let program = admitted_newtype_pattern_fixture(
             "local-parameterized-newtype-constructor.ash",
             concat!(
                 "newtype Box<A> = Box(A)\n",
@@ -34881,84 +34940,73 @@ mod tests {
                 "}\n",
             ),
         );
-        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
-            .expect("the local constructor fixture should load");
-        let loaded = graph
-            .module(graph.entry())
-            .expect("the local constructor entry should remain loaded");
-        let resolved = resolve_module(loaded, &[])
-            .expect("the local parameterized constructor should resolve");
-        let checked = check_module(resolved)
-            .expect("the locally bound parameterized constructor should check");
-        let linked = link_modules(vec![checked], graph.entry())
-            .expect("the local constructor fixture should link");
-        let linked = crate::evidence_validation::validate_interface_evidence(linked)
-            .expect("the local constructor fixture has no interface evidence");
-        let registry = Arc::clone(linked.registry());
-        let mut elaborator = Elaborator::for_module_program(&linked)
-            .expect("the local constructor Core namespace should fit");
-        let typed = elaborator
-            .synthesize_module_program(&linked)
-            .expect("the local constructor program should synthesize");
-        let unchecked = elaborator
-            .finish(typed.node)
-            .expect("the local constructor Core should finish unchecked");
-        let kinds = unchecked.expression_kinds_for_test().collect::<Vec<_>>();
+        let registry = program.registry();
+        let box_owner = registry
+            .nominals()
+            .iter()
+            .find(|owner| owner.spelling == "Box")
+            .expect("the defining user Box must remain canonical")
+            .id;
         let mut generated_wrap_functions = 0;
-        for kind in &kinds {
-            match kind {
-                crate::core::PureExprKind::Value(crate::core::PureValue::Function(function)) => {
-                    let body = kinds
-                        .get(function.body().value() as usize)
-                        .expect("the generated function body should remain in its arena");
-                    let crate::core::PureExprKind::Computation(
-                        crate::core::PureComputation::NewtypeConversion(conversion),
-                    ) = body
-                    else {
-                        continue;
-                    };
-                    if conversion.direction() != NewtypeConversionDirection::Wrap {
-                        continue;
-                    }
-                    let owner = registry
-                        .nominal(conversion.owner())
-                        .expect("the generated wrap owner should remain canonical");
-                    if owner.declaration_kind != ResolvedNominalDeclarationKind::Newtype {
-                        continue;
-                    }
+        for node in program.nodes() {
+            let function = match &node.kind {
+                crate::core::effect::EffectExprKind::Pure(crate::core::PureExprKind::Value(
+                    crate::core::PureValue::Function(function),
+                )) => Some(function),
+                crate::core::effect::EffectExprKind::Operation(
+                    crate::core::effect::EffectOperation::RegionClosure(closure),
+                ) => closure.code.function(),
+                _ => None,
+            };
+            if let Some(function) = function {
+                let body = program
+                    .node(function.body())
+                    .expect("the generated code body must remain in its validated arena");
+                if let Some(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::NewtypeConversion(conversion),
+                )) = EffectOperationFamily::pure(&body.kind)
+                    && conversion.direction() == NewtypeConversionDirection::Wrap
+                    && conversion.owner() == box_owner
+                {
                     assert!(matches!(
-                        kinds.get(conversion.child().value() as usize),
+                        program.node(conversion.child()).and_then(|node| EffectOperationFamily::pure(&node.kind)),
                         Some(crate::core::PureExprKind::Variable(variable))
                             if variable.binder() == function.parameter().id()
                     ));
                     generated_wrap_functions += 1;
                 }
-                crate::core::PureExprKind::Value(crate::core::PureValue::Constructor(value)) => {
-                    let constructor = registry
-                        .constructor(value.constructor())
-                        .expect("an ordinary Core constructor should remain canonical");
-                    let owner = registry
-                        .nominal(constructor.owner)
-                        .expect("the ordinary Core constructor owner should remain canonical");
-                    assert_ne!(
-                        owner.declaration_kind,
-                        ResolvedNominalDeclarationKind::Newtype,
-                        "newtype constructor escaped through the allocating constructor route",
-                    );
-                }
-                _ => {}
+            }
+            let constructor = match &node.kind {
+                crate::core::effect::EffectExprKind::Operation(
+                    crate::core::effect::EffectOperation::RegionTuple(tuple),
+                ) => tuple.constructor,
+                kind => match EffectOperationFamily::pure(kind) {
+                    Some(crate::core::PureExprKind::Value(
+                        crate::core::PureValue::Constructor(value),
+                    )) => Some(value.constructor()),
+                    _ => None,
+                },
+            };
+            if let Some(constructor) = constructor {
+                let constructor = registry
+                    .constructor(constructor)
+                    .expect("an ordinary Core constructor should remain canonical");
+                let owner = registry
+                    .nominal(constructor.owner)
+                    .expect("the ordinary Core constructor owner should remain canonical");
+                assert_ne!(
+                    owner.declaration_kind,
+                    ResolvedNominalDeclarationKind::Newtype,
+                    "newtype constructor escaped through the allocating constructor route"
+                );
             }
         }
         assert_eq!(generated_wrap_functions, 1);
-
-        let source = loaded.source();
-        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-            .expect("the canonical local wrap conversion should independently authenticate");
     }
 
     #[test]
     fn mixed_fallbacks_remove_nested_parameterized_newtypes_from_core_patterns() {
-        let file = ModuleFixtureFile::write(
+        let program = admitted_newtype_pattern_fixture(
             "nested-newtype-fallback.ash",
             concat!(
                 "newtype Box<A> = Box(A)\n",
@@ -34980,30 +35028,13 @@ mod tests {
                 "main () = classify_binder(Envelope(Box(Flag(false)))) + classify_wildcard(Envelope(Box(Flag(true))))\n",
             ),
         );
-        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
-            .expect("the nested fallback fixture should load");
-        let loaded = graph
-            .module(graph.entry())
-            .expect("the nested fallback entry should remain loaded");
-        let resolved = resolve_module(loaded, &[])
-            .expect("the nested parameterized newtype patterns should resolve");
-        let checked =
-            check_module(resolved).expect("the binder and wildcard fallback patterns should check");
-        let linked = link_modules(vec![checked], graph.entry())
-            .expect("the nested fallback fixture should link");
-        let linked = crate::evidence_validation::validate_interface_evidence(linked)
-            .expect("the nested fallback fixture has no unauthenticated interface evidence");
-        let registry = Arc::clone(linked.registry());
-        let mut elaborator = Elaborator::for_module_program(&linked)
-            .expect("the nested fallback Core namespace should fit");
-        let typed = elaborator
-            .synthesize_module_program(&linked)
-            .expect("the nested fallback program should synthesize");
-        let unchecked = elaborator
-            .finish(typed.node)
-            .expect("the nested fallback Core should finish unchecked");
+        let registry = program.registry();
 
-        for kind in unchecked.expression_kinds_for_test() {
+        for kind in program
+            .nodes()
+            .iter()
+            .filter_map(|node| EffectOperationFamily::pure(&node.kind))
+        {
             let crate::core::PureExprKind::Computation(crate::core::PureComputation::Match(
                 matched,
             )) = kind
@@ -35045,36 +35076,17 @@ mod tests {
                 }
             }
         }
-
-        let source = loaded.source();
-        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-            .expect("the canonical nested conversions should independently authenticate");
     }
 
     fn assert_nested_newtype_patterns_lower_to_conversions(display_path: &str, text: &str) {
-        let file = ModuleFixtureFile::write(display_path, text);
-        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
-            .expect("the nested pattern fixture should load");
-        let loaded = graph
-            .module(graph.entry())
-            .expect("the nested pattern entry should remain loaded");
-        let resolved = resolve_module(loaded, &[]).expect("the nested patterns should resolve");
-        let checked = check_module(resolved).expect("the nested fallback patterns should check");
-        let linked = link_modules(vec![checked], graph.entry())
-            .expect("the nested pattern fixture should link");
-        let linked = crate::evidence_validation::validate_interface_evidence(linked)
-            .expect("the nested pattern fixture has no unauthenticated interface evidence");
-        let registry = Arc::clone(linked.registry());
-        let mut elaborator = Elaborator::for_module_program(&linked)
-            .expect("the nested pattern Core namespace should fit");
-        let typed = elaborator
-            .synthesize_module_program(&linked)
-            .expect("the nested pattern program should synthesize");
-        let unchecked = elaborator
-            .finish(typed.node)
-            .expect("the nested pattern Core should finish unchecked");
+        let program = admitted_newtype_pattern_fixture(display_path, text);
+        let registry = program.registry();
 
-        for kind in unchecked.expression_kinds_for_test() {
+        for kind in program
+            .nodes()
+            .iter()
+            .filter_map(|node| EffectOperationFamily::pure(&node.kind))
+        {
             let crate::core::PureExprKind::Computation(crate::core::PureComputation::Match(
                 matched,
             )) = kind
@@ -35116,10 +35128,6 @@ mod tests {
                 }
             }
         }
-
-        let source = loaded.source();
-        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-            .expect("the canonical nested conversions should independently authenticate");
     }
 
     #[test]

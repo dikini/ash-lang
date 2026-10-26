@@ -41,10 +41,16 @@ removing unused backward-prefix reconstruction from escape checks (37.49%
 Source saving, all 78 focused capture tests passing). Source `10000*S` and Core
 `25000*S` apply the existing 25% fitting rule; other owners/defaults are
 unchanged. Normal policy passes all 114 focused driver, policy, capture,
-reporting and observer checks. The fresh full-library inventory is 1,489 pass /
-106 fail across the same 1,595 names: 18 restored since the prior draft and no
-new failures. All 8,565 inputs matched before/after; only task/plan inventory
-prose changed afterward. Full workspace/all-target/all-feature Clippy passes.
+reporting and observer checks. The latest full-library inventory is 1,510 pass /
+85 fail across 1,595 executed names: 20 existing failed names restored since the
+prior draft and no new failures. One private Source capture test is renamed to
+assert its required Effect lifetime summaries, with the unchanged Pure
+exact/short/retry contract passing separately; the rename is not counted as a
+restored old name. Source pattern fixtures retain complete Effect components;
+import and row mutations target actual user identities, with honest donors
+validated before corruption and all service metadata preserved. All 8,565 inputs
+matched before/after; only task/plan inventory prose changed afterward. Full
+workspace/all-target/all-feature Clippy passes.
 An unfinished draft checkpoint and independent review precede further shared
 fixture repairs and the still-required complete normal workspace gate. Whole
 criteria stay open.

@@ -40,19 +40,22 @@ fn generic_cell_summary_authenticates_complete_facade_facts() {
         let tree = TempTree::create();
         tree.write("facade.ash", "pub import @builtin.generic_cell (read)\n");
         let graph = load(&tree, "import facade (read)\n", &[]);
-        let builtin = &graph.modules()[0];
-        let checked = check_module(resolve_module(builtin, &[]).unwrap()).unwrap();
-        let facade = &graph.modules()[1];
-        let dependency =
-            DependencyExports::new(&facade.dependencies()[0], checked.exports()).unwrap();
-        let mut summary = check_module(resolve_module(facade, &[dependency]).unwrap())
+        let builtin = graph
+            .modules()
+            .iter()
+            .find(|module| module.id().is_builtin_generic_cell())
+            .expect("the defining builtin must be loaded");
+        let checked = check_module(resolve_with(&graph, builtin, &[]).unwrap()).unwrap();
+        let facade = module_named(&graph, "facade.ash");
+        let mut summary = check_module(resolve_with(&graph, facade, &[checked.exports()]).unwrap())
             .unwrap()
             .into_exports();
+        resolve_with(&graph, graph.module(graph.entry()).unwrap(), &[&summary])
+            .expect("the honest complete builtin summary must resolve before mutation");
         summary.corrupt_builtin_fact_for_test(mutation);
         let entry = graph.module(graph.entry()).unwrap();
-        let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
         assert!(
-            resolve_module(entry, &[dependency]).is_err(),
+            resolve_with(&graph, entry, &[&summary]).is_err(),
             "generic summary forgery admitted"
         );
     }
@@ -118,17 +121,20 @@ fn builtin_cell_summary_rejects_well_kinded_operation_tampering() {
     use crate::resolved::BuiltinCellSummaryMutationForTest;
     let tree = TempTree::create();
     let graph = load(&tree, "import @builtin.cell as Cell\n", &[]);
-    let builtin = &graph.modules()[0];
-    let mut summary = check_module(resolve_module(builtin, &[]).unwrap())
+    let builtin = graph
+        .modules()
+        .iter()
+        .find(|module| module.id().is_builtin_cell())
+        .expect("the defining builtin must be loaded");
+    let mut summary = check_module(resolve_with(&graph, builtin, &[]).unwrap())
         .unwrap()
         .into_exports();
+    resolve_with(&graph, graph.module(graph.entry()).unwrap(), &[&summary])
+        .expect("the honest complete builtin summary must resolve before mutation");
     summary.corrupt_builtin_fact_for_test(BuiltinCellSummaryMutationForTest::OperationResult);
     let entry = graph.module(graph.entry()).unwrap();
-    let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
-    let error = resolve_module(entry, &[dependency]).expect_err("builtin signature is fixed");
-    assert!(
-        matches!(error, ResolveModuleError::Resolution(ref error) if error.reason == ResolveReason::InternalState)
-    );
+    let error = resolve_with(&graph, entry, &[&summary]).expect_err("builtin signature is fixed");
+    assert!(error.reason == ResolveReason::InternalState);
 }
 
 #[test]
@@ -144,22 +150,24 @@ fn builtin_cell_facade_rejects_tampered_or_detached_hidden_facts() {
         let tree = TempTree::create();
         tree.write("facade.ash", "pub import @builtin.cell (read)\n");
         let graph = load(&tree, "import facade (read)\n", &[]);
-        let builtin = &graph.modules()[0];
-        let builtin_checked = check_module(resolve_module(builtin, &[]).unwrap()).unwrap();
-        let facade = &graph.modules()[1];
-        let dependency =
-            DependencyExports::new(&facade.dependencies()[0], builtin_checked.exports()).unwrap();
-        let mut summary = check_module(resolve_module(facade, &[dependency]).unwrap())
-            .unwrap()
-            .into_exports();
+        let builtin = graph
+            .modules()
+            .iter()
+            .find(|module| module.id().is_builtin_cell())
+            .expect("the defining builtin must be loaded");
+        let builtin_checked = check_module(resolve_with(&graph, builtin, &[]).unwrap()).unwrap();
+        let facade = module_named(&graph, "facade.ash");
+        let mut summary =
+            check_module(resolve_with(&graph, facade, &[builtin_checked.exports()]).unwrap())
+                .unwrap()
+                .into_exports();
+        resolve_with(&graph, graph.module(graph.entry()).unwrap(), &[&summary])
+            .expect("the honest complete builtin summary must resolve before mutation");
         summary.corrupt_builtin_fact_for_test(mutation);
         let entry = graph.module(graph.entry()).unwrap();
-        let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
-        let error = resolve_module(entry, &[dependency])
+        let error = resolve_with(&graph, entry, &[&summary])
             .expect_err("selected method needs authentic complete hidden facts");
-        assert!(
-            matches!(error, ResolveModuleError::Resolution(ref error) if error.reason == ResolveReason::InternalState)
-        );
+        assert!(error.reason == ResolveReason::InternalState);
     }
 }
 
@@ -173,18 +181,17 @@ fn ordinary_effect_operation_summary_authenticates_retained_nominal_kinds() {
             "pub opaque type Handle<R> = Hidden\npub effect Ops<R> {\nread : Handle<R> -> Int\n}\n",
         );
         let graph = load(&tree, "import cell as Cell\n", &[]);
-        let ordinary = &graph.modules()[0];
+        let ordinary = module_named(&graph, "cell.ash");
         let mut summary = check_module(resolve_with(&graph, ordinary, &[]).unwrap())
             .unwrap()
             .into_exports();
+        resolve_with(&graph, graph.module(graph.entry()).unwrap(), &[&summary])
+            .expect("the honest ordinary effect summary should resolve before mutation");
         summary.corrupt_builtin_fact_for_test(mutation);
         let entry = graph.module(graph.entry()).unwrap();
-        let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
-        let error = resolve_module(entry, &[dependency])
+        let error = resolve_with(&graph, entry, &[&summary])
             .expect_err("effect signatures require their retained nominal kinds");
-        assert!(
-            matches!(error, ResolveModuleError::Resolution(ref error) if error.reason == ResolveReason::InternalState)
-        );
+        assert!(error.reason == ResolveReason::InternalState);
     }
 }
 
@@ -2308,13 +2315,12 @@ fn equational(module: &ResolvedModule, index: usize) -> &crate::resolved::Resolv
 }
 
 fn nominal_function_parts(ty: &Type) -> (NominalTypeId, NominalTypeId) {
-    let Type::Function(domain, codomain) = ty else {
-        panic!("expected a function type");
-    };
-    let Type::Nominal(domain) = domain.as_ref() else {
+    let function = ty.function_view().expect("expected a function type");
+    let (domain, codomain) = (function.domain(), function.value());
+    let Type::Nominal(domain) = domain else {
         panic!("expected a nominal domain");
     };
-    let Type::Nominal(codomain) = codomain.as_ref() else {
+    let Type::Nominal(codomain) = codomain else {
         panic!("expected a nominal codomain");
     };
     (*domain, *codomain)

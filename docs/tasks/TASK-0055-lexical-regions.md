@@ -60,9 +60,12 @@ selected rounded fits under the existing 25% rule; Final, resolution, builder,
 rewrite, standalone and stack policies are unchanged. All temporary diagnostics
 were removed. The normal-policy focused run passes 114 distinct driver, policy, capture,
 reporting and observer tests, including the original staged 24-owner 256 KiB
-witness and 8,000-member worker. The fresh full-library inventory records
-1,489 passes and 106 failures across the same 1,595 names; the complete workspace
-gate remains pending and no whole criterion closes here.
+witness and 8,000-member worker. The latest full-library inventory records
+1,510 passes and 85 failures across 1,595 executed names. It restores 20 existing
+failed names since the prior draft without a new failure. The private Source
+capture test has one justified rename and passes under its Effect lifetime
+obligation; its old name's disappearance is not counted as restoration. The
+complete workspace gate remains pending and no whole criterion closes here.
 
 ## Work
 
@@ -347,11 +350,14 @@ stages ran. Focused repairs have restored the four inherited Machine and ten
 capture tests using complete dependency provenance and actual activation IDs.
 They also exposed and repaired stale resume-row finalization without cleanup
 equations and lost intermediate arrow rows in curried equation reconstruction.
-The latest complete all-feature library inventory executes all 1,595 tests:
-1,489 pass and 106 fail, restoring 303 original failures (18 since the prior
-draft checkpoint) without a newly failing name. All 8,565 tracked input hashes
-match before/after that run; only this task and its plan inventory prose changed
-afterward. Full workspace/all-target/all-feature Clippy and the 114 focused
+The latest complete all-feature library inventory executes 1,595 test names:
+1,510 pass and 85 fail, restoring 20 existing failed names since the prior draft
+checkpoint without a newly failing name. The old private-Pure Source expectation
+is renamed to assert required local Effect lifetime summaries; the adjacent Pure
+capture-demand exact/short/retry contract remains unchanged and passes. That
+rename is recorded separately, not counted as a restored old name. All 8,565
+tracked input hashes match before/after the run; only this task and its plan
+inventory prose changed afterward. Full workspace/all-target/all-feature Clippy and the 114 focused
 driver/policy/capture/reporting/observer checks pass. Seven integration names
 are additional to the library inventory; the overlapping 107 are not added
 again. This is partial repair evidence, not the complete workspace gate.
@@ -359,7 +365,14 @@ Cell mutation donors now validate through the actual Source/Effect pipeline
 before corruption, with physical closure capture/layout metadata kept coherent.
 Source Effect transforms preserve region arithmetic and its allocation effects;
 the independent seven-node Pure contracts retain actual folding and exact
-budgets. Full dependency provenance replaces incomplete manual import setup. The remaining failures require classification across graph fixtures,
+budgets. Full dependency provenance replaces incomplete manual import setup. Source
+newtype/pattern fixtures now lower and independently validate the complete Effect
+component, inspecting actual user closure code and RegionTuple constructors.
+Import mutations select defining modules while retaining supplied corrupt
+summaries. Global-row mutations use named user owners and their actual registry
+positions, preserving all unrelated service rows and exact rejection spans;
+the same donor validates before corruption. The remaining failures require
+classification across graph fixtures,
 selectors, exact ledgers and product behavior; this library run does not replace
 the canonical workspace gate.
 The final fresh full gate and independent review remain pending.
