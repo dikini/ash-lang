@@ -21,6 +21,27 @@ permission to skip the proposal. Start R1 and R2 together. Hold product R3 until
 the accepted R2 contract and final matching bounded R1 proof are retained.
 
 
+## Current R-core progress
+
+Focused interface and scoped-evidence migrations now pass all 44 and 53 original
+tests respectively. Their six and 50 restored names are disjoint from the prior
+229 staged restorations, giving 285; these selected observations do not refresh
+Library9 (1,560/35) or Integration69 (1,276/504). The scoped controls retain exact
+resolver/checker reasons and labels, full dependency/source authority, defining
+factory privacy, result 42 and fresh independent validation after both Effect
+transforms. User-effect counts identify the complete instance and handler; whole
+transformed effect traces still equal the original trace.
+
+The fixed generic-prerequisite program completes with 93 Enter events and 12
+frames; its whole Source sanity ceilings are 120/16, retaining exact method IDs,
+five-event application prefix and prerequisite ordering. These are test ceilings,
+not runtime budgets. Current dynamic semantics explicitly records the historical
+32/6 profile; R5 must reconcile that statement under CP-0025's accepted timing
+transition before Main or whole acceptance. The canonical gate, remaining
+regressions and R5 finite-provider/operational specification work remain open.
+
+The following measurements and staged checkpoint counts are historical evidence.
+
 R-core's unchanged 8,000-member/256 KiB driver test now passes under normal
 selected policy. Closure preparation uses one charged temporary first-variable
 index per batch; Source work fell from 519,069,391 to 7,149,428 and Final from
@@ -391,20 +412,3 @@ Only usage/lifetime-based automatic placement inference is deferred as an
 optimization of placement. Region collection/RC, moving objects, ownership
 transport, concurrency, a custom backend matrix, broader row inference and new
 FFI types are outside this M2 assignment.
-
-The Source interface Core controls are being migrated to the accepted region
-construction and capture timing. The fixed generic-prerequisite program completes
-with 93 Enter events and 12 frames; its whole-execution sanity ceilings are now
-120 and 16, retaining the exact original method identities, five-event application
-prefix, prerequisite ordering and result. These are test ceilings, not runtime
-budgets. The current dynamic specification explicitly records the historical
-32-event/6-frame profile; R5 must reconcile that fixed-program statement with
-CP-0025's accepted construction/timing transition before Main or whole acceptance.
-No normative specification update or full-gate acceptance is claimed here.
-The complete interfaces target now passes all 44 original tests. Its six
-Source Core restorations are disjoint from the prior 229 staged integration
-restorations, giving 235 staged restored names. This is a focused result; the
-latest full Library9 and Integration69 baselines and all remaining gates are
-unchanged. Full independent Effect validation, exact defining binders, owned
-application subtrees, original type/evidence order and source provenance remain
-checked; isolated Pure controls and production code are unchanged.

@@ -21,6 +21,27 @@ matching reviewed bounded R1 proof and audited frozen gate, retained by
 [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`. Retained verification and author acceptance closed R1/R2.
 
 
+## Current R-core progress
+
+Focused interface and scoped-evidence migrations now pass all 44 and 53 original
+tests respectively. Their six and 50 restored names are disjoint from the prior
+229 staged restorations, giving 285; these selected observations do not refresh
+Library9 (1,560/35) or Integration69 (1,276/504). The scoped controls retain exact
+resolver/checker reasons and labels, full dependency/source authority, defining
+factory privacy, result 42 and fresh independent validation after both Effect
+transforms. User-effect counts identify the complete instance and handler; whole
+transformed effect traces still equal the original trace.
+
+The fixed generic-prerequisite program completes with 93 Enter events and 12
+frames; its whole Source sanity ceilings are 120/16, retaining exact method IDs,
+five-event application prefix and prerequisite ordering. These are test ceilings,
+not runtime budgets. Current dynamic semantics explicitly records the historical
+32/6 profile; R5 must reconcile that statement under CP-0025's accepted timing
+transition before Main or whole acceptance. The canonical gate, remaining
+regressions and R5 finite-provider/operational specification work remain open.
+
+The following measurements and staged checkpoint counts are historical evidence.
+
 R-core's unchanged 8,000-member/256 KiB driver test now passes under normal
 selected policy. Closure preparation uses one charged temporary first-variable
 index per batch; Source work fell from 519,069,391 to 7,149,428 and Final from
@@ -92,7 +113,7 @@ baseline executed all 103 workspace test targets: 1,276 passes and 504 failures
 across 1,780 package/target/test keys, without ignored, aborted or unexecuted
 cases. These are separate inventories, not a refreshed combined total.
 
-The next bounded repair removes the concrete Effect operation sum from the
+Checkpoint 10 removed the concrete Effect operation sum from the
 family-neutral Core interface through borrowed closure, tuple and request views.
 Contextual anonymous functions now infer only the residual beyond the expected
 row's known prefix, using existing charged row operations and transactional
@@ -112,7 +133,7 @@ shape and three diagnostic/profile expectations. Two architecture probes now
 reach a separate visible-glob carrier ambiguity in evaluator region metadata;
 no manifest entries were guessed. The complete normal gate remains pending.
 
-The next interface fixture batch reuses dependency-ordered checking for original
+Checkpoint 11 reused dependency-ordered checking for original
 positive and negative entry endpoints. Exact callable checks retain their kinds,
 arguments and requirements and now include the closed singleton DefaultAlloc row
 from the actual defining checked compiler module. Import-route checks preserve
@@ -121,7 +142,7 @@ service graph. Both complete targets were rerun: interfaces 38 pass / 6 fail,
 interface selection 40 pass / 0 fail. All 68 original setup-blocked names now
 pass, with no new or missing failed names. Their exact name set is disjoint from
 the prior 135 restores, yielding 203 staged integration restorations without a
-refreshed whole-suite total. The six remaining interface failures reach existing
+refreshed whole-suite total. At that checkpoint six interface failures reached existing
 Source-to-Pure Core producers; no stored-closure decoder, trace projection,
 capacity change or production code is included in this fixture batch.
 
@@ -528,20 +549,3 @@ or budget policy changed.
 None. No broader permission algebra, backend matrix, FFI type expansion or
 omitted-definition-row inference is added. Remove this task and its owned plan
 when the completed product checkpoint satisfies the artifact lifecycle.
-
-The Source interface Core controls are being migrated to the accepted region
-construction and capture timing. The fixed generic-prerequisite program completes
-with 93 Enter events and 12 frames; its whole-execution sanity ceilings are now
-120 and 16, retaining the exact original method identities, five-event application
-prefix, prerequisite ordering and result. These are test ceilings, not runtime
-budgets. The current dynamic specification explicitly records the historical
-32-event/6-frame profile; R5 must reconcile that fixed-program statement with
-CP-0025's accepted construction/timing transition before Main or whole acceptance.
-No normative specification update or full-gate acceptance is claimed here.
-The complete interfaces target now passes all 44 original tests. Its six
-Source Core restorations are disjoint from the prior 229 staged integration
-restorations, giving 235 staged restored names. This is a focused result; the
-latest full Library9 and Integration69 baselines and all remaining gates are
-unchanged. Full independent Effect validation, exact defining binders, owned
-application subtrees, original type/evidence order and source provenance remain
-checked; isolated Pure controls and production code are unchanged.

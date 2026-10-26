@@ -1,16 +1,19 @@
 use std::{
+    collections::HashSet,
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use ash::{
-    core::{validate_effect_modules, validate_modules},
-    elaborate::{EffectElaborator, Elaborator, TypeError, TypeReason, check_module, link_modules},
-    eval::{EffectTraceEvent, Value, evaluate, evaluate_effect},
+    core::{EffectExprKind, EffectOperation, validate_effect_modules},
+    elaborate::{EffectElaborator, TypeError, TypeReason, check_module, link_modules},
+    eval::{EffectTraceEvent, Value, evaluate_effect},
     evidence_validation::validate_interface_evidence,
-    module::{ModuleRoots, load_module_graph},
+    module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
+    resolved::{CheckedModule, ResolvedModule},
+    types::{EffectInstance, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -50,41 +53,92 @@ fn assert_execution(text: &str) {
     let fixture = Fixture::new(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("interaction fixture should load");
-    let resolved =
-        resolve_module(&graph.modules()[0], &[]).expect("interaction fixture should resolve");
-    let checked = check_module(resolved).expect("interaction fixture should check");
-    let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("dependency order must retain the exact target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("each checked summary must authenticate its actual dependency edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the interaction component should resolve");
+        checked.push(check_module(resolved).expect("the interaction component should check"));
+    }
+    let linked = link_modules(checked, graph.entry()).expect("fixture should link");
     let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("Core namespace should fit");
+        EffectElaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("interaction fixture should elaborate");
     let program = elaborator.finish(typed.node).expect("Core should finish");
-    let source = graph.modules()[0].source();
-    let relation = [(graph.entry(), source.id())];
-    let validated = validate_modules(program, &[source], &relation).expect("Core should validate");
-    let observed = evaluate(&validated).expect("Core should execute");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let relation = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let validated =
+        validate_effect_modules(program, &sources, &relation).expect("Core should validate");
+    let observed = evaluate_effect(&validated).expect("Core should execute");
     assert!(matches!(observed.value, Value::SmallInteger(value) if value.to_string() == "42"));
     for transformed in [
-        ash::core::transform::identity_traversal(&validated)
+        ash::core::transform::identity_effect_traversal(&validated)
             .expect("identity traversal should rebuild"),
-        ash::core::transform::fold_literal_primitives(&validated)
+        ash::core::transform::fold_effect_literal_primitives(&validated)
             .expect("literal folding should rebuild"),
     ] {
-        let validated = validate_modules(transformed, &[source], &relation)
+        let validated = validate_effect_modules(transformed, &sources, &relation)
             .expect("transformed Core should validate");
-        let observed = evaluate(&validated).expect("transformed Core should execute");
+        let observed = evaluate_effect(&validated).expect("transformed Core should execute");
         assert!(matches!(observed.value, Value::SmallInteger(value) if value.to_string() == "42"));
     }
+}
+
+fn resolve_entry(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("dependency order must retain the exact target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("each checked summary must authenticate its actual dependency edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies);
+        if module.id() == graph.entry() {
+            return resolved;
+        }
+        checked.push(
+            check_module(resolved.expect("preceding dependencies should resolve"))
+                .expect("preceding dependencies should check"),
+        );
+    }
+    panic!("the graph must retain its actual entry");
 }
 
 fn assert_reason(text: &str, expected: &str) {
     let fixture = Fixture::new(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("rejected interaction should load");
-    let resolved = resolve_module(&graph.modules()[0], &[])
-        .expect("rejected interaction should resolve before checking");
+    let resolved =
+        resolve_entry(&graph).expect("rejected interaction should resolve before checking");
     let error = check_module(resolved).expect_err("interaction must be rejected");
     let reason = match error {
         TypeError::Interface(diagnostic) => diagnostic.reason.to_string(),
@@ -94,14 +148,42 @@ fn assert_reason(text: &str, expected: &str) {
     assert_eq!(reason, expected);
 }
 
-fn assert_effect_execution(text: &str) {
+fn assert_effect_execution(text: &str, expected_arguments: &[Type]) {
     let fixture = Fixture::new(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("effect interaction should load");
-    let resolved =
-        resolve_module(&graph.modules()[0], &[]).expect("effect interaction should resolve");
-    let checked = check_module(resolved).expect("effect interaction should check");
-    let linked = link_modules(vec![checked], graph.entry()).expect("effect fixture should link");
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("dependency order must retain the exact target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("each checked summary must authenticate its actual dependency edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the interaction component should resolve");
+        checked.push(check_module(resolved).expect("the interaction component should check"));
+    }
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .unwrap();
+    let [effect] = entry.effects() else {
+        panic!("the entry declares exactly one user effect");
+    };
+    let [operation] = effect.operations.as_ref() else {
+        panic!("the user effect declares one operation");
+    };
+    let operation = operation.id;
+    let expected_instance =
+        EffectInstance::new(effect.id, expected_arguments.to_vec().into_boxed_slice());
+    let linked = link_modules(checked, graph.entry()).expect("effect fixture should link");
     let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
     let mut elaborator =
         EffectElaborator::for_module_program(&linked).expect("effect Core namespace should fit");
@@ -111,17 +193,47 @@ fn assert_effect_execution(text: &str) {
     let program = elaborator
         .finish(typed.node)
         .expect("effect Core should finish");
-    let source = graph.modules()[0].source();
-    let relation = [(graph.entry(), source.id())];
-    let validated = validate_effect_modules(program, &[source], &relation)
-        .expect("effect Core should validate");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let relation = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let validated =
+        validate_effect_modules(program, &sources, &relation).expect("effect Core should validate");
+    let mut pending = vec![validated.root()];
+    let mut visited = HashSet::new();
+    let mut handlers = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let node = validated.node(id).expect("validated child remains present");
+        if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &node.kind
+            && handler.effect() == &expected_instance
+        {
+            assert_eq!(handler.clauses().len(), 1);
+            assert_eq!(handler.clauses()[0].operation(), operation);
+            handlers.push(handler.id());
+        }
+        pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+    }
+    let [handler] = handlers.as_slice() else {
+        panic!("the exact user instance has one handler");
+    };
     let observed = evaluate_effect(&validated).expect("effect Core should execute");
     assert!(matches!(observed.value, Value::SmallInteger(ref value) if value.to_string() == "42"));
     assert_eq!(
         observed
             .effect_trace()
             .iter()
-            .filter(|event| matches!(event, EffectTraceEvent::Request(_)))
+            .filter(
+                |event| matches!(event, EffectTraceEvent::Request(actual) if *actual == operation)
+            )
             .count(),
         1,
     );
@@ -129,17 +241,20 @@ fn assert_effect_execution(text: &str) {
         observed
             .effect_trace()
             .iter()
-            .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
+            .filter(|event| matches!(event, EffectTraceEvent::Resume(actual) if actual == handler))
             .count(),
         1,
     );
+    assert_eq!(observed.effect_trace().iter().filter(|event|
+        matches!(event, EffectTraceEvent::ClauseEntered(actual_handler, actual_operation)
+            if actual_handler == handler && *actual_operation == operation)).count(), 1);
     for transformed in [
         ash::core::transform::identity_effect_traversal(&validated)
             .expect("effect identity traversal should rebuild"),
         ash::core::transform::fold_effect_literal_primitives(&validated)
             .expect("effect literal folding should rebuild"),
     ] {
-        let validated = validate_effect_modules(transformed, &[source], &relation)
+        let validated = validate_effect_modules(transformed, &sources, &relation)
             .expect("transformed effect Core should validate");
         let transformed =
             evaluate_effect(&validated).expect("transformed effect Core should execute");
@@ -714,6 +829,7 @@ main () = {
     }
 }
 "#,
+        &[],
     );
 }
 
@@ -737,6 +853,7 @@ main () = {
     read(Token(()))
 }
 "#,
+        &[],
     );
 }
 
@@ -933,8 +1050,7 @@ main () = {
     );
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("resume outside a handler should parse");
-    let error = resolve_module(&graph.modules()[0], &[])
-        .expect_err("resume outside a handler must fail resolution");
+    let error = resolve_entry(&graph).expect_err("resume outside a handler must fail resolution");
     assert!(
         matches!(error, ResolveModuleError::Resolution(ref error)
             if error.reason == ResolveReason::ResumeOutsideClause),
@@ -991,8 +1107,7 @@ fn evidence_diagnostics_label_the_new_and_related_declarations() {
         let fixture = Fixture::new(&text);
         let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
             .expect("diagnostic fixture should load");
-        let resolved =
-            resolve_module(&graph.modules()[0], &[]).expect("diagnostic fixture should resolve");
+        let resolved = resolve_entry(&graph).expect("diagnostic fixture should resolve");
         let TypeError::Interface(diagnostic) =
             check_module(resolved).expect_err("diagnostic fixture should fail evidence admission")
         else {
@@ -1055,8 +1170,7 @@ main () = {
     );
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("ill-typed supplied method should parse");
-    let resolved =
-        resolve_module(&graph.modules()[0], &[]).expect("ill-typed supplied method should resolve");
+    let resolved = resolve_entry(&graph).expect("ill-typed supplied method should resolve");
     let error = check_module(resolved).expect_err("unused supplied method must check");
     assert!(
         matches!(error, TypeError::Source(ref diagnostic)
@@ -1307,26 +1421,43 @@ make () = {
     .expect("factory module should be writable");
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("factory and importer should load");
-    let library = graph
+    let factory_id = graph
         .modules()
         .iter()
-        .find(|module| module.id() != graph.entry())
-        .expect("factory should be a dependency");
-    let library = check_module(resolve_module(library, &[]).expect("factory should resolve"))
-        .expect("factory should check");
-    let interface = library.interfaces()[0].id;
-    assert!(library.implementations().is_empty());
-    assert!(library.available_implementations().is_empty());
-    let entry = graph
-        .modules()
+        .find(|module| module.source().display_path().ends_with("factory.ash"))
+        .expect("the defining factory remains loaded")
+        .id();
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    .expect("the exact dependency target precedes its importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the actual edge authenticates")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies).expect("factory component resolves");
+        if module.id() == graph.entry() {
+            let library = checked
+                .iter()
+                .find(|module| module.module() == factory_id)
+                .expect("the actual factory remains checked");
+            let interface = library.interfaces()[0].id;
+            assert!(library.implementations().is_empty());
+            assert!(library.available_implementations().is_empty());
+            assert!(resolved.imported_facts().interface(interface).is_none());
+        }
+        checked.push(check_module(resolved).expect("factory component checks"));
+    }
+    let entry = checked
         .iter()
-        .find(|module| module.id() == graph.entry())
-        .expect("importer should be the entry");
-    let dependency = DependencyExports::new(&entry.dependencies()[0], library.exports())
-        .expect("ordinary factory export should authenticate");
-    let entry = resolve_module(entry, &[dependency]).expect("importer should resolve");
-    assert!(entry.imported_facts().interface(interface).is_none());
-    let entry = check_module(entry).expect("importer should check without interface evidence");
+        .find(|module| module.module() == graph.entry())
+        .unwrap();
     assert!(entry.available_implementations().is_empty());
     let observation = ash::driver::run_path(ash::driver::RunConfiguration {
         entry: fixture.0.clone(),
@@ -1407,6 +1538,7 @@ main () = {
     }
 }
 "#,
+        &[Type::Int],
     );
 }
 
