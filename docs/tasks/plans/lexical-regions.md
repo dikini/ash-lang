@@ -20,6 +20,18 @@ User-approved design directions constrain R1/R2; they are not proof results or
 permission to skip the proposal. Start R1 and R2 together. Hold product R3 until
 the accepted R2 contract and final matching bounded R1 proof are retained.
 
+
+R-core's unchanged 8,000-member/256 KiB driver test now passes under normal
+selected policy. Closure preparation uses one charged temporary first-variable
+index per batch; Source work fell from 519,069,391 to 7,149,428 and Final from
+350,952,800 exhausted to 2,296,950 complete. The separate program primary-builder
+allowance is `max(327680, 8*S)` from the already-paid canonical source closure;
+its largest complete arena used 2,680,644 at S = 438,691. Source/Final/Core and
+rewrite coefficients, standalone/image capacities and original assertions are
+unchanged; [AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md) records the measurement and ownership. This restores
+one required test, not the full gate; remaining fixture and product failures
+still require repair before integration.
+
 ## Approved directions and remaining contract
 
 | Boundary | Approved direction | R1/R2 must make concrete |
@@ -136,8 +148,9 @@ No additional environment/storage framework is authorized.
 
 All original R3–R5 criteria, remaining recursive evidence, completion/discharge,
 fixture migrations and the connected R-core gate stay pending. The separate
-whole-public-driver 256 KiB abort remains unclassified; the retained original
-staged stress results do not clear it.
+whole-public-driver 256 KiB abort was unclassified at that partial checkpoint;
+the current R-core classification below does not promise arbitrary whole-driver
+inputs at that stack size.
 
 ## Ordered deliveries
 
@@ -211,7 +224,7 @@ private representation/escape/request/backpatch negatives preserve the origin
 and actual-dependency chain. No new owner-discharge checker is added. This does
 not certify close-service/removed-backend correspondence by itself.
 
-The connected composition candidate adds the accepted explicit cleanup Unit
+The retained connected composition slice adds the accepted explicit cleanup Unit
 query/saved-view adapter for DefaultAlloc-bearing or open invocations, preserving
 the original direct form for closed invocations without DefaultAlloc. Pending
 cleanup-equation rows finalize locally after solving; retargeting preserves exact
@@ -229,13 +242,27 @@ different default, H/J normal/cleanup routing, removed allocate-only/release-onl
 backends with an outer same-instance handler, action-local admission, and distinct
 region handles/block lists sharing one refcounted backend. Shared-backend evidence
 orders A close, B old-value read, B new allocation/read, then the last backend close.
-Independent review/retention/acceptance and root-owned connected R-core verification
-remain required; all whole criteria stay open.
+PR #154 retained this slice as `0064080b41016679fca26c735b41d2fe119c3867`
+with independent review, retained tree verification and partial author acceptance.
+The root-owned connected R-core gate is active. Its first canonical run stopped
+at compilation; focused graph/provenance and consumer migrations have restored
+the inherited Machine/capture failures and identified actual resume-row and
+curried-arrow reconstruction defects. Remaining shared graph fixtures, selectors
+and ledger expectations must settle before the final fresh full gate; focused
+subset totals do not replace that gate. Existing whole-driver small-stack tests
+and staged 24/deep 1024 obligations remain required; the historical extra
+nested-Cell whole-driver diagnostic does not promise arbitrary compile_path
+inputs at 256 KiB. All whole criteria stay open.
 
 ### R5 — connected milestone and Main gate (#70)
 
 Compare default and explicit host-backed/fixed-capacity cases with ordinary heap
-construction on results, retention, refusal and completion order. Cover all six
+construction on results, retention, refusal and completion order. Actual finite
+provider refusal preservation remains unproved by the pre-allocation Pause
+injections: fill two slots with an old tuple and cleanup closure, refuse the next
+request, and check discard cleanup reads the old tuple while its region is live,
+writes through an older argument package and releases once. Reuse the existing
+native runner and ABI for this R5 case. Cover all six
 features, public/imported/opaque and transformed Core paths, negative lifetime
 and forgery cases, and actual supplied storage. Record native assumptions and
 unsupported cases honestly; unsupported required closures/graphs cannot close M2.

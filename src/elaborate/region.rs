@@ -213,17 +213,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let Some(builder) = F::effect_builder(&mut self.builder) else {
             return Ok(());
         };
-        for &(node, request) in &self.pending_region_closures {
-            crate::core::capture::prepare_region_closure(
-                builder,
-                node,
-                request,
-                methods,
-                roots,
-                &mut self.type_work,
-            )
-            .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
-        }
+        crate::core::capture::prepare_region_closures(
+            builder,
+            &self.pending_region_closures,
+            methods,
+            roots,
+            &mut self.type_work,
+        )
+        .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
         self.pending_region_closures.clear();
         Ok(())
     }

@@ -512,10 +512,10 @@ impl CoreOperationFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Region(region)) = kind {
             visit(&region.access);
         }
-        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind {
-            if let Some(function) = closure.code.function() {
-                visit(function.parameter());
-            }
+        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind
+            && let Some(function) = closure.code.function()
+        {
+            visit(function.parameter());
         }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,

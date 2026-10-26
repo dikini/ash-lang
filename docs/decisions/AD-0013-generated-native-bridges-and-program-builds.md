@@ -66,6 +66,7 @@ owners and for native preparation and startup. The accepted policy is:
 preparation gas = 850 * (admitted source UTF8 bytes + validated main Core nodes)
 source gas      = 3900 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 800 * (the same canonical source UTF8 closure)
+builder gas     = max(327680, 8 * (the same canonical source UTF8 closure)), per program arena
 rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
 Core gas        = 6200 * (the same canonical source UTF8 closure)
 startup gas     = 118 * (canonical image bytes + canonical expected-fact bytes)
@@ -90,6 +91,24 @@ inherits only the allowance, never spent work or unused Source/Final credit.
 Reject multiplication overflow. There is no floor, intercept, refill or extra
 margin. Generic builder, standalone and private-image defaults remain unchanged;
 resolution, constraints and other construction budgets remain separate.
+
+Program arenas also receive a separate primary payload-construction allowance
+`max(327680, 8*S)` from that paid census. Install it before catalog precharges;
+each arena starts with fresh independent primary and rewrite meters. Primary
+construction remains excluded from the Source/Final reports. Standalone,
+default and private-image primary limits retain their existing capacities.
+
+On 2026-10-26 the unchanged 8,000-member recursive-group/call-chain test exposed
+the fixed primary builder cap and repeated whole-arena variable searches during
+closure preparation. One temporary, charged first-variable index per existing
+batch preserves first-match and fallback behavior. With S = 438,691, Source work
+fell from 519,069,391 to 7,149,428; Final previously exhausted 350,952,800 and then
+completed at 2,296,950. Core completed at 10,731,616. The largest complete primary
+arena used 2,680,644; a 25% fitting reserve requires 3,350,805, covered by
+`8*S = 3,509,528`. Completion diagnostics used a finite `16*S` primary ceiling;
+the normal selected `8*S` policy then passed the original test, including its
+256 KiB worker, evaluation and evidence-envelope assertions. Phase coefficients,
+rewrite ownership and runtime limits are unchanged.
 
 Preparation reads resident admitted source lengths and main arena length before
 image construction. Pay one unit per source and one for the node count using a

@@ -12,6 +12,14 @@ pub(crate) fn rewrite_total(bytes: usize) -> Result<usize, ()> {
     bytes.checked_mul(16).ok_or(())
 }
 
+/// Separate program-arena payload admission; standalone builders keep their cap.
+pub(crate) fn primary_total(bytes: usize) -> Result<usize, ()> {
+    bytes
+        .checked_mul(8)
+        .map(|total| total.max(crate::types::TYPE_WORK_LIMIT))
+        .ok_or(())
+}
+
 fn source_total(bytes: usize) -> Result<usize, ()> {
     bytes.checked_mul(SOURCE_PER_BYTE).ok_or(())
 }
@@ -208,6 +216,14 @@ mod tests {
             resident_phase_work(CompilationPhase::SourceChecking, &[&source]).unwrap();
         assert_eq!(bytes, source.text().len());
         assert_eq!((source_work.used(), source_work.limit()), (2, 3900 * bytes));
+        assert_eq!(primary_total(0), Ok(crate::types::TYPE_WORK_LIMIT));
+        let floor = crate::types::TYPE_WORK_LIMIT;
+        assert_eq!(primary_total(floor / 8), Ok(floor));
+        assert_eq!(primary_total(floor / 8 + 1), Ok(floor + 8));
+        assert!(primary_total(usize::MAX / 8 + 1).is_err());
+        let mut primary = TypeWorkBudget::with_limit(primary_total(bytes).unwrap());
+        primary.charge(primary.remaining()).unwrap();
+        assert!(primary.charge(1).is_err());
         assert_eq!(rewrite_total(bytes), Ok(16 * bytes));
         assert_eq!(rewrite_total(0), Ok(0));
         assert!(rewrite_total(usize::MAX / 16 + 1).is_err());

@@ -266,6 +266,16 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
             }
+            ResolvedExprKind::Region(region) => {
+                if let Some(provider) = &region.provider {
+                    expressions.push(provider);
+                }
+                expressions.push(&region.body);
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                expressions.push(&selection.region);
+                expressions.push(&selection.body);
+            }
         }
     }
     slots.reverse();

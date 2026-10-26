@@ -317,8 +317,10 @@ fn checked_source_lowers_to_explicit_effect_core() {
     let checked = check_graph(&graph);
     let effect = checked
         .iter()
-        .find_map(|module| module.effects().first().map(|effect| effect.id))
-        .expect("fixture should retain its effect declaration");
+        .flat_map(|module| module.effects())
+        .find(|effect| effect.spelling == "Build")
+        .map(|effect| effect.id)
+        .expect("fixture should retain the defining Build effect");
     let linked = link_modules(checked, graph.entry()).expect("fixture should link");
     assert!(linked.registry().effect(effect).is_some());
     let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
@@ -354,6 +356,8 @@ fn checked_source_lowers_to_explicit_effect_core() {
         &module_sources,
     )
     .expect("row-aware fold output should revalidate");
+    let mut build_handlers = std::collections::HashSet::new();
+    let mut resumes = Vec::new();
     let mut pending = vec![program.root()];
     let mut seen = std::collections::HashSet::new();
     let mut operations = [0_usize; 3];
@@ -364,9 +368,22 @@ fn checked_source_lowers_to_explicit_effect_core() {
         let node = program.node(id).expect("reachable effect Core node");
         if let EffectExprKind::Operation(operation) = &node.kind {
             match operation {
-                EffectOperation::Request(_) => operations[0] += 1,
-                EffectOperation::Handler(_) => operations[1] += 1,
-                EffectOperation::Resume(_) => operations[2] += 1,
+                EffectOperation::Request(request) => {
+                    operations[0] += usize::from(request.effect().effect() == effect)
+                }
+                EffectOperation::Handler(handler) => {
+                    if handler.effect().effect() == effect {
+                        operations[1] += 1;
+                        build_handlers.insert(handler.id());
+                    }
+                }
+                EffectOperation::Resume(resume) => resumes.push(resume.handler()),
+                EffectOperation::Region(_)
+                | EffectOperation::RegionAllocate(_)
+                | EffectOperation::RegionValueRequest(_)
+                | EffectOperation::RegionBuffer(_)
+                | EffectOperation::RegionTuple(_)
+                | EffectOperation::RegionClosure(_) => {}
                 EffectOperation::Discard(_) => panic!("resume-only fixture cannot contain discard"),
                 EffectOperation::Resource(_) => {
                     panic!("resume-only fixture cannot contain resource")
@@ -382,6 +399,10 @@ fn checked_source_lowers_to_explicit_effect_core() {
         }
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
     }
+    operations[2] = resumes
+        .iter()
+        .filter(|handler| build_handlers.contains(handler))
+        .count();
     assert_eq!(operations, [1, 1, 1]);
     let observation = run_path(RunConfiguration {
         entry: path.clone(),

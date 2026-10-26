@@ -9350,13 +9350,12 @@ fn encode_native_preparation(
                 return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
             }
             push(&mut identities, scope.acquisition.identity, work)?;
-        } else if let crate::core::EffectExprKind::Operation(
-            crate::core::EffectOperation::Region(scope),
-        ) = &node.kind
+        } else if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Region(
+            scope,
+        )) = &node.kind
+            && !scope.entry
         {
-            if !scope.entry {
-                push(&mut identities, scope.identity(), work)?;
-            }
+            push(&mut identities, scope.identity(), work)?;
         }
     }
     if !program

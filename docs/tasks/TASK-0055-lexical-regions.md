@@ -20,6 +20,18 @@ user-approved intended direction. CP-0025 is accepted for transition with a
 matching reviewed bounded R1 proof and audited frozen gate, retained by
 [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`. Retained verification and author acceptance closed R1/R2.
 
+
+R-core's unchanged 8,000-member/256 KiB driver test now passes under normal
+selected policy. Closure preparation uses one charged temporary first-variable
+index per batch; Source work fell from 519,069,391 to 7,149,428 and Final from
+350,952,800 exhausted to 2,296,950 complete. The separate program primary-builder
+allowance is `max(327680, 8*S)` from the already-paid canonical source closure;
+its largest complete arena used 2,680,644 at S = 438,691. Source/Final/Core and
+rewrite coefficients, standalone/image capacities and original assertions are
+unchanged; [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md) records the measurement and ownership. This restores
+one required test, not the full gate; remaining fixture and product failures
+still require repair before integration.
+
 ## Work
 
 Follow the task-owned [execution plan](plans/lexical-regions.md) through existing
@@ -127,7 +139,8 @@ uses Source `2600S`, Final `800S`, Core `5300S` and startup `65B`; standalone li
 Normal-driver checks of the two original same-site fixtures and 24 nested Cells
 return 42. The original staged 256 KiB stress pipeline also preserves 24 unique
 acquisitions and exact reverse release order. A separate whole-public-driver
-256 KiB abort remains unclassified; the staged result does not clear it.
+256 KiB abort was unclassified at that checkpoint; the current bounded
+classification below does not add an arbitrary whole-driver stack guarantee.
 
 [PR #151](https://github.com/dikini/ash-lang/pull/151) retained the partial Int
 delivery at `df79789134d680f4288b48c0081c6c74c6bf4de9`, with author and
@@ -238,8 +251,8 @@ checks follow the existing explicit view/actual-dependency/owner-invocation chai
 no admitted missing-owner example warrants another checker. They do not complete
 close-service/removed-backend correspondence by themselves.
 
-For a DefaultAlloc-bearing or open-row invocation, the connected R4 composition
-candidate binds one Unit allocation-context query after the original cleanup
+For a DefaultAlloc-bearing or open-row invocation, the retained connected R4 composition
+implementation binds one Unit allocation-context query after the original cleanup
 callback is evaluated once. Closed invocations without DefaultAlloc retain the
 original direct callback form; no unused handler or context query is emitted. Cleanup-equation tails
 wait until the existing row-completion boundary. A final empty row stays direct;
@@ -285,17 +298,40 @@ backend's single final close. The action-local backend fixture packages its
 outbound Cell write arguments before A entry; cleanup allocates and consumes its
 own A tuple, then gates the write on the computed sum. This preserves the existing
 conservative payload contract for symbolic generic callables, rather than claiming
-new opaque-call precision. These focused checks precede whole-slice review and
-retention; they do not establish the connected full gate.
+new opaque-call precision. PR #154 retained this composition slice as
+`0064080b41016679fca26c735b41d2fe119c3867`, with reviewed tree equality and
+partial author acceptance. Its 366 selected passes include a native suite of
+29 executions and two exact admission refusals; they do not establish the
+connected full gate.
 
 Five focused root checks cover structured exact/short/retry, forged pair/record
 rejection, shared Evaluation lifetime/weak expiry, repeated close, post-transfer
 primary plus teardown failure, and ambient-scope failure visibility. Existing
 Observation/value/parts accessors retain the same shared owner. The root subset's
-review, retention and partial acceptance are complete; the connected composition
-candidate still requires independent review, retention and author acceptance.
-The connected R-core full all-target/all-feature checkpoint remains root-owned;
-later R5/final/Main gates remain separate.
+review, retention and partial acceptance are complete, as are those of the
+connected composition slice. The root-owned R-core checkpoint is now active.
+Its initial canonical gate stopped at test-consumer compilation before later
+stages ran. Focused repairs have restored the four inherited Machine and ten
+capture tests using complete dependency provenance and actual activation IDs.
+They also exposed and repaired stale resume-row finalization without cleanup
+equations and lost intermediate arrow rows in curried equation reconstruction.
+The latest complete all-feature library inventory executes all 1,595 tests:
+1,444 pass and 151 fail, restoring 258 original failures without a newly failing
+name. The policy/rewrite/catalog/row focused checks also pass. The remaining failures require classification across graph fixtures,
+selectors, exact ledgers and product behavior; this library run does not replace
+the canonical workspace gate.
+The final fresh full gate and independent review remain pending.
+The historical extra whole-driver nested-Cell diagnostic at 256 KiB does not
+establish a guarantee for arbitrary compile_path inputs. Existing whole-driver
+small-stack tests on their actual inputs and the staged 24/deep 1024 assertions
+remain required; no new stack work is assigned for that historical diagnostic.
+
+R5 still needs actual fixed-capacity refusal preservation evidence: a finite
+provider must refuse after an old tuple and cleanup closure occupy its capacity,
+then checked discard must consume the old tuple during cleanup while its region
+is live, publish completion through an older argument package, and release once.
+Existing Pause injections occur before allocation and do not prove that case.
+Later R5/specification/final/Main gates and all whole criteria remain open.
 
 Keep implementation tight: reuse existing Ash mechanisms and libraries, prefer
 removing duplicate machinery, and seek constructive planner/reviewer scrutiny

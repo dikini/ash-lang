@@ -2226,12 +2226,20 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         registry: Arc<ResolvedRegistry>,
         rewrite_type_work: TypeWorkBudget,
     ) -> Self {
+        Self::with_registry_and_arena_work(registry, TypeWorkBudget::default(), rewrite_type_work)
+    }
+
+    pub(crate) fn with_registry_and_arena_work(
+        registry: Arc<ResolvedRegistry>,
+        type_work: TypeWorkBudget,
+        rewrite_type_work: TypeWorkBudget,
+    ) -> Self {
         Self::from_catalogs(
             registry,
             Arc::clone(empty_method_evidence()),
             Vec::new(),
             Vec::new(),
-            TypeWorkBudget::default(),
+            type_work,
             rewrite_type_work,
         )
     }
@@ -2299,12 +2307,21 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         method_evidence: Arc<MethodEvidenceCatalog>,
         rewrite_type_work: TypeWorkBudget,
     ) -> Result<Self, BuildError> {
-        Self::with_catalogs_and_type_work(
+        Self::with_registry_method_evidence_and_arena_work(
             registry,
             method_evidence,
             TypeWorkBudget::default(),
             rewrite_type_work,
         )
+    }
+
+    pub(crate) fn with_registry_method_evidence_and_arena_work(
+        registry: Arc<ResolvedRegistry>,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+        type_work: TypeWorkBudget,
+        rewrite_type_work: TypeWorkBudget,
+    ) -> Result<Self, BuildError> {
+        Self::with_catalogs_and_type_work(registry, method_evidence, type_work, rewrite_type_work)
     }
 
     fn with_catalogs_and_type_work(

@@ -95,10 +95,10 @@ impl TransformFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Region(scope)) = kind {
             binders.push(scope.access.id());
         }
-        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind {
-            if let Some(function) = closure.code.function() {
-                binders.push(function.parameter().id());
-            }
+        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind
+            && let Some(function) = closure.code.function()
+        {
+            binders.push(function.parameter().id());
         }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,

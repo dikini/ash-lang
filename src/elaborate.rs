@@ -3372,6 +3372,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &mut type_work,
             coverage_work,
             None,
+            None,
         )
     }
 
@@ -3380,10 +3381,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         registry: Arc<ResolvedRegistry>,
         type_work: &mut TypeWorkBudget,
         coverage_work: UsefulnessBudget,
+        primary_work: Option<TypeWorkBudget>,
         rewrite_work: Option<TypeWorkBudget>,
     ) -> Result<Self, TypeError> {
-        let mut builder = CoreBuilder::<F>::with_registry_and_rewrite_work(
+        let mut builder = CoreBuilder::<F>::with_registry_and_arena_work(
             Arc::clone(&registry),
+            primary_work.unwrap_or_default(),
             rewrite_work.unwrap_or_default(),
         );
         let binders = resolved_module_binders(module, |units| builder.charge_rebuild_work(units))
@@ -3486,12 +3489,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         program: &ValidatedInterfaceProgram,
         type_work: TypeWorkBudget,
     ) -> Result<Self, (ElaborationFailure, usize)> {
-        Self::for_module_program_with_budgets(program, type_work, TypeWorkBudget::default())
+        Self::for_module_program_with_budgets(
+            program,
+            type_work,
+            TypeWorkBudget::default(),
+            TypeWorkBudget::default(),
+        )
     }
 
     pub(crate) fn for_module_program_with_budgets(
         program: &ValidatedInterfaceProgram,
         type_work: TypeWorkBudget,
+        primary_work: TypeWorkBudget,
         rewrite_work: TypeWorkBudget,
     ) -> Result<Self, (ElaborationFailure, usize)> {
         let prefix = type_work.used();
@@ -3501,6 +3510,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             program.result(),
             Arc::clone(program.method_evidence()),
             type_work,
+            primary_work,
             rewrite_work,
         )
         .map_err(|failure| (failure, prefix))?;
@@ -3525,12 +3535,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         result: &ResolvedExpr,
         catalog: Arc<crate::core::dialect::MethodEvidenceCatalog>,
         type_work: TypeWorkBudget,
+        primary_work: TypeWorkBudget,
         rewrite_work: TypeWorkBudget,
     ) -> Result<Self, ElaborationFailure> {
         let registry = Arc::clone(registry);
-        let mut builder = CoreBuilder::<F>::with_registry_method_evidence_and_rewrite_work(
+        let mut builder = CoreBuilder::<F>::with_registry_method_evidence_and_arena_work(
             Arc::clone(&registry),
             catalog,
+            primary_work,
             rewrite_work,
         )?;
         let mut binders = Vec::new();
@@ -5244,14 +5256,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ComputationType::new(codomain.into_inner(), effects),
             ));
             if generated_parameters.is_empty() {
-                return self
-                    .construct_function(
-                        parameter,
-                        conversion,
-                        function_type.into_inner(),
-                        origin.clone(),
-                    )
-                    .map_err(Into::into);
+                return self.construct_function(
+                    parameter,
+                    conversion,
+                    function_type.into_inner(),
+                    origin.clone(),
+                );
             }
             let retained_function_type = self.clone_type(&function_type)?;
             let function = self.construct_function(
@@ -18004,7 +18014,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut expected_body_effects = EffectRow::empty();
-        for _ in 0..arity {
+        let mut outer_arrow_effects = Vec::new();
+        if F::ALLOWS_EFFECTFUL_TYPES {
+            self.type_work
+                .charge(arity - 1)
+                .map_err(|()| type_resource())?;
+            outer_arrow_effects
+                .try_reserve_exact(arity - 1)
+                .map_err(|_| type_resource())?;
+        }
+        for arrow in 0..arity {
+            if F::ALLOWS_EFFECTFUL_TYPES && arrow != 0 {
+                outer_arrow_effects.push(expected_body_effects);
+            }
             if remainder.ty.function_view().is_none() {
                 return Err(equation_arity_error(
                     EquationArityCause::DeclaredArrows,
@@ -18073,6 +18095,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             parameters,
             domain_types,
             expected_body_effects,
+            outer_arrow_effects,
             coverage_matrix,
             clause_bodies,
             contains_newtype: false,
@@ -18260,6 +18283,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             mut parameters,
             domain_types,
             mut expected_body_effects,
+            mut outer_arrow_effects,
             mut coverage_matrix,
             mut clause_bodies,
             contains_newtype,
@@ -18395,13 +18419,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             )?
         };
         let mut body_type = IterativeTypeOwner::new(self.pure_core_type(&remainder.ty)?);
-        for (parameter, domain) in parameters.into_iter().zip(domains.iter()).rev() {
+        for (arrow, (parameter, domain)) in
+            parameters.into_iter().zip(domains.iter()).rev().enumerate()
+        {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let domain_type = self.pure_core_type(&domain.ty)?;
             let effects = if F::ALLOWS_EFFECTFUL_TYPES {
-                std::mem::replace(&mut expected_body_effects, EffectRow::empty())
+                if arrow == 0 {
+                    std::mem::replace(&mut expected_body_effects, EffectRow::empty())
+                } else {
+                    outer_arrow_effects.pop().ok_or_else(invalid_state)?
+                }
             } else {
                 EffectRow::empty()
             };
@@ -21131,6 +21161,7 @@ pub(crate) fn check_module_with_budget(
         coverage_work,
         constraint_work,
         None,
+        None,
     )
 }
 pub(crate) fn check_module_with_budget_and_rewrite_work(
@@ -21138,6 +21169,7 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
+    primary_work: Option<TypeWorkBudget>,
     rewrite_work: Option<TypeWorkBudget>,
 ) -> Result<CheckedModule, TypeError> {
     let mut effects = !resolved.effects().is_empty()
@@ -21165,6 +21197,7 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
             type_work,
             coverage_work,
             constraint_work,
+            primary_work,
             rewrite_work,
         )
     } else {
@@ -21173,6 +21206,7 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
             type_work,
             coverage_work,
             constraint_work,
+            primary_work,
             rewrite_work,
         )
     }
@@ -21187,6 +21221,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
+    primary_work: Option<TypeWorkBudget>,
     rewrite_work: Option<TypeWorkBudget>,
 ) -> Result<CheckedModule, TypeError> {
     resolved
@@ -21220,6 +21255,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         registry,
         type_work,
         coverage_work.clone(),
+        primary_work,
         rewrite_work,
     )?;
     let result: Result<_, TypeError> = (|| {
@@ -21739,6 +21775,7 @@ struct EquationsProgress<'a> {
     parameters: Vec<TypedBinder>,
     domain_types: OwnedTypeBuffer,
     expected_body_effects: EffectRow,
+    outer_arrow_effects: Vec<EffectRow>,
     coverage_matrix: CorePatternMatrixBuffer,
     clause_bodies: Vec<(NodeId, Span)>,
     contains_newtype: bool,
@@ -27740,6 +27777,7 @@ pub(crate) fn cell_resource_core_fixture_for_test() -> (
     ResolvedModule,
     Vec<crate::source::SourceFile>,
     Arc<ResolvedRegistry>,
+    Vec<(crate::module::ModuleId, crate::source::SourceId)>,
 ) {
     tests::cell_resource_core_fixture()
 }
@@ -27750,6 +27788,7 @@ pub(crate) fn generic_cell_resource_core_fixture_for_test() -> (
     ResolvedModule,
     Vec<crate::source::SourceFile>,
     Arc<ResolvedRegistry>,
+    Vec<(crate::module::ModuleId, crate::source::SourceId)>,
 ) {
     tests::cell_resource_core_fixture_with_generic(true)
 }
@@ -28823,11 +28862,18 @@ mod tests {
         let mut body = "{\n".repeat(DEPTH);
         body.push_str("()");
         body.push_str(&"\n}".repeat(DEPTH));
-        let resolved = resolved_module_fixture("deep-effect-selection.ash", "", "Unit", &body);
+        let (resolved, mut dependencies) =
+            resolved_module_fixture_component("deep-effect-selection.ash", "", "Unit", &body);
         let module = resolved.module();
         let checked = check_module(resolved).expect("the deep selection fixture should check");
-        let linked =
-            link_modules(vec![checked], module).expect("the deep selection fixture should link");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the deep selection fixture should link");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("the deep selection fixture evidence should validate");
 
@@ -29328,6 +29374,15 @@ mod tests {
         result_type: &str,
         result: &str,
     ) -> ResolvedModule {
+        resolved_module_fixture_component(display_path, declarations, result_type, result).0
+    }
+
+    fn resolved_module_fixture_component(
+        display_path: &str,
+        declarations: &str,
+        result_type: &str,
+        result: &str,
+    ) -> (ResolvedModule, Vec<CheckedModule>) {
         let separator = if !declarations.is_empty() && !declarations.ends_with('\n') {
             "\n"
         } else {
@@ -29335,14 +29390,7 @@ mod tests {
         };
         let text =
             format!("{declarations}{separator}main : Unit -> {result_type}\nmain () = {result}\n");
-        let file = ModuleFixtureFile::write(display_path, &text);
-        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
-            .expect("the module fixture should load");
-        let loaded = graph
-            .module(graph.entry())
-            .expect("the module fixture should retain its entry");
-        assert!(loaded.dependencies().is_empty());
-        let resolved = resolve_module(loaded, &[]).expect("the module fixture should resolve");
+        let (resolved, _, _, dependencies) = cell_module_fixture_sources_at(display_path, &text);
         let wrapper = resolved
             .definitions()
             .last()
@@ -29352,7 +29400,7 @@ mod tests {
         };
         assert_eq!(wrapper.interface.name.spelling, "main");
         assert_eq!(wrapper.equations.len(), 1);
-        resolved
+        (resolved, dependencies)
     }
 
     fn cell_resource_fixture(result: &str) -> ResolvedModule {
@@ -29380,7 +29428,19 @@ mod tests {
         Arc<ResolvedRegistry>,
         Vec<CheckedModule>,
     ) {
-        let file = ModuleFixtureFile::write("cell-resource-typed.ash", text);
+        cell_module_fixture_sources_at("cell-resource-typed.ash", text)
+    }
+
+    fn cell_module_fixture_sources_at(
+        display_path: &str,
+        text: &str,
+    ) -> (
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+        Vec<CheckedModule>,
+    ) {
+        let file = ModuleFixtureFile::write(display_path, text);
         let graph = load_module_graph(&file.0, &ModuleRoots::empty()).expect("resource graph");
         let mut checked = Vec::<CheckedModule>::new();
         for loaded in graph.modules() {
@@ -29454,6 +29514,7 @@ mod tests {
         ResolvedModule,
         Vec<SourceFile>,
         Arc<ResolvedRegistry>,
+        Vec<(crate::module::ModuleId, crate::source::SourceId)>,
     ) {
         cell_resource_core_fixture_with_generic(false)
     }
@@ -29465,8 +29526,9 @@ mod tests {
         ResolvedModule,
         Vec<SourceFile>,
         Arc<ResolvedRegistry>,
+        Vec<(crate::module::ModuleId, crate::source::SourceId)>,
     ) {
-        let (module, sources, registry, _) = if generic {
+        let (module, sources, registry, checked) = if generic {
             cell_module_fixture_sources(
                 "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Bool> c = true {\n42\n}\n",
             )
@@ -29488,7 +29550,12 @@ mod tests {
             .builder
             .finish(typed.node)
             .expect("resource arena");
-        (core, module, sources, registry)
+        let relation = checked
+            .iter()
+            .map(|dependency| (dependency.module(), dependency.span().source()))
+            .chain(std::iter::once((module.module(), module.span().source())))
+            .collect();
+        (core, module, sources, registry, relation)
     }
 
     // Only the builtin becomes a checked group. The resource result is typed
@@ -30209,7 +30276,11 @@ mod tests {
     }
 
     fn lexical_resource_fixture() -> ResolvedModule {
-        resolved_module_fixture(
+        lexical_resource_fixture_component().0
+    }
+
+    fn lexical_resource_fixture_component() -> (ResolvedModule, Vec<CheckedModule>) {
+        resolved_module_fixture_component(
             "lexical-preparation-work.ash",
             "interface Read<A, B> where A -> B {\nread : A -> B\n}\n",
             "Unit",
@@ -30351,8 +30422,8 @@ mod tests {
             .expect("unpublished checked scheme dismantles iteratively");
     }
 
-    fn lexical_capture_resource_fixture() -> ResolvedModule {
-        resolved_module_fixture(
+    fn lexical_capture_resource_fixture_component() -> (ResolvedModule, Vec<CheckedModule>) {
+        resolved_module_fixture_component(
             "lexical-capture-work.ash",
             "interface Read<A> {\nread : A -> Int\n}\n",
             "Int",
@@ -30362,11 +30433,18 @@ mod tests {
 
     #[test]
     fn lexical_capture_collection_and_routing_have_exact_retry_boundaries() {
-        let resolved = lexical_capture_resource_fixture();
+        let (resolved, mut dependencies) = lexical_capture_resource_fixture_component();
         let source = lexical_resource_source(&resolved).clone();
         let module = resolved.module();
         let checked = check_module(resolved).expect("capture fixture checks");
-        let linked = link_modules(vec![checked], module).expect("capture fixture links");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("capture fixture links");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("capture catalog authenticates");
         let prepare = || {
@@ -30475,10 +30553,17 @@ mod tests {
 
     #[test]
     fn lexical_capture_module_boundaries_clear_routes_and_poison_failed_synthesis() {
-        let resolved = lexical_capture_resource_fixture();
+        let (resolved, mut dependencies) = lexical_capture_resource_fixture_component();
         let module = resolved.module();
         let checked = check_module(resolved).expect("capture fixture checks");
-        let linked = link_modules(vec![checked], module).expect("capture fixture links");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("capture fixture links");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("capture catalog authenticates");
         let mut measured = Elaborator::for_module_program(&program).expect("elaborator");
@@ -30748,11 +30833,18 @@ mod tests {
 
     #[test]
     fn lexical_block_cleanup_charges_retained_map_capacity_at_exact_boundaries() {
-        let resolved = lexical_resource_fixture();
+        let (resolved, mut dependencies) = lexical_resource_fixture_component();
         let source = lexical_resource_source(&resolved).clone();
         let module = resolved.module();
         let checked = check_module(resolved).expect("the lexical fixture should check");
-        let linked = link_modules(vec![checked], module).expect("the lexical fixture should link");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the lexical fixture should link");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("the lexical fixture should authenticate");
         let method = source.method_groups[0].method.expect("one supplied method");
@@ -30885,10 +30977,17 @@ mod tests {
 
     #[test]
     fn lexical_final_synthesis_resource_failure_poisoning_prevents_publication() {
-        let resolved = lexical_resource_fixture();
+        let (resolved, mut dependencies) = lexical_resource_fixture_component();
         let module = resolved.module();
         let checked = check_module(resolved).expect("the lexical fixture should check");
-        let linked = link_modules(vec![checked], module).expect("the lexical fixture should link");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the lexical fixture should link");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("the lexical fixture should authenticate");
         let mut measured = Elaborator::for_module_program(&program).expect("final elaborator");
@@ -30902,7 +31001,17 @@ mod tests {
         let mut short = Elaborator::for_module_program(&program).expect("final elaborator");
         let private = short
             .builder
-            .unit(Type::Unit, Origin::Source(program.groups()[0].span()))
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    program
+                        .groups()
+                        .iter()
+                        .find(|group| group.module() == program.entry())
+                        .expect("entry group")
+                        .span(),
+                ),
+            )
             .expect("private Core");
         short.type_work = TypeWorkBudget::with_limit(usize::MAX);
         short.constraint_work = InterfaceConstraintBudget::with_limit(work - 1);
@@ -31323,7 +31432,7 @@ mod tests {
 
     #[test]
     fn final_effect_binder_preparation_matches_completed_source_and_exact_retry() {
-        let resolved = resolved_module_fixture(
+        let (resolved, mut dependencies) = resolved_module_fixture_component(
             "prepared-final-binder.ash",
             "value : Unit -> Unit\nvalue argument = argument\n",
             "Unit",
@@ -31331,10 +31440,21 @@ mod tests {
         );
         let module = resolved.module();
         let checked = check_module(resolved).expect("source checks");
-        let linked = link_modules(vec![checked], module).expect("module links");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("module links");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("original evidence authenticates");
-        let group = &program.groups()[0];
+        let group = &*program
+            .groups()
+            .iter()
+            .find(|group| group.module() == program.entry())
+            .expect("entry group");
         let prepare = |allowance| {
             let mut elaborator =
                 EffectElaborator::for_module_program(&program).expect("completed global lowering");
@@ -31440,7 +31560,7 @@ mod tests {
 
     #[test]
     fn program_elaborator_reserves_hidden_impl_binders() {
-        let resolved = resolved_module_fixture(
+        let (resolved, mut dependencies) = resolved_module_fixture_component(
             "impl-program-reservation.ash",
             "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<Int> {\nconvert value = value\n}\n",
             "Unit",
@@ -31449,11 +31569,24 @@ mod tests {
         let module = resolved.module();
         let hidden = resolved.implementations()[0].method_groups[0].binder.id;
         let checked = check_module(resolved).expect("Task 3 ignores impl bodies while checking");
-        let program = link_modules(vec![checked], module)
-            .expect("the checked fixture should link into one module program");
+        let program = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the checked fixture should link into one module program");
         let program = crate::evidence_validation::validate_interface_evidence(program)
             .expect("the linked fixture evidence should validate");
-        let origin = Origin::Source(program.groups()[0].span());
+        let origin = Origin::Source(
+            program
+                .groups()
+                .iter()
+                .find(|group| group.module() == program.entry())
+                .expect("entry group")
+                .span(),
+        );
         let mut elaborator = Elaborator::for_module_program(&program)
             .expect("the complete resolved namespace should reserve");
 
@@ -31465,18 +31598,35 @@ mod tests {
 
     #[test]
     fn final_elaborator_requires_the_authorized_module_program_root() {
-        let resolved = resolved_module_fixture("final-root-authorization.ash", "", "Unit", "()");
+        let (resolved, mut dependencies) =
+            resolved_module_fixture_component("final-root-authorization.ash", "", "Unit", "()");
         let module = resolved.module();
         let checked = check_module(resolved).expect("the fixture module should check");
-        let program = link_modules(vec![checked], module)
-            .expect("the checked fixture should link into one module program");
+        let program = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the checked fixture should link into one module program");
         let program = crate::evidence_validation::validate_interface_evidence(program)
             .expect("the linked fixture evidence should validate");
         let mut elaborator = Elaborator::for_module_program(&program)
             .expect("the complete resolved namespace should reserve");
         let unrelated = elaborator
             .builder
-            .unit(Type::Unit, Origin::Source(program.groups()[0].span()))
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    program
+                        .groups()
+                        .iter()
+                        .find(|group| group.module() == program.entry())
+                        .expect("entry group")
+                        .span(),
+                ),
+            )
             .expect("the adversarial root should allocate");
 
         assert!(matches!(

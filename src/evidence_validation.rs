@@ -9018,7 +9018,7 @@ mod tests {
         const CONSTRAINT_WORK: usize = 12 + 2 * 2;
         const TYPE_WORK: usize = 4;
         let program = generic_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[1];
         let interface = &group.interface_facts()[0];
         let variables = fact
@@ -9103,7 +9103,7 @@ mod tests {
             "main : Unit -> Unit\n",
             "main () = ()\n",
         ));
-        let scheme = &program.groups()[0].schemes()[0].scheme;
+        let scheme = &entry_group(&program).schemes()[0].scheme;
         let variables = scheme
             .type_parameters
             .iter()
@@ -9122,9 +9122,18 @@ mod tests {
             "main : Unit -> Unit\n",
             "main () = ()\n",
         ));
-        let [pair, higher] = program.registry().nominals() else {
-            panic!("the fixture should retain Pair and Higher in source order");
-        };
+        let pair = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module() == program.entry() && nominal.spelling == "Pair")
+            .expect("Pair");
+        let higher = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module() == program.entry() && nominal.spelling == "Higher")
+            .expect("Higher");
         let partial_pair = Type::Application(Box::new(Type::Nominal(pair.id)), Box::new(Type::Int));
         let value_type =
             Type::Application(Box::new(Type::Nominal(higher.id)), Box::new(partial_pair));
@@ -9142,9 +9151,15 @@ mod tests {
             "main : Unit -> Unit\n",
             "main () = ()\n",
         ));
-        let scheme = &program.groups()[0].schemes()[0].scheme;
+        let scheme = &entry_group(&program).schemes()[0].scheme;
         let function = scheme.type_parameters[0].0;
-        let option = program.registry().nominals()[0].id;
+        let option = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module() == program.entry() && nominal.spelling == "Option")
+            .expect("Option")
+            .id;
         let wrong = Type::Application(
             Box::new(Type::Variable(function)),
             Box::new(Type::Nominal(option)),
@@ -9166,7 +9181,7 @@ mod tests {
             "main : Unit -> Unit\n",
             "main () = ()\n",
         ));
-        let parameter = program.groups()[0].schemes()[0].scheme.type_parameters[0].0;
+        let parameter = entry_group(&program).schemes()[0].scheme.type_parameters[0].0;
         let wrong = Type::Application(Box::new(Type::Variable(parameter)), Box::new(Type::Int));
 
         assert_eq!(
@@ -9185,7 +9200,7 @@ mod tests {
             "main : Unit -> Unit\n",
             "main () = ()\n",
         ));
-        let parameter = program.groups()[0].schemes()[0].scheme.type_parameters[0].0;
+        let parameter = entry_group(&program).schemes()[0].scheme.type_parameters[0].0;
         let cases = [
             Type::Variable(parameter),
             Type::Inference(InferenceVariableId::new(0)),
@@ -9227,13 +9242,13 @@ mod tests {
             "main : Unit -> Unit\n",
             "main () = ()\n",
         ));
-        let scheme = &program.groups()[0].schemes()[0].scheme;
+        let scheme = &entry_group(&program).schemes()[0].scheme;
         let variables = scheme
             .type_parameters
             .iter()
             .map(|(identity, _)| *identity)
             .collect::<Vec<_>>();
-        let span = program.groups()[0].span();
+        let span = entry_group(&program).span();
 
         let mut structural_short = InterfaceConstraintBudget::with_limit(STRUCTURAL_WORK - 1);
         assert_eq!(
@@ -9384,7 +9399,7 @@ mod tests {
             XI_WORK,
             "linked value schemes must not rebuild the nominal environment",
         );
-        assert!(program.groups()[0].schemes().len() >= 2);
+        assert!(entry_group(&program).schemes().len() >= 2);
     }
 
     #[test]
@@ -9604,8 +9619,8 @@ mod tests {
                         "main : Unit -> Unit\n",
                         "main () = ()\n",
                     ));
-                    let module = program.groups()[0].module();
-                    let parameter = program.groups()[0].schemes()[0].scheme.type_parameters[0].0;
+                    let module = entry_group(&program).module();
+                    let parameter = entry_group(&program).schemes()[0].scheme.type_parameters[0].0;
                     let canonical = program
                         .registry()
                         .type_variable(parameter)
@@ -9639,7 +9654,7 @@ mod tests {
                         generated_origin_depth(&canonical.origin),
                         GENERATED_ORIGIN_DEPTH,
                     );
-                    let source_origin = match program.groups()[0].definitions()[0].kind() {
+                    let source_origin = match entry_group(&program).definitions()[0].kind() {
                         ResolvedDefinitionKind::Equational(global)
                         | ResolvedDefinitionKind::ForeignConstant(global) => {
                             &global.interface.type_parameters[0].origin
@@ -9921,7 +9936,7 @@ mod tests {
             "main : Unit -> Unit\n",
             "main () = ()\n",
         ));
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let implementation = &group.implementations()[0];
         assert_eq!(
             group.implementation_facts()[0].head_parameters.len(),
@@ -9964,6 +9979,14 @@ mod tests {
             exact.expect("the exact implementation-body validation budget should fit");
             assert_eq!(exact_used, EXACT_WORK_WITHOUT_UNUSED_HEAD_BUFFER);
         }
+    }
+
+    fn entry_group(program: &ResolvedModuleProgram) -> &crate::resolved::ResolvedModuleGroup {
+        program
+            .groups()
+            .iter()
+            .find(|group| group.module() == program.entry())
+            .expect("the checked entry group")
     }
 
     fn entry_program(source: &str) -> ResolvedModuleProgram {
@@ -10303,7 +10326,7 @@ mod tests {
             LinkedCarrierMutationForTest::LexicalBeforeNominal,
         ] {
             let mut program = unused_lexical_program();
-            let module = program.groups()[0].module();
+            let module = entry_group(&program).module();
             assert!(program.corrupt_linked_carrier_for_test(module, mutation));
             if validate_interface_evidence(program).is_ok() {
                 accepted.push(mutation);
@@ -10318,7 +10341,7 @@ mod tests {
     #[test]
     fn intact_lexical_method_groups_may_remain_in_either_source_order() {
         let mut program = unused_lexical_program();
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(program.corrupt_linked_carrier_for_test(
             module,
             LinkedCarrierMutationForTest::LexicalMethodOrder
@@ -10334,7 +10357,7 @@ mod tests {
             "main : Unit -> Int\nmain () = {\nnewtype N = N(Unit)\nnewtype M = M(Unit)\n",
             "with R<N, M> {\nread ignored = 42\n}\n42\n}\n",
         ));
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(program.corrupt_linked_carrier_for_test(
             module,
             LinkedCarrierMutationForTest::LexicalBeforeNominal
@@ -10348,7 +10371,7 @@ mod tests {
     fn first_lexical_source(
         program: &ResolvedModuleProgram,
     ) -> &crate::resolved::ResolvedLexicalEvidence {
-        program.groups()[0]
+        (*entry_group(&program))
             .definitions()
             .iter()
             .find_map(|definition| {
@@ -10742,7 +10765,7 @@ mod tests {
     #[test]
     fn lexical_node_method_and_equation_scans_have_exact_retry_boundaries() {
         let program = lexical_resource_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let source = first_lexical_source(&program);
         let application = &source.checked.get().expect("checked source").application;
         let methods = source
@@ -10808,7 +10831,7 @@ mod tests {
     fn lexical_owner_lookup_charges_unrelated_method_table_width() {
         let program = lexical_resource_program();
         let source = first_lexical_source(&program);
-        let fact = &program.groups()[0].interface_facts()[0];
+        let fact = &entry_group(&program).interface_facts()[0];
         let mut methods = fact
             .methods
             .iter()
@@ -10835,7 +10858,7 @@ mod tests {
             &mut TypeWorkBudget::default(),
         )
         .expect("base owners");
-        let unrelated = &program.groups()[0].interface_facts()[1];
+        let unrelated = &entry_group(&program).interface_facts()[1];
         for method in &unrelated.methods {
             methods.push(MethodEvidenceMethod {
                 spelling: method.spelling.clone().into_boxed_str(),
@@ -10902,7 +10925,7 @@ mod tests {
     fn lexical_block_scheduling_charges_its_shape_scan_before_retention() {
         let program = lexical_resource_program();
         let ResolvedDefinitionKind::Equational(global) =
-            program.groups()[0].definitions()[0].kind()
+            entry_group(&program).definitions()[0].kind()
         else {
             panic!("global");
         };
@@ -10961,7 +10984,7 @@ mod tests {
                 if same_dependent { "Int" } else { "Bool" },
                 if same_dependent { "42" } else { "false" }
             ));
-            let group = &program.groups()[0];
+            let group = entry_group(&program);
             let source = first_lexical_source(&program);
             let checked = source.checked.get().expect("checked source");
             let Type::Application(_, token) =
@@ -11061,7 +11084,7 @@ mod tests {
         let template = unused_lexical_program();
         for current in [false, true] {
             let program = abstract_priority_program();
-            let group = &program.groups()[0];
+            let group = entry_group(&program);
             let fact = &group.implementation_facts()[0];
             let global = &group.schemes()[0];
             let (application, owner, variables) = if current {
@@ -11202,7 +11225,7 @@ mod tests {
     #[test]
     fn lexical_selection_requires_the_complete_canonical_method_order() {
         let program = unused_lexical_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let source = first_lexical_source(&program);
         let application = &source.checked.get().expect("checked source").application;
         let methods = &group.interface_facts()[0].methods;
@@ -11271,7 +11294,7 @@ mod tests {
             &mut TypeWorkBudget::default(),
         )
         .expect("complete lexical catalog");
-        let method = &program.groups()[0].implementation_facts()[0].methods[0];
+        let method = &entry_group(&program).implementation_facts()[0].methods[0];
         // Owner visit, nominal worklist and node, variable worklist/node/slot,
         // and one source-parameter comparison. Each argument also retains its tag.
         const EXACT: usize = 1 + (2 + 1) + (3 + 1) + 1;
@@ -11305,7 +11328,7 @@ mod tests {
             "impl<A> Keep<Box<A>> {\nkeep value = {\nnewtype Local = Local(A)\nvalue\n}\n}\n",
             "main : Unit -> Int\nmain () = 42\n",
         ));
-        let method = &program.groups()[0].implementation_facts()[0].methods[0];
+        let method = &entry_group(&program).implementation_facts()[0].methods[0];
         const EXACT: usize = 5;
         let mut short = InterfaceConstraintBudget::with_limit(EXACT - 1);
         assert_eq!(
@@ -12115,7 +12138,7 @@ mod tests {
     #[test]
     fn rejects_same_shaped_method_occurrence_identity_substitution() {
         let mut program = same_shaped_method_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let second = group.interface_facts()[0].methods[1].id;
         assert!(
@@ -12134,7 +12157,7 @@ mod tests {
     #[test]
     fn rejects_same_shaped_retained_method_identity_substitution() {
         let mut program = same_shaped_method_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let second = group.interface_facts()[0].methods[1].id;
         assert!(
@@ -12152,7 +12175,7 @@ mod tests {
     #[test]
     fn rejects_wrong_concrete_method_relationship_for_same_shaped_occurrence() {
         let mut program = same_shaped_method_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let implementation = &group.implementation_facts()[0];
         let [first, second] = implementation.methods.as_ref() else {
@@ -12192,7 +12215,7 @@ mod tests {
             "main : Unit -> Bool\n",
             "main () = relay((true, false))\n",
         ));
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let interface = &group.interface_facts()[0];
         let requirement = group
@@ -12243,7 +12266,7 @@ mod tests {
             "main : Unit -> Bool\n",
             "main () = first((true, false))\n",
         ));
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let implementation = &group.implementation_facts()[0];
         let [first, second] = implementation.methods.as_ref() else {
@@ -12289,7 +12312,7 @@ mod tests {
             Mutation::WrongMethod,
         ] {
             let mut program = polymorphic_method_program();
-            let module = program.groups()[0].module();
+            let module = entry_group(&program).module();
             let changed = match mutation {
                 Mutation::Missing => program
                     .replace_nth_direct_method_occurrence_arguments_for_test(
@@ -12357,7 +12380,7 @@ mod tests {
     #[test]
     fn rejects_reordered_implementation_head_then_method_binder_relationship() {
         let mut program = polymorphic_method_program();
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(
             program.swap_first_implementation_method_scheme_parameters_for_test(module),
             "the fixture should retain the combined head-then-method scheme",
@@ -12373,8 +12396,8 @@ mod tests {
     #[test]
     fn rejects_forged_implementation_head_method_partition_before_capability() {
         let mut program = polymorphic_method_program();
-        let module = program.groups()[0].module();
-        let method = &program.groups()[0].implementation_facts()[0].methods[0];
+        let module = entry_group(&program).module();
+        let method = &entry_group(&program).implementation_facts()[0].methods[0];
         assert_eq!(method.head_type_parameter_count(), 1);
         assert_eq!(method.scheme.type_parameters.len(), 4);
         assert!(
@@ -12388,6 +12411,42 @@ mod tests {
                 .reason(),
             EvidenceValidationReason::UnknownIdentity,
         );
+    }
+
+    fn reexport_groups(
+        program: &ResolvedModuleProgram,
+    ) -> (
+        &crate::resolved::ResolvedModuleGroup,
+        &crate::resolved::ResolvedModuleGroup,
+        &crate::resolved::ResolvedModuleGroup,
+    ) {
+        let base = program
+            .groups()
+            .iter()
+            .find(|group| {
+                group
+                    .interface_facts()
+                    .iter()
+                    .any(|fact| fact.spelling == "Equal")
+            })
+            .expect("Equal's defining group");
+        let facade = program
+            .groups()
+            .iter()
+            .filter(|group| group.module() != base.module() && group.module() != program.entry())
+            .filter_map(|group| {
+                group
+                    .public_implementation_authorizations()
+                    .iter()
+                    .filter(|authorization| authorization.id().module() == base.module())
+                    .map(|authorization| authorization.authorization().hops().len())
+                    .max()
+                    .map(|depth| (depth, group))
+            })
+            .max_by_key(|(depth, _)| *depth)
+            .expect("the outer publishing facade")
+            .1;
+        (base, facade, entry_group(program))
     }
 
     fn reexport_program() -> ResolvedModuleProgram {
@@ -13140,7 +13199,7 @@ mod tests {
         substitution_argument: &Type,
         root_argument: Type,
     ) -> EvidenceSelection {
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let ground = &group.implementation_facts()[0];
         let generic = &group.implementation_facts()[1];
         let parameter = generic.head_parameters[0].id;
@@ -13362,7 +13421,7 @@ mod tests {
         let program = entry_program(
             "interface Read<A> {\nread : A -> A\n}\nmain : Unit -> Unit\nmain () = ()\n",
         );
-        let parameters = &program.groups()[0].interface_facts()[0].parameters;
+        let parameters = &entry_group(&program).interface_facts()[0].parameters;
         let span = program.result().span;
         let effect = crate::types::EffectId::new(ModuleId::new(77), 0);
         let free = TypeVariableId::generated(900);
@@ -13723,7 +13782,7 @@ mod tests {
     #[test]
     fn rejects_selected_goal_that_does_not_match_the_recorded_impl_head() {
         let program = local_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let selection = implementation_selection(
             fact.id,
@@ -13774,7 +13833,7 @@ mod tests {
     #[test]
     fn rejects_missing_extra_and_reordered_checked_application_arguments() {
         let program = two_application_parameter_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let registry =
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
@@ -13815,7 +13874,7 @@ mod tests {
     #[test]
     fn rejects_selection_root_application_that_differs_from_its_frozen_slot() {
         let mut program = two_application_parameter_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let fact = &group.implementation_facts()[0];
         let forged = implementation_selection_for_application(
@@ -13858,7 +13917,7 @@ mod tests {
             .expect("the canonical relational linked fixture should validate");
         for mutation in mutations {
             let mut program = two_application_parameter_program();
-            let module = program.groups()[0].module();
+            let module = entry_group(&program).module();
             assert!(
                 program.corrupt_linked_carrier_for_test(module, mutation),
                 "the relational linked fixture should retain {mutation:?}",
@@ -13895,7 +13954,7 @@ mod tests {
                 Mutation::SameShapedHiddenDependent => hidden_relational_application_program(),
                 _ => relational_application_program(),
             };
-            let module = program.groups()[0].module();
+            let module = entry_group(&program).module();
             match mutation {
                 Mutation::KeyCarrier => assert!(program.corrupt_linked_carrier_for_test(
                     module,
@@ -13906,7 +13965,7 @@ mod tests {
                     LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch,
                 )),
                 Mutation::AbstractSelection => {
-                    let group = &program.groups()[0];
+                    let group = entry_group(&program);
                     let interface = &group.interface_facts()[0];
                     let requirement = group
                         .schemes()
@@ -13928,7 +13987,7 @@ mod tests {
                     );
                 }
                 Mutation::ImplementationSelection => {
-                    let group = &program.groups()[0];
+                    let group = entry_group(&program);
                     let fact = &group.implementation_facts()[0];
                     let mut arguments = fact.arguments().to_vec();
                     arguments[1] = crate::types::KindedArgument::TypeArg(Type::Bool);
@@ -13943,7 +14002,7 @@ mod tests {
                     );
                 }
                 Mutation::SameShapedHiddenDependent => {
-                    let group = &program.groups()[0];
+                    let group = entry_group(&program);
                     let interface = &group.interface_facts()[0];
                     let requirement = group
                         .schemes()
@@ -14056,7 +14115,7 @@ mod tests {
         // publication (1). Each complete owner argument adds one traversal slot.
         const EXACT_WORK: usize = 14 + 2;
         let program = dependent_only_global_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let scheme = group
             .schemes()
             .iter()
@@ -14121,7 +14180,7 @@ mod tests {
         const EXACT_TYPE_WORK: usize = 22 + 1 + 2 * 2 + METHOD_SPELLING_WORK;
 
         let relationship_program = linked_determined_generic_decrease_program();
-        let group = &relationship_program.groups()[0];
+        let group = entry_group(&relationship_program);
         let interface = &group.interface_facts()[0];
         let fact = &group.implementation_facts()[0];
         let prerequisite = &fact.prerequisites[0];
@@ -14233,7 +14292,7 @@ mod tests {
             "main : Unit -> Unit\n",
             "main () = ()\n",
         ));
-        let implementation = program.groups()[0].implementation_facts()[0].id;
+        let implementation = entry_group(&program).implementation_facts()[0].id;
         assert!(
             program.replace_implementation_prerequisite_argument_with_head_for_test(
                 implementation,
@@ -14242,7 +14301,7 @@ mod tests {
             ),
             "the linked fixture should retain every prerequisite mirror",
         );
-        let fact = &program.groups()[0].implementation_facts()[0];
+        let fact = &entry_group(&program).implementation_facts()[0];
         let prerequisite = &fact.prerequisites[0];
         assert_eq!(prerequisite.arguments()[0], fact.arguments()[0]);
         assert_ne!(prerequisite.arguments()[1], fact.arguments()[1]);
@@ -14362,7 +14421,7 @@ mod tests {
         let mut unexpectedly_accepted = Vec::new();
         for (carrier, mutation) in mutations {
             let mut program = entry_program(SOURCE);
-            let module = program.groups()[0].module();
+            let module = entry_group(&program).module();
             assert!(
                 program.corrupt_linked_determination_for_test(module, carrier, mutation),
                 "the fixture should retain {carrier:?} {mutation:?}",
@@ -14456,7 +14515,7 @@ mod tests {
     #[test]
     fn rejects_kind_invalid_selected_goal_and_matching_higher_kinded_substitution() {
         let program = higher_kinded_generic_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let [wrapped] = program.registry().nominals() else {
             panic!("the fixture should retain exactly one nominal constructor");
         };
@@ -14513,7 +14572,7 @@ mod tests {
     #[test]
     fn rejects_checked_global_parameter_kind_mirror_before_core() {
         let mut program = higher_kinded_generic_program();
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(program.replace_first_checked_global_parameter_kind_for_test(module, Kind::Type,));
 
         let failure = validate_interface_evidence(program)
@@ -14794,7 +14853,7 @@ mod tests {
     #[test]
     fn rejects_implementation_method_parameter_kind_mirror_before_core() {
         let mut program = higher_kinded_generic_program();
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(
             program
                 .replace_first_implementation_method_parameter_kind_for_test(module, Kind::Type,)
@@ -14886,7 +14945,7 @@ mod tests {
     #[test]
     fn rejects_surplus_canonical_variable_at_linked_owner_boundary() {
         let mut program = polymorphic_method_program();
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(program.add_surplus_registry_type_variable_for_test(module));
 
         assert_eq!(
@@ -14910,7 +14969,7 @@ mod tests {
                 "main : Unit -> Unit\n",
                 "main () = ()\n",
             ));
-            let group = &program.groups()[0];
+            let group = entry_group(&program);
             let module = group.module();
             let parameter = group.interface_facts()[0].parameters[0].id;
             let replacement = replacement.unwrap_or(Type::Variable(parameter));
@@ -14937,7 +14996,7 @@ mod tests {
         const SUBSTITUTION_CONSTRAINT_WORK: usize = 12;
         const LEXICAL_TYPE_WORK: usize = 2;
         let program = higher_kinded_generic_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let [wrapped] = program.registry().nominals() else {
             panic!("the fixture should retain exactly one nominal constructor");
         };
@@ -15104,7 +15163,7 @@ mod tests {
     #[test]
     fn rejects_wrong_generic_substitution_and_prerequisite_argument() {
         let program = generic_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let generic = &group.implementation_facts()[1];
         let owner = test_type_argument(&generic.arguments()[0])
             .outer_nominal()
@@ -15157,7 +15216,7 @@ mod tests {
             .expect("one unit should authenticate the kind-preserving pending edge");
         assert_eq!(proof_exact.used(), 1);
 
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let generic = &group.implementation_facts()[1];
         let owner = test_type_argument(&generic.arguments()[0])
             .outer_nominal()
@@ -15216,7 +15275,7 @@ mod tests {
     #[test]
     fn rejects_reordered_two_parameter_substitution() {
         let program = two_parameter_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let [first, second] = fact.head_parameters.as_ref() else {
             panic!("the fixture should retain two head parameters");
@@ -15270,7 +15329,7 @@ mod tests {
     #[test]
     fn rejects_reordered_prerequisites_and_a_shared_prerequisite_child() {
         let program = two_prerequisite_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let left = &group.implementation_facts()[0];
         let right = &group.implementation_facts()[1];
         let generic = &group.implementation_facts()[2];
@@ -15356,7 +15415,7 @@ mod tests {
     #[test]
     fn rejects_abstract_requirement_from_another_lexical_owner() {
         let program = abstract_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let first = &group.schemes()[0];
         let second = &group.schemes()[1];
         let selection = abstract_selection(
@@ -15398,7 +15457,7 @@ mod tests {
     #[test]
     fn rejects_abstract_requirement_with_a_different_goal_argument() {
         let program = abstract_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let first = &group.schemes()[0];
         let selection = abstract_selection(
             first.scheme.requirements[0].id,
@@ -15439,7 +15498,7 @@ mod tests {
     #[test]
     fn rejects_a_sibling_requirement_identity_for_an_exact_selected_application() {
         let program = distinct_abstract_prerequisites_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let implementation = &group.implementation_facts()[0];
         let [selected_requirement, sibling_requirement] = implementation.prerequisites.as_ref()
         else {
@@ -15552,7 +15611,7 @@ mod tests {
     #[test]
     fn rejects_freshly_instantiated_current_implementation_at_the_selection_root() {
         let program = current_authenticity_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let leaf = &group.implementation_facts()[0];
         let current = &group.implementation_facts()[1];
         let mut builder = EvidenceSelectionBuilder::new();
@@ -15600,7 +15659,7 @@ mod tests {
     #[test]
     fn rejects_freshly_instantiated_current_implementation_below_another_node() {
         let program = current_authenticity_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let leaf = &group.implementation_facts()[0];
         let current = &group.implementation_facts()[1];
         let enclosing = &group.implementation_facts()[2];
@@ -15667,7 +15726,7 @@ mod tests {
     #[test]
     fn rejects_concrete_evidence_when_lexical_abstract_requirement_matches_a_goal() {
         let program = abstract_priority_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let wrapped = &group.implementation_facts()[0];
         let outer = &group.implementation_facts()[1];
         let shadowed = &group.schemes()[0];
@@ -15847,7 +15906,7 @@ mod tests {
     #[test]
     fn identity_equal_abstract_priority_scan_has_an_exact_constraint_limit() {
         let program = abstract_priority_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let shadowed = &group.schemes()[0];
         let [requirement] = shadowed.scheme.requirements.as_ref() else {
             panic!("the constrained global should retain one abstract requirement");
@@ -15919,7 +15978,7 @@ mod tests {
         // authentication visit.
         const EXACT_WORK: usize = 87 + 15 + 4 + 1 + 1 + 2;
         let program = current_authenticity_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let current = &group.implementation_facts()[1];
         let [parameter] = current.head_parameters.as_ref() else {
             panic!("the current implementation should retain one rigid parameter");
@@ -16029,7 +16088,7 @@ mod tests {
     #[test]
     fn rejects_inference_forall_and_out_of_scope_type_escape_in_selected_goals() {
         let program = local_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let methods = fact
             .methods
@@ -16078,7 +16137,7 @@ mod tests {
     #[test]
     fn rejects_unknown_nominal_identity_and_wrong_nominal_arity_in_selected_goals() {
         let program = generic_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let ground = &group.implementation_facts()[0];
         let generic = &group.implementation_facts()[1];
         let owner = test_type_argument(&generic.arguments()[0])
@@ -16132,7 +16191,7 @@ mod tests {
     #[test]
     fn rejects_unreachable_nodes_in_a_flat_evidence_plan() {
         let program = local_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let methods = fact
             .methods
@@ -16185,7 +16244,7 @@ mod tests {
         let cases = [0, 1, 2];
         for case in cases {
             let mut program = local_program();
-            let group = &program.groups()[0];
+            let group = entry_group(&program);
             let module = group.module();
             let span = group.span();
             let changed = match case {
@@ -16217,7 +16276,7 @@ mod tests {
     #[test]
     fn rejects_unknown_selected_impl_identity_before_core() {
         let program = local_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let unknown_implementation = ImplId::new(group.module(), 99);
         let selection = implementation_selection(unknown_implementation, fact.interface(), &[]);
@@ -16242,7 +16301,7 @@ mod tests {
     #[test]
     fn rejects_hidden_implementation_method_binder_reused_by_a_global() {
         let mut program = local_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let global = group.schemes()[0].binder;
         assert!(program.replace_first_implementation_method_binder_for_test(module, global));
@@ -16256,7 +16315,7 @@ mod tests {
     #[test]
     fn rejects_interface_identity_with_a_non_source_declaration_ordinal() {
         let mut program = local_program();
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(
             program.replace_first_interface_fact_id_for_test(module, InterfaceId::new(module, 99),)
         );
@@ -16270,7 +16329,7 @@ mod tests {
     #[test]
     fn rejects_method_identity_with_a_non_source_declaration_ordinal() {
         let mut program = local_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let interface = group.interface_facts()[0].id;
         assert!(
@@ -16287,7 +16346,7 @@ mod tests {
     #[test]
     fn rejects_implementation_identity_with_a_non_source_declaration_ordinal() {
         let mut program = local_program();
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(
             program.replace_first_implementation_fact_id_for_test(module, ImplId::new(module, 99),)
         );
@@ -16311,7 +16370,7 @@ mod tests {
             "}\n\n",
             "main : Unit -> Int\nmain () = first 1\n",
         ));
-        let module = program.groups()[0].module();
+        let module = entry_group(&program).module();
         assert!(program.reuse_first_implementation_method_binder_for_test(module));
 
         let failure = validate_interface_evidence(program)
@@ -16333,7 +16392,7 @@ mod tests {
             "}\n\n",
             "main : Unit -> Int\nmain () = first 1\n",
         ));
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let [first, second] = fact.methods.as_ref() else {
             panic!("the implementation should retain two same-typed method slots");
@@ -16461,7 +16520,7 @@ mod tests {
             "impl Keep<Bool> {\nkeep value = value\n}\n\n",
             "main : Unit -> (Int -> Int)\nmain () = keep\n",
         ));
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let module = group.module();
         let bool_implementation = group
             .implementation_facts()
@@ -16534,9 +16593,7 @@ mod tests {
     #[test]
     fn rejects_a_forged_reexport_authorization_hop() {
         let mut program = reexport_program();
-        let [base, _facade, entry] = program.groups() else {
-            panic!("the re-export fixture should retain three groups");
-        };
+        let (base, _facade, entry) = reexport_groups(&program);
         let base_module = base.module();
         let entry_module = entry.module();
         let entry_span = entry.span();
@@ -16564,9 +16621,7 @@ mod tests {
     #[test]
     fn rejects_a_forged_intermediate_public_authorization_suffix() {
         let mut program = deep_reexport_program();
-        let [_base, _inner, facade, _entry] = program.groups() else {
-            panic!("the deep re-export fixture should retain four groups");
-        };
+        let (_base, facade, _entry) = reexport_groups(&program);
         let facade_module = facade.module();
         let facade_span = facade.span();
         let [published] = facade.public_implementation_authorizations() else {
@@ -16591,9 +16646,7 @@ mod tests {
     #[test]
     fn rejects_an_unused_forged_public_authorization_before_occurrences() {
         let mut program = dual_reexport_program();
-        let [base, facade, entry] = program.groups() else {
-            panic!("the dual re-export fixture should retain three groups");
-        };
+        let (base, facade, entry) = reexport_groups(&program);
         let unused_implementation = base.implementation_facts()[1].id;
         let selected_implementation = entry.available_implementations()[0].id();
         assert_ne!(unused_implementation, selected_implementation);
@@ -16621,9 +16674,7 @@ mod tests {
     #[test]
     fn rejects_a_forged_public_authorization_hop_span() {
         let mut program = reexport_program();
-        let [_base, _facade, entry] = program.groups() else {
-            panic!("the re-export fixture should retain three groups");
-        };
+        let (_base, _facade, entry) = reexport_groups(&program);
         let entry_module = entry.module();
         let entry_span = entry.span();
         let [published] = entry.public_implementation_authorizations() else {
@@ -16647,9 +16698,7 @@ mod tests {
     #[test]
     fn rejects_a_public_authorization_with_a_forged_final_owner() {
         let mut program = reexport_program();
-        let [_base, facade, entry] = program.groups() else {
-            panic!("the re-export fixture should retain three groups");
-        };
+        let (_base, facade, entry) = reexport_groups(&program);
         let entry_module = entry.module();
         let entry_span = entry.span();
         let facade_module = facade.module();
@@ -16674,9 +16723,7 @@ mod tests {
     #[test]
     fn rejects_a_disconnected_public_authorization_route() {
         let mut program = reexport_program();
-        let [_base, _facade, entry] = program.groups() else {
-            panic!("the re-export fixture should retain three groups");
-        };
+        let (_base, _facade, entry) = reexport_groups(&program);
         let entry_module = entry.module();
         let entry_span = entry.span();
         let [published] = entry.public_implementation_authorizations() else {
@@ -16700,9 +16747,7 @@ mod tests {
     #[test]
     fn rejects_a_repeated_public_authorization_route() {
         let mut program = reexport_program();
-        let [_base, _facade, entry] = program.groups() else {
-            panic!("the re-export fixture should retain three groups");
-        };
+        let (_base, _facade, entry) = reexport_groups(&program);
         let entry_module = entry.module();
         let entry_span = entry.span();
         let [published] = entry.public_implementation_authorizations() else {
@@ -16726,9 +16771,7 @@ mod tests {
     #[test]
     fn changed_available_identity_is_reported_as_occurrence_unavailability() {
         let mut program = dual_reexport_program();
-        let [base, _facade, entry] = program.groups() else {
-            panic!("the re-export fixture should retain three groups");
-        };
+        let (base, _facade, entry) = reexport_groups(&program);
         let entry_module = entry.module();
         let [equal] = entry.available_implementations() else {
             panic!("the entry should retain only its explicitly selected implementation");
@@ -16751,9 +16794,7 @@ mod tests {
     #[test]
     fn changed_selected_identity_is_reported_as_an_invalid_evidence_root() {
         let mut program = dual_reexport_program();
-        let [base, _facade, entry] = program.groups() else {
-            panic!("the re-export fixture should retain three groups");
-        };
+        let (base, _facade, entry) = reexport_groups(&program);
         let entry_module = entry.module();
         let keep = &base.implementation_facts()[1];
         let forged = implementation_selection(
@@ -16796,7 +16837,12 @@ mod tests {
         let dependency = program
             .groups()
             .iter()
-            .find(|group| group.module() != graph.entry())
+            .find(|group| {
+                group
+                    .implementations()
+                    .iter()
+                    .any(|implementation| !implementation.source().public)
+            })
             .expect("the dependency group should remain linked");
         let private = dependency
             .implementations()
@@ -16837,7 +16883,7 @@ mod tests {
             "}\n\n",
             "main : Unit -> Unit\nmain () = ()\n",
         ));
-        let generic = &program.groups()[0].implementation_facts()[1];
+        let generic = &entry_group(&program).implementation_facts()[1];
         let implementation = generic.id;
         assert!(program.replace_implementation_prerequisite_with_head_for_test(implementation, 0,));
 
@@ -17136,7 +17182,7 @@ mod tests {
         // for the selected Int goal adds two synthesis cells and one Kind cell.
         const EXACT_WORK: usize = 16 + 3 + 8;
         let program = local_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let methods = fact
             .methods
@@ -17205,10 +17251,13 @@ mod tests {
             "main : Unit -> Bool\n",
             "main () = equal((1, 1))\n",
         ));
-        let module = program.groups()[0].module();
-        let [effect] = program.registry().effects() else {
-            panic!("the fixture must retain exactly one canonical effect");
-        };
+        let module = entry_group(&program).module();
+        let effect = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.id.module() == program.entry() && effect.spelling == "Probe")
+            .expect("Probe");
         assert_eq!(effect.spelling, "Probe");
         let effect_id = effect.id;
         let closed = Type::function_computation(
@@ -17227,7 +17276,7 @@ mod tests {
                     "the linked registry should authenticate before the retained head mutation",
                 );
         assert!(program.replace_first_implementation_argument_for_test(module, closed.clone()));
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let methods = fact
             .methods
@@ -17260,7 +17309,7 @@ mod tests {
             ),
         );
         assert!(program.replace_first_implementation_argument_for_test(module, malformed.clone()));
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let fact = &group.implementation_facts()[0];
         let selection =
             implementation_selection_for_argument(fact.id, fact.interface(), &methods, malformed);
@@ -17290,7 +17339,7 @@ mod tests {
     #[test]
     fn local_availability_authentication_requires_exactly_two_units() {
         let program = local_program();
-        let group = &program.groups()[0];
+        let group = entry_group(&program);
         let implementation = group.implementation_facts()[0].id;
         assert_eq!(group.available_implementations().len(), 1);
         let registry =
@@ -17383,7 +17432,7 @@ mod tests {
             "first\n",
             "}\n",
         ));
-        let definition = &program.groups()[0].definitions()[0];
+        let definition = &entry_group(&program).definitions()[0];
         let ResolvedDefinitionKind::Equational(global) = definition.kind() else {
             panic!("the fixture should retain an equational global");
         };
@@ -17429,7 +17478,7 @@ mod tests {
             "first\n",
             "}\n",
         ));
-        let definition = &program.groups()[0].definitions()[0];
+        let definition = &entry_group(&program).definitions()[0];
         let ResolvedDefinitionKind::Equational(global) = definition.kind() else {
             panic!("the fixture should retain an equational global");
         };

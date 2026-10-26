@@ -277,6 +277,16 @@ fn occurrences_in_expressions(
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);
             }
+            ResolvedExprKind::Region(region) => {
+                if let Some(provider) = &region.provider {
+                    expressions.push(provider);
+                }
+                expressions.push(&region.body);
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                expressions.push(&selection.region);
+                expressions.push(&selection.body);
+            }
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
                 expressions.extend(handler.clauses.iter().map(|clause| &clause.body));

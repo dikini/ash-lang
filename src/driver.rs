@@ -1218,6 +1218,13 @@ where
             &mut checking_type_work,
             &mut coverage_work,
             constraint_work,
+            Some(TypeWorkBudget::with_limit(
+                modular_primary_limit(source_bytes).map_err(|()| {
+                    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                        crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                    )))
+                })?,
+            )),
             Some(TypeWorkBudget::with_limit(rewrite_limit)),
         )
         .map_err(|failure| {
@@ -1467,6 +1474,11 @@ where
         let mut elaborator = Elaborator::for_module_program_with_budgets(
             &validated_interfaces,
             final_budget,
+            TypeWorkBudget::with_limit(modular_primary_limit(source_bytes).map_err(|()| {
+                FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                    crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+                )))
+            })?),
             rewrite_budget,
         )
         .map_err(|(failure, used)| {
@@ -1572,6 +1584,13 @@ fn modular_phase_work(
     Ok((work, normal, source_bytes))
 }
 
+fn modular_primary_limit(source_bytes: usize) -> Result<usize, ()> {
+    Ok(crate::calibration::limit(
+        crate::compiler_work::primary_total(source_bytes)?,
+        crate::calibration::DiagnosticOwner::Structural,
+    ))
+}
+
 fn modular_rewrite_limit(source_bytes: usize) -> Result<usize, ()> {
     Ok(crate::calibration::limit(
         crate::compiler_work::rewrite_total(source_bytes)?,
@@ -1656,6 +1675,11 @@ fn finish_effect_compilation(
     let mut elaborator = EffectElaborator::for_module_program_with_budgets(
         validated_interfaces,
         final_budget,
+        TypeWorkBudget::with_limit(modular_primary_limit(source_bytes).map_err(|()| {
+            FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+                crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+            )))
+        })?),
         rewrite_budget,
     )
     .map_err(|(failure, used)| {
@@ -1994,6 +2018,9 @@ mod tests {
                             &mut crate::pattern::UsefulnessBudget::default(),
                             &mut InterfaceConstraintBudget::default(),
                             Some(TypeWorkBudget::with_limit(
+                                crate::compiler_work::primary_total(bytes).unwrap(),
+                            )),
+                            Some(TypeWorkBudget::with_limit(
                                 crate::compiler_work::rewrite_total(bytes).unwrap(),
                             )),
                         )
@@ -2022,6 +2049,7 @@ mod tests {
                 let mut elaborator = EffectElaborator::for_module_program_with_budgets(
                     &linked,
                     final_work,
+                    TypeWorkBudget::with_limit(crate::compiler_work::primary_total(bytes).unwrap()),
                     TypeWorkBudget::with_limit(crate::compiler_work::rewrite_total(bytes).unwrap()),
                 )
                 .unwrap();
@@ -2076,69 +2104,67 @@ mod tests {
 
     #[test]
     fn integer_cell_regressions_fit_normal_modular_allowances() {
-        (|| {
-            for (name, source) in [
-                (
-                    "same-site",
-                    "import @builtin.cell as Cell\neffect Pause {\nask : Unit -> Unit\n}\nvisit : Int -> Int ! {Pause}\nvisit depth = resource cell<R> c = (match depth == 0 {\ntrue => 1\nfalse => 41\n}) {\nmatch depth == 0 {\ntrue => {\nlet _ = perform Pause.ask ()\nCell.read c\n}\nfalse => {\nlet observe : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nhandle (visit 0) with Pause {\nask ignored => {\nlet outer = observe ()\nlet inner = resume ()\nouter + inner\n}\n}\n}\n}\n}\nmain : Unit -> Int\nmain () = handle (visit 1) with Pause {\nask ignored => resume ()\n}\n\n",
-                ),
-                (
-                    "metadata",
-                    "import @builtin.cell as Cell\neffect E<T> {\nask : Unit -> Int\n}\neffect Pause {\nask : Unit -> Unit\n}\nvisit : Int -> Int ! {Pause}\nvisit depth = resource cell<R> c = depth {\nlet observe : Unit -> Int ! {E<R>} = fn(ignored) {\nperform E<R>.ask ()\n}\nhandle (match depth == 0 {\ntrue => {\nlet _ = perform Pause.ask ()\nobserve ()\n}\nfalse => {\nhandle (visit 0) with Pause {\nask ignored => {\nlet outer = observe ()\nlet inner = resume ()\nouter + inner\n}\n}\n}\n}) with E<R> {\nask ignored => resume (match depth == 0 {\ntrue => 1\nfalse => 41\n})\n}\n}\nmain : Unit -> Int\nmain () = handle (visit 1) with Pause {\nask ignored => resume ()\n}\n",
-                ),
-                (
-                    "nested24",
-                    "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nCell.read c\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n",
-                ),
-            ] {
-                let fixture = TestSource::write(source);
-                let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).unwrap();
-                let bytes: usize = graph
-                    .modules()
+        for (name, source) in [
+            (
+                "same-site",
+                "import @builtin.cell as Cell\neffect Pause {\nask : Unit -> Unit\n}\nvisit : Int -> Int ! {Pause}\nvisit depth = resource cell<R> c = (match depth == 0 {\ntrue => 1\nfalse => 41\n}) {\nmatch depth == 0 {\ntrue => {\nlet _ = perform Pause.ask ()\nCell.read c\n}\nfalse => {\nlet observe : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nhandle (visit 0) with Pause {\nask ignored => {\nlet outer = observe ()\nlet inner = resume ()\nouter + inner\n}\n}\n}\n}\n}\nmain : Unit -> Int\nmain () = handle (visit 1) with Pause {\nask ignored => resume ()\n}\n\n",
+            ),
+            (
+                "metadata",
+                "import @builtin.cell as Cell\neffect E<T> {\nask : Unit -> Int\n}\neffect Pause {\nask : Unit -> Unit\n}\nvisit : Int -> Int ! {Pause}\nvisit depth = resource cell<R> c = depth {\nlet observe : Unit -> Int ! {E<R>} = fn(ignored) {\nperform E<R>.ask ()\n}\nhandle (match depth == 0 {\ntrue => {\nlet _ = perform Pause.ask ()\nobserve ()\n}\nfalse => {\nhandle (visit 0) with Pause {\nask ignored => {\nlet outer = observe ()\nlet inner = resume ()\nouter + inner\n}\n}\n}\n}) with E<R> {\nask ignored => resume (match depth == 0 {\ntrue => 1\nfalse => 41\n})\n}\n}\nmain : Unit -> Int\nmain () = handle (visit 1) with Pause {\nask ignored => resume ()\n}\n",
+            ),
+            (
+                "nested24",
+                "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nresource cell<R> c = 42 {\nCell.read c\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n}\n",
+            ),
+        ] {
+            let fixture = TestSource::write(source);
+            let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).unwrap();
+            let bytes: usize = graph
+                .modules()
+                .iter()
+                .map(|module| module.source().text().len())
+                .sum();
+            let compiled = compile_path(fixture.configuration())
+                .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+            eprintln!(
+                "integer Cell {name}: canonical_bytes={bytes}, work={:?}",
+                compiled.compilation_work()
+            );
+            let (program, _) = compiled.effect_build_input().expect("region Effect Core");
+            let evaluation =
+                crate::eval::evaluate_effect(program).expect("resource fixture evaluates");
+            assert_eq!(evaluation.value.to_string(), "42");
+            if name == "nested24" {
+                use crate::eval::EffectTraceEvent;
+                let acquired = evaluation
+                    .effect_trace()
                     .iter()
-                    .map(|module| module.source().text().len())
-                    .sum();
-                let compiled = compile_path(fixture.configuration())
-                    .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
-                eprintln!(
-                    "integer Cell {name}: canonical_bytes={bytes}, work={:?}",
-                    compiled.compilation_work()
+                    .filter_map(|event| match event {
+                        EffectTraceEvent::ResourceAcquired(key) => Some(*key),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let released = evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter_map(|event| match event {
+                        EffectTraceEvent::ResourceReleased(key) => Some(*key),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(acquired.len(), 24);
+                assert_eq!(
+                    acquired
+                        .iter()
+                        .collect::<std::collections::HashSet<_>>()
+                        .len(),
+                    24
                 );
-                let (program, _) = compiled.effect_build_input().expect("region Effect Core");
-                let evaluation =
-                    crate::eval::evaluate_effect(program).expect("resource fixture evaluates");
-                assert_eq!(evaluation.value.to_string(), "42");
-                if name == "nested24" {
-                    use crate::eval::EffectTraceEvent;
-                    let acquired = evaluation
-                        .effect_trace()
-                        .iter()
-                        .filter_map(|event| match event {
-                            EffectTraceEvent::ResourceAcquired(key) => Some(*key),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    let released = evaluation
-                        .effect_trace()
-                        .iter()
-                        .filter_map(|event| match event {
-                            EffectTraceEvent::ResourceReleased(key) => Some(*key),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    assert_eq!(acquired.len(), 24);
-                    assert_eq!(
-                        acquired
-                            .iter()
-                            .collect::<std::collections::HashSet<_>>()
-                            .len(),
-                        24
-                    );
-                    assert_eq!(released, acquired.into_iter().rev().collect::<Vec<_>>());
-                }
-                eprintln!("integer Cell {name}: result=42");
+                assert_eq!(released, acquired.into_iter().rev().collect::<Vec<_>>());
             }
-        })();
+            eprintln!("integer Cell {name}: result=42");
+        }
     }
 
     #[test]

@@ -174,7 +174,7 @@ fn ordinary_effect_operation_summary_authenticates_retained_nominal_kinds() {
         );
         let graph = load(&tree, "import cell as Cell\n", &[]);
         let ordinary = &graph.modules()[0];
-        let mut summary = check_module(resolve_module(ordinary, &[]).unwrap())
+        let mut summary = check_module(resolve_with(&graph, ordinary, &[]).unwrap())
             .unwrap()
             .into_exports();
         summary.corrupt_builtin_fact_for_test(mutation);
@@ -241,18 +241,59 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
 }
 
 fn resolve_with(
+    graph: &ModuleGraph,
     module: &LoadedModule,
     summaries: &[&ExportSummary],
 ) -> Result<ResolvedModule, ResolveError> {
-    assert_eq!(module.dependencies().len(), summaries.len());
+    let mut implicit = Vec::<ExportSummary>::new();
+    for loaded in graph
+        .modules()
+        .iter()
+        .filter(|loaded| loaded.id().is_builtin_foreign() || loaded.id().is_builtin_region())
+    {
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let summary = implicit
+                    .iter()
+                    .find(|summary| summary.module() == edge.target())
+                    .expect("the implicit service component is dependency ordered");
+                DependencyExports::new(edge, summary)
+                    .expect("the actual implicit edge matches its export")
+            })
+            .collect::<Vec<_>>();
+        implicit.push(
+            check_module(
+                resolve_module(loaded, &dependencies).expect("the implicit service resolves"),
+            )
+            .expect("the implicit service checks")
+            .into_exports(),
+        );
+    }
+    let mut supplied = summaries.iter();
     let dependencies = module
         .dependencies()
         .iter()
-        .zip(summaries)
-        .map(|(edge, summary)| {
-            DependencyExports::new(edge, summary).expect("summary should match its import edge")
+        .map(|edge| {
+            let summary = if edge.is_region_service() {
+                implicit
+                    .iter()
+                    .find(|summary| summary.module() == edge.target())
+                    .expect("the generated service summary remains in the graph")
+            } else {
+                *supplied
+                    .next()
+                    .expect("every source edge retains its supplied summary")
+            };
+            DependencyExports::new(edge, summary)
+                .expect("the original source summary matches its exact import edge")
         })
         .collect::<Vec<_>>();
+    assert!(
+        supplied.next().is_none(),
+        "every supplied source summary is consumed"
+    );
     resolve_module(module, &dependencies).map_err(|error| match error {
         ResolveModuleError::Resolution(error) => error,
         ResolveModuleError::Kind(error) => {
@@ -298,9 +339,9 @@ fn globals_and_implementation_methods_share_capture_scans_per_import_edge() {
             &[("dependency.ash", &dependency)],
         );
         let defining = module_named(&graph, "dependency.ash");
-        let checked = check_module(resolve_module(defining, &[]).unwrap()).unwrap();
+        let checked = check_module(resolve_with(&graph, defining, &[]).unwrap()).unwrap();
         let entry = module_named(&graph, "entry.ash");
-        let resolved = resolve_with(entry, &[checked.exports()])
+        let resolved = resolve_with(&graph, entry, &[checked.exports()])
             .expect("global and method capture metadata should fit the default import budget");
         assert_eq!(resolved.imported_facts().globals().count(), 96);
         assert_eq!(resolved.imported_facts().implementations().count(), 1);
@@ -347,7 +388,7 @@ fn fresh_import_capture_scan_rejects_missing_metadata_even_after_retention() {
         )],
     );
     let defining = module_named(&graph, "dependency.ash");
-    let checked = check_module(resolve_module(defining, &[]).unwrap()).unwrap();
+    let checked = check_module(resolve_with(&graph, defining, &[]).unwrap()).unwrap();
     let summary = checked.exports();
     let entry = module_named(&graph, "entry.ash");
     let missing = ExportSummary::test_fixture(defining.id(), vec![], vec![], vec![], vec![]);
@@ -514,14 +555,15 @@ fn unselected_kind_invalid_summary_fact_is_rejected_before_local_checking() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let checked = check_module(
-        resolve_module(dependency, &[]).expect("the dependency should resolve before mutation"),
+        resolve_with(&graph, dependency, &[])
+            .expect("the dependency should resolve before mutation"),
     )
     .expect("the dependency should check before mutation");
     let mut summary = checked.into_exports();
     assert!(summary.replace_first_term_parameter_kind_for_test(Kind::Type));
     let importer = module_named(&graph, "entry.ash");
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("an unselected forged scheme must fail dependency-summary admission");
 
     assert_eq!(error.reason, ResolveReason::InternalState);
@@ -545,7 +587,7 @@ fn frozen_summary_retains_authoritative_declaration_order() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let summary = check_module(
-        resolve_module(dependency, &[]).expect("the ordered dependency should resolve"),
+        resolve_with(&graph, dependency, &[]).expect("the ordered dependency should resolve"),
     )
     .expect("the ordered dependency should check")
     .into_exports();
@@ -563,7 +605,7 @@ fn frozen_summary_retains_authoritative_declaration_order() {
         ["Zed", "Able"],
     );
     let importer = module_named(&graph, "entry.ash");
-    let retained = resolve_with(importer, &[&summary])
+    let retained = resolve_with(&graph, importer, &[&summary])
         .expect("the qualified import should preserve authenticated freeze order");
     let retained_binders = retained
         .imported_facts()
@@ -593,14 +635,14 @@ fn unselected_constructor_scheme_corruption_fails_summary_admission() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let checked = check_module(
-        resolve_module(dependency, &[]).expect("the constructor dependency should resolve"),
+        resolve_with(&graph, dependency, &[]).expect("the constructor dependency should resolve"),
     )
     .expect("the constructor dependency should check");
     let mut summary = checked.into_exports();
     assert!(summary.replace_first_constructor_scheme_value_type_for_test(Type::Unit));
     let importer = module_named(&graph, "entry.ash");
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("an unselected forged constructor scheme must fail admission");
 
     assert_eq!(error.reason, ResolveReason::InternalState);
@@ -623,14 +665,15 @@ fn unselected_implementation_method_corruption_fails_summary_admission() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let checked = check_module(
-        resolve_module(dependency, &[]).expect("the implementation dependency should resolve"),
+        resolve_with(&graph, dependency, &[])
+            .expect("the implementation dependency should resolve"),
     )
     .expect("the implementation dependency should check");
     let mut summary = checked.into_exports();
     assert!(summary.replace_first_implementation_method_value_type_for_test(Type::Unit));
     let importer = module_named(&graph, "entry.ash");
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("an unselected kind-valid method forgery must fail admission");
 
     assert_eq!(error.reason, ResolveReason::InternalState);
@@ -708,7 +751,7 @@ fn exhaustive_summary_orders_indexes_aliases_and_owners_fail_before_local_checki
 
     for mutation in mutations {
         let checked = check_module(
-            resolve_module(dependency, &[]).expect("the matrix dependency should resolve"),
+            resolve_with(&graph, dependency, &[]).expect("the matrix dependency should resolve"),
         )
         .expect("the matrix dependency should check");
         let mut summary = checked.into_exports();
@@ -743,7 +786,7 @@ fn exhaustive_summary_orders_indexes_aliases_and_owners_fail_before_local_checki
             }
         };
         assert!(changed, "the selected matrix carrier should be present");
-        let error = resolve_with(importer, &[&summary])
+        let error = resolve_with(&graph, importer, &[&summary])
             .expect_err("every forged summary carrier must fail exhaustive admission");
         assert_eq!(error.reason, ResolveReason::InternalState);
     }
@@ -832,7 +875,7 @@ fn exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking() {
         );
         let dependency = module_named(&graph, "dependency.ash");
         let mut summary = check_module(
-            resolve_module(dependency, &[]).expect("the rich dependency should resolve"),
+            resolve_with(&graph, dependency, &[]).expect("the rich dependency should resolve"),
         )
         .expect("the rich dependency should check")
         .into_exports();
@@ -849,7 +892,7 @@ fn exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking() {
             "the raw boundary must reject {mutation:?} independently",
         );
         let importer = module_named(&graph, "entry.ash");
-        let error = resolve_with(importer, &[&summary])
+        let error = resolve_with(&graph, importer, &[&summary])
             .expect_err("every forged public summary carrier must fail admission");
         assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
     }
@@ -887,13 +930,13 @@ fn exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking() {
         );
         let base = module_named(&graph, "base.ash");
         let base_summary = check_module(
-            resolve_module(base, &[]).expect("the hidden-carrier base should resolve"),
+            resolve_with(&graph, base, &[]).expect("the hidden-carrier base should resolve"),
         )
         .expect("the hidden-carrier base should check")
         .into_exports();
         let facade = module_named(&graph, "facade.ash");
         let mut summary = check_module(
-            resolve_with(facade, &[&base_summary]).expect("the facade should resolve"),
+            resolve_with(&graph, facade, &[&base_summary]).expect("the facade should resolve"),
         )
         .expect("the facade should check")
         .into_exports();
@@ -910,7 +953,7 @@ fn exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking() {
             "the raw boundary must reject {mutation:?} independently",
         );
         let importer = module_named(&graph, "entry.ash");
-        let error = resolve_with(importer, &[&summary])
+        let error = resolve_with(&graph, importer, &[&summary])
             .expect_err("every forged hidden summary carrier must fail admission");
         assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
     }
@@ -949,7 +992,8 @@ fn relational_summary_rejects_complete_parameter_and_application_tampering_matri
         );
         let dependency = module_named(&graph, "dependency.ash");
         let mut summary = check_module(
-            resolve_module(dependency, &[]).expect("the relational dependency should resolve"),
+            resolve_with(&graph, dependency, &[])
+                .expect("the relational dependency should resolve"),
         )
         .expect("the relational dependency should check")
         .into_exports();
@@ -966,7 +1010,7 @@ fn relational_summary_rejects_complete_parameter_and_application_tampering_matri
             "the raw summary boundary must reject {mutation:?}",
         );
         let importer = module_named(&graph, "entry.ash");
-        let error = resolve_with(importer, &[&summary])
+        let error = resolve_with(&graph, importer, &[&summary])
             .expect_err("the forged relational summary must fail before local checking");
         assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
     }
@@ -997,7 +1041,7 @@ fn determined_summary_method_seed_has_exact_admission_boundaries() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let summary = check_module(
-        resolve_module(dependency, &[]).expect("the determined dependency should resolve"),
+        resolve_with(&graph, dependency, &[]).expect("the determined dependency should resolve"),
     )
     .expect("the determined dependency should check locally")
     .into_exports();
@@ -1065,7 +1109,7 @@ fn summary_admission_rejects_every_malformed_private_determination_key() {
         );
         let dependency = module_named(&graph, "dependency.ash");
         let mut summary = check_module(
-            resolve_module(dependency, &[]).expect("the no-edge dependency should resolve"),
+            resolve_with(&graph, dependency, &[]).expect("the no-edge dependency should resolve"),
         )
         .expect("the no-edge dependency should check")
         .into_exports();
@@ -1100,7 +1144,7 @@ fn detached_summary_rechecks_variable_head_against_an_alternate_key() {
     );
     let module = module_named(&graph, "entry.ash");
     let mut summary = check_module(
-        resolve_module(module, &[]).expect("the honest determined module should resolve"),
+        resolve_with(&graph, module, &[]).expect("the honest determined module should resolve"),
     )
     .expect("the honest structured selection key should check")
     .into_exports();
@@ -1142,7 +1186,7 @@ fn detached_summary_rechecks_dependent_coverage_against_an_alternate_key() {
     );
     let module = module_named(&graph, "entry.ash");
     let mut summary = check_module(
-        resolve_module(module, &[]).expect("the honestly covered module should resolve"),
+        resolve_with(&graph, module, &[]).expect("the honestly covered module should resolve"),
     )
     .expect("the honest determinant key should cover its dependent variable")
     .into_exports();
@@ -1189,13 +1233,13 @@ fn detached_summary_rechecks_orphan_ownership_against_an_alternate_key() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let dependency_summary = check_module(
-        resolve_module(dependency, &[]).expect("the foreign interface should resolve"),
+        resolve_with(&graph, dependency, &[]).expect("the foreign interface should resolve"),
     )
     .expect("the foreign interface should check")
     .into_exports();
     let entry = module_named(&graph, "entry.ash");
     let mut summary = check_module(
-        resolve_with(entry, &[&dependency_summary])
+        resolve_with(&graph, entry, &[&dependency_summary])
             .expect("the honestly authorized foreign implementation should resolve"),
     )
     .expect("the local outer nominal in the honest key should authorize the implementation")
@@ -1239,7 +1283,8 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
         );
         let module = module_named(&graph, "entry.ash");
         check_module(
-            resolve_module(module, &[]).expect("the exact relationship fixture should resolve"),
+            resolve_with(&graph, module, &[])
+                .expect("the exact relationship fixture should resolve"),
         )
         .expect("the exact relationship fixture should check")
         .into_exports()
@@ -1357,7 +1402,8 @@ fn relational_summary_application_arity_precedes_a_late_wrong_kind() {
         );
         let dependency = module_named(&graph, "dependency.ash");
         let mut summary = check_module(
-            resolve_module(dependency, &[]).expect("the relational dependency should resolve"),
+            resolve_with(&graph, dependency, &[])
+                .expect("the relational dependency should resolve"),
         )
         .expect("the relational dependency should check")
         .into_exports();
@@ -1413,7 +1459,8 @@ fn fused_constructor_scheme_authentication_rejects_every_independent_type_obliga
         let dependency = module_named(&graph, "dependency.ash");
         let importer = module_named(&graph, "entry.ash");
         let mut summary = check_module(
-            resolve_module(dependency, &[]).expect("the phantom-parameter fixture should resolve"),
+            resolve_with(&graph, dependency, &[])
+                .expect("the phantom-parameter fixture should resolve"),
         )
         .expect("a constructor payload need not mention every owner parameter")
         .into_exports();
@@ -1435,7 +1482,7 @@ fn fused_constructor_scheme_authentication_rejects_every_independent_type_obliga
             Err(ResolvedBuildFailure::InvalidState),
             "the fused raw boundary must reject {mutation:?}",
         );
-        let error = resolve_with(importer, &[&summary])
+        let error = resolve_with(&graph, importer, &[&summary])
             .expect_err("forged constructor closure must fail before local checking");
         assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
     }
@@ -1658,7 +1705,7 @@ fn hidden_constructor_order_and_family_coverage_are_authenticated() {
     );
     let base = module_named(&graph, "base.ash");
     let base_summary =
-        check_module(resolve_module(base, &[]).expect("the constructor base should resolve"))
+        check_module(resolve_with(&graph, base, &[]).expect("the constructor base should resolve"))
             .expect("the constructor base should check")
             .into_exports();
     let facade = module_named(&graph, "facade.ash");
@@ -1666,7 +1713,8 @@ fn hidden_constructor_order_and_family_coverage_are_authenticated() {
 
     for remove_fact in [false, true] {
         let mut summary = check_module(
-            resolve_with(facade, &[&base_summary]).expect("the constructor facade should resolve"),
+            resolve_with(&graph, facade, &[&base_summary])
+                .expect("the constructor facade should resolve"),
         )
         .expect("the constructor facade should check")
         .into_exports();
@@ -1679,7 +1727,7 @@ fn hidden_constructor_order_and_family_coverage_are_authenticated() {
             changed,
             "the partial family should retain its hidden sibling"
         );
-        let error = resolve_with(importer, &[&summary])
+        let error = resolve_with(&graph, importer, &[&summary])
             .expect_err("hidden constructor closure must authenticate before local checking");
         assert_eq!(error.reason, ResolveReason::InternalState);
     }
@@ -1763,19 +1811,22 @@ fn diamond_routes_require_complete_fact_agreement_before_route_mutation() {
                 ],
             );
             let base = module_named(&graph, "base.ash");
-            let base_summary =
-                check_module(resolve_module(base, &[]).expect("the diamond base should resolve"))
-                    .expect("the diamond base should check")
-                    .into_exports();
+            let base_summary = check_module(
+                resolve_with(&graph, base, &[]).expect("the diamond base should resolve"),
+            )
+            .expect("the diamond base should check")
+            .into_exports();
             let left = module_named(&graph, "left.ash");
             let left_summary = check_module(
-                resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+                resolve_with(&graph, left, &[&base_summary])
+                    .expect("the left facade should resolve"),
             )
             .expect("the left facade should check")
             .into_exports();
             let right = module_named(&graph, "right.ash");
             let mut right_summary = check_module(
-                resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+                resolve_with(&graph, right, &[&base_summary])
+                    .expect("the right facade should resolve"),
             )
             .expect("the right facade should check")
             .into_exports();
@@ -1785,7 +1836,8 @@ fn diamond_routes_require_complete_fact_agreement_before_route_mutation() {
             } else {
                 [&left_summary, &right_summary]
             };
-            resolve_with(importer, &clean).expect("exact diamond mirrors should deduplicate");
+            resolve_with(&graph, importer, &clean)
+                .expect("exact diamond mirrors should deduplicate");
 
             let changed = right_summary.corrupt_first_duplicate_fact_for_test(mutation);
             assert!(
@@ -1807,7 +1859,7 @@ fn diamond_routes_require_complete_fact_agreement_before_route_mutation() {
             } else {
                 [&left_summary, &right_summary]
             };
-            let error = match resolve_with(importer, &conflicting) {
+            let error = match resolve_with(&graph, importer, &conflicting) {
                 Err(error) => error,
                 Ok(_) => {
                     panic!("conflicting diamond fact {mutation:?} must fail at the second route")
@@ -1873,19 +1925,21 @@ fn hidden_diamond_facts_require_complete_provenance_agreement_in_dependency_orde
             );
             let base = module_named(&graph, "base.ash");
             let base_summary = check_module(
-                resolve_module(base, &[]).expect("the hidden diamond base should resolve"),
+                resolve_with(&graph, base, &[]).expect("the hidden diamond base should resolve"),
             )
             .expect("the hidden diamond base should check")
             .into_exports();
             let left = module_named(&graph, "left.ash");
             let left_summary = check_module(
-                resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+                resolve_with(&graph, left, &[&base_summary])
+                    .expect("the left facade should resolve"),
             )
             .expect("the left facade should check")
             .into_exports();
             let right = module_named(&graph, "right.ash");
             let mut right_summary = check_module(
-                resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+                resolve_with(&graph, right, &[&base_summary])
+                    .expect("the right facade should resolve"),
             )
             .expect("the right facade should check")
             .into_exports();
@@ -1905,7 +1959,7 @@ fn hidden_diamond_facts_require_complete_provenance_agreement_in_dependency_orde
             } else {
                 [&left_summary, &right_summary]
             };
-            let error = match resolve_with(importer, &summaries) {
+            let error = match resolve_with(&graph, importer, &summaries) {
                 Err(error) => error,
                 Ok(_) => panic!(
                     "hidden diamond provenance {mutation:?} must agree before route mutation (reverse={reverse})",
@@ -1957,19 +2011,21 @@ fn interface_and_implementation_only_diamonds_compare_hidden_nominal_closure() {
             );
             let base = module_named(&graph, "base.ash");
             let base_summary = check_module(
-                resolve_module(base, &[]).expect("the nominal-closure base should resolve"),
+                resolve_with(&graph, base, &[]).expect("the nominal-closure base should resolve"),
             )
             .expect("the nominal-closure base should check")
             .into_exports();
             let left = module_named(&graph, "left.ash");
             let left_summary = check_module(
-                resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+                resolve_with(&graph, left, &[&base_summary])
+                    .expect("the left facade should resolve"),
             )
             .expect("the left facade should check")
             .into_exports();
             let right = module_named(&graph, "right.ash");
             let mut right_summary = check_module(
-                resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+                resolve_with(&graph, right, &[&base_summary])
+                    .expect("the right facade should resolve"),
             )
             .expect("the right facade should check")
             .into_exports();
@@ -1989,7 +2045,7 @@ fn interface_and_implementation_only_diamonds_compare_hidden_nominal_closure() {
             } else {
                 [&left_summary, &right_summary]
             };
-            let error = resolve_with(importer, &summaries).expect_err(&format!(
+            let error = resolve_with(&graph, importer, &summaries).expect_err(&format!(
                 "the {carrier}-only diamond should reject conflicting nominal provenance",
             ));
             assert_eq!(error.reason, ResolveReason::InternalState, "{carrier}");
@@ -2022,19 +2078,19 @@ fn targeted_constructor_diamond_authenticates_its_hidden_owner_before_deduplicat
         );
         let base = module_named(&graph, "base.ash");
         let base_summary =
-            check_module(resolve_module(base, &[]).expect("the Pair base should resolve"))
+            check_module(resolve_with(&graph, base, &[]).expect("the Pair base should resolve"))
                 .expect("the Pair base should check")
                 .into_exports();
         let left = module_named(&graph, "left.ash");
         let left_summary = check_module(
-            resolve_with(left, &[&base_summary])
+            resolve_with(&graph, left, &[&base_summary])
                 .expect("the left constructor facade should resolve"),
         )
         .expect("the left constructor facade should check")
         .into_exports();
         let right = module_named(&graph, "right.ash");
         let mut right_summary = check_module(
-            resolve_with(right, &[&base_summary])
+            resolve_with(&graph, right, &[&base_summary])
                 .expect("the right constructor facade should resolve"),
         )
         .expect("the right constructor facade should check")
@@ -2045,7 +2101,7 @@ fn targeted_constructor_diamond_authenticates_its_hidden_owner_before_deduplicat
         } else {
             [&left_summary, &right_summary]
         };
-        resolve_with(importer, &clean)
+        resolve_with(&graph, importer, &clean)
             .expect("exact targeted constructor and hidden-owner mirrors should deduplicate");
 
         assert!(right_summary.corrupt_hidden_diamond_fact_for_test(
@@ -2062,7 +2118,7 @@ fn targeted_constructor_diamond_authenticates_its_hidden_owner_before_deduplicat
         } else {
             [&left_summary, &right_summary]
         };
-        let error = resolve_with(importer, &conflicting)
+        let error = resolve_with(&graph, importer, &conflicting)
             .expect_err("constructor deduplication must not skip its hidden owner mirror");
         assert_eq!(error.reason, ResolveReason::InternalState);
         let second_import = importer.dependencies()[1].import_span();
@@ -2092,19 +2148,19 @@ fn duplicate_constructor_payload_routes_compare_foreign_nominal_provenance() {
         );
         let base = module_named(&graph, "base.ash");
         let base_summary = check_module(
-            resolve_module(base, &[]).expect("the constructor-payload base should resolve"),
+            resolve_with(&graph, base, &[]).expect("the constructor-payload base should resolve"),
         )
         .expect("the constructor-payload base should check")
         .into_exports();
         let left = module_named(&graph, "left.ash");
         let left_summary = check_module(
-            resolve_with(left, &[&base_summary]).expect("the left facade should resolve"),
+            resolve_with(&graph, left, &[&base_summary]).expect("the left facade should resolve"),
         )
         .expect("the left facade should check")
         .into_exports();
         let right = module_named(&graph, "right.ash");
         let mut right_summary = check_module(
-            resolve_with(right, &[&base_summary]).expect("the right facade should resolve"),
+            resolve_with(&graph, right, &[&base_summary]).expect("the right facade should resolve"),
         )
         .expect("the right facade should check")
         .into_exports();
@@ -2124,7 +2180,7 @@ fn duplicate_constructor_payload_routes_compare_foreign_nominal_provenance() {
         } else {
             [&left_summary, &right_summary]
         };
-        let error = resolve_with(importer, &summaries)
+        let error = resolve_with(&graph, importer, &summaries)
             .expect_err("duplicate constructors should compare foreign payload nominal provenance");
         assert_eq!(error.reason, ResolveReason::InternalState);
         assert_eq!(
@@ -2154,14 +2210,14 @@ fn unselected_non_decreasing_prerequisite_fails_summary_admission() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let mut summary = check_module(
-        resolve_module(dependency, &[]).expect("the prerequisite dependency should resolve"),
+        resolve_with(&graph, dependency, &[]).expect("the prerequisite dependency should resolve"),
     )
     .expect("the decreasing prerequisite should check")
     .into_exports();
     assert!(summary.replace_first_implementation_prerequisite_with_head_for_test());
     let importer = module_named(&graph, "entry.ash");
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("a non-strict imported prerequisite must fail summary admission");
 
     assert_eq!(error.reason, ResolveReason::InternalState);
@@ -2185,14 +2241,14 @@ fn unselected_kind_valid_bare_variable_head_fails_summary_admission() {
     );
     let dependency = module_named(&graph, "dependency.ash");
     let mut summary = check_module(
-        resolve_module(dependency, &[]).expect("the generic dependency should resolve"),
+        resolve_with(&graph, dependency, &[]).expect("the generic dependency should resolve"),
     )
     .expect("the concrete generic head should check")
     .into_exports();
     assert!(summary.replace_first_implementation_head_with_bare_parameter_for_test());
     let importer = module_named(&graph, "entry.ash");
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("a bare-variable imported implementation head must fail admission");
 
     assert_eq!(error.reason, ResolveReason::InternalState);
@@ -2225,12 +2281,12 @@ fn unselected_kind_valid_orphan_head_fails_summary_admission() {
     );
     let base = module_named(&graph, "base.ash");
     let base_summary =
-        check_module(resolve_module(base, &[]).expect("the foreign base should resolve"))
+        check_module(resolve_with(&graph, base, &[]).expect("the foreign base should resolve"))
             .expect("the foreign base should check")
             .into_exports();
     let dependency = module_named(&graph, "dependency.ash");
     let mut summary = check_module(
-        resolve_with(dependency, &[&base_summary])
+        resolve_with(&graph, dependency, &[&base_summary])
             .expect("the local orphan-safe impl should resolve"),
     )
     .expect("the local nominal should satisfy the owner rule")
@@ -2238,7 +2294,7 @@ fn unselected_kind_valid_orphan_head_fails_summary_admission() {
     assert!(summary.replace_first_implementation_head_with_foreign_nominal_for_test());
     let importer = module_named(&graph, "entry.ash");
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("a foreign-interface/foreign-nominal impl must fail admission");
 
     assert_eq!(error.reason, ResolveReason::InternalState);
@@ -2295,7 +2351,8 @@ fn qualified_import_resolves_term_type_and_constructor_identities() {
         vec![],
     );
 
-    let resolved = resolve_with(importer, &[&summary]).expect("qualified imports should resolve");
+    let resolved =
+        resolve_with(&graph, importer, &[&summary]).expect("qualified imports should resolve");
     let definition = equational(&resolved, 0);
     assert_eq!(
         nominal_function_parts(&definition.interface.annotation.ty),
@@ -2339,7 +2396,7 @@ fn targeted_import_rename_preserves_the_exported_binder_identity() {
         vec![],
     );
 
-    let resolved = resolve_with(importer, &[&summary]).expect("the rename should resolve");
+    let resolved = resolve_with(&graph, importer, &[&summary]).expect("the rename should resolve");
     assert!(matches!(
         equational(&resolved, 0).equations[0].body.kind,
         ResolvedExprKind::Occurrence(ref occurrence)
@@ -2374,7 +2431,8 @@ fn one_targeted_selector_imports_same_spelled_type_and_constructor() {
         vec![],
     );
 
-    let resolved = resolve_with(importer, &[&summary]).expect("both namespaces should resolve");
+    let resolved =
+        resolve_with(&graph, importer, &[&summary]).expect("both namespaces should resolve");
     let definition = equational(&resolved, 0);
     let Type::Function(_, codomain) = &definition.interface.annotation.ty else {
         panic!("expected a function type");
@@ -2409,7 +2467,8 @@ fn duplicate_targeted_selector_is_an_import_conflict() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&summary]).expect_err("the duplicate should conflict");
+    let error =
+        resolve_with(&graph, importer, &[&summary]).expect_err("the duplicate should conflict");
     assert_eq!(error.reason, ResolveReason::ImportConflict);
 }
 
@@ -2449,7 +2508,7 @@ fn bindings_from_distinct_imports_cannot_silently_shadow() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&first_summary, &second_summary])
+    let error = resolve_with(&graph, importer, &[&first_summary, &second_summary])
         .expect_err("the second import should conflict");
     assert_eq!(error.reason, ResolveReason::ImportConflict);
 }
@@ -2496,7 +2555,7 @@ fn targeted_term_and_constructor_cannot_share_a_renamed_expression_spelling() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&first_summary, &second_summary])
+    let error = resolve_with(&graph, importer, &[&first_summary, &second_summary])
         .expect_err("term and constructor imports must not shadow in expression scope");
     assert_eq!(error.reason, ResolveReason::ImportConflict);
 }
@@ -2524,7 +2583,7 @@ fn targeted_term_cannot_shadow_a_local_constructor() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("an imported term must not shadow a local constructor");
     assert_eq!(error.reason, ResolveReason::ImportConflict);
 }
@@ -2552,7 +2611,7 @@ fn targeted_import_cannot_shadow_a_local_global() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&summary]).expect_err("the local should conflict");
+    let error = resolve_with(&graph, importer, &[&summary]).expect_err("the local should conflict");
     assert_eq!(error.reason, ResolveReason::ImportConflict);
 }
 
@@ -2568,7 +2627,7 @@ fn local_interface_cannot_shadow_a_qualified_module_alias() {
     let importer = module_named(&graph, "entry.ash");
     let summary = ExportSummary::test_fixture(dependency.id(), vec![], vec![], vec![], vec![]);
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("a local interface must not shadow a qualified module alias");
 
     assert_eq!(error.reason, ResolveReason::ImportConflict);
@@ -2599,7 +2658,7 @@ fn local_interface_cannot_shadow_a_targeted_nominal() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("a local interface must not shadow a targeted nominal");
 
     assert_eq!(error.reason, ResolveReason::ImportConflict);
@@ -2628,7 +2687,7 @@ fn local_method_cannot_shadow_a_targeted_global_term() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("a local method must not shadow a targeted global term");
 
     assert_eq!(error.reason, ResolveReason::ImportConflict);
@@ -2659,7 +2718,7 @@ fn local_method_cannot_shadow_a_targeted_constructor_under_a_lowercase_rename() 
         vec![],
     );
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("a local method must not shadow a targeted renamed constructor");
 
     assert_eq!(error.reason, ResolveReason::ImportConflict);
@@ -2700,7 +2759,7 @@ fn imported_non_interface_targets_report_interface_kind() {
             vec![],
         );
 
-        let error = resolve_with(importer, &[&summary])
+        let error = resolve_with(&graph, importer, &[&summary])
             .expect_err("a resolved non-interface target should fail its sort check");
 
         assert_eq!(error.reason, ResolveReason::InterfaceKind, "{label}");
@@ -2717,7 +2776,7 @@ fn local_interface_and_nominal_report_a_duplicate_type() {
     );
     let importer = module_named(&graph, "entry.ash");
 
-    let error = resolve_with(importer, &[])
+    let error = resolve_with(&graph, importer, &[])
         .expect_err("a local interface and nominal cannot share a type namespace name");
 
     assert_eq!(error.reason, ResolveReason::DuplicateType);
@@ -2733,7 +2792,7 @@ fn local_method_and_global_report_a_duplicate_global() {
     );
     let importer = module_named(&graph, "entry.ash");
 
-    let error = resolve_with(importer, &[])
+    let error = resolve_with(&graph, importer, &[])
         .expect_err("a local method and global cannot share a term namespace name");
 
     assert_eq!(error.reason, ResolveReason::DuplicateGlobal);
@@ -2765,7 +2824,7 @@ fn a_renamed_imported_type_does_not_conflict_with_a_local_global() {
         vec![],
     );
 
-    resolve_with(importer, &[&summary])
+    resolve_with(&graph, importer, &[&summary])
         .expect("the nominal and expression namespaces should remain distinct");
 }
 
@@ -2816,7 +2875,8 @@ fn selecting_a_withheld_private_spelling_reports_unavailable_export() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&summary]).expect_err("private export should fail");
+    let error =
+        resolve_with(&graph, importer, &[&summary]).expect_err("private export should fail");
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
 }
 
@@ -2862,8 +2922,8 @@ fn diamond_consumers_preserve_one_shared_binder_and_nominal_identity() {
         vec![],
     );
 
-    let left_resolved = resolve_with(left, &[&summary]).expect("left should resolve");
-    let right_resolved = resolve_with(right, &[&summary]).expect("right should resolve");
+    let left_resolved = resolve_with(&graph, left, &[&summary]).expect("left should resolve");
+    let right_resolved = resolve_with(&graph, right, &[&summary]).expect("right should resolve");
     let left_definition = equational(&left_resolved, 0);
     let right_definition = equational(&right_resolved, 0);
 
@@ -2925,7 +2985,7 @@ fn targeted_import_of_an_opaque_constructor_reports_opaque_access() {
     let importer = module_named(&graph, "entry.ash");
     let summary = opaque_nominal_summary(dependency, "Token", vec!["Seal"]);
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("an opaque constructor cannot be imported by name");
 
     assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
@@ -2947,7 +3007,7 @@ fn qualified_construction_of_an_opaque_type_reports_opaque_access() {
     let importer = module_named(&graph, "entry.ash");
     let summary = opaque_nominal_summary(dependency, "Token", vec!["Seal"]);
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("qualified construction must not inspect an opaque type");
 
     assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
@@ -2974,7 +3034,7 @@ fn qualified_pattern_on_an_opaque_type_reports_opaque_access() {
     let importer = module_named(&graph, "entry.ash");
     let summary = opaque_nominal_summary(dependency, "Token", vec!["Seal"]);
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("qualified matching must not inspect an opaque type");
 
     assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
@@ -2997,7 +3057,7 @@ fn a_private_type_name_remains_unavailable_to_a_qualified_importer() {
     let summary =
         ExportSummary::test_fixture(dependency.id(), vec![], vec![], vec![], vec!["Hidden"]);
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("a private type name must not enter the qualified namespace");
 
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
@@ -3020,8 +3080,8 @@ fn a_public_opaque_type_name_is_available_to_a_qualified_importer() {
     let nominal = NominalTypeId::new(dependency.id(), 0);
     let summary = opaque_nominal_summary(dependency, "Token", vec!["Seal"]);
 
-    let resolved =
-        resolve_with(importer, &[&summary]).expect("an opaque nominal name should be usable");
+    let resolved = resolve_with(&graph, importer, &[&summary])
+        .expect("an opaque nominal name should be usable");
 
     assert_eq!(
         nominal_function_parts(&equational(&resolved, 0).interface.annotation.ty),
@@ -3059,7 +3119,7 @@ fn a_public_transparent_constructor_is_available_in_terms_and_patterns() {
         vec![],
     );
 
-    let resolved = resolve_with(importer, &[&summary])
+    let resolved = resolve_with(&graph, importer, &[&summary])
         .expect("a transparent constructor should resolve in terms and patterns");
     let definition = equational(&resolved, 0);
 
@@ -3109,7 +3169,7 @@ fn targeting_only_a_transparent_constructor_retains_its_owner_metadata() {
         vec![],
     );
 
-    let resolved = resolve_with(importer, &[&summary])
+    let resolved = resolve_with(&graph, importer, &[&summary])
         .expect("a targeted constructor should retain its semantic owner");
 
     assert!(resolved.imported_facts().nominal(nominal).is_some());
@@ -3142,7 +3202,7 @@ fn same_spelled_opaque_type_imports_but_its_constructor_remains_inaccessible() {
         vec![],
     );
 
-    let error = resolve_with(importer, &[&summary])
+    let error = resolve_with(&graph, importer, &[&summary])
         .expect_err("the selector imports the type but not its opaque constructor");
 
     assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
@@ -3196,7 +3256,7 @@ fn a_hidden_nominal_in_a_public_scheme_is_retained_without_becoming_nameable() {
     let importer = module_named(&graph, "entry.ash");
     let (summary, hidden) = hidden_scheme_summary(dependency, "make", "Hidden", 0);
 
-    let resolved = resolve_with(importer, &[&summary])
+    let resolved = resolve_with(&graph, importer, &[&summary])
         .expect("the public term should carry its hidden nominal identity");
 
     let hidden_fact = resolved
@@ -3229,7 +3289,7 @@ fn a_hidden_nominal_in_a_public_scheme_is_retained_without_becoming_nameable() {
     let naming_dependency = module_named(&naming_graph, "dependency.ash");
     let naming_importer = module_named(&naming_graph, "entry.ash");
     let (naming_summary, _) = hidden_scheme_summary(naming_dependency, "make", "Hidden", 0);
-    let error = resolve_with(naming_importer, &[&naming_summary])
+    let error = resolve_with(&naming_graph, naming_importer, &[&naming_summary])
         .expect_err("hidden metadata must not add a source type binding");
 
     assert_eq!(error.reason, ResolveReason::UnavailableExport);
@@ -3271,7 +3331,7 @@ fn a_public_transparent_nominal_in_a_targeted_term_scheme_is_hidden() {
         vec![],
     );
 
-    let resolved = resolve_with(importer, &[&summary])
+    let resolved = resolve_with(&graph, importer, &[&summary])
         .expect("a targeted term should retain its transparent nominal identity");
     let fact = resolved
         .imported_facts()
@@ -3377,7 +3437,7 @@ fn hidden_nominals_from_distinct_dependencies_retain_distinct_identities() {
     let (first_summary, first_hidden) = hidden_scheme_summary(first, "make", "Hidden", 0);
     let (second_summary, second_hidden) = hidden_scheme_summary(second, "make", "Hidden", 0);
 
-    let resolved = resolve_with(importer, &[&first_summary, &second_summary])
+    let resolved = resolve_with(&graph, importer, &[&first_summary, &second_summary])
         .expect("both hidden nominal facts should survive import installation");
 
     assert_ne!(first_hidden, second_hidden);
@@ -3440,7 +3500,7 @@ fn direct_nominal_access_upgrades_the_same_identity_reached_hidden_in_either_imp
             vec![&owner_summary, &carrier_summary]
         };
 
-        let resolved = resolve_with(importer, &summaries)
+        let resolved = resolve_with(&graph, importer, &summaries)
             .expect("access should merge by identity rather than first route");
         let fact = resolved
             .imported_facts()
@@ -3479,7 +3539,7 @@ fn withheld_type_and_constructor_facts_with_one_spelling_keep_their_namespaces()
         vec![],
     );
 
-    let type_error = resolve_with(importer, &[&summary])
+    let type_error = resolve_with(&graph, importer, &[&summary])
         .expect_err("the private nominal must remain unavailable");
     assert_eq!(type_error.reason, ResolveReason::UnavailableExport);
 
@@ -3508,8 +3568,12 @@ fn withheld_type_and_constructor_facts_with_one_spelling_keep_their_namespaces()
         vec![],
     );
 
-    let constructor_error = resolve_with(expression_importer, &[&expression_summary])
-        .expect_err("the opaque constructor must retain its own denial");
+    let constructor_error = resolve_with(
+        &expression_graph,
+        expression_importer,
+        &[&expression_summary],
+    )
+    .expect_err("the opaque constructor must retain its own denial");
     assert_eq!(constructor_error.reason, ResolveReason::OpaqueConstructor);
 }
 
@@ -3530,7 +3594,7 @@ fn a_local_constructor_wins_over_a_targeted_opaque_marker_with_the_same_spelling
     let importer = module_named(&graph, "entry.ash");
     let summary = opaque_nominal_summary(dependency, "Token", vec!["Token"]);
 
-    resolve_with(importer, &[&summary])
+    resolve_with(&graph, importer, &[&summary])
         .expect("an accessible local constructor must take precedence over a denial marker");
 }
 
@@ -3560,7 +3624,7 @@ fn targeted_public_constructor_does_not_block_a_same_spelled_type_parameter() {
         vec!["Foo"],
     );
 
-    let resolved = resolve_with(importer, &[&summary])
+    let resolved = resolve_with(&graph, importer, &[&summary])
         .expect("withheld diagnostic metadata must not bind the type namespace");
     let definition = equational(&resolved, 0);
 

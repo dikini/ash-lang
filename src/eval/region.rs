@@ -886,7 +886,7 @@ impl Machine<'_> {
         let Some(fields) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        let [allocate, release] = fields.as_ref() else {
+        let [allocate, release] = fields else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let (allocate, release) = (allocate.clone(), release.clone());
@@ -1206,7 +1206,7 @@ impl Machine<'_> {
         if values.len().checked_mul(core::mem::size_of::<Value>()) != Some(record.usable_bytes)
             || record.extent < record.usable_bytes
             || record.alignment < core::mem::align_of::<Value>()
-            || (record.locator.as_ptr() as usize) % core::mem::align_of::<Value>() != 0
+            || !(record.locator.as_ptr() as usize).is_multiple_of(core::mem::align_of::<Value>())
         {
             return Err(RuntimeFailure::InvalidControlState);
         }
@@ -1330,7 +1330,7 @@ impl Machine<'_> {
             Value::Address(locator),
             extent,
             alignment,
-        ] = fields.as_ref()
+        ] = fields
         else {
             return Err(RuntimeFailure::InvalidControlState);
         };
@@ -1352,7 +1352,7 @@ impl Machine<'_> {
             || alignment < request.alignment
             || extent > isize::MAX as usize
             || extent < request.usable_bytes
-            || (locator.as_ptr() as usize) % request.alignment != 0
+            || !(locator.as_ptr() as usize).is_multiple_of(request.alignment)
         {
             return Err(RuntimeFailure::InvalidControlState);
         }

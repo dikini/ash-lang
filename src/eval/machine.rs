@@ -2188,7 +2188,7 @@ impl<'runtime> Machine<'runtime> {
             let Some(elements) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
-            let [handle, written] = elements.as_ref() else {
+            let [handle, written] = elements else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             read_integer(written, &self.heap, &mut self.instantiation_work)?;
@@ -2255,7 +2255,7 @@ impl<'runtime> Machine<'runtime> {
             let Some(elements) = self.heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
-            let [Value::ResourceHandle(handle), replacement] = elements.as_ref() else {
+            let [Value::ResourceHandle(handle), replacement] = elements else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             if *handle != key {
@@ -3174,12 +3174,9 @@ fn enter_recursive_binding(
             ExecutableNode::Effect(expression) => expression.origin.clone(),
         };
         let mut erased_initializer = member.initializer();
-        loop {
-            let Ok(PureExprKind::Computation(PureComputation::TypeAbstraction(operation))) =
-                pure_expression(program, erased_initializer)
-            else {
-                break;
-            };
+        while let Ok(PureExprKind::Computation(PureComputation::TypeAbstraction(operation))) =
+            pure_expression(program, erased_initializer)
+        {
             erased_initializer = operation.body();
         }
         let stored = if let ExecutableProgram::Effect(effect) = program {
@@ -3645,7 +3642,7 @@ fn apply_intrinsic(
             let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
-            let [Value::Address(left), Value::Address(right)] = fields.as_ref() else {
+            let [Value::Address(left), Value::Address(right)] = fields else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
             Value::Boolean(left.as_ptr() == right.as_ptr())
@@ -3761,7 +3758,7 @@ fn apply_byte_lookup(
         let Some(fields) = heap.get(location).and_then(HeapCell::tuple_fields) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        let [bytes, index] = fields.as_ref() else {
+        let [bytes, index] = fields else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         let index = read_integer(index, heap, work)?;
@@ -5662,7 +5659,7 @@ mod tests {
                 );
                 assert!(result.max_frame_depth > DEPTH);
                 for _ in 0..2 {
-                    let mut failure = Machine::new_effect(&program);
+                    let mut failure = Machine::new_effect(program);
                     failure.instantiation_work = TypeWorkBudget::with_limit(failure_work);
                     assert!(matches!(
                         failure.run(),
@@ -6558,15 +6555,18 @@ mod tests {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            assert_eq!(
-                owners,
-                [
-                    EffectTraceEvent::ResourceAcquired(0),
-                    EffectTraceEvent::ResourceReleased(0),
-                    EffectTraceEvent::ResourceAcquired(1),
-                    EffectTraceEvent::ResourceReleased(1)
-                ]
-            );
+            let [
+                EffectTraceEvent::ResourceAcquired(first),
+                EffectTraceEvent::ResourceReleased(first_closed),
+                EffectTraceEvent::ResourceAcquired(second),
+                EffectTraceEvent::ResourceReleased(second_closed),
+            ] = owners.as_slice()
+            else {
+                panic!("two sequential acquisitions and matching releases: {owners:?}");
+            };
+            assert_eq!(first, first_closed);
+            assert_eq!(second, second_closed);
+            assert_ne!(first, second);
         }
     }
 
