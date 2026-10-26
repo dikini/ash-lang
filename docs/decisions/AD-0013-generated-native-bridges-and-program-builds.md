@@ -94,7 +94,7 @@ margin. Generic builder, standalone and private-image defaults remain unchanged;
 resolution, constraints and other construction budgets remain separate.
 
 Program arenas also receive a separate primary payload-construction allowance
-`max(327680, 8*S)` from that paid census. Install it before catalog precharges;
+`max(327680, 12*S)` from that paid census. Install it before catalog precharges;
 each arena starts with fresh independent primary and rewrite meters. Primary
 construction remains excluded from the Source/Final reports. Standalone,
 default and private-image primary limits retain their existing capacities.
@@ -110,6 +110,26 @@ arena used 2,680,644; a 25% fitting reserve requires 3,350,805, covered by
 the normal selected `8*S` policy then passed the original test, including its
 256 KiB worker, evaluation and evidence-envelope assertions. Phase coefficients,
 rewrite ownership and runtime limits are unchanged.
+
+The later unchanged 10,000-member cyclic-data witness at 320 KiB exposed the
+primary `8*S` ceiling during cleanup-row replay, not aggregate Source
+exhaustion. With S = 398,678 it refused a one-cell charge at 3,189,424. A finite
+`16*S` primary diagnostic completed all original render/count/drop assertions;
+its four independent primary arenas used `23`, `117`, `3,430,201` and
+`3,430,528` cells.
+Rewrite work remained separate. The largest complete owner requires 4,288,160
+with the existing 25% reserve. The selected rounded primary coefficient is now
+12: 4,784,136 here, 39.46% above observed use (28.29% of the allowance unused).
+Source, Final and Core completed at 8,654,930, 2,320,736 and 15,063,023 cells.
+No qualifying small replay optimization was established: provisional propagation,
+strict removal and atomic rollback retain distinct obligations. All temporary
+tracing and the diagnostic coefficient were restored before selecting the policy.
+Standalone/default/private-image primary capacities, paid prefixes, independent
+rewrite ownership and every other phase coefficient remain unchanged. Normal
+uninstrumented verification is separate from this completion measurement. The
+selected policy passes the original cycle witness with all three reported phases
+complete at the same measured costs, all 25 driver tests, four policy tests,
+57 builder tests and the exact/short/retry cleanup-row replay test.
 
 Program resolution receives a fresh independent graph-wide allowance
 `max(327680, 80*S)` after the existing paid canonical source census. Check the
@@ -143,8 +163,9 @@ coefficients 10,000 and 25,000 supply 17,910,000 and 44,775,000 respectively
 (about 35.5% reserve). This increases admitted work after the bounded saving;
 it does not claim unchanged cost or a universal complexity guarantee. Canonical
 source counting, paid census, cumulative phase owners, overflow and refusal
-prefixes are unchanged. Final 800*S, resolution 80*S with its default floor,
-primary 8*S with its default floor, rewrite 16*S, standalone, private-image,
+prefixes are unchanged. At that fitting checkpoint, Final 800*S, resolution 80*S
+with its default floor, primary 8*S with its default floor, rewrite 16*S,
+standalone, private-image,
 constraint, depth and production stack limits remain unchanged. Normal-policy
 verification is separate from these finite completion measurements. The
 selected normal policy subsequently passed all 25 original driver tests, four

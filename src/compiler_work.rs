@@ -15,7 +15,7 @@ pub(crate) fn rewrite_total(bytes: usize) -> Result<usize, ()> {
 /// Separate program-arena payload admission; standalone builders keep their cap.
 pub(crate) fn primary_total(bytes: usize) -> Result<usize, ()> {
     bytes
-        .checked_mul(8)
+        .checked_mul(12)
         .map(|total| total.max(crate::types::TYPE_WORK_LIMIT))
         .ok_or(())
 }
@@ -229,9 +229,11 @@ mod tests {
         );
         assert_eq!(primary_total(0), Ok(crate::types::TYPE_WORK_LIMIT));
         let floor = crate::types::TYPE_WORK_LIMIT;
-        assert_eq!(primary_total(floor / 8), Ok(floor));
-        assert_eq!(primary_total(floor / 8 + 1), Ok(floor + 8));
-        assert!(primary_total(usize::MAX / 8 + 1).is_err());
+        assert_eq!(primary_total(floor / 12), Ok(floor));
+        let first_scaled = floor / 12 + 1;
+        assert_eq!(primary_total(first_scaled), Ok(12 * first_scaled));
+        assert_eq!(primary_total(398_678), Ok(4_784_136));
+        assert!(primary_total(usize::MAX / 12 + 1).is_err());
         assert_eq!(resolution_total(0), Ok(floor));
         assert_eq!(resolution_total(floor / 80), Ok(floor));
         assert_eq!(resolution_total(floor / 80 + 1), Ok(floor + 80));

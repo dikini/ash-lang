@@ -829,7 +829,32 @@ fn ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack() {
             }
             source.push_str("value0\n}\n");
 
-            let observation = run(&source);
+            let directory = loop {
+                let id = CORE_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "ash-data-cycle-{}-{id}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&path) {
+                    Ok(()) => break path,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("cycle fixture directory should be creatable: {error}"),
+                }
+            };
+            let entry = directory.join("data-and-adts.ash");
+            fs::write(&entry, &source).expect("cycle fixture should be writable");
+            let result = ash::driver::run_path(ash::driver::RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty(),
+            });
+            let _ = fs::remove_dir_all(directory);
+            let observation = result.unwrap_or_else(|failure| {
+                panic!(
+                    "cycle fixture should run; compilation work: {:?}; full failure: {failure:?}",
+                    failure.compilation_work(),
+                )
+            });
+            eprintln!("cycle compilation work: {:?}", observation.compilation_work());
             assert_eq!(observation.type_display(), "Chain");
             let rendered = observation.value_display();
             assert!(rendered.starts_with("Link(Link(Link("));

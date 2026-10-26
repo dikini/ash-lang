@@ -25,12 +25,33 @@ R-core's unchanged 8,000-member/256 KiB driver test now passes under normal
 selected policy. Closure preparation uses one charged temporary first-variable
 index per batch; Source work fell from 519,069,391 to 7,149,428 and Final from
 350,952,800 exhausted to 2,296,950 complete. The separate program primary-builder
-allowance is `max(327680, 8*S)` from the already-paid canonical source closure;
+allowance at that checkpoint was `max(327680, 8*S)` from the already-paid canonical source closure;
 its largest complete arena used 2,680,644 at S = 438,691. That checkpoint
 retained its then-current Source/Final/Core and rewrite coefficients,
 standalone/image capacities and original assertions; [AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md) records the measurement and ownership. This restores
 one required test, not the full gate; remaining fixture and product failures
 still require repair before integration.
+
+The unchanged 10,000-member cyclic-data witness at 320 KiB later identified a
+primary-owner refusal during cleanup row replay: 3,189,424 of 3,189,424 cells,
+requesting one. Aggregate Source was not the refusing owner. A finite primary
+16*S diagnostic completed the original render/count/drop assertions; the largest
+independent primary arena used 3,430,528 at S = 398,678. Its 25% target is
+4,288,160, so the selected rounded policy is now `max(327680, 12*S)` (4,784,136
+here). Source, Final and Core completed at 8,654,930 / 2,320,736 / 15,063,023.
+No small replay optimization justified changing its propagation/strict-removal
+and rollback obligations. All temporary diagnostics were restored; standalone,
+rewrite and other owner policies remain unchanged. Normal verification of the
+selected policy is recorded separately from the finite diagnostic: the original
+10,000-member/320 KiB witness passes uninstrumented with complete Source/Final/Core
+reports at the same costs, alongside all 25 driver, four policy, 57 builder and
+one exact/short/retry replay tests. The kind fixture now resolves only its actual
+entry after authenticating preceding dependencies, preserving original phase,
+count and span assertions; all 27 tests pass, restoring 25 baseline failures.
+Their names are disjoint from the prior 203 staged restores. Including the newly
+passing original cycle witness gives 229 staged integration restorations, not a
+refreshed full-suite result. Library9 and Integration69 remain the latest
+complete baselines; all whole-gate requirements remain pending.
 
 Current R-core repair preserves real Source Effect validation/evaluation phase
 injection and interface-owner disposal. Program resolution uses its separate

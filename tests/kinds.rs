@@ -8,8 +8,8 @@ use ash::{
     elaborate::{TypeError, check_module},
     kind::{KindError, KindExpectation, KindFailure, KindReason},
     module::{ModuleRoots, load_module_graph},
-    resolve::{ResolveModuleError, resolve_module},
-    resolved::ResolvedModule,
+    resolve::{DependencyExports, ResolveModuleError, resolve_module},
+    resolved::{CheckedModule, ResolvedModule},
     source::Span,
     types::Kind,
 };
@@ -45,7 +45,33 @@ impl KindFixture {
     fn resolve(&self) -> Result<ResolvedModule, ResolveModuleError> {
         let graph = load_module_graph(&self.path, &ModuleRoots::empty())
             .expect("the resolved-kind fixture should load");
-        resolve_module(&graph.modules()[0], &[])
+        let mut checked = Vec::<CheckedModule>::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .expect("dependencies precede their importer")
+                            .exports(),
+                    )
+                    .expect("the exact dependency summary authenticates its edge")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies);
+            if module.id() == graph.entry() {
+                return resolved;
+            }
+            checked.push(
+                check_module(resolved.expect("builtin dependency should resolve"))
+                    .expect("builtin dependency should check"),
+            );
+        }
+        panic!("the graph should retain its entry")
     }
 
     fn span_of(&self, needle: &str, occurrence: usize) -> Span {
@@ -57,7 +83,9 @@ impl KindFixture {
             .expect("the expected span text should occur");
         let graph = load_module_graph(&self.path, &ModuleRoots::empty())
             .expect("the resolved-kind fixture should reload");
-        graph.modules()[0]
+        graph
+            .module(graph.entry())
+            .expect("the actual entry source should remain loaded")
             .source()
             .span(
                 ash::source::ByteRange::new(
