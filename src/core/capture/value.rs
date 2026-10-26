@@ -286,7 +286,9 @@ struct EvidenceIndex {
 #[derive(Debug)]
 pub(super) struct Graph {
     expressions: Vec<Expr>,
-    globals: Vec<(usize, usize)>,
+    // Declaration bindings retain their original control initializer through
+    // import relocation. Alias/opaque bindings have no initializer to execute.
+    globals: Vec<(usize, usize, Option<usize>)>,
     // Local source-method proxy bodies are compiled by the ordinary control builder.
     pub(super) method_proxies: Vec<(usize, usize, BinderId)>,
     // Empty for ordinary analysis. The single fallible private carrier avoids
@@ -332,7 +334,7 @@ pub(super) fn observed_control_call_graph_for_test() -> Graph {
                 captures: Vec::new(),
             },
         ],
-        globals: vec![(2, 1)],
+        globals: vec![(2, 1, None)],
         method_proxies: Vec::new(),
         sources: vec![span; 5],
         exports: Vec::new(),
@@ -396,12 +398,14 @@ impl Graph {
         self.globals
             .try_reserve(imported.globals.len())
             .map_err(|_| Failure::Resource)?;
-        self.globals.extend(
-            imported
-                .globals
-                .iter()
-                .map(|(binder, value)| (binder + offset, value + offset)),
-        );
+        for &(binder, value, code) in &imported.globals {
+            self.globals.push((
+                binder + offset,
+                value + offset,
+                code.map(|code| code.checked_add(code_offset).ok_or(Failure::Resource))
+                    .transpose()?,
+            ));
+        }
         for (&code, &expression) in &imported.positions {
             self.position(code + code_offset, expression + offset, budget)?;
         }
@@ -1762,7 +1766,11 @@ impl Graph {
                 .globals
                 .try_reserve(1)
                 .map_err(|_| Failure::Resource)?;
-            graph.globals.push((slot, index(*node)));
+            graph.globals.push((
+                slot,
+                index(*node),
+                Some(index(*node).checked_add(1).ok_or(Failure::Resource)?),
+            ));
             graph
                 .exports
                 .try_reserve(1)
@@ -1963,7 +1971,7 @@ impl Graph {
                     .globals
                     .try_reserve(1)
                     .map_err(|_| Failure::Resource)?;
-                graph.globals.push((*local, value + offset));
+                graph.globals.push((*local, value + offset, None));
             }
         }
         // A declared symbolic parameter can still be unresolved during closure.
@@ -1975,7 +1983,7 @@ impl Graph {
             defined.insert(slot);
             Ok(())
         };
-        for &(binder, _) in &graph.globals {
+        for &(binder, _, _) in &graph.globals {
             retain(binder)?;
         }
         for expression in &graph.expressions {
@@ -2022,7 +2030,7 @@ impl Graph {
                     .globals
                     .try_reserve(1)
                     .map_err(|_| Failure::Resource)?;
-                graph.globals.push((*slot, opaque));
+                graph.globals.push((*slot, opaque, None));
             }
         }
         Ok(graph)
@@ -2061,19 +2069,21 @@ impl Graph {
         Ok(())
     }
 
-    pub(super) fn append_export_initializers(
+    pub(super) fn append_global_initializers(
         &self,
         offset: usize,
         roots: &mut Vec<usize>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        charge(budget, self.exports.len())?;
+        charge(budget, self.globals.len())?;
         roots
-            .try_reserve(self.exports.len())
+            .try_reserve(self.globals.len())
             .map_err(|_| Failure::Resource)?;
-        for &(_, initializer) in &self.exports {
+        for &(_, initializer, code) in &self.globals {
             charge(budget, 1)?;
-            let code = initializer.checked_add(1).ok_or(Failure::Resource)?;
+            let Some(code) = code else {
+                continue;
+            };
             if self.positions.get(&code) != Some(&initializer) {
                 return Err(Failure::Invalid);
             }
@@ -2084,7 +2094,7 @@ impl Graph {
 
     pub(super) fn start(&self, budget: &mut TypeWorkBudget) -> Result<Analysis<'_>, Failure> {
         let mut analysis = Analysis::new(self, budget)?;
-        for &(binder, value) in &self.globals {
+        for &(binder, value, _) in &self.globals {
             let initializer = analysis.slot(value, 0, budget)?;
             let binder = analysis.slot(binder, 0, budget)?;
             analysis.edge(binder, initializer, budget)?;
@@ -5856,7 +5866,7 @@ mod tests {
                 body: 1,
                 source: graph.sources[5],
             };
-            graph.globals.push((4, 2));
+            graph.globals.push((4, 2, None));
             let mut work = TypeWorkBudget::unbounded();
             let mut analysis = graph.start(&mut work).unwrap();
             let function = analysis.indices[&(2, 0)];
@@ -6013,7 +6023,7 @@ mod tests {
     #[test]
     fn immutable_setup_roots_focus_and_restore_keep_separate_frozen_authority() {
         let mut graph = immutable_setup_graph();
-        graph.globals.push((8, 4));
+        graph.globals.push((8, 4, None));
         let mut work = TypeWorkBudget::unbounded();
         let mut normal = graph.start(&mut work).unwrap();
         let function = normal.indices[&(4, 0)];

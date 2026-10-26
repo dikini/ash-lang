@@ -1956,7 +1956,7 @@ fn import_capture_control(
 ) -> Result<(), Failure> {
     for (import, target_offset, code_offset, type_offset) in &imported.graphs {
         if let Some(data) = &import.data {
-            data.append_export_initializers(*code_offset, roots, budget)?;
+            data.append_global_initializers(*code_offset, roots, budget)?;
         }
         graph
             .code

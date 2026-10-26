@@ -3686,6 +3686,19 @@ mod tests {
     }
 
     #[test]
+    fn mixed_recursive_closure_image_preserves_captures_and_guarded_cycle() {
+        assert_region_image(concat!(
+            "import @builtin.regions as Region\n",
+            "type Stream = Next(Int, Unit -> Int, Unit -> Int)\n",
+            "main : Unit -> Int\nmain () = region<R> r {\n",
+            "let rec first : Stream = Next(42, read, again)\n",
+            "and read : Unit -> Int = fn(ignored) {\nmatch first {\nNext(value, ignored, also_ignored) => value\n}\n}\n",
+            "and again : Unit -> Int = fn(ignored) {\nread ()\n}\nlet alias = first\n",
+            "match alias {\nNext(value, head, tail) => match (head ()) == 42 {\ntrue => match (tail ()) == value {\ntrue => 42\nfalse => 0\n}\nfalse => 0\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
     fn byte_storage_image_restores_literal_and_utf8_result_without_sources() {
         assert_region_image(concat!(
             "import @builtin.regions as Region\nimport @builtin.string as Text\nimport @builtin.bytes as B\n",

@@ -1730,6 +1730,68 @@ mod tests {
     }
 
     #[test]
+    fn mixed_recursive_group_creates_functions_before_guarded_data_in_member_order() {
+        let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
+            concat!(
+                "type Stream = Next(Int, Unit -> Int, Unit -> Int)\n",
+                "main : Unit -> Bool\nmain () = region<R> r {\n",
+                "let rec first : Stream = Next(42, read, again)\n",
+                "and read : Unit -> Int = fn(ignored) {\nmatch first {\nNext(value, ignored, also_ignored) => value\n}\n}\n",
+                "and again : Unit -> Int = fn(ignored) {\nread ()\n}\nlet alias = first\n",
+                "match alias {\nNext(value, head, tail) => match (head ()) == 42 {\ntrue => (tail ()) == value\nfalse => false\n}\n}\n}\n",
+            ),
+            None,
+        );
+        let group = program
+            .nodes()
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::RecursiveBind(group),
+                )) if group.members().len() == 3
+                    && matches!(group.members()[0].binder().ty(), Type::Nominal(_)) =>
+                {
+                    Some(group)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let functions = group
+            .members()
+            .iter()
+            .filter_map(|member| {
+                crate::core::region::closure_initializer::<
+                        crate::core::effect::EffectOperationFamily,
+                    >(member.initializer(), |node| {
+                        program.node(node).map(|node| &node.kind)
+                    })
+                    .map(|(node, _)| node)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(functions.len(), 2);
+        let evaluation = evaluate_effect(&program).unwrap();
+        assert_eq!(evaluation.value.to_string(), "true");
+        let entered = |node| {
+            evaluation
+                .trace
+                .iter()
+                .enumerate()
+                .filter_map(|(index, event)| (*event == TraceEvent::Enter(node)).then_some(index))
+                .collect::<Vec<_>>()
+        };
+        let first = entered(functions[0]);
+        let second = entered(functions[1]);
+        let data = entered(group.members()[0].initializer());
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(data.len(), 1);
+        assert!(
+            first[0] < second[0] && second[0] < data[0],
+            "functions materialize once in member order before the first guarded data initializer"
+        );
+    }
+
+    #[test]
     fn type_views_share_records_and_dynamic_function_creation_is_fresh() {
         let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(
             "main : Unit -> Int\nmain () = {\nlet identity = fn(value) {\nvalue\n}\nlet answer = identity 42\nmatch identity true {\ntrue => answer\nfalse => 0\n}\n}\n",

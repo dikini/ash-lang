@@ -11153,10 +11153,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         {
             return Ok(Some(constructor.constructor()));
         }
-        let Some(PureExprKind::Value(PureValue::Function(callable))) =
-            F::pure(&self.node(id)?.kind)
-        else {
-            return Ok(None);
+        let callable = match self.callable_initializer(id) {
+            Ok((_, callable)) => callable,
+            Err(error) if error.reason() == ValidationReason::NodeType => return Ok(None),
+            Err(error) => return Err(error),
         };
         let Some(body) = self.guarded_region_context(callable.body())? else {
             return Ok(None);

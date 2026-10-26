@@ -282,6 +282,30 @@ fn closure_creation_discard_at_second_record_does_not_replay_the_first() {
 }
 
 #[test]
+fn recursive_closure_group_resume_keeps_completed_member_records() {
+    let body = CLOSURE_GROUP_BODY
+        .replace("let first", "let rec first")
+        .replace("let second", "and second");
+    run_native(
+        "recursive-closure-resume",
+        &suspended_entry(&body, 2, None),
+        b"maar",
+    );
+}
+
+#[test]
+fn recursive_closure_group_discard_at_second_record_does_not_replay_first() {
+    let body = CLOSURE_GROUP_BODY
+        .replace("let first", "let rec first")
+        .replace("let second", "and second");
+    run_native(
+        "recursive-closure-discard",
+        &suspended_entry(&body, 2, Some(2)),
+        b"mar",
+    );
+}
+
+#[test]
 fn buffer_allocation_suspension_retains_payload_and_envelope_progress() {
     run_native("buffer-resume", &suspended_buffer_entry(None), b"maaaaar");
 }
