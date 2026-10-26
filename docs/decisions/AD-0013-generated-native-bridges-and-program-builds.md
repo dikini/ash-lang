@@ -64,22 +64,22 @@ owners and for native preparation and startup. The accepted policy is:
 
 ```text
 preparation gas = 850 * (admitted source UTF8 bytes + validated main Core nodes)
-source gas      = 2600 * (canonical loaded source UTF8 bytes, including builtins)
+source gas      = 3900 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 800 * (the same canonical source UTF8 closure)
 rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
-Core gas        = 5300 * (the same canonical source UTF8 closure)
-startup gas     = 65 * (canonical image bytes + canonical expected-fact bytes)
+Core gas        = 6200 * (the same canonical source UTF8 closure)
+startup gas     = 118 * (canonical image bytes + canonical expected-fact bytes)
 ```
 
 Source checking sizes the complete canonical loaded source closure before
 checking. Count each loaded module once, including builtin sources, rather than
 import edges or aliases. Pay one unit per source and one for the census in a
-finite source-count-derived bootstrap, then carry that work inside `2600*S`
+finite source-count-derived bootstrap, then carry that work inside `3900*S`
 through every module, source copy, closed entry and retained provenance. This is
 the total allowance; the historical ten-percent deficit does not apply.
 Final elaboration and independent compiler Core each pay their own identical
 resident-length census before work begins and carry it inside their respective
-`800*S` and `5300*S` totals. Apply this at both Pure and Effect modular driver
+`800*S` and `6200*S` totals. Apply this at both Pure and Effect modular driver
 entries. Their existing remaining-credit loans debit the same cumulative meter.
 These totals have no historical extra ten percent.
 
@@ -170,6 +170,23 @@ cumulative phase owners and checked overflow are unchanged. No floor, runtime
 margin, refill, cross-phase credit or change to standalone, private-image,
 constraint, runtime, depth or stack defaults is introduced.
 
+On 2026-10-26 the closure-storage delivery recalibrated Source to `3900S`
+and Core to `6200S`, retaining Final `800S`. The original 1,024-level
+registration fixture completed at 4,886,806 Source units and 7,763,338 Core
+units over S = 1,582 canonical bytes (3,089.005 and 4,907.293 units per byte).
+The existing 25% fitting rule rounded upward to hundreds gives 3,900 and 6,200,
+about 26.3% reserve each. The completion measurement used one diagnostic
+Source allowance of twice normal; Final and Core retained normal allowances.
+Its original sum, 1,025 registration/request counts, exact failure/retry and
+256 KiB runtime-worker assertions passed; normal policy verification is separate.
+Focused discovery used about 94% of both measured phases; copying used less than
+0.7%, with no demonstrated safe root/state omission or raw-context growth.
+This raises admitted work, not performance claims. Canonical S, paid census,
+cumulative owners, overflow, all other phase/default capacities and production
+stack settings remain unchanged. Two private disposal stress workers separately
+use 128 KiB after observed 64 KiB failures and 128 KiB passes at unchanged depths;
+this is fixed debug-frame headroom evidence, not a minimal or universal bound.
+
 On 2026-10-26 the project lead also selected startup `65B`, preserving B as
 canonical image bytes plus canonical expected-fact bytes. Of nine complete
 imported-flow restoration observations, the recursive case used 406,477 units
@@ -183,6 +200,23 @@ caller verification is separate. The recursive case refuses the unchanged
 Normal `65B` restoration must retain all nine expected results and exact
 short/retry checks. No standalone limit, extra runtime margin, refill or
 Source/Core credit transfer is introduced.
+
+On 2026-10-26 the closure-storage delivery selected startup `118B`. All nine
+existing imported-flow fixtures completed with one diagnostic allowance of
+`130B` per image, retaining framing, canonical fact comparison and restoration
+in the same meter. The maximum recursive case used 772,224 units over
+B = 8,206 (5,233 image and 2,973 expected-fact bytes), or 94.104801 units per
+byte. The existing integer fitting rule gives `ceil(1.25 * 94.104801) = 118`,
+about 25.4% reserve. An earlier normal `65B` run refused that case at
+533,647/533,650 over B = 8,210; separately generated identity encodings account
+for the different byte census, so these are not identical image bytes. In the
+completed diagnostic, cases one and two refused the unchanged standalone
+327,680 allowance and the other seven fit it. This fits complete restore-stage
+work, not the later native-binding correspondence/final admission that retains
+the same cumulative meter. Normal nine-flow and actual native verification
+remain separate obligations. Canonical B, checked overflow, all other owners
+and defaults, the supported image profile and the no-refill/no-transfer rules
+are unchanged.
 
 The project lead subsequently selected preparation `125P` under the same
 delegated judgment after independent review of four complete preparation

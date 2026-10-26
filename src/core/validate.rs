@@ -20241,6 +20241,128 @@ mod tests {
         (donor, sources, relation)
     }
 
+    fn effect_method_scheme_extra_bind_is_rejected(adapter: bool) {
+        use super::super::effect::EffectExprKind;
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            concat!(
+                "type Option<A> =\nNone\n| Some(A)\n",
+                "interface Score<A> {\nscore<X> : (A, X) -> Int\n}\n",
+                "impl Score<Int> {\nscore (value, ignored) = value\n}\n",
+                "impl Score<Option<A>> where Score<A> {\nscore (None, ignored) = 4\n",
+                "score (Some(value), ignored) = {\nlet empty : Option<A> = None\n",
+                "score((empty, ignored)) * 10 + score((value, ignored))\n}\n}\n",
+                "forward<A> : A -> Int where Score<A>\n",
+                "forward value = score((value, true))\n",
+                "main : Unit -> Int\nmain () = forward(Some(2))\n",
+            ),
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        let copied = crate::core::transform::identity_effect_traversal(&donor).unwrap();
+        let validated = super::super::validate_effect_modules(copied, &refs, &relation)
+            .expect("the current transformed Effect Score donor validates independently");
+        let mut copied = crate::core::transform::identity_effect_traversal(&validated).unwrap();
+        let scheme = copied
+            .method_evidence_anchors
+            .iter()
+            .find_map(|anchor| match anchor.role {
+                MethodEvidenceAnchorRole::Adapter { .. } if adapter => Some(anchor.node),
+                MethodEvidenceAnchorRole::Instantiation { binder: Some(_) } if !adapter => {
+                    let EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeApplication(application),
+                    )) = &copied.nodes[anchor.node.index().unwrap()].kind
+                    else {
+                        return None;
+                    };
+                    let operand = application.function();
+                    matches!(
+                        copied.nodes[operand.index().unwrap()].kind,
+                        EffectExprKind::Pure(PureExprKind::Variable(_))
+                    )
+                    .then_some(operand)
+                }
+                _ => None,
+            })
+            .expect("the donor contains the selected authenticated scheme");
+        assert!(matches!(
+            copied.nodes[scheme.index().unwrap()].ty,
+            Type::Forall(_, _)
+        ));
+
+        // Walk only the existing strict expression spine. Crossing a function,
+        // abstraction or stored closure would change the scheme's lexical scope.
+        let mut child = scheme;
+        let parent = loop {
+            let (index, node) = copied
+                .nodes
+                .iter()
+                .enumerate()
+                .find(|(_, node)| {
+                    (0..node.kind.child_count()).any(|i| node.kind.child_at(i) == Some(child))
+                })
+                .expect("the scheme has a reachable consumer");
+            let parent = node_id(copied.arena, index).unwrap();
+            let anchored = copied
+                .method_evidence_anchors
+                .iter()
+                .any(|anchor| anchor.node == parent);
+            match &node.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::Apply(_) | PureComputation::Bind(_),
+                )) if !anchored => break parent,
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::Apply(_) | PureComputation::TypeApplication(_),
+                )) => child = parent,
+                _ => panic!(
+                    "the selected consumer must remain in the scheme's lexical scope: {node:?}"
+                ),
+            }
+        };
+        let index = parent.index().unwrap();
+        let original = &copied.nodes[index];
+        assert_eq!(
+            copied.nodes[scheme.index().unwrap()]
+                .effects
+                .union(&original.effects)
+                .unwrap(),
+            original.effects,
+            "the strict Bind preserves the parent's complete effect row"
+        );
+        let saved = node_id(copied.arena, copied.nodes.len()).unwrap();
+        let saved_node = StoredNode {
+            dialect: original.dialect,
+            ty: original.ty.clone(),
+            effects: original.effects.clone(),
+            origin: original.origin.clone(),
+            kind: original.kind.clone(),
+        };
+        let binder = TypedBinder::new(
+            copied.arena,
+            BinderId::Generated(u32::MAX - 31),
+            copied.nodes[scheme.index().unwrap()].ty.clone(),
+            original.origin.clone().unwrap(),
+        );
+        copied.nodes.push(saved_node);
+        copied.nodes[index].kind = EffectExprKind::Pure(PureExprKind::Computation(
+            PureComputation::Bind(BindingNode::new(binder, scheme, saved)),
+        ));
+        // Preserve all original anchors and consumers, their types/full rows and
+        // reachability. The only new incoming edge is the ordinary strict Bind.
+        let failure = super::super::validate_effect_modules(copied, &refs, &relation).unwrap_err();
+        assert_eq!(failure.reason, ValidationReason::NodeType);
+        assert_eq!(failure.node, Some(scheme));
+    }
+
+    #[test]
+    fn effect_adapter_scheme_rejects_extra_incoming_bind() {
+        effect_method_scheme_extra_bind_is_rejected(true);
+    }
+
+    #[test]
+    fn effect_abstract_domain_scheme_rejects_extra_incoming_bind() {
+        effect_method_scheme_extra_bind_is_rejected(false);
+    }
+
     #[test]
     fn stored_adapter_capture_owner_is_checked_independently() {
         use super::super::effect::{EffectExprKind, EffectOperation};

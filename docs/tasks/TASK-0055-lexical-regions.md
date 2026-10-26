@@ -153,15 +153,35 @@ only at type application. Focused checks cover Score capture storage, local and
 transitive imported ownership, mixed function/data cycles, source-order creation,
 recursive-group resume/discard, and independent capture/layout/row refusals.
 Handler-row recomputation and lexical evidence blocks retain actual creation rows.
-The current WIP also repairs constructor creation rows, inline function-header
+This candidate also repairs constructor creation rows, inline function-header
 row expansion and full-row evidence validation. Source placement and recursion
-suites pass, but affected Machine checks remain open: callback replay/discard
-fixtures, two small-stack aborts and exact capture quotas. The original 1,024-level
-registration case now resolves its lexical method capture and exhausts the normal
-Source allowance of 4,113,200 work units; attribution is pending, with limits
-unchanged. Isolated legacy callback preflight/disposal fixtures use independently
-validated Pure closures and are not supplied-storage evidence. Final affected
-regressions and independent completed-slice review remain pending.
+suites pass. Callback preflight fixtures now execute in their validated arena;
+replay checks recognize exact structured work refusals. Two private disposal
+workers preserve all depths/assertions with measured 128 KiB headroom; production
+stack settings are unchanged. The original 1,024-level registration fixture
+resolved its lexical method capture, then exceeded the previous Source allowance.
+One bounded diagnostic completed at Source 4,886,806 and Core 7,763,338 units over
+1,582 bytes; the existing fitting rule selects Source `3900S` and Core `6200S`.
+Normal-policy deep registration, coefficient and exact capture-quota checks
+pass. Machine's remaining four failures and capture's ten failures match the
+separately pinned prior fixture debt; their blocked assertions are not verified.
+A supported recursive image exceeded `65B`; all nine flows completed under a
+bounded `130B` diagnostic, selecting `118B` by the existing fitting rule. Normal nine-flow restoration, fresh native 21-case execution and affected
+source/Core checks pass. Existing Pure method-carrier fixtures stop before their
+assertions at an Effect lowering boundary; this remains separate from passing
+Effect donor guards. Two current Effect Score negatives now preserve the
+transformed donor's original evidence anchors, consumers and complete rows while
+adding an ordinary same-scope strict Bind use. The full donor validates first;
+the Adapter scheme and abstract-domain scheme Variable are then each rejected
+with NodeType at the exact unauthorized scheme. The selected final evidence
+contains 382 distinct passing test names, including those two negatives, while
+preserving the fourteen inherited Machine/capture failures and two obsolete Pure
+fixture setup failures as unverified behavior. This is focused evidence, not a
+fresh full gate. A separate feature-gated observer check stops at compilation:
+the unchanged surface-feature census lacks Region/RegionSelection visitor arms.
+Its changed coefficient assertions remain unreached; repair belongs to the
+connected R-core checkpoint. Independent completed-slice review remains pending.
+Legacy Pure callback fixtures cover isolated preflight/disposal, not supplied storage.
 
 A generated-native Score attempt stops in the unchanged image profile: its
 registry inventory omits method/head quantifiers, and the method-evidence codec
@@ -178,7 +198,7 @@ reader. The native checks distinguish custom supplied-byte construction/read,
 a root-host Bytes argument kept live through a native call, and exact rejection
 of an explicit-region payload sent through an unprotected outward request. The
 last case preserves the existing lexical payload rule; this delivery adds no
-source native-interpretation syntax. This retained partial delivery does not complete
+source native-interpretation syntax. This candidate does not complete
 ordinary-construction acceptance.
 The host root retains backing through the existing observed heap, but
 observation-before-root-release ordering remains pending. Target-specific discharge correspondence/regression audit, full close/composition,

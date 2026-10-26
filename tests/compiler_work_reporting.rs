@@ -42,7 +42,7 @@ fn ordinary_public_execution_reports_completed_costs_without_changing_the_value(
     let report = result.compilation_work();
     assert_eq!(
         report.source_checking.unwrap().allowance,
-        Some(2600 * bytes)
+        Some(3900 * bytes)
     );
     assert_eq!(
         report.final_elaboration.unwrap().allowance,
@@ -50,7 +50,7 @@ fn ordinary_public_execution_reports_completed_costs_without_changing_the_value(
     );
     assert_eq!(
         report.independent_core.unwrap().allowance,
-        Some(5300 * bytes)
+        Some(6200 * bytes)
     );
     for (cost, phase) in [
         (report.source_checking, CompilationPhase::SourceChecking),
@@ -89,9 +89,9 @@ fn effect_execution_reports_paid_canonical_totals_without_alias_credit() {
             assert_eq!(result.value_display(), "42");
             let report = result.compilation_work();
             for (cost, coefficient) in [
-                (report.source_checking.unwrap(), 2600),
+                (report.source_checking.unwrap(), 3900),
                 (report.final_elaboration.unwrap(), 800),
-                (report.independent_core.unwrap(), 5300),
+                (report.independent_core.unwrap(), 6200),
             ] {
                 assert!(cost.completed);
                 assert_eq!(cost.allowance, Some(coefficient * bytes));

@@ -107,13 +107,23 @@ Ordinary and authenticated deferred records reuse capture metadata, recursive
 slots, Value storage and the host adapter. Direct type views forward the same
 record; deferred evidence applications remain ordered and delayed. Focused checks
 cover local/transitive imported ownership, mixed cycles, member order and recursive
-group suspension. Current WIP repairs constructor/header/evidence rows; Source
-placement and recursion suites pass. Machine replay/discard, small-stack and exact
-capture-quota checks remain open. The deep registration fixture now resolves its
-lexical method capture but exhausts the unchanged 4,113,200 Source allowance;
-work attribution precedes any policy decision. Legacy Pure callback fixtures
-cover isolated preflight/disposal only. Final affected checks and independent
-review remain pending.
+group suspension. This candidate repairs constructor/header/evidence rows; Source
+placement and recursion suites pass. Same-arena callback/replay checks and measured private-worker stack headroom
+preserve the original assertions. Exact capture-quota checks pass. The
+deep registration fixture resolves its lexical capture; measured completion
+selects Source `3900S`/Core `6200S` by the existing fitting rule. Normal-policy
+deep registration and coefficient checks pass. Remaining Machine/capture
+failures match separately recorded fixture debt. Image fitting selects `118B`
+after the bounded nine-flow completion measurement; normal nine-flow/native execution and affected source/Core refresh pass.
+Two current Effect Score extra-use negatives preserve the original anchors,
+consumers, scope and complete rows; each full validator rejects NodeType at the
+exact unauthorized Adapter or abstract-domain scheme after the unmutated donor
+validates. Selected final evidence contains 382 distinct passing test names;
+blocked legacy fixture assertions are not passing evidence. Legacy Pure callback
+fixtures cover isolated preflight/disposal only. Independent completed-slice review
+and retained verification remain pending. A separate resource-calibration observer
+target cannot compile because the unchanged syntax census lacks region-expression
+visitor arms; its coefficient assertions remain unreached R-core migration debt.
 The generated-native Score attempt exposes the unchanged method-evidence image
 profile's concrete-adapter exclusion. This slice adds no catalog codec: actual
 host supplied-slot/prefix-order evidence and shared native generic/mixed backing

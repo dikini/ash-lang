@@ -854,11 +854,19 @@ impl Machine<'_> {
         {
             return Err(RuntimeFailure::InvalidControlState);
         }
+        let captured_len = self.frames.len() - index - 1;
         let retained = self
             .captured_cells
-            .checked_add(self.frames.len() - index - 1)
+            .checked_add(captured_len)
             .filter(|count| *count <= self.capture_limit)
-            .ok_or(RuntimeFailure::CapturedControlCapacity)?;
+            .ok_or_else(|| {
+                control_failure(
+                    ResourceFailureCause::ConfiguredCapacity,
+                    RuntimeResource::FrameStorage,
+                    Some(captured_len),
+                    Some(self.capture_limit.saturating_sub(self.captured_cells)),
+                )
+            })?;
         let mut segment = Vec::new();
         segment
             .try_reserve_exact(self.frames.len() - index - 1)

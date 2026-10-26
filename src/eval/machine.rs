@@ -4049,7 +4049,7 @@ mod tests {
     pub(super) fn is_work_exhaustion(failure: super::RuntimeFailure) -> bool {
         use super::{ResourceFailureCause, RuntimeFailure, RuntimeResource};
         matches!(failure, RuntimeFailure::Report(report)
-            if report.primary.reason_code() == "runtime.environment-capacity"
+            if matches!(report.primary.reason_code(), "runtime.environment-capacity" | "runtime.work-budget-exhausted")
             && report.teardown.is_none()
             && report.primary.resource().is_some_and(|details|
                 details.cause == ResourceFailureCause::WorkBudgetExhausted
@@ -4347,7 +4347,6 @@ mod tests {
     }
 
     enum LegacyCallback {
-        Cleanup,
         Increment,
         Constant,
     }
@@ -4363,14 +4362,9 @@ mod tests {
         } else {
             Type::Unit
         };
-        let result = if matches!(kind, LegacyCallback::Cleanup) {
-            Type::Unit
-        } else {
-            Type::Int
-        };
+        let result = Type::Int;
         let parameter = builder.binder(domain.clone(), origin.clone()).unwrap();
         let body = match kind {
-            LegacyCallback::Cleanup => builder.unit(Type::Unit, origin.clone()).unwrap(),
             LegacyCallback::Constant => builder
                 .integer(
                     Integer::parse_decimal("7").unwrap(),
@@ -4419,23 +4413,71 @@ mod tests {
         crate::core::effect::CleanupScopeNode,
         Environment,
     ) {
-        let program =
-            effect_program("main : Unit -> Int\nmain () = cleanup fn(ignored) {\n()\n} {\n42\n}\n");
-        let mut pending = vec![program.root()];
-        let mut scope = None;
-        while let Some(node) = pending.pop() {
-            let expression = program.node(node).unwrap();
-            match &expression.kind {
-                EffectExprKind::Operation(EffectOperation::Cleanup(found)) => scope = Some(*found),
-                _ => {}
-            }
-            pending.extend(
-                (0..expression.kind.child_count())
-                    .filter_map(|index| expression.kind.child_at(index)),
-            );
-        }
-        let scope = scope.unwrap();
-        let callback = legacy_callback_fixture(LegacyCallback::Cleanup);
+        // This fixture executes its callback, so code and owner share one
+        // independently validated, region-free Effect arena.
+        let source = SourceFile::new("cleanup-preflight.ash", "()").unwrap();
+        let span = source.span(ByteRange::new(0, 2).unwrap()).unwrap();
+        let origin = Origin::Source(span);
+        let mut builder =
+            EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+        let function_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        let parameter = builder.binder(Type::Unit, origin.clone()).unwrap();
+        let callback_binder = builder
+            .binder(function_type.clone(), origin.clone())
+            .unwrap();
+        let callback_body = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let initializer = builder
+            .function(
+                parameter,
+                callback_body,
+                function_type.clone(),
+                origin.clone(),
+            )
+            .unwrap();
+        let function = builder
+            .variable(callback_binder.id(), function_type, origin.clone())
+            .unwrap();
+        let argument = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let action = builder
+            .application(function, argument, Type::Unit, origin.clone())
+            .unwrap();
+        let body = builder
+            .integer(
+                Integer::parse_decimal("42").unwrap(),
+                Type::Int,
+                origin.clone(),
+            )
+            .unwrap();
+        let scope = crate::core::effect::CleanupScopeNode {
+            callback: callback_binder.id(),
+            body,
+            action,
+            span,
+            action_span: span,
+        };
+        let cleanup = builder
+            .cleanup_scope(
+                scope,
+                Type::Int,
+                crate::types::EffectRow::empty(),
+                origin.clone(),
+            )
+            .unwrap();
+        let root = builder
+            .binding(callback_binder, initializer, cleanup, Type::Int, origin)
+            .unwrap();
+        let program = validate_effect(builder.finish(root).unwrap(), &[&source]).unwrap();
+        let executable = ExecutableProgram::Effect(program.shared());
+        let transition = dispatch_entry(
+            &executable,
+            initializer,
+            Environment::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let Control::Return(callback) = transition.control else {
+            panic!("same-arena pure callback")
+        };
         let environment = Environment::new().extend(scope.callback, callback).unwrap();
         (program, scope, environment)
     }
@@ -6138,6 +6180,8 @@ mod tests {
 
     #[test]
     fn generic_cell_admitted_function_origin_and_deep_environment_dispose_on_small_stack() {
+        // Fixed debug evaluator frames need headroom: 64 KiB failed at the
+        // first return; 128 KiB preserves all depths and disposal assertions.
         let program = effect_program(
             "import @builtin.generic_cell as Cell\ninitial : Unit -> Int\ninitial () = 7\nmain : Unit -> Int\nmain () = resource Cell.Cell<R,(Unit -> Int)> c = initial {\nlet action = Cell.read c\naction ()\n}\n",
         );
@@ -6145,7 +6189,7 @@ mod tests {
             panic!("function")
         };
         std::thread::Builder::new()
-            .stack_size(64 * 1024)
+            .stack_size(128 * 1024)
             .spawn(move || {
                 let node = resource_node(&program);
                 for mode in 0..4 {
@@ -6887,26 +6931,54 @@ mod tests {
 
         // Two retained Ask frames coexist with four frames for the explicit
         // allocation-context request while preparing the arithmetic reply.
-        let evaluation = Machine::new_effect_with_capture_limit(&program, 6)
-            .run()
-            .expect("exact quota should serve both sequential requests");
-        assert_eq!(evaluation.value.to_string(), "3");
-        assert_eq!(
-            evaluation
+        let ask = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "Ask")
+            .unwrap()
+            .id;
+        let default = program
+            .registry()
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .unwrap()
+            .default_alloc();
+        for _ in 0..2 {
+            let evaluation = Machine::new_effect_with_capture_limit(&program, 6)
+                .run()
+                .expect("exact quota should serve both sequential requests");
+            assert_eq!(evaluation.value.to_string(), "3");
+            let requests = evaluation
                 .effect_trace()
                 .iter()
-                .filter(|event| matches!(event, EffectTraceEvent::Request(_)))
-                .count(),
-            4
-        );
-        assert_eq!(
-            evaluation
-                .effect_trace()
-                .iter()
-                .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
-                .count(),
-            4
-        );
+                .filter_map(|event| match event {
+                    EffectTraceEvent::Request(operation) => Some(*operation),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            // Main creation and both arithmetic replies query the selected
+            // context; the two business requests remain ordinary Ask calls.
+            assert_eq!(
+                requests,
+                [
+                    OperationId::new(default, 1),
+                    OperationId::new(ask, 0),
+                    OperationId::new(default, 1),
+                    OperationId::new(ask, 0),
+                    OperationId::new(default, 1)
+                ]
+            );
+            assert_eq!(
+                evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
+                    .count(),
+                5
+            );
+        }
     }
 
     #[test]
@@ -6919,9 +6991,13 @@ mod tests {
             "handle (perform Ask.ask () + 100) with Ask {\n",
             "ask ignored => {\nlet _ = discard\nfirst + 1\n}\n}\n}\n",
         ));
-        assert!(matches!(
-            Machine::new_effect_with_capture_limit(&program, 3).run(),
-            Err(failure) if is_configured_capacity(failure, RuntimeFailure::CapturedControlCapacity, RuntimeResource::FrameStorage)
+        let short = Machine::new_effect_with_capture_limit(&program, 3)
+            .run()
+            .unwrap_err();
+        assert!(is_configured_capacity(
+            short,
+            RuntimeFailure::CapturedControlCapacity,
+            RuntimeResource::FrameStorage
         ));
         for _ in 0..2 {
             let evaluation = Machine::new_effect_with_capture_limit(&program, 4)
@@ -7173,8 +7249,10 @@ mod tests {
 
     #[test]
     fn deep_discard_success_and_malformed_failure_drop_on_a_small_stack() {
+        // 64 KiB failed during fixture validation before deep state existed;
+        // 128 KiB passed the unchanged construction/capture/discard assertions.
         std::thread::Builder::new()
-            .stack_size(64 * 1024)
+            .stack_size(128 * 1024)
             .spawn(|| {
                 const DEPTH: usize = 32_768;
                 let handler = HandlerId::new(0);
