@@ -3410,8 +3410,17 @@ mod tests {
 
         let observation = run_path(source.configuration()).expect("the closure should evaluate");
 
-        assert!(matches!(observation.value, Value::Function(_)));
-        assert_eq!(observation._heap.cell_count(), 1);
+        assert!(matches!(observation.value, Value::RegionFunction(_)));
+        let weak = Arc::downgrade(&observation._heap);
+        let clone = observation.clone();
+        drop(observation);
+        assert!(weak.upgrade().is_some());
+        assert_eq!(clone.value_display(), "<function>");
+        drop(clone);
+        assert!(
+            weak.upgrade().is_none(),
+            "only the last observation releases its root"
+        );
     }
 
     #[test]
@@ -3426,22 +3435,35 @@ mod tests {
             "}\n",
         ));
 
-        let consumed = run_path(source.configuration())
-            .expect("the closure should evaluate")
-            .into_value();
-
-        assert!(matches!(consumed.value(), Value::Function(_)));
-        assert_eq!(consumed.value_display(), "<function>");
-        assert_eq!(consumed._heap.cell_count(), 1);
-
-        let parts = run_path(source.configuration())
-            .expect("the closure should evaluate again")
-            .into_parts();
-        assert!(matches!(parts.value(), Value::Function(_)));
-        assert_eq!(parts.observation_value()._heap.cell_count(), 1);
-        let consumed = parts.into_value();
-        assert!(matches!(consumed.value(), Value::Function(_)));
-        assert_eq!(consumed._heap.cell_count(), 1);
+        for accessor in 0..3 {
+            let observation =
+                run_path(source.configuration()).expect("the closure should evaluate");
+            let weak = Arc::downgrade(&observation._heap);
+            let consumed = match accessor {
+                0 => observation.into_value(),
+                1 => observation.into_parts().into_value(),
+                _ => {
+                    let (value, ty) = observation.into_parts().into_pair();
+                    crate::types::discard_type_iteratively(ty);
+                    value
+                }
+            };
+            assert!(matches!(consumed.value(), Value::RegionFunction(_)));
+            assert_eq!(consumed.value_display(), "<function>");
+            let clone = consumed.clone();
+            drop(consumed);
+            assert!(weak.upgrade().is_some());
+            drop(clone);
+            assert!(weak.upgrade().is_none());
+        }
+        let observation = run_path(source.configuration()).expect("the closure should evaluate");
+        let weak = Arc::downgrade(&observation._heap);
+        let ty = observation.into_type();
+        assert!(
+            weak.upgrade().is_none(),
+            "returning only its type releases the observation root"
+        );
+        crate::types::discard_type_iteratively(ty);
     }
 
     #[test]

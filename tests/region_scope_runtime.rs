@@ -737,3 +737,13 @@ fn transitive_selected_method_outer_placement_survives_inner_close() {
         "true"
     );
 }
+
+#[test]
+fn region_parameter_targets_its_live_enclosing_owner_through_an_unrelated_region() {
+    assert_eq!(
+        run(
+            "main : Unit -> Unit\nmain () = region<A> outer {\nlet place = fn(selected) {\nregion<B> inner {\nusing selected {\nlet pair = (20, 22)\nmatch pair {\n(left, right) => ()\n}\n}\n}\n}\nplace outer\n}\n"
+        ),
+        "()"
+    );
+}

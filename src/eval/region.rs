@@ -15,6 +15,35 @@ pub(super) struct BackingRecord {
     pub(super) initialized: bool,
 }
 
+/// The fixed host root's records, moved to the existing shared observation owner.
+/// This retains no evaluator, source release action or ownership of another heap.
+#[derive(Debug)]
+pub(in crate::eval) struct HostRootCompletion {
+    records: Vec<BackingRecord>,
+}
+
+impl HostRootCompletion {
+    pub(in crate::eval) fn close(&mut self, heap: &mut [HeapCell]) {
+        // Preparation authenticated every location and paid these two flat passes.
+        // Empty the Rust representation before freeing any root backing. Existing
+        // metadata disposal reports through the ambient Scope, if one is active.
+        for record in &mut self.records {
+            if let HeapCell::Tuple(fields) =
+                &mut heap[record.location.expect("prepared host root location")]
+            {
+                for field in fields.iter_mut() {
+                    drop(std::mem::replace(field, Value::Unit));
+                }
+            }
+            record.initialized = false;
+        }
+        for record in &self.records {
+            heap[record.location.expect("prepared host root location")] = HeapCell::Uninitialized;
+        }
+        self.records.clear();
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct BufferProgress {
     node: NodeId,
@@ -34,6 +63,88 @@ struct PreparedBuffer {
 }
 
 impl Machine<'_> {
+    /// Prepare and move only the validated fixed host entry owner. Refusal leaves
+    /// its frame, records and initialized cells untouched for existing teardown.
+    pub(super) fn retain_root_completion(&mut self) -> Result<(), RuntimeFailure> {
+        let Some(Frame::RegionBoundary {
+            node,
+            key,
+            allocate,
+            release,
+            preceding,
+            records,
+        }) = self.frames.last()
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if self.root_completion.is_some()
+            || !self
+                .region_scope(*node)
+                .ok_or(RuntimeFailure::InvalidControlState)?
+                .entry
+            || !matches!(allocate, Value::RegionHostFunction { owner, release: false } if owner == key)
+            || !matches!(release, Value::RegionHostFunction { owner, release: true } if owner == key)
+            || !matches!(preceding, Value::Unit)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let record_work = records
+            .len()
+            .checked_mul(3)
+            .ok_or(RuntimeFailure::HeapCapacity)?;
+        charge_effect_work(
+            &mut self.instantiation_work,
+            record_work,
+            RuntimePhase::Cleanup,
+        )?;
+        let mut previous = None;
+        let mut fields = 0usize;
+        for record in records {
+            let location = record.location.ok_or(RuntimeFailure::InvalidControlState)?;
+            if record.invocation.owner != *key
+                || previous.is_some_and(|previous| location <= previous)
+                || record.extent != record.usable_bytes
+                || record.extent > isize::MAX as usize
+            {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            previous = Some(location);
+            let cell = self
+                .heap
+                .get(location)
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            let valid = match cell {
+                HeapCell::Tuple(values) => {
+                    fields = fields
+                        .checked_add(values.len())
+                        .ok_or(RuntimeFailure::HeapCapacity)?;
+                    record.alignment == core::mem::align_of::<Value>()
+                        && values.len().checked_mul(core::mem::size_of::<Value>())
+                            == Some(record.usable_bytes)
+                        && values.as_ptr().cast::<core::ffi::c_void>().cast_mut()
+                            == record.locator.as_ptr()
+                }
+                HeapCell::Bytes(bytes, len, _) => {
+                    record.alignment == 1
+                        && bytes.len() == record.usable_bytes
+                        && *len <= bytes.len()
+                        && bytes.as_ptr().cast::<core::ffi::c_void>().cast_mut()
+                            == record.locator.as_ptr()
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+        }
+        charge_effect_work(&mut self.instantiation_work, fields, RuntimePhase::Cleanup)?;
+        let Some(Frame::RegionBoundary { records, .. }) = self.frames.pop() else {
+            unreachable!()
+        };
+        self.root_completion = Some(HostRootCompletion { records });
+        Ok(())
+    }
+
     fn buffer_node(&self, node: NodeId) -> Option<&crate::core::region::RegionBufferNode> {
         let Some(ExecutableNode::Effect(expression)) = self.program.node(node) else {
             return None;
@@ -1141,7 +1252,7 @@ impl Machine<'_> {
         let Some(Frame::RegionCompletion { node, .. }) = self.frames.get(index) else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        // Root observation ordering remains the separate entry completion work.
+        // run_loop transfers the fixed host entry before ordinary close.
         if self
             .region_scope(*node)
             .ok_or(RuntimeFailure::InvalidControlState)?
@@ -1300,6 +1411,291 @@ mod tests {
         source::{ByteRange, Origin, SourceFile},
         types::Type,
     };
+
+    fn root_driver(payload: Value) -> Machine<'static> {
+        let program = super::super::tests::effect_program("main : Unit -> Unit\nmain () = ()\n");
+        let mut pending = vec![program.root()];
+        let node = loop {
+            let id = pending.pop().expect("generated root");
+            let kind = &program.node(id).unwrap().kind;
+            if matches!(kind, EffectExprKind::Operation(EffectOperation::Region(scope)) if scope.entry)
+            {
+                break id;
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        };
+        let mut fields = vec![payload].into_boxed_slice();
+        let locator = Address::new(fields.as_mut_ptr().cast());
+        let mut machine = Machine::new_effect(&program);
+        machine.heap.push(HeapCell::Tuple(fields));
+        machine.frames.push(Frame::RegionBoundary {
+            node,
+            key: ActivationKey(9),
+            allocate: Value::RegionHostFunction {
+                owner: ActivationKey(9),
+                release: false,
+            },
+            release: Value::RegionHostFunction {
+                owner: ActivationKey(9),
+                release: true,
+            },
+            preceding: Value::Unit,
+            records: vec![BackingRecord {
+                locator,
+                extent: core::mem::size_of::<Value>(),
+                usable_bytes: core::mem::size_of::<Value>(),
+                alignment: core::mem::align_of::<Value>(),
+                invocation: RegionInvocation {
+                    owner: ActivationKey(9),
+                    serial: 5,
+                },
+                location: Some(0),
+                initialized: true,
+            }],
+        });
+        machine.control = Some(Control::Return(Value::Unit));
+        machine
+    }
+
+    #[test]
+    fn root_completion_preparation_is_exact_atomic_and_retryable() {
+        for prefix in [0, 7] {
+            let payload: Arc<[u8]> = Arc::from([1_u8, 2, 3]);
+            let mut machine = root_driver(Value::Bytes(Arc::clone(&payload)));
+            // Two authentication/field passes plus record retirement: 3 + 1.
+            for allowance in [0, 3] {
+                machine.instantiation_work = TypeWorkBudget::with_limit(prefix + allowance);
+                machine.instantiation_work.charge(prefix).unwrap();
+                machine.control = Some(Control::Return(Value::Unit));
+                let RuntimeFailure::Report(report) = machine.run_loop().unwrap_err() else {
+                    panic!("structured root preparation refusal");
+                };
+                let resource = report.primary.resource().unwrap();
+                assert_eq!(resource.cause, ResourceFailureCause::WorkBudgetExhausted);
+                assert_eq!(resource.phase, RuntimePhase::Cleanup);
+                assert_eq!(resource.resource, RuntimeResource::WorkUnits);
+                assert_eq!(resource.requested, Some(if allowance == 0 { 3 } else { 1 }));
+                assert_eq!(resource.available, Some(0));
+                assert!(
+                    matches!(machine.frames.as_slice(), [Frame::RegionBoundary { records, .. }] if records[0].initialized)
+                );
+                assert!(machine.root_completion.is_none());
+                assert_eq!(
+                    Arc::strong_count(&payload),
+                    2,
+                    "refusal retains initialized fields"
+                );
+            }
+            machine.instantiation_work = TypeWorkBudget::with_limit(prefix + 4);
+            machine.instantiation_work.charge(prefix).unwrap();
+            machine.control = Some(Control::Return(Value::Unit));
+            let evaluation = machine.run_loop().unwrap();
+            assert_eq!(machine.instantiation_work.used(), prefix + 4);
+            assert!(machine.frames.is_empty() && machine.root_completion.is_none());
+            assert_eq!(
+                Arc::strong_count(&payload),
+                2,
+                "completion moves to the observation"
+            );
+            drop(evaluation);
+            assert_eq!(Arc::strong_count(&payload), 1);
+            for _ in 0..2 {
+                let mut retry = root_driver(Value::Unit);
+                retry.instantiation_work = TypeWorkBudget::with_limit(4);
+                assert_eq!(retry.run_loop().unwrap().value.to_string(), "()");
+                assert_eq!(retry.instantiation_work.used(), 4);
+            }
+        }
+    }
+
+    #[test]
+    fn root_completion_rejects_forged_pair_owner_layout_and_duplicate_location() {
+        for mutation in [
+            "pair",
+            "owner",
+            "locator",
+            "extent",
+            "location",
+            "cell",
+            "duplicate",
+        ] {
+            let payload: Arc<[u8]> = Arc::from([1_u8, 2, 3]);
+            let mut machine = root_driver(Value::Bytes(Arc::clone(&payload)));
+            let Frame::RegionBoundary {
+                release, records, ..
+            } = &mut machine.frames[0]
+            else {
+                unreachable!()
+            };
+            match mutation {
+                "pair" => {
+                    *release = Value::RegionHostFunction {
+                        owner: ActivationKey(10),
+                        release: true,
+                    }
+                }
+                "owner" => records[0].invocation.owner = ActivationKey(10),
+                "locator" => records[0].locator = Address::new(core::ptr::null_mut()),
+                "extent" => records[0].extent += 1,
+                "location" => records[0].location = None,
+                "cell" => {
+                    machine.heap.push(HeapCell::Uninitialized);
+                    records[0].location = Some(1);
+                }
+                "duplicate" => records.push(BackingRecord {
+                    locator: records[0].locator.clone(),
+                    extent: records[0].extent,
+                    usable_bytes: records[0].usable_bytes,
+                    alignment: records[0].alignment,
+                    invocation: RegionInvocation {
+                        owner: ActivationKey(9),
+                        serial: 6,
+                    },
+                    location: Some(0),
+                    initialized: true,
+                }),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                machine.retain_root_completion(),
+                Err(RuntimeFailure::InvalidControlState),
+                "{mutation}"
+            );
+            assert!(machine.root_completion.is_none());
+            assert!(
+                matches!(machine.frames.as_slice(), [Frame::RegionBoundary { records, .. }] if records[0].initialized)
+            );
+            assert_eq!(Arc::strong_count(&payload), 2);
+        }
+    }
+
+    #[test]
+    fn root_completion_is_retained_by_evaluation_clones_until_the_last_owner() {
+        let payload: Arc<[u8]> = Arc::from([1_u8, 2, 3]);
+        let weak_payload = Arc::downgrade(&payload);
+        let evaluation = root_driver(Value::Bytes(payload)).run().unwrap();
+        let weak_heap = Arc::downgrade(&evaluation.heap);
+        let clone = evaluation.clone();
+        drop(evaluation);
+        assert!(weak_heap.upgrade().is_some() && weak_payload.upgrade().is_some());
+        drop(clone);
+        assert!(weak_heap.upgrade().is_none() && weak_payload.upgrade().is_none());
+
+        let payload: Arc<[u8]> = Arc::from([4_u8]);
+        let weak = Arc::downgrade(&payload);
+        let mut machine = root_driver(Value::Bytes(payload));
+        machine.retain_root_completion().unwrap();
+        let mut root = machine.root_completion.take().unwrap();
+        root.close(&mut machine.heap);
+        assert!(weak.upgrade().is_none());
+        assert!(root.records.is_empty());
+        assert!(matches!(machine.heap[0], HeapCell::Uninitialized));
+        root.close(&mut machine.heap);
+        assert!(
+            root.records.is_empty(),
+            "completion cannot retire the same backing twice"
+        );
+    }
+
+    #[test]
+    fn root_completion_is_disposed_if_the_outer_boundary_fails_before_observation() {
+        let payload: Arc<[u8]> = Arc::from([1_u8, 2, 3]);
+        let weak = Arc::downgrade(&payload);
+        let mut machine = root_driver(Value::Bytes(payload));
+        machine.retain_root_completion().unwrap();
+        machine.frames.push(Frame::CloseCompletion);
+        machine.control = Some(Control::Return(Value::Boolean(true)));
+        assert_eq!(
+            machine.run().unwrap_err(),
+            RuntimeFailure::InvalidControlState
+        );
+        assert!(
+            weak.upgrade().is_none(),
+            "an unpublished owner cannot strand its fields/backing"
+        );
+
+        let mut machine = root_disposal_pressure_driver();
+        machine.retain_root_completion().unwrap();
+        machine.frames.push(Frame::CloseCompletion);
+        machine.control = Some(Control::Return(Value::Boolean(true)));
+        disposal::reset_growth_attempts();
+        super::super::machine_test_hooks::FAIL_DISPOSAL_GROWTH.set(true);
+        let RuntimeFailure::Report(report) = machine.run().unwrap_err() else {
+            panic!("primary error with root teardown failure");
+        };
+        assert_eq!(
+            report.primary.reason_code(),
+            RuntimeFailure::InvalidControlState.reason_code()
+        );
+        let teardown = report.teardown.unwrap();
+        assert_eq!(teardown.cause, ResourceFailureCause::AllocatorRefused);
+        assert_eq!(teardown.phase, RuntimePhase::Teardown);
+        assert_eq!(teardown.resource, RuntimeResource::EnvironmentDisposal);
+        assert_eq!(report.cleanup, crate::eval::CleanupStatus::Incomplete);
+        assert_eq!(disposal::growth_attempts(), 1);
+    }
+
+    fn root_disposal_pressure_driver() -> Machine<'static> {
+        let mut machine = root_driver(Value::Unit);
+        let template = Closure {
+            parameter: crate::resolved::BinderId::new(1),
+            body: machine.program.root(),
+            program: machine.program.clone(),
+            environment: Environment::new(),
+            origin: Origin::Source(
+                SourceFile::new("root-disposal", "()")
+                    .unwrap()
+                    .span(ByteRange::new(0, 2).unwrap())
+                    .unwrap(),
+            ),
+        };
+        let mut frontier = (0..512).map(|_| Environment::new()).collect::<Vec<_>>();
+        while frontier.len() > 1 {
+            let mut next = Vec::new();
+            while let Some(right) = frontier.pop() {
+                let left = frontier.pop().unwrap();
+                let mut function = template.clone();
+                function.environment = right;
+                next.push(
+                    left.extend(crate::resolved::BinderId::new(1), Value::Function(function))
+                        .unwrap(),
+                );
+            }
+            frontier = next;
+        }
+        let mut function = template;
+        function.environment = frontier.pop().unwrap();
+        let HeapCell::Tuple(fields) = &mut machine.heap[0] else {
+            unreachable!()
+        };
+        fields[0] = Value::Function(function);
+        machine
+    }
+
+    #[test]
+    fn root_completion_disposal_failure_remains_visible_in_the_ambient_scope() {
+        let machine = root_disposal_pressure_driver();
+        let evaluation = machine.run().unwrap();
+        let weak = Arc::downgrade(&evaluation.heap);
+        let scope = disposal::Scope::enter();
+        disposal::reset_growth_attempts();
+        super::super::machine_test_hooks::FAIL_DISPOSAL_GROWTH.set(true);
+        drop(evaluation);
+        assert!(weak.upgrade().is_none());
+        assert!(
+            disposal::check().is_err(),
+            "root disposal must not hide failure in a fresh Scope"
+        );
+        assert_eq!(disposal::growth_attempts(), 1);
+        let RuntimeFailure::Report(report) = scope.finish(Ok::<_, RuntimeFailure>(())).unwrap_err()
+        else {
+            panic!("ambient teardown failure")
+        };
+        assert_eq!(
+            report.primary.resource().unwrap().cause,
+            ResourceFailureCause::AllocatorRefused
+        );
+    }
 
     fn prepared_driver() -> Machine<'static> {
         let source = SourceFile::new("region-driver.ash", "()").unwrap();
@@ -1965,9 +2361,9 @@ mod tests {
             panic!("stored callable");
         };
         let record = function.record;
-        let cells = Arc::get_mut(&mut evaluation.heap)
-            .expect("unique observation owner")
-            .cells_mut_for_test();
+        let heap = Arc::get_mut(&mut evaluation.heap).expect("unique observation owner");
+        let root_completion = heap.take_root_completion_for_test();
+        let cells = heap.cells_mut_for_test();
         let HeapCell::Tuple(fields) = &mut cells[record] else {
             panic!("supplied Value slots");
         };
@@ -1982,6 +2378,7 @@ mod tests {
             .iter_mut()
             .map(|cell| std::mem::replace(cell, HeapCell::Uninitialized))
             .collect();
+        machine.root_completion = root_completion;
         let callable = machine.read_callable(&evaluation.value).unwrap();
         machine.control = Some(Control::Evaluate(callable.body, callable.environment));
         assert_eq!(machine.run().unwrap().value.to_string(), "43");
@@ -2133,7 +2530,36 @@ mod tests {
 
     #[test]
     fn close_frame_reservation_failure_keeps_the_owner_and_backing() {
-        let mut machine = prepared_driver();
+        let program = super::super::tests::effect_program(
+            "main : Unit -> Unit\nmain () = region<R> owner {\n()\n}\n",
+        );
+        let mut pending = vec![program.root()];
+        let node = loop {
+            let id = pending.pop().expect("declared owner");
+            let kind = &program.node(id).unwrap().kind;
+            if matches!(kind, EffectExprKind::Operation(EffectOperation::Region(scope)) if !scope.entry)
+            {
+                break id;
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        };
+        let mut machine = Machine::new_effect(&program);
+        machine.frames.push(Frame::RegionBoundary {
+            node,
+            key: ActivationKey(9),
+            allocate: Value::Unit,
+            release: Value::Unit,
+            preceding: Value::Unit,
+            records: Vec::new(),
+        });
+        machine.frames.push(Frame::RegionAllocated {
+            segment: CapturedContinuation { frames: Vec::new() },
+            invocation: RegionInvocation {
+                owner: ActivationKey(9),
+                serial: 5,
+            },
+            registered: false,
+        });
         let storage = machine
             .allocate_host_region_storage(
                 ActivationKey(9),

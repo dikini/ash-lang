@@ -20241,6 +20241,30 @@ mod tests {
         (donor, sources, relation)
     }
 
+    #[test]
+    fn region_parameter_live_target_survives_core_reconstruction() {
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            "main : Unit -> Unit\nmain () = region<A> outer {\nlet place = fn(selected) {\nregion<B> inner {\nusing selected {\nlet pair = (20, 22)\nmatch pair {\n(left, right) => ()\n}\n}\n}\n}\nplace outer\n}\n",
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let copied = transform(&donor).unwrap();
+            let validated =
+                super::super::validate_effect_modules(copied, &refs, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "()"
+            );
+        }
+    }
+
     fn effect_method_scheme_extra_bind_is_rejected(adapter: bool) {
         use super::super::effect::EffectExprKind;
         let (donor, sources, relation) = generic_cell_source_fixture(
