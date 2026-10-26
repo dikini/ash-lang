@@ -174,14 +174,16 @@ transformed donor's original evidence anchors, consumers and complete rows while
 adding an ordinary same-scope strict Bind use. The full donor validates first;
 the Adapter scheme and abstract-domain scheme Variable are then each rejected
 with NodeType at the exact unauthorized scheme. The selected final evidence
-contains 382 distinct passing test names, including those two negatives, while
+contains 384 distinct passing test names, including those two negatives, while
 preserving the fourteen inherited Machine/capture failures and two obsolete Pure
 fixture setup failures as unverified behavior. This is focused evidence, not a
-fresh full gate. A separate feature-gated observer check stops at compilation:
-the unchanged surface-feature census lacks Region/RegionSelection visitor arms.
-Its changed coefficient assertions remain unreached; repair belongs to the
-connected R-core checkpoint. Independent completed-slice review remains pending.
-Legacy Pure callback fixtures cover isolated preflight/disposal, not supplied storage.
+fresh full gate. The feature-gated syntax census now visits existing region
+provider/selection operands and bodies; both observer tests reach and pass their
+changed coefficient assertions. Its cfg-only repair preserves all 134 default
+compiler dependency/configuration pins, allowing the normal 382 passing names to
+transfer; the observer adds two fresh names. Independent completed-slice review
+remains pending. Legacy Pure callback fixtures cover isolated preflight/disposal,
+not supplied storage.
 
 A generated-native Score attempt stops in the unchanged image profile: its
 registry inventory omits method/head quantifiers, and the method-evidence codec

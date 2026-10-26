@@ -118,12 +118,13 @@ after the bounded nine-flow completion measurement; normal nine-flow/native exec
 Two current Effect Score extra-use negatives preserve the original anchors,
 consumers, scope and complete rows; each full validator rejects NodeType at the
 exact unauthorized Adapter or abstract-domain scheme after the unmutated donor
-validates. Selected final evidence contains 382 distinct passing test names;
+validates. Selected final evidence contains 384 distinct passing test names;
 blocked legacy fixture assertions are not passing evidence. Legacy Pure callback
 fixtures cover isolated preflight/disposal only. Independent completed-slice review
-and retained verification remain pending. A separate resource-calibration observer
-target cannot compile because the unchanged syntax census lacks region-expression
-visitor arms; its coefficient assertions remain unreached R-core migration debt.
+and retained verification remain pending. Two existing observer tests pass after
+the cfg-only syntax census adds traversal of existing region operands and bodies.
+All 134 default dependency/configuration pins remain equal, transferring the
+normal 382 passing names; the observer contributes two fresh names.
 The generated-native Score attempt exposes the unchanged method-evidence image
 profile's concrete-adapter exclusion. This slice adds no catalog codec: actual
 host supplied-slot/prefix-order evidence and shared native generic/mixed backing
