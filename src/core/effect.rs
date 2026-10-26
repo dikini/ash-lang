@@ -482,16 +482,29 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(_) => None,
         }
     }
-    fn region_construction(kind: &Self::Kind) -> Option<&EffectOperation> {
+    fn region_closure(kind: &Self::Kind) -> Option<&super::region::RegionClosureNode> {
         match kind {
-            EffectExprKind::Operation(
-                operation @ (EffectOperation::RegionBuffer(_)
-                | EffectOperation::RegionTuple(_)
-                | EffectOperation::RegionClosure(_)
-                | EffectOperation::RegionAllocate(_)
-                | EffectOperation::RegionValueRequest(_)
-                | EffectOperation::Request(_)),
-            ) => Some(operation),
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => Some(closure),
+            _ => None,
+        }
+    }
+    fn region_tuple(kind: &Self::Kind) -> Option<&super::region::RegionTupleNode> {
+        match kind {
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => Some(tuple),
+            _ => None,
+        }
+    }
+    fn request_metadata(
+        kind: &Self::Kind,
+    ) -> Option<(
+        &crate::types::EffectInstance,
+        crate::types::OperationId,
+        super::NodeId,
+    )> {
+        match kind {
+            EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                Some((request.effect(), request.operation(), request.operand()))
+            }
             _ => None,
         }
     }

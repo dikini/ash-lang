@@ -17,7 +17,7 @@ use ash::{
         ParseContext, ParseReason, ProjectionError, SynchronizationBoundary, parse, project_module,
     },
     render,
-    resolve::{ResolveError, ResolveModuleError, ResolveReason, resolve_module},
+    resolve::{DependencyExports, ResolveError, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{
         ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
         ResolvedLocalDeclaration, ResolvedModule,
@@ -85,10 +85,39 @@ impl ModuleFixture {
             .expect("entry module should remain loaded")
     }
 
+    fn try_resolve(&self) -> Result<ResolvedModule, ResolveModuleError> {
+        let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+        for module in self.graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .expect("dependencies precede their importer")
+                            .exports(),
+                    )
+                    .expect("the exact dependency summary authenticates its edge")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies);
+            if module.id() == self.graph.entry() {
+                return resolved;
+            }
+            checked.push(
+                check_module(resolved.expect("dependency should resolve"))
+                    .expect("dependency should check"),
+            );
+        }
+        panic!("the graph should retain its entry")
+    }
+
     fn resolve(&self) -> ResolvedModule {
-        let loaded = self.loaded();
-        assert!(loaded.dependencies().is_empty());
-        resolve_module(loaded, &[]).expect("diagnostic fixture should resolve")
+        self.try_resolve()
+            .expect("diagnostic fixture should resolve")
     }
 }
 
@@ -185,9 +214,7 @@ fn unknown_name_presentation_distinguishes_terms_from_effect_operations() {
         ),
     ] {
         let fixture = ModuleFixture::load("unknown.ash", text);
-        let ResolveModuleError::Resolution(error) =
-            resolve_module(fixture.loaded(), &[]).unwrap_err()
-        else {
+        let ResolveModuleError::Resolution(error) = fixture.try_resolve().unwrap_err() else {
             panic!("expected resolution failure");
         };
         assert_eq!(error.found.as_deref(), Some("missing"));
@@ -245,9 +272,7 @@ fn unknown_type_presentation_retains_the_actual_parameter_scope() {
         ),
     ] {
         let fixture = ModuleFixture::load("unknown-type.ash", text);
-        let ResolveModuleError::Resolution(error) =
-            resolve_module(fixture.loaded(), &[]).unwrap_err()
-        else {
+        let ResolveModuleError::Resolution(error) = fixture.try_resolve().unwrap_err() else {
             panic!("expected resolution failure");
         };
         assert_eq!(error.reason, ResolveReason::UnknownType);
@@ -764,7 +789,7 @@ fn duplicate_effect_presentation_relates_both_exact_instances() {
     assert_eq!(json["labels"][1]["byte_start"], occurrences[0]);
     let distinct = text.replacen("Read<Int>, Read<Int>", "Read<Int>, Read<Bool>", 1);
     let distinct = ModuleFixture::load("distinct-effects.ash", &distinct);
-    assert!(resolve_module(distinct.loaded(), &[]).is_ok());
+    assert!(distinct.try_resolve().is_ok());
 }
 
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
@@ -1153,7 +1178,7 @@ fn recursive_and_cleanup_messages_retain_every_causal_label() {
         ),
     ] {
         let fixture = ModuleFixture::load("causal-message.ash", text);
-        let failure = match resolve_module(fixture.loaded(), &[]) {
+        let failure = match fixture.try_resolve() {
             Ok(resolved) => check_module(resolved).unwrap_err(),
             Err(ResolveModuleError::Representation(error)) => error,
             Err(error) => panic!("expected a source typing failure, found {error:?}"),
@@ -2569,7 +2594,9 @@ fn complete_declaration_without_a_logical_line_end_remains_diagnosed() {
 fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() {
     let fixture = ModuleFixture::load("r001.ash", R001);
     let error = expect_resolution_error(
-        resolve_module(fixture.loaded(), &[]).expect_err("R-001 should fail in resolution"),
+        fixture
+            .try_resolve()
+            .expect_err("R-001 should fail in resolution"),
     );
 
     assert_eq!(error.reason, ResolveReason::UnknownName);
@@ -2591,7 +2618,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
         "type Thing =\nFirst\n\ntype Thing =\nSecond\n\nmain : Unit -> Thing\nmain () = First\n";
     let duplicate = ModuleFixture::load("duplicate-type.ash", duplicate_text);
     let error = expect_resolution_error(
-        resolve_module(duplicate.loaded(), &[]).expect_err("duplicate type should fail"),
+        duplicate
+            .try_resolve()
+            .expect_err("duplicate type should fail"),
     );
     assert_eq!(error.reason, ResolveReason::DuplicateType);
     let first = duplicate_text.find("type Thing").expect("first type name") + "type ".len();
@@ -2608,7 +2637,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
     let binder_text = "main : Unit -> Int\nmain () = {\nlet (value, value) = (1, 2)\nvalue\n}\n";
     let binder_fixture = ModuleFixture::load("duplicate-pattern-binder.ash", binder_text);
     let error = expect_resolution_error(
-        resolve_module(binder_fixture.loaded(), &[]).expect_err("duplicate binder should fail"),
+        binder_fixture
+            .try_resolve()
+            .expect_err("duplicate binder should fail"),
     );
     assert_eq!(error.reason, ResolveReason::DuplicatePatternBinder);
     let first = binder_text.find("value").expect("first binder");
@@ -2623,7 +2654,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
     let unknown_text = "main : Unit -> Unit\nmain () = Missing\n";
     let unknown = ModuleFixture::load("unknown-constructor.ash", unknown_text);
     let error = expect_resolution_error(
-        resolve_module(unknown.loaded(), &[]).expect_err("unknown constructor should fail"),
+        unknown
+            .try_resolve()
+            .expect_err("unknown constructor should fail"),
     );
     assert_eq!(error.reason, ResolveReason::UnknownConstructor);
     assert_eq!(
@@ -2787,7 +2820,9 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
     let first = &surface.definitions[0];
     let second = &surface.definitions[1];
     let error = expect_resolution_error(
-        resolve_module(fixture.loaded(), &[]).expect_err("R-002 should fail in resolution"),
+        fixture
+            .try_resolve()
+            .expect_err("R-002 should fail in resolution"),
     );
 
     assert_eq!(error.reason, ResolveReason::DuplicateGlobal);
@@ -2812,7 +2847,9 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
 fn equation_name_mismatch_retains_both_names_and_a_justified_correction() {
     let fixture = ModuleFixture::load("equation-name.ash", EQUATION_NAME_MISMATCH);
     let error = expect_resolution_error(
-        resolve_module(fixture.loaded(), &[]).expect_err("the equation head should disagree"),
+        fixture
+            .try_resolve()
+            .expect_err("the equation head should disagree"),
     );
 
     assert_eq!(error.reason, ResolveReason::EquationNameMismatch);

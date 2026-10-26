@@ -7,7 +7,7 @@ use std::{
 use ash::{
     elaborate::check_module,
     module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
+    resolve::{DependencyExports, resolve_module},
     types::{EffectRow, Kind, Type},
 };
 
@@ -41,13 +41,31 @@ fn try_check_source(
     let fixture = TempModule::write(source);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the effect typing fixture should load");
-    let module = graph
-        .modules()
-        .iter()
-        .find(|module| module.id() == graph.entry())
-        .expect("the graph should retain its entry");
-    let resolved = resolve_module(module, &[]).expect("the effect typing fixture should resolve");
-    check_module(resolved)
+    let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .expect("dependencies precede their importer")
+                        .exports(),
+                )
+                .expect("the exact dependency summary authenticates its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the effect typing fixture should resolve");
+        if module.id() == graph.entry() {
+            return check_module(resolved);
+        }
+        checked.push(check_module(resolved).expect("builtin dependency should check"));
+    }
+    panic!("the graph should retain its entry")
 }
 
 fn latent_effects<'a>(checked: &'a ash::resolved::CheckedModule, spelling: &str) -> &'a EffectRow {

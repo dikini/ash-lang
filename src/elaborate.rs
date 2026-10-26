@@ -13360,21 +13360,29 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         ComputationType::new(*codomain, effects),
                     ));
                 } else if !infer_effects {
-                    let expected_effects = match ty
-                        .function_view()
-                        .and_then(|function| function.effects())
-                    {
-                        Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?,
-                        None => EffectRow::empty(),
-                    };
+                    let expected_effects =
+                        match ty.function_view().and_then(|function| function.effects()) {
+                            Some(effects) => self.zonk_effect_row(effects)?,
+                            None => EffectRow::empty(),
+                        };
                     let expected_is_inference = expected_effects.tail().is_some_and(|tail| {
                         matches!(tail.variable(), EffectRowVariable::Inference(_))
                     });
                     if expected_is_inference {
-                        self.unify_effect_rows(&expected_effects, &body.effects)
+                        // Checking may weaken to the contextual row's known
+                        // requirements. Infer only its still-unsolved residual;
+                        // retain the original tail/lacks in the exact unifier.
+                        let known_prefix = rebuild_effect_row_with_budget(
+                            expected_effects.known().iter(),
+                            None,
+                            std::iter::empty(),
+                            clone_type_with_budget,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| type_resource())?;
+                        let weakened =
+                            self.union_effects(&body.effects, &known_prefix, effect_span)?;
+                        self.unify_effect_rows(&expected_effects, &weakened)
                             .map_err(|failure| match failure {
                                 UnificationFailure::RowExclusion => {
                                     row_exclusion_error(effect_span, None)
@@ -39700,6 +39708,135 @@ mod tests {
             ),
             Err(invalid_state()),
         );
+    }
+
+    #[test]
+    fn contextual_callback_inference_retains_known_rows_and_solves_only_the_residual() {
+        use crate::core::effect::{EffectExprKind, EffectOperation};
+        let relay = "relay<R : EffectRow, T> : (Unit -> T ! {| R}) -> T ! {| R}\nrelay f = f ()\n";
+        for (name, source, public_residual) in [
+            (
+                "pure",
+                format!("{relay}main : Unit -> Bool\nmain () = relay (fn(ignored) {{\ntrue\n}})\n"),
+                false,
+            ),
+            (
+                "allocating",
+                format!(
+                    "{relay}main : Unit -> Bool\nmain () = relay (fn(ignored) {{\nlet pair = (true, false)\nmatch pair {{\n(left, _) => left\n}}\n}})\n"
+                ),
+                false,
+            ),
+            (
+                "public",
+                format!(
+                    "effect Ask<A> {{\nask : Unit -> Bool\n}}\n{relay}main : Unit -> Bool\nmain () = handle (relay (fn(ignored) {{\nperform Ask<Int>.ask ()\n}})) with Ask<Int> {{\nask ignored => resume true\n}}\n"
+                ),
+                true,
+            ),
+            (
+                "captured-method",
+                format!(
+                    "{relay}interface Read<A> {{\nread<T> : (A, T) -> T\n}}\nimpl Read<Int> {{\nread (ignored, extra) = relay (fn(ignored) {{\nextra\n}})\n}}\nmain : Unit -> Bool\nmain () = read (0, true)\n"
+                ),
+                false,
+            ),
+        ] {
+            let program =
+                admitted_newtype_pattern_fixture(&format!("callback-{name}.ash"), &source);
+            let registry = program.registry();
+            let mut rows = registry.global_parameter_rows().iter().filter(|row| {
+                row.parameters()
+                    .iter()
+                    .any(|id| registry.type_variable(*id).unwrap().kind == Kind::EffectRow)
+            });
+            let row = rows.next().expect("the original relay row owner");
+            assert!(rows.next().is_none());
+            let row_parameter = row
+                .parameters()
+                .iter()
+                .find_map(|id| {
+                    let parameter = registry.type_variable(*id).unwrap();
+                    (parameter.kind == Kind::EffectRow).then_some(parameter)
+                })
+                .unwrap();
+            let entry_source = row_parameter.origin.primary_span().source();
+            let residual = if public_residual {
+                let ask = registry
+                    .effects()
+                    .iter()
+                    .find(|effect| {
+                        effect.spelling == "Ask"
+                            && effect.origin.primary_span().source() == entry_source
+                    })
+                    .unwrap();
+                EffectRow::singleton(EffectInstance::new(ask.id, Box::new([Type::Int])))
+            } else {
+                EffectRow::empty()
+            };
+            let default = registry
+                .effects()
+                .iter()
+                .find_map(|effect| {
+                    crate::resolved::RegionApi::for_module(effect.id.module())
+                        .filter(|api| effect.id == api.default_alloc())
+                        .map(|_| effect.id)
+                })
+                .unwrap();
+            let contextual = EffectRow::singleton(EffectInstance::new(default, Box::new([])))
+                .union(&residual)
+                .unwrap();
+            let mut applications = 0;
+            let mut callbacks = 0;
+            for node in program.nodes() {
+                match &node.kind {
+                    EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::TypeApplication(application),
+                    )) if matches!(&program.node(application.function()).unwrap().kind,
+                            EffectExprKind::Pure(crate::core::PureExprKind::Variable(variable))
+                                if variable.binder() == row.owner()) =>
+                    {
+                        assert_eq!(
+                            application.row_arguments(),
+                            std::slice::from_ref(&residual),
+                            "{name}"
+                        );
+                        applications += 1;
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                        let Some(function) = closure.code.function() else {
+                            continue;
+                        };
+                        let span = function.parameter().origin().primary_span();
+                        if span.source() == entry_source
+                            && &source[span.range().start() as usize..span.range().end() as usize]
+                                == "ignored"
+                            && node
+                                .ty
+                                .function_view()
+                                .is_some_and(|ty| ty.domain() == &Type::Unit)
+                        {
+                            assert_eq!(
+                                node.ty.function_view().unwrap().effects(),
+                                Some(&contextual),
+                                "{name}"
+                            );
+                            callbacks += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(applications, 1, "{name}");
+            assert_eq!(callbacks, 1, "{name}");
+            assert_eq!(
+                crate::eval::evaluate_effect(&program)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "true"
+            );
+        }
     }
 
     #[test]

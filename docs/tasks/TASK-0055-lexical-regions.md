@@ -66,9 +66,30 @@ failed names since the prior draft without a new failure. The earlier private
 Source capture test has one justified rename and passes under its Effect lifetime
 obligation; its old name's disappearance is not counted as restoration. The
 complete workspace gate remains pending and no whole criterion closes here. These
-35 failures are the library backlog, not the complete regression scope: the next
-action after draft publication/readback is a serialized all-feature integration-only
-inventory with no fail-fast, before further cost-ledger migration.
+35 failures are the latest full-library backlog. The subsequent integration-only
+baseline executed all 103 workspace test targets: 1,276 passes and 504 failures
+across 1,780 package/target/test keys, without ignored, aborted or unexecuted
+cases. These are separate inventories, not a refreshed combined total.
+
+The next bounded repair removes the concrete Effect operation sum from the
+family-neutral Core interface through borrowed closure, tuple and request views.
+Contextual anonymous functions now infer only the residual beyond the expected
+row's known prefix, using existing charged row operations and transactional
+unification. Fixed/rigid rows, exclusions and named-value equality are unchanged.
+The two original empty-residual callback programs pass; a four-case Source/Core
+control checks empty and parameterized residuals, complete callback rows and
+execution. Ten focused product checks, 78 capture checks and the native suite's
+31 cases pass (29 native executions and two exact admission refusals).
+
+Dependency-ordered diagnostic/resolution helpers retain every builtin dependency
+and return the original unresolved entry or checking result. Selected reruns
+restore 135 baseline integration failures, with no newly failed names in those
+selected groups; this is staged evidence, not a new full inventory. Remaining
+failures include seven known Core ledger cases, six effect-row expectations and
+one direct setup path, fourteen runtime trace/setup cases, one resolution type
+shape and three diagnostic/profile expectations. Two architecture probes now
+reach a separate visible-glob carrier ambiguity in evaluator region metadata;
+no manifest entries were guessed. The complete normal gate remains pending.
 
 ## Work
 
@@ -378,8 +399,9 @@ one-short cases preserve paid prefixes under atomic refusal rather than assume a
 rejected bulk debit consumes its remaining credit. Per-charge accounting tests
 retain their specific exact debits. These are test-fixture repairs, with no
 production behavior, capacity or meter change. The 35 remaining failures are only
-the library backlog; integration-only inventory remains pending before further
-ledger migration and the final canonical gate.
+the library backlog at checkpoint 9; the integration-only baseline above was
+subsequently executed before further ledger migration. The final canonical gate
+remains pending.
 
 Cell mutation donors now validate through the actual Source/Effect pipeline
 before corruption, with physical closure capture/layout metadata kept coherent.

@@ -1591,8 +1591,22 @@ pub trait CoreOperationFamily: Clone + Copy + fmt::Debug + Eq + PartialEq + 'sta
     fn from_operation(operation: Self::Operation) -> Self::Kind;
     /// Borrows an ordinary Core feature when present.
     fn pure(kind: &Self::Kind) -> Option<&PureExprKind>;
-    /// Borrows explicit region construction metadata for guarded-data checking.
-    fn region_construction(_kind: &Self::Kind) -> Option<&super::effect::EffectOperation> {
+    /// Borrows stored closure metadata without exposing a dialect's operation sum.
+    fn region_closure(_kind: &Self::Kind) -> Option<&super::region::RegionClosureNode> {
+        None
+    }
+    /// Borrows record construction metadata for guarded recursive data.
+    fn region_tuple(_kind: &Self::Kind) -> Option<&super::region::RegionTupleNode> {
+        None
+    }
+    /// Borrows the exact request fields; consumers still authenticate its shape.
+    fn request_metadata(
+        _kind: &Self::Kind,
+    ) -> Option<(
+        &crate::types::EffectInstance,
+        crate::types::OperationId,
+        NodeId,
+    )> {
         None
     }
     /// Mutably borrows an ordinary Core feature when present.

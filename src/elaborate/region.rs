@@ -1,14 +1,17 @@
 //! Lower lexical owners and selections to explicit provider pairs and handlers.
 
+use super::TypedNodeOwner;
 use super::*;
-use crate::module::ModuleId;
 use crate::{
     core::{
+        TypedBinder,
         packed::Intrinsic,
         region::{HostRegionConfiguration, RegionAllocateNode, RegionScopeNode},
     },
     resolved::{RegionApi, ResolvedRegionExpr, ResolvedRegionSelectionExpr},
+    types::EffectRow,
 };
+use crate::{module::ModuleId, source::Span};
 
 pub(super) struct RegionProgress<'a> {
     pub source: &'a ResolvedRegionExpr,

@@ -46,10 +46,21 @@ reporting and observer checks. The latest full-library inventory is 1,560 pass /
 prior draft and no new failures. The earlier private Source capture test was
 renamed to assert its required Effect lifetime summaries, with the unchanged Pure
 exact/short/retry contract passing separately; the rename is not counted as a
-restored old name. The current 35 failures are the library backlog only. After
-this draft checkpoint's publication/readback, the sole developer runs a serialized
-all-feature integration-only inventory with no fail-fast before further ledger
-migration; the final full workspace gate remains pending. Core fixture repairs
+restored old name. The 35 failures are the latest full-library backlog only. The subsequent
+integration-only baseline executed all 103 workspace targets, with 1,276 passes
+and 504 failures over 1,780 qualified test keys, no ignored/aborted/unexecuted
+cases. A bounded product repair restores family-local operation views and
+contextual anonymous-function residual inference without changing fixed rows,
+lacks or general unification. The original two callback programs and four-case
+Core control pass, together with the targeted architecture guard, 78 capture
+checks and all 31 native suite cases (29 executions, two admission refusals).
+Dependency-ordered admission helpers preserve original negative endpoints and
+all builtin facts. Selected staged runs restore 135 baseline integration names
+without a new failed name in those groups; neither complete inventory was rerun.
+Known ledger, row/trace/profile and separate architecture preflight residuals
+remain open. The next owner is the independent reviewer for the exact draft
+checkpoint, then root for publication/readback; the final full workspace gate
+remains pending. Core fixture repairs
 retain full provenance and actual user owners, separate the manual Pure donor's
 structural phases, and preserve original deep-stack, row and rejection-anchor
 assertions. Closure mutations follow stored code and preserve entry ownership;

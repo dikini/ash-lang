@@ -4466,9 +4466,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(self.program.nodes.len())?;
         for (index, stored) in self.program.nodes.iter().enumerate() {
             let parent = node_id(self.program.arena, index)?;
-            if let Some(super::effect::EffectOperation::RegionClosure(closure)) =
-                F::region_construction(&stored.kind)
-            {
+            if let Some(closure) = F::region_closure(&stored.kind) {
                 // These exact operands spell the ordinary implicit lexical
                 // capture. Full closure validation independently reconstructs
                 // their binder sequence, types and scopes; this grants no
@@ -10011,10 +10009,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 id,
                                 binder,
                                 ValidationReason::Pattern,
-                                matches!(
-                                    F::region_construction(&node.kind),
-                                    Some(super::effect::EffectOperation::RegionClosure(_))
-                                ),
+                                F::region_closure(&node.kind).is_some(),
                                 false,
                             );
                         }
@@ -11080,8 +11075,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .guarded_region_context(initializer)?
             .unwrap_or(initializer);
         let root = self.node(initializer)?;
-        if let Some(super::effect::EffectOperation::RegionTuple(record)) =
-            F::region_construction(&root.kind)
+        if let Some(record) = F::region_tuple(&root.kind)
             && let Some(constructor) = record.constructor
         {
             let Some(info) = self.program.registry.constructor(constructor) else {
@@ -11157,9 +11151,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(body) = self.guarded_region_context(callable.body())? else {
             return Ok(None);
         };
-        let Some(super::effect::EffectOperation::RegionTuple(record)) =
-            F::region_construction(&self.node(body)?.kind)
-        else {
+        let Some(record) = F::region_tuple(&self.node(body)?.kind) else {
             return Ok(None);
         };
         if record.fields.len() != 1
@@ -11186,7 +11178,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     /// A saved context query precedes the tuple's original guarded fields.
     fn guarded_region_context(&self, root: NodeId) -> Result<Option<NodeId>, ValidationError> {
-        use super::effect::EffectOperation;
         let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
             F::pure(&self.node(root)?.kind)
         else {
@@ -11195,26 +11186,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         if !matches!(binding.binder().id(), BinderId::Generated(_)) {
             return Ok(None);
         }
-        let Some(EffectOperation::RegionTuple(tuple)) =
-            F::region_construction(&self.node(binding.body())?.kind)
-        else {
+        let Some(tuple) = F::region_tuple(&self.node(binding.body())?.kind) else {
             return Ok(None);
         };
         let Some(api) = crate::resolved::RegionApi::for_module(tuple.api) else {
             return Ok(None);
         };
-        let Some(EffectOperation::Request(query)) =
-            F::region_construction(&self.node(binding.initializer())?.kind)
+        let Some((effect, operation, operand)) =
+            F::request_metadata(&self.node(binding.initializer())?.kind)
         else {
             return Ok(None);
         };
         if !matches!(F::pure(&self.node(tuple.context)?.kind),
             Some(PureExprKind::Variable(variable)) if variable.binder() == binding.binder().id())
-            || query.effect().effect() != api.default_alloc()
-            || !query.effect().arguments().is_empty()
-            || query.operation() != crate::types::OperationId::new(api.default_alloc(), 1)
+            || effect.effect() != api.default_alloc()
+            || !effect.arguments().is_empty()
+            || operation != crate::types::OperationId::new(api.default_alloc(), 1)
             || !matches!(
-                F::pure(&self.node(query.operand())?.kind),
+                F::pure(&self.node(operand)?.kind),
                 Some(PureExprKind::Value(PureValue::Unit(_)))
             )
         {
@@ -11252,9 +11241,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Some(PureExprKind::Value(PureValue::Function(_))) => {}
                 _ => {
-                    if let Some(super::effect::EffectOperation::RegionTuple(tuple)) =
-                        F::region_construction(&node.kind)
-                    {
+                    if let Some(tuple) = F::region_tuple(&node.kind) {
                         if [tuple.context, tuple.storage]
                             .iter()
                             .any(|child| reaches_recursive.get(child).copied().unwrap_or(false))
@@ -12466,8 +12453,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                         )
                                     })?;
                                 let mut child_free = self.requirements_for(&requirements, child)?;
-                                if matches!(F::region_construction(&node.kind), Some(super::effect::EffectOperation::RegionClosure(closure)) if child_index == closure.captures.len() + 2)
-                                {
+                                if F::region_closure(&node.kind).is_some_and(|closure| {
+                                    child_index == closure.captures.len() + 2
+                                }) {
                                     self.reject_resume_capture(&child_free, id)?;
                                 }
                                 F::visit_operation_child_binders(
