@@ -10371,7 +10371,7 @@ mod tests {
     fn first_lexical_source(
         program: &ResolvedModuleProgram,
     ) -> &crate::resolved::ResolvedLexicalEvidence {
-        (*entry_group(&program))
+        entry_group(program)
             .definitions()
             .iter()
             .find_map(|definition| {
@@ -13199,7 +13199,7 @@ mod tests {
         substitution_argument: &Type,
         root_argument: Type,
     ) -> EvidenceSelection {
-        let group = entry_group(&program);
+        let group = entry_group(program);
         let ground = &group.implementation_facts()[0];
         let generic = &group.implementation_facts()[1];
         let parameter = generic.head_parameters[0].id;

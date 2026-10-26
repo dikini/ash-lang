@@ -26,11 +26,43 @@ selected policy. Closure preparation uses one charged temporary first-variable
 index per batch; Source work fell from 519,069,391 to 7,149,428 and Final from
 350,952,800 exhausted to 2,296,950 complete. The separate program primary-builder
 allowance is `max(327680, 8*S)` from the already-paid canonical source closure;
-its largest complete arena used 2,680,644 at S = 438,691. Source/Final/Core and
-rewrite coefficients, standalone/image capacities and original assertions are
-unchanged; [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md) records the measurement and ownership. This restores
+its largest complete arena used 2,680,644 at S = 438,691. That checkpoint
+retained the then-current Source/Final/Core and rewrite coefficients,
+standalone/image capacities and original assertions; [AD-0013](../decisions/AD-0013-generated-native-bridges-and-program-builds.md) records the measurement and ownership. This restores
 one required test, not the full gate; remaining fixture and product failures
 still require repair before integration.
+
+The reviewed Source driver callback seam now validates and evaluates actual
+Effect Core at its real phase boundaries, dropping owned interface input before
+independent validation. Focused driver evidence restores six injection/owner
+tests, including
+registry-owner count and measured/unmeasured failures. Both original Pure
+small-stack disposal cases remain passing separately. This is partial repair
+evidence, not a full gate.
+The unchanged depth-48/width-4 public routes completed resolution at 643,634
+cells (S = 11,791) under a finite 2× diagnostic. The selected independent program
+resolution allowance is `max(327680, 80*S)` (943,280 here); standalone and explicit
+caller budgets and original stack/constraint assertions remain unchanged.
+That resolution checkpoint retained its then-current Source/Final/Core coefficients. Temporary diagnostics were removed. The
+normal-policy focused refresh passes
+12 distinct policy, gas, duplicate-route, Render exact/short and deep-route
+tests; the full gate remains pending. AD-0013 records the measured owner and
+fitting reserve.
+
+The original 24-owner Cell witness exposed repeated backward-prefix work in
+escape checks that consume only owner boundaries. Reusing the unchanged charged
+forward walk preserves all owner/payload checks and ordinary capture prefixes;
+78 focused control/capture tests pass. Complete Source work fell 37.49%, from
+21,142,054 to 13,215,994 at S = 1,791. Finite completion also measured Final
+29,736 and full Core 33,035,808, with the original result, acquisition and
+reverse-release assertions intact. Source `10000*S` and Core `25000*S` are the
+selected rounded fits under the existing 25% rule; Final, resolution, builder,
+rewrite, standalone and stack policies are unchanged. All temporary diagnostics
+were removed. The normal-policy focused run passes 114 distinct driver, policy, capture,
+reporting and observer tests, including the original staged 24-owner 256 KiB
+witness and 8,000-member worker. The fresh full-library inventory records
+1,489 passes and 106 failures across the same 1,595 names; the complete workspace
+gate remains pending and no whole criterion closes here.
 
 ## Work
 
@@ -316,8 +348,13 @@ capture tests using complete dependency provenance and actual activation IDs.
 They also exposed and repaired stale resume-row finalization without cleanup
 equations and lost intermediate arrow rows in curried equation reconstruction.
 The latest complete all-feature library inventory executes all 1,595 tests:
-1,471 pass and 124 fail, restoring 285 original failures without a newly failing
-name. The policy/rewrite/catalog/row focused checks also pass.
+1,489 pass and 106 fail, restoring 303 original failures (18 since the prior
+draft checkpoint) without a newly failing name. All 8,565 tracked input hashes
+match before/after that run; only this task and its plan inventory prose changed
+afterward. Full workspace/all-target/all-feature Clippy and the 114 focused
+driver/policy/capture/reporting/observer checks pass. Seven integration names
+are additional to the library inventory; the overlapping 107 are not added
+again. This is partial repair evidence, not the complete workspace gate.
 Cell mutation donors now validate through the actual Source/Effect pipeline
 before corruption, with physical closure capture/layout metadata kept coherent.
 Source Effect transforms preserve region arithmetic and its allocation effects;

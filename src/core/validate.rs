@@ -19907,15 +19907,19 @@ mod tests {
     }
 
     fn cell_resource_node(core: &super::super::effect::UnvalidatedEffectProgram) -> NodeId {
-        let mut resources = core.nodes.iter().enumerate().filter_map(|(index, node)| {
-            matches!(
-                &node.kind,
-                super::super::effect::EffectExprKind::Operation(
-                    super::super::effect::EffectOperation::Resource(_)
+        let mut resources = core
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                matches!(
+                    &node.kind,
+                    super::super::effect::EffectExprKind::Operation(
+                        super::super::effect::EffectOperation::Resource(_)
+                    )
                 )
-            )
-            .then(|| node_id(core.arena, index).unwrap())
-        });
+            })
+            .map(|(index, _)| node_id(core.arena, index).unwrap());
         let resource = resources.next().expect("user Cell resource");
         assert!(resources.next().is_none(), "exactly one user Cell resource");
         resource
@@ -22240,7 +22244,7 @@ mod tests {
     ) -> (Option<ValidationReason>, usize) {
         let refs = sources.iter().collect::<Vec<_>>();
         let mut validator =
-            super::Validator::new_modules(core, &refs, &relation).expect("module origins");
+            super::Validator::new_modules(core, &refs, relation).expect("module origins");
         validator.type_work.set(used);
         let reason = validator.run_effect().err().map(|error| error.reason());
         (reason, validator.type_work.get())
@@ -29873,7 +29877,7 @@ mod tests {
                         Ok(())
                     },
                 )
-                .map_or_else(|()| found = true, |()| ());
+                .unwrap_or_else(|()| found = true);
             }
         }
         found

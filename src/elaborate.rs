@@ -31379,7 +31379,7 @@ mod tests {
         .expect("module links");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("original evidence authenticates");
-        let group = &*program
+        let group = program
             .groups()
             .iter()
             .find(|group| group.module() == program.entry())

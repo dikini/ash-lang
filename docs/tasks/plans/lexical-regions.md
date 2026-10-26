@@ -26,11 +26,28 @@ selected policy. Closure preparation uses one charged temporary first-variable
 index per batch; Source work fell from 519,069,391 to 7,149,428 and Final from
 350,952,800 exhausted to 2,296,950 complete. The separate program primary-builder
 allowance is `max(327680, 8*S)` from the already-paid canonical source closure;
-its largest complete arena used 2,680,644 at S = 438,691. Source/Final/Core and
-rewrite coefficients, standalone/image capacities and original assertions are
-unchanged; [AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md) records the measurement and ownership. This restores
+its largest complete arena used 2,680,644 at S = 438,691. That checkpoint
+retained its then-current Source/Final/Core and rewrite coefficients,
+standalone/image capacities and original assertions; [AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md) records the measurement and ownership. This restores
 one required test, not the full gate; remaining fixture and product failures
 still require repair before integration.
+
+Current R-core repair preserves real Source Effect validation/evaluation phase
+injection and interface-owner disposal. Program resolution uses its separate
+`max(327680, 80*S)` allowance after the existing paid canonical census; the
+unchanged deep 48/4 route witness passes normally. The original nested-24 Cell
+witness completed at Source 13,215,994 and Core 33,035,808 over S = 1,791 after
+removing unused backward-prefix reconstruction from escape checks (37.49%
+Source saving, all 78 focused capture tests passing). Source `10000*S` and Core
+`25000*S` apply the existing 25% fitting rule; other owners/defaults are
+unchanged. Normal policy passes all 114 focused driver, policy, capture,
+reporting and observer checks. The fresh full-library inventory is 1,489 pass /
+106 fail across the same 1,595 names: 18 restored since the prior draft and no
+new failures. All 8,565 inputs matched before/after; only task/plan inventory
+prose changed afterward. Full workspace/all-target/all-feature Clippy passes.
+An unfinished draft checkpoint and independent review precede further shared
+fixture repairs and the still-required complete normal workspace gate. Whole
+criteria stay open.
 
 ## Approved directions and remaining contract
 
