@@ -7,13 +7,15 @@ use std::{
 
 use ash::{
     core::{
-        PureComputation, PureExprKind, PureValue, ValidatedProgram,
-        transform::{fold_literal_primitives, identity_traversal},
-        validate_modules,
+        EffectExprKind, EffectOperation, EffectOperationFamily, PureComputation, PureExprKind,
+        PureValue, ValidatedEffectProgram,
+        dialect::CoreOperationFamily,
+        transform::{fold_effect_literal_primitives, identity_effect_traversal},
+        validate_effect_modules,
     },
     driver::{RunConfiguration, run_path},
-    elaborate::{Elaborator, TypeError, check_module, link_modules},
-    eval::{TraceEvent, evaluate},
+    elaborate::{EffectElaborator, TypeError, check_module, link_modules},
+    eval::{TraceEvent, evaluate_effect},
     evidence_validation::validate_interface_evidence,
     interface::{EvidenceNode, EvidenceSlot, InterfaceId, MethodId, RequirementOwner},
     module::{ModuleGraph, ModuleRoots, load_module_graph},
@@ -175,7 +177,7 @@ fn observe_source(text: &str, expected_value: &str, expected_type: Type) {
     assert_eq!(observation.ty(), &expected_type);
 }
 
-fn validated_interface_core(text: &str) -> ValidatedProgram {
+fn validated_interface_core(text: &str) -> ValidatedEffectProgram {
     let fixture = InterfaceFixture::create(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the interface Core fixture should load");
@@ -183,10 +185,10 @@ fn validated_interface_core(text: &str) -> ValidatedProgram {
     let linked = link_modules(checked, graph.entry()).expect("the interface Core should link");
     let linked = validate_interface_evidence(linked)
         .expect("the interface Core evidence should authenticate");
-    let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the interface Core namespace should fit");
+    let mut elaborator = EffectElaborator::for_module_program(&linked)
+        .expect("the interface Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("the interface Core should elaborate");
     let unchecked = elaborator
         .finish(typed.node)
@@ -201,13 +203,16 @@ fn validated_interface_core(text: &str) -> ValidatedProgram {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    validate_modules(unchecked, &sources, &module_sources)
+    validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("the interface Core should independently validate")
 }
 
-fn reachable_core_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
+fn reachable_core_nodes(
+    program: &ValidatedEffectProgram,
+    root: ash::core::NodeId,
+) -> Vec<ash::core::NodeId> {
     let mut visited = HashSet::new();
-    let mut pending = vec![program.root()];
+    let mut pending = vec![root];
     let mut nodes = Vec::new();
     while let Some(id) = pending.pop() {
         if !visited.insert(id) {
@@ -765,10 +770,10 @@ fn linked_polymorphic_method_evidence_evaluates() {
     let linked = link_modules(checked, graph.entry()).expect("the product should link");
     let linked = validate_interface_evidence(linked)
         .expect("the product's polymorphic method evidence should authenticate");
-    let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the product Core namespace should fit");
+    let mut elaborator = EffectElaborator::for_module_program(&linked)
+        .expect("the product Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("the authenticated polymorphic evidence should lower");
     let unchecked = elaborator
         .finish(typed.node)
@@ -783,15 +788,17 @@ fn linked_polymorphic_method_evidence_evaluates() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let original = validate_modules(unchecked, &sources, &module_sources)
+    let original = validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("the linked product Core should independently validate");
 
-    let reachable = reachable_core_nodes(&original);
+    let reachable = reachable_core_nodes(&original, original.root());
     let recursive_initializers = reachable
         .iter()
         .filter_map(|id| {
             let node = original.node(*id)?;
-            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &node.kind
             else {
                 return None;
             };
@@ -805,27 +812,52 @@ fn linked_polymorphic_method_evidence_evaluates() {
         })
         .flatten()
         .collect::<HashSet<_>>();
+    let concrete_method_applications = reachable
+        .iter()
+        .copied()
+        .filter(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                application,
+            ))) = &original
+                .node(*id)
+                .expect("reachable application exists")
+                .kind
+            else {
+                return false;
+            };
+            matches!(
+                original.node(application.function()).map(|node| &node.kind),
+                Some(EffectExprKind::Pure(PureExprKind::Variable(variable)))
+                    if variable.binder() == implementation_method_binder
+            )
+        })
+        .collect::<Vec<_>>();
+    let [adapter_type_application] = concrete_method_applications.as_slice() else {
+        panic!("one selection should instantiate the concrete implementation method once");
+    };
     let adapters = reachable
         .iter()
         .copied()
         .filter(|id| {
             !recursive_initializers.contains(id)
+                && reachable_core_nodes(&original, *id).contains(adapter_type_application)
                 && matches!(
                     original.node(*id).map(|node| &node.kind),
-                    Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                    Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
                         abstraction
-                    ))) if abstraction.parameters().len() == 2
+                    )))) if abstraction.parameters().len() == 2
                 )
         })
         .collect::<Vec<_>>();
     let [adapter] = adapters.as_slice() else {
         panic!("one concrete selection should lower through one generated map adapter");
     };
-    let PureExprKind::Computation(PureComputation::TypeAbstraction(adapter_abstraction)) =
-        &original
-            .node(*adapter)
-            .expect("the generated adapter should exist")
-            .kind
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+        adapter_abstraction,
+    ))) = &original
+        .node(*adapter)
+        .expect("the generated adapter should exist")
+        .kind
     else {
         unreachable!("the selected adapter is a type abstraction");
     };
@@ -833,12 +865,13 @@ fn linked_polymorphic_method_evidence_evaluates() {
     else {
         panic!("the generated adapter should preserve both map parameter kinds and order");
     };
-    let adapter_type_application = adapter_abstraction.body();
-    let PureExprKind::Computation(PureComputation::TypeApplication(adapter_application)) =
-        &original
-            .node(adapter_type_application)
-            .expect("the adapter implementation application should exist")
-            .kind
+    let adapter_type_application = *adapter_type_application;
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+        adapter_application,
+    ))) = &original
+        .node(adapter_type_application)
+        .expect("the adapter implementation application should exist")
+        .kind
     else {
         panic!("the generated adapter should type-apply the concrete implementation method");
     };
@@ -847,7 +880,7 @@ fn linked_polymorphic_method_evidence_evaluates() {
         &[Type::Variable(*adapter_a), Type::Variable(*adapter_b),],
     );
     let implementation_variable = adapter_application.function();
-    let PureExprKind::Variable(variable) = &original
+    let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &original
         .node(implementation_variable)
         .expect("the adapter implementation variable should exist")
         .kind
@@ -856,17 +889,20 @@ fn linked_polymorphic_method_evidence_evaluates() {
     };
     assert_eq!(variable.binder(), implementation_method_binder);
 
-    let evidence_binders = reachable
-        .iter()
-        .filter_map(|id| {
-            let node = original.node(*id)?;
-            let PureExprKind::Value(PureValue::Function(function)) = &node.kind else {
-                return None;
-            };
-            matches!(function.parameter().ty(), Type::Forall(parameters, _) if parameters.len() == 2)
-                .then_some(function.parameter().id())
-        })
-        .collect::<Vec<_>>();
+    let mut evidence_binders = Vec::new();
+    for id in &reachable {
+        let kind = &original.node(*id).expect("reachable node exists").kind;
+        if matches!(
+            kind,
+            EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+        ) {
+            EffectOperationFamily::visit_operation_binders(kind, &mut |parameter| {
+                if matches!(parameter.ty(), Type::Forall(parameters, _) if parameters.len() == 2) {
+                    evidence_binders.push(parameter.id());
+                }
+            });
+        }
+    }
     let [evidence_binder] = evidence_binders.as_slice() else {
         panic!("map_pair should expose one polymorphic evidence domain");
     };
@@ -876,14 +912,16 @@ fn linked_polymorphic_method_evidence_evaluates() {
         let Some(node) = original.node(type_application) else {
             continue;
         };
-        let PureExprKind::Computation(PureComputation::TypeApplication(application)) = &node.kind
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+            application,
+        ))) = &node.kind
         else {
             continue;
         };
         let Some(function) = original.node(application.function()) else {
             continue;
         };
-        let PureExprKind::Variable(variable) = &function.kind else {
+        let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &function.kind else {
             continue;
         };
         if variable.binder() != *evidence_binder {
@@ -895,7 +933,7 @@ fn linked_polymorphic_method_evidence_evaluates() {
             .find(|candidate| {
                 matches!(
                     original.node(*candidate).map(|node| &node.kind),
-                    Some(PureExprKind::Computation(PureComputation::Apply(application)))
+                    Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))))
                         if application.function() == type_application
                 )
             })
@@ -910,7 +948,8 @@ fn linked_polymorphic_method_evidence_evaluates() {
     let int_to_bool = int_to_bool.expect("map_pair should instantiate map at Int and Bool");
     let bool_to_int = bool_to_int.expect("map_pair should instantiate map at Bool and Int");
 
-    let evaluation = evaluate(&original).expect("the linked product should erase and evaluate");
+    let evaluation =
+        evaluate_effect(&original).expect("the linked product should erase and evaluate");
     assert_eq!(evaluation.value.to_string(), "(Box(true), Box(42))");
     let entered = evaluation
         .trace
@@ -934,20 +973,36 @@ fn linked_polymorphic_method_evidence_evaluates() {
         .into_iter()
         .filter(|node| evidence_nodes.contains(node))
         .collect::<Vec<_>>();
+    // Main captures the implementation during group initialization. Adapter forwarding
+    // looks it up again and applies type metadata without entering the TypeApplication.
+    // The inner source function then captures its evidence before the strict calls.
     assert_eq!(
-        erased_evidence_trace, evidence_nodes,
-        "polymorphic evidence should enter only adapter erasure, implementation lookup, and each strict abstract application in source order",
+        erased_evidence_trace,
+        [
+            implementation_variable,
+            *adapter,
+            implementation_variable,
+            int_to_bool.2,
+            int_to_bool.0,
+            int_to_bool.1,
+            int_to_bool.2,
+            bool_to_int.0,
+            bool_to_int.1,
+            bool_to_int.2,
+        ],
+        "polymorphic evidence should preserve exact capture, forwarding, and strict application order",
     );
 
     for transformed in [
-        identity_traversal(&original).expect("identity traversal should preserve method evidence"),
-        fold_literal_primitives(&original)
+        identity_effect_traversal(&original)
+            .expect("identity traversal should preserve method evidence"),
+        fold_effect_literal_primitives(&original)
             .expect("literal folding should preserve method evidence"),
     ] {
-        let transformed = validate_modules(transformed, &sources, &module_sources)
+        let transformed = validate_effect_modules(transformed, &sources, &module_sources)
             .expect("each transformed product should pass fresh independent validation");
         let transformed_evaluation =
-            evaluate(&transformed).expect("each freshly validated product should evaluate");
+            evaluate_effect(&transformed).expect("each freshly validated product should evaluate");
         assert_eq!(
             transformed_evaluation.value.to_string(),
             evaluation.value.to_string()
@@ -1208,9 +1263,9 @@ fn cross_module_constraint_lowers_to_method_evidence() {
     let linked =
         validate_interface_evidence(linked).expect("the linked evidence should authenticate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
+        EffectElaborator::for_module_program(&linked).expect("the graph namespace should reserve");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("validated interface evidence should lower through ordinary Core");
     assert_eq!(typed.ty, Type::Bool);
     let unchecked = elaborator
@@ -1226,13 +1281,37 @@ fn cross_module_constraint_lowers_to_method_evidence() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let core = validate_modules(unchecked, &sources, &module_sources)
+    let core = validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("ordinary Core emitted from evidence lowering should validate");
 
-    let PureExprKind::Computation(PureComputation::RecursiveBind(library_group)) =
-        &core.node(core.root()).expect("Core root should exist").kind
-    else {
-        panic!("the dependency should lower to its ordinary recursive group");
+    let reachable = reachable_core_nodes(&core, core.root());
+    let groups = reachable
+        .iter()
+        .filter_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &core.node(*id)?.kind
+            else {
+                return None;
+            };
+            Some((*id, group))
+        })
+        .collect::<Vec<_>>();
+    let library_groups = groups
+        .iter()
+        .filter(|(_, group)| {
+            group
+                .members()
+                .iter()
+                .any(|member| member.binder().id() == same)
+                && group
+                    .members()
+                    .iter()
+                    .any(|member| member.binder().id() == implementation_method)
+        })
+        .collect::<Vec<_>>();
+    let [(_, library_group)] = library_groups.as_slice() else {
+        panic!("same and the original implementation method must own one defining group");
     };
     let same_initializer = library_group
         .members()
@@ -1240,26 +1319,71 @@ fn cross_module_constraint_lowers_to_method_evidence() {
         .find(|member| member.binder().id() == same)
         .expect("the constrained global should remain a dependency group member")
         .initializer();
-    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &core
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+        abstraction,
+    ))) = &core
         .node(same_initializer)
         .expect("same initializer should exist")
         .kind
     else {
         panic!("a constrained global must type-abstract before evidence binders");
     };
-    let PureExprKind::Value(PureValue::Function(evidence_binder)) = &core
+    let evidence_type = &core
         .node(abstraction.body())
-        .expect("type abstraction body should exist")
-        .kind
-    else {
-        panic!("a constrained global must bind its flattened evidence after type abstraction");
+        .expect("the quantified callable remains typed")
+        .ty;
+    let evidence_function = evidence_type
+        .function_view()
+        .expect("the first callable binds flattened evidence");
+    let source_type = evidence_function.value();
+    let source_function = source_type
+        .function_view()
+        .expect("the second callable binds the source parameter");
+    let evidence_closures = reachable_core_nodes(&core, abstraction.body())
+        .into_iter()
+        .filter(|id| {
+            let node = core.node(*id).expect("owned child remains present");
+            matches!(
+                node.kind,
+                EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+            ) && &node.ty == evidence_type
+        })
+        .collect::<Vec<_>>();
+    let [evidence_closure] = evidence_closures.as_slice() else {
+        panic!("the quantified initializer must contain one exact evidence callable");
     };
-    assert!(matches!(
-        core.node(evidence_binder.body())
-            .expect("evidence binder body should exist")
-            .kind,
-        PureExprKind::Value(PureValue::Function(_))
-    ));
+    let mut evidence_parameters = Vec::new();
+    EffectOperationFamily::visit_operation_binders(
+        &core.node(*evidence_closure).unwrap().kind,
+        &mut |parameter| evidence_parameters.push((parameter.id(), parameter.ty().clone())),
+    );
+    let [(evidence_parameter, evidence_parameter_type)] = evidence_parameters.as_slice() else {
+        panic!("the evidence callable must bind exactly one flattened parameter");
+    };
+    assert_eq!(evidence_parameter_type, evidence_function.domain());
+    let source_closures = reachable_core_nodes(&core, *evidence_closure)
+        .into_iter()
+        .filter(|id| {
+            let node = core.node(*id).expect("owned child remains present");
+            matches!(
+                node.kind,
+                EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+            ) && &node.ty == source_type
+        })
+        .collect::<Vec<_>>();
+    let [source_closure] = source_closures.as_slice() else {
+        panic!("the evidence callable must own one exact source callable");
+    };
+    let mut source_parameters = Vec::new();
+    EffectOperationFamily::visit_operation_binders(
+        &core.node(*source_closure).unwrap().kind,
+        &mut |parameter| source_parameters.push((parameter.id(), parameter.ty().clone())),
+    );
+    let [(source_parameter, source_parameter_type)] = source_parameters.as_slice() else {
+        panic!("the source callable must bind exactly one source parameter");
+    };
+    assert_ne!(evidence_parameter, source_parameter);
+    assert_eq!(source_parameter_type, source_function.domain());
     assert!(
         library_group
             .members()
@@ -1267,46 +1391,66 @@ fn cross_module_constraint_lowers_to_method_evidence() {
             .any(|member| member.binder().id() == implementation_method)
     );
 
-    let PureExprKind::Computation(PureComputation::RecursiveBind(entry_group)) = &core
-        .node(library_group.body())
-        .expect("the entry group should follow its dependency group")
-        .kind
-    else {
-        panic!("the entry should lower to its ordinary recursive group");
+    let entry_groups = groups
+        .iter()
+        .filter(|(_, group)| {
+            group
+                .members()
+                .iter()
+                .any(|member| member.binder().id() == main)
+        })
+        .collect::<Vec<_>>();
+    let [(entry_group_id, entry_group)] = entry_groups.as_slice() else {
+        panic!("main must own exactly one entry group");
     };
+    assert_eq!(
+        library_group.body(),
+        *entry_group_id,
+        "the entry group should directly follow its defining library"
+    );
     let main_initializer = entry_group
         .members()
         .iter()
         .find(|member| member.binder().id() == main)
-        .expect("main should remain an entry group member")
+        .expect("main remains an entry member")
         .initializer();
-    let PureExprKind::Value(PureValue::Function(main_function)) = &core
-        .node(main_initializer)
-        .expect("main initializer should exist")
-        .kind
-    else {
-        panic!("main should lower to a source function");
+    let entry_source = graph
+        .module(graph.entry())
+        .expect("entry remains loaded")
+        .source();
+    let expression = "Library.same((1, 1))";
+    let start = entry_source
+        .text()
+        .find(expression)
+        .expect("entry expression remains present");
+    let expected_span = (
+        entry_source.id(),
+        u32::try_from(start).unwrap(),
+        u32::try_from(start + expression.len()).unwrap(),
+    );
+    let source_applications = reachable_core_nodes(&core, main_initializer)
+        .into_iter()
+        .filter_map(|id| {
+            let node = core.node(id)?;
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                application,
+            ))) = &node.kind
+            else {
+                return None;
+            };
+            let span = node.origin.primary_span();
+            ((span.source(), span.range().start(), span.range().end()) == expected_span)
+                .then_some(application)
+        })
+        .collect::<Vec<_>>();
+    let [source_application] = source_applications.as_slice() else {
+        panic!(
+            "the exact main initializer must contain one source application at its original span"
+        );
     };
-    let main_body = match &core
-        .node(main_function.body())
-        .expect("main body should exist")
-        .kind
-    {
-        PureExprKind::Computation(PureComputation::Match(group)) => group
-            .arms()
-            .first()
-            .expect("the checked Unit equation should retain its one arm")
-            .body(),
-        _ => main_function.body(),
-    };
-    let PureExprKind::Computation(PureComputation::Apply(source_application)) = &core
-        .node(main_body)
-        .expect("main equation body should exist")
-        .kind
-    else {
-        panic!("the source argument should be applied after evidence");
-    };
-    let PureExprKind::Computation(PureComputation::Apply(evidence_application)) = &core
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+        evidence_application,
+    ))) = &core
         .node(source_application.function())
         .expect("source application function should exist")
         .kind
@@ -1317,9 +1461,11 @@ fn cross_module_constraint_lowers_to_method_evidence() {
         core.node(evidence_application.function())
             .expect("evidence application function should exist")
             .kind,
-        PureExprKind::Computation(PureComputation::TypeApplication(_))
+        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+            _
+        )))
     ));
-    let PureExprKind::Variable(evidence_method) = core
+    let EffectExprKind::Pure(PureExprKind::Variable(evidence_method)) = core
         .node(evidence_application.argument())
         .expect("evidence argument should exist")
         .kind
@@ -1327,6 +1473,15 @@ fn cross_module_constraint_lowers_to_method_evidence() {
         panic!("concrete evidence should lower through its hidden implementation-method binder");
     };
     assert_eq!(evidence_method.binder(), implementation_method);
+    let evaluation = evaluate_effect(&core).expect("cross-module evidence should evaluate");
+    assert_eq!(evaluation.value.to_string(), "true");
+    let observation = run_path(RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the cross-module program should complete the public pipeline");
+    assert_eq!(observation.value_display(), "true");
+    assert_eq!(observation.ty(), &Type::Bool);
 }
 
 #[test]
@@ -1368,9 +1523,15 @@ fn facade_selection_lowers_through_the_original_core_binder() {
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the facade interface graph should load");
     let checked = checked_graph(&graph);
+    let library_id = graph
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("library.ash"))
+        .expect("the defining library source remains loaded")
+        .id();
     let library = checked
         .iter()
-        .find(|module| !module.implementation_facts().is_empty())
+        .find(|module| module.module() == library_id)
         .expect("the defining module should retain the implementation");
     let implementation_method = library.implementation_facts()[0].methods[0].binder;
     let main = checked
@@ -1389,9 +1550,9 @@ fn facade_selection_lowers_through_the_original_core_binder() {
     let linked = validate_interface_evidence(linked)
         .expect("the complete facade authorization should authenticate before Core");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
+        EffectElaborator::for_module_program(&linked).expect("the graph namespace should reserve");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("facade evidence should lower through ordinary Core");
     let unchecked = elaborator
         .finish(typed.node)
@@ -1406,63 +1567,95 @@ fn facade_selection_lowers_through_the_original_core_binder() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let core = validate_modules(unchecked, &sources, &module_sources)
+    let core = validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("facade lowering should pass the independent Core validator");
 
-    let PureExprKind::Computation(PureComputation::RecursiveBind(library_group)) = &core
-        .node(core.root())
-        .expect("the defining Core group should exist")
-        .kind
-    else {
-        panic!("the defining module should lower to an ordinary recursive group");
+    let reachable = reachable_core_nodes(&core, core.root());
+    let groups = reachable
+        .iter()
+        .filter_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &core.node(*id)?.kind
+            else {
+                return None;
+            };
+            Some((*id, group))
+        })
+        .collect::<Vec<_>>();
+    let library_groups = groups
+        .iter()
+        .filter(|(_, group)| {
+            group
+                .members()
+                .iter()
+                .any(|member| member.binder().id() == implementation_method)
+        })
+        .collect::<Vec<_>>();
+    let [(library_group_id, library_group)] = library_groups.as_slice() else {
+        panic!("the original implementation method must own exactly one defining group");
     };
-    assert!(
-        library_group
-            .members()
-            .iter()
-            .any(|member| member.binder().id() == implementation_method),
-        "the original implementation-method binder should remain the sole evidence body",
+    let entry_groups = groups
+        .iter()
+        .filter(|(_, group)| {
+            group
+                .members()
+                .iter()
+                .any(|member| member.binder().id() == main)
+        })
+        .collect::<Vec<_>>();
+    let [(entry_group_id, entry_group)] = entry_groups.as_slice() else {
+        panic!("main must own exactly one entry group");
+    };
+    assert_ne!(library_group_id, entry_group_id);
+    assert_eq!(
+        library_group.body(),
+        *entry_group_id,
+        "the body-free facade should add no runtime or Core group"
     );
-    let PureExprKind::Computation(PureComputation::RecursiveBind(entry_group)) = &core
-        .node(library_group.body())
-        .expect("the entry Core group should follow the defining group")
-        .kind
-    else {
-        panic!("the body-free facade should add no runtime or Core group");
-    };
     let main_initializer = entry_group
         .members()
         .iter()
         .find(|member| member.binder().id() == main)
-        .expect("main should remain an entry group member")
+        .expect("main remains an entry member")
         .initializer();
-    let PureExprKind::Value(PureValue::Function(main_function)) = &core
-        .node(main_initializer)
-        .expect("main initializer should exist")
-        .kind
-    else {
-        panic!("main should lower to a source function");
+    let entry_source = graph
+        .module(graph.entry())
+        .expect("entry remains loaded")
+        .source();
+    let expression = "same((1, 1))";
+    let start = entry_source
+        .text()
+        .find(expression)
+        .expect("entry expression remains present");
+    let expected_span = (
+        entry_source.id(),
+        u32::try_from(start).unwrap(),
+        u32::try_from(start + expression.len()).unwrap(),
+    );
+    let source_applications = reachable_core_nodes(&core, main_initializer)
+        .into_iter()
+        .filter_map(|id| {
+            let node = core.node(id)?;
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                application,
+            ))) = &node.kind
+            else {
+                return None;
+            };
+            let span = node.origin.primary_span();
+            ((span.source(), span.range().start(), span.range().end()) == expected_span)
+                .then_some(application)
+        })
+        .collect::<Vec<_>>();
+    let [source_application] = source_applications.as_slice() else {
+        panic!(
+            "the exact main initializer must contain one source application at its original span"
+        );
     };
-    let main_body = match &core
-        .node(main_function.body())
-        .expect("main body should exist")
-        .kind
-    {
-        PureExprKind::Computation(PureComputation::Match(group)) => group
-            .arms()
-            .first()
-            .expect("the checked Unit equation should retain one arm")
-            .body(),
-        _ => main_function.body(),
-    };
-    let PureExprKind::Computation(PureComputation::Apply(source_application)) = &core
-        .node(main_body)
-        .expect("main equation body should exist")
-        .kind
-    else {
-        panic!("the source argument should remain an ordinary term application");
-    };
-    let PureExprKind::Computation(PureComputation::Apply(evidence_application)) = &core
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+        evidence_application,
+    ))) = &core
         .node(source_application.function())
         .expect("the source application function should exist")
         .kind
@@ -1473,9 +1666,11 @@ fn facade_selection_lowers_through_the_original_core_binder() {
         core.node(evidence_application.function())
             .expect("the constrained global function should exist")
             .kind,
-        PureExprKind::Computation(PureComputation::TypeApplication(_))
+        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+            _
+        )))
     ));
-    let PureExprKind::Variable(evidence_method) = core
+    let EffectExprKind::Pure(PureExprKind::Variable(evidence_method)) = core
         .node(evidence_application.argument())
         .expect("the evidence argument should exist")
         .kind
@@ -1588,10 +1783,10 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
     let linked = link_modules(checked, graph.entry()).expect("the fixture should link");
     let linked =
         validate_interface_evidence(linked).expect("the generic evidence should authenticate");
-    let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the fixture namespace should reserve");
+    let mut elaborator = EffectElaborator::for_module_program(&linked)
+        .expect("the fixture namespace should reserve");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("the generic evidence should lower");
     let unchecked = elaborator
         .finish(typed.node)
@@ -1606,46 +1801,82 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let core = validate_modules(unchecked, &sources, &module_sources)
+    let core = validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("the unspecialized generic evidence Core should validate");
 
-    let PureExprKind::Computation(PureComputation::RecursiveBind(group)) =
-        &core.node(core.root()).expect("Core root should exist").kind
-    else {
-        panic!("the module should lower to one recursive group");
+    let groups = reachable_core_nodes(&core, core.root())
+        .into_iter()
+        .filter_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &core.node(id)?.kind
+            else {
+                return None;
+            };
+            group
+                .members()
+                .iter()
+                .any(|member| member.binder().id() == main)
+                .then_some(group)
+        })
+        .collect::<Vec<_>>();
+    let [group] = groups.as_slice() else {
+        panic!("the actual main binder must own exactly one module group");
     };
+    assert!(
+        group
+            .members()
+            .iter()
+            .any(|member| member.binder().id() == generic_method)
+    );
+    assert!(
+        group
+            .members()
+            .iter()
+            .any(|member| member.binder().id() == ground_method)
+    );
     let main_initializer = group
         .members()
         .iter()
         .find(|member| member.binder().id() == main)
-        .expect("main should remain a group member")
+        .unwrap()
         .initializer();
-    let PureExprKind::Value(PureValue::Function(main_function)) = &core
-        .node(main_initializer)
-        .expect("main initializer should exist")
-        .kind
-    else {
-        panic!("main should lower to a function");
+    let entry_source = graph.module(graph.entry()).unwrap().source();
+    let expression = "read(Wrap(42))";
+    let start = entry_source
+        .text()
+        .find(expression)
+        .expect("the entry expression remains present");
+    let expected_span = (
+        entry_source.id(),
+        u32::try_from(start).unwrap(),
+        u32::try_from(start + expression.len()).unwrap(),
+    );
+    let applications = reachable_core_nodes(&core, main_initializer)
+        .into_iter()
+        .filter_map(|id| {
+            let node = core.node(id)?;
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+                application,
+            ))) = &node.kind
+            else {
+                return None;
+            };
+            let span = node.origin.primary_span();
+            ((span.source(), span.range().start(), span.range().end()) == expected_span)
+                .then_some((id, application))
+        })
+        .collect::<Vec<_>>();
+    let [(source_application_node, source_application)] = applications.as_slice() else {
+        panic!(
+            "the exact main initializer must contain one source application at its original span"
+        );
     };
-    let source_application_node = match &core
-        .node(main_function.body())
-        .expect("main body should exist")
-        .kind
-    {
-        PureExprKind::Computation(PureComputation::Match(match_node)) => {
-            match_node.arms()[0].body()
-        }
-        _ => main_function.body(),
-    };
-    let PureExprKind::Computation(PureComputation::Apply(source_application)) = &core
-        .node(source_application_node)
-        .expect("the source application should exist")
-        .kind
-    else {
-        panic!("the selected method should receive its source value last");
-    };
+    let source_application_node = *source_application_node;
     let evidence_application_node = source_application.function();
-    let PureExprKind::Computation(PureComputation::Apply(evidence_application)) = &core
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+        evidence_application,
+    ))) = &core
         .node(evidence_application_node)
         .expect("the evidence application should exist")
         .kind
@@ -1653,7 +1884,9 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
         panic!("the generic method should receive prerequisite evidence");
     };
     let type_application_node = evidence_application.function();
-    let PureExprKind::Computation(PureComputation::TypeApplication(type_application)) = &core
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+        type_application,
+    ))) = &core
         .node(type_application_node)
         .expect("the generic method type application should exist")
         .kind
@@ -1661,7 +1894,7 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
         panic!("the generic method should be type-applied before evidence");
     };
     let generic_method_node = type_application.function();
-    let PureExprKind::Variable(generic_method_variable) = core
+    let EffectExprKind::Pure(PureExprKind::Variable(generic_method_variable)) = core
         .node(generic_method_node)
         .expect("the generic method variable should exist")
         .kind
@@ -1670,7 +1903,7 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
     };
     assert_eq!(generic_method_variable.binder(), generic_method);
     let prerequisite_node = evidence_application.argument();
-    let PureExprKind::Variable(prerequisite_variable) = core
+    let EffectExprKind::Pure(PureExprKind::Variable(prerequisite_variable)) = core
         .node(prerequisite_node)
         .expect("the prerequisite method variable should exist")
         .kind
@@ -1679,7 +1912,8 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
     };
     assert_eq!(prerequisite_variable.binder(), ground_method);
 
-    let evaluation = evaluate(&core).expect("the unspecialized generic evidence should evaluate");
+    let evaluation =
+        evaluate_effect(&core).expect("the unspecialized generic evidence should evaluate");
     assert_eq!(evaluation.value.to_string(), "42");
     let entered = evaluation
         .trace
@@ -1704,6 +1938,9 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
             ]
             .as_slice(),
         ),
+        "actual trace length {}, max frame depth {}",
+        evaluation.trace.len(),
+        evaluation.max_frame_depth,
     );
     let prerequisite_index = entered
         .iter()
@@ -1714,8 +1951,20 @@ fn generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace() 
         .position(|node| *node == source_application.argument())
         .expect("evaluation should enter the source value argument");
     assert!(prerequisite_index < source_argument_index);
-    assert!(evaluation.trace.len() <= 32);
-    assert!(evaluation.max_frame_depth <= 6);
+    // Accepted region startup and once-created stored captures add construction work
+    // to the historical Pure profile; these remain whole Source execution bounds.
+    assert!(
+        evaluation.trace.len() <= 120,
+        "actual trace length {}, max frame depth {}",
+        evaluation.trace.len(),
+        evaluation.max_frame_depth
+    );
+    assert!(
+        evaluation.max_frame_depth <= 16,
+        "actual trace length {}, max frame depth {}",
+        evaluation.trace.len(),
+        evaluation.max_frame_depth
+    );
 }
 
 #[test]
@@ -1805,7 +2054,10 @@ fn higher_kinded_interface_evidence_evaluates() {
 
 #[test]
 fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
-    fn runtime_classes(program: &ValidatedProgram, trace: &[TraceEvent]) -> Vec<&'static str> {
+    fn runtime_classes(
+        program: &ValidatedEffectProgram,
+        trace: &[TraceEvent],
+    ) -> Vec<&'static str> {
         trace
             .iter()
             .map(|event| {
@@ -1815,40 +2067,64 @@ fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
                     .expect("an entered interface Core node should exist")
                     .kind
                 {
-                    PureExprKind::Value(PureValue::String(_)) => "string",
-                    PureExprKind::Value(PureValue::Intrinsic(_)) => "intrinsic",
-                    PureExprKind::Value(PureValue::Integer(_)) => "integer",
-                    PureExprKind::Value(PureValue::Boolean(_)) => "boolean",
-                    PureExprKind::Value(PureValue::Unit(_)) => "unit",
-                    PureExprKind::Value(PureValue::Function(_)) => "function",
-                    PureExprKind::Value(PureValue::Constructor(_)) => "constructor",
-                    PureExprKind::Variable(_) => "variable-lookup",
-                    PureExprKind::Computation(PureComputation::Bind(_)) => "bind",
-                    PureExprKind::Computation(PureComputation::RecursiveBind(_)) => {
-                        "recursive-bind"
+                    EffectExprKind::Pure(kind) => match kind {
+                        PureExprKind::Value(PureValue::String(_)) => "string",
+                        PureExprKind::Value(PureValue::Intrinsic(_)) => "intrinsic",
+                        PureExprKind::Value(PureValue::Integer(_)) => "integer",
+                        PureExprKind::Value(PureValue::Boolean(_)) => "boolean",
+                        PureExprKind::Value(PureValue::Unit(_)) => "unit",
+                        PureExprKind::Value(PureValue::Function(_)) => "function",
+                        PureExprKind::Value(PureValue::Constructor(_)) => "constructor",
+                        PureExprKind::Variable(_) => "variable-lookup",
+                        PureExprKind::Computation(PureComputation::Bind(_)) => "bind",
+                        PureExprKind::Computation(PureComputation::RecursiveBind(_)) => {
+                            "recursive-bind"
+                        }
+                        PureExprKind::Computation(PureComputation::Apply(_)) => "apply",
+                        PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
+                        PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
+                        PureExprKind::Computation(PureComputation::Match(_)) => "match",
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
+                            "newtype-conversion-erasure"
+                        }
+                        PureExprKind::Computation(PureComputation::LocalNominalScope(_)) => {
+                            "local-nominal-scope-erasure"
+                        }
+                        PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
+                            "type-abstraction-erasure"
+                        }
+                        PureExprKind::Computation(PureComputation::TypeApplication(_)) => {
+                            "type-application-erasure"
+                        }
+                    },
+                    EffectExprKind::Operation(EffectOperation::NativeInterpret(_)) => {
+                        "native-interpret"
                     }
-                    PureExprKind::Computation(PureComputation::Apply(_)) => "apply",
-                    PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
-                    PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
-                    PureExprKind::Computation(PureComputation::Match(_)) => "match",
-                    PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
-                        "newtype-conversion-erasure"
+                    EffectExprKind::Operation(EffectOperation::Cleanup(_)) => "cleanup",
+                    EffectExprKind::Operation(EffectOperation::Registration(_)) => "registration",
+                    EffectExprKind::Operation(EffectOperation::Resource(_)) => "resource",
+                    EffectExprKind::Operation(EffectOperation::Region(_)) => "region",
+                    EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => {
+                        "region-allocate"
                     }
-                    PureExprKind::Computation(PureComputation::LocalNominalScope(_)) => {
-                        "local-nominal-scope-erasure"
+                    EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => {
+                        "region-value-request"
                     }
-                    PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
-                        "type-abstraction-erasure"
+                    EffectExprKind::Operation(EffectOperation::RegionBuffer(_)) => "region-buffer",
+                    EffectExprKind::Operation(EffectOperation::RegionTuple(_)) => "region-tuple",
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(_)) => {
+                        "region-closure"
                     }
-                    PureExprKind::Computation(PureComputation::TypeApplication(_)) => {
-                        "type-application-erasure"
-                    }
+                    EffectExprKind::Operation(EffectOperation::Request(_)) => "request",
+                    EffectExprKind::Operation(EffectOperation::Handler(_)) => "handler",
+                    EffectExprKind::Operation(EffectOperation::Resume(_)) => "resume",
+                    EffectExprKind::Operation(EffectOperation::Discard(_)) => "discard",
                 }
             })
             .collect()
     }
 
-    fn core_type_operation_shape(program: &ValidatedProgram) -> (usize, usize, usize, bool) {
+    fn core_type_operation_shape(program: &ValidatedEffectProgram) -> (usize, usize, usize, bool) {
         let mut visited = std::collections::HashSet::new();
         let mut work = vec![program.root()];
         let mut abstractions = 0;
@@ -1863,14 +2139,18 @@ fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
                 .node(id)
                 .expect("a reachable interface Core node should exist");
             match &node.kind {
-                PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeAbstraction(operation),
+                )) => {
                     abstractions += 1;
                     has_arrow_parameter |= operation
                         .parameters()
                         .iter()
                         .any(|(_, kind)| matches!(kind, Kind::Arrow(_, _)));
                 }
-                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeApplication(operation),
+                )) => {
                     applications += 1;
                     maximum_argument_count =
                         maximum_argument_count.max(operation.arguments().len());
@@ -1935,9 +2215,9 @@ fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
     );
 
     let first_order_evaluation =
-        evaluate(&first_order).expect("the first-order interface Core should evaluate");
+        evaluate_effect(&first_order).expect("the first-order interface Core should evaluate");
     let higher_kinded_evaluation =
-        evaluate(&higher_kinded).expect("the higher-kinded interface Core should evaluate");
+        evaluate_effect(&higher_kinded).expect("the higher-kinded interface Core should evaluate");
     assert_eq!(first_order_evaluation.value.to_string(), "42");
     assert_eq!(
         higher_kinded_evaluation.value.to_string(),

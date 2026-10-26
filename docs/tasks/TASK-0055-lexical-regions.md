@@ -528,3 +528,20 @@ or budget policy changed.
 None. No broader permission algebra, backend matrix, FFI type expansion or
 omitted-definition-row inference is added. Remove this task and its owned plan
 when the completed product checkpoint satisfies the artifact lifecycle.
+
+The Source interface Core controls are being migrated to the accepted region
+construction and capture timing. The fixed generic-prerequisite program completes
+with 93 Enter events and 12 frames; its whole-execution sanity ceilings are now
+120 and 16, retaining the exact original method identities, five-event application
+prefix, prerequisite ordering and result. These are test ceilings, not runtime
+budgets. The current dynamic specification explicitly records the historical
+32-event/6-frame profile; R5 must reconcile that fixed-program statement with
+CP-0025's accepted construction/timing transition before Main or whole acceptance.
+No normative specification update or full-gate acceptance is claimed here.
+The complete interfaces target now passes all 44 original tests. Its six
+Source Core restorations are disjoint from the prior 229 staged integration
+restorations, giving 235 staged restored names. This is a focused result; the
+latest full Library9 and Integration69 baselines and all remaining gates are
+unchanged. Full independent Effect validation, exact defining binders, owned
+application subtrees, original type/evidence order and source provenance remain
+checked; isolated Pure controls and production code are unchanged.
