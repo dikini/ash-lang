@@ -3783,12 +3783,10 @@ impl ResolvedModuleProgram {
     #[cfg(test)]
     pub(crate) fn replace_first_linked_nominal_parameter_kind_for_test(
         &mut self,
+        owner: NominalTypeId,
         replacement: Kind,
     ) -> bool {
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
-            return false;
-        };
-        let Some(owner) = registry.nominals.first().map(|nominal| nominal.id) else {
             return false;
         };
         let Some(parameter) = registry
@@ -3803,14 +3801,17 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
-    pub(crate) fn truncate_first_linked_constructor_family_for_test(&mut self) -> bool {
+    pub(crate) fn truncate_first_linked_constructor_family_for_test(
+        &mut self,
+        owner: NominalTypeId,
+    ) -> bool {
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
             return false;
         };
         let Some(nominal) = registry
             .nominals
             .iter_mut()
-            .find(|nominal| nominal.constructors.len() > 1)
+            .find(|nominal| nominal.id == owner && nominal.constructors.len() > 1)
         else {
             return false;
         };
@@ -3823,6 +3824,7 @@ impl ResolvedModuleProgram {
     #[cfg(test)]
     pub(crate) fn replace_first_linked_constructor_payload_for_test(
         &mut self,
+        owner: NominalTypeId,
         replacement: Type,
     ) -> bool {
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
@@ -3831,7 +3833,7 @@ impl ResolvedModuleProgram {
         let Some(constructor) = registry
             .constructors
             .iter_mut()
-            .find(|constructor| constructor.payload.is_some())
+            .find(|constructor| constructor.owner == owner && constructor.payload.is_some())
         else {
             return false;
         };
@@ -3842,11 +3844,18 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
-    pub(crate) fn detach_first_linked_constructor_from_owner_for_test(&mut self) -> bool {
+    pub(crate) fn detach_first_linked_constructor_from_owner_for_test(
+        &mut self,
+        owner: NominalTypeId,
+    ) -> bool {
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
             return false;
         };
-        let Some(constructor) = registry.constructors.first_mut() else {
+        let Some(constructor) = registry
+            .constructors
+            .iter_mut()
+            .find(|constructor| constructor.owner == owner)
+        else {
             return false;
         };
         constructor.owner = NominalTypeId::new(ModuleId::new(u32::MAX - 1), 0);
@@ -14659,14 +14668,16 @@ impl ExportSummary {
                 wrap_origin(&mut parameter.origin);
             }
             SummaryDuplicateFactForTest::ImplementationHeadArgument => {
-                let Some(implementation) = self.implementations.iter_mut().find(|implementation| {
-                    matches!(
-                        implementation.fact.arguments()[0],
-                        crate::types::KindedArgument::TypeArg(Type::Application(_, _))
-                    ) && implementation.fact.methods.first().is_some_and(|method| {
-                        matches!(method.scheme.value_type, Type::Function(_, _))
+                let Some(implementation) =
+                    self.implementations.iter_mut().find(|implementation| {
+                        matches!(
+                            implementation.fact.arguments()[0],
+                            crate::types::KindedArgument::TypeArg(Type::Application(_, _))
+                        ) && implementation.fact.methods.first().is_some_and(|method| {
+                            method.scheme.value_type.function_view().is_some()
+                        })
                     })
-                }) else {
+                else {
                     return false;
                 };
                 let application = &mut implementation.fact.application;
@@ -14692,8 +14703,9 @@ impl ExportSummary {
                 let Some(method) = implementation.fact.methods.first_mut() else {
                     return false;
                 };
-                let Type::Function(domain, _) = &mut method.scheme.value_type else {
-                    return false;
+                let domain = match &mut method.scheme.value_type {
+                    Type::Function(domain, _) | Type::EffectfulFunction(domain, _) => domain,
+                    _ => return false,
                 };
                 let Type::Application(_, argument) = domain.as_mut() else {
                     return false;
@@ -15166,7 +15178,8 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::HiddenNominalKind => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .and_then(|nominal| nominal.parameters.first_mut())
                 .is_some_and(|parameter| {
@@ -15175,7 +15188,8 @@ impl ExportSummary {
                 }),
             SummaryCarrierMutationForTest::HiddenNominalParameterIdentity => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .and_then(|nominal| nominal.parameters.last_mut())
                 .is_some_and(|parameter| {
@@ -15187,7 +15201,8 @@ impl ExportSummary {
                 }),
             SummaryCarrierMutationForTest::HiddenNominalParameterOwner => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .and_then(|nominal| nominal.parameters.first_mut())
                 .is_some_and(|parameter| {
@@ -15197,7 +15212,8 @@ impl ExportSummary {
                 }),
             SummaryCarrierMutationForTest::HiddenNominalParameterOrder => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .map(|nominal| &mut nominal.parameters)
                 .filter(|parameters| parameters.len() >= 2)
@@ -15207,7 +15223,8 @@ impl ExportSummary {
                 }),
             SummaryCarrierMutationForTest::HiddenNominalAccess => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .is_some_and(|nominal| {
                     nominal.access = ImportedTypeAccess::Opaque;
@@ -15251,7 +15268,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorPayload => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(payload) = self
@@ -15265,7 +15282,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorPayloadDomainKind => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(constructor) = self.hidden_constructors.get_mut(&identity) else {
@@ -15317,7 +15334,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorSchemeKind => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(parameter) = self
@@ -15331,7 +15348,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorSchemeParameterIdentity => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(parameter) = self
@@ -15346,7 +15363,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorResultOwner => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(constructor) = self.hidden_constructors.get_mut(&identity) else {
@@ -16441,6 +16458,7 @@ impl ExportSummary {
     #[cfg(test)]
     pub(crate) fn corrupt_hidden_diamond_fact_for_test(
         &mut self,
+        defining_module: ModuleId,
         mutation: SummaryHiddenDiamondMutationForTest,
     ) -> bool {
         let wrap_origin = |origin: &mut Origin| {
@@ -16453,7 +16471,8 @@ impl ExportSummary {
         let changed = match mutation {
             SummaryHiddenDiamondMutationForTest::NominalOrigin => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| identity.module() == defining_module)
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .is_some_and(|nominal| {
                     wrap_origin(&mut nominal.origin);
@@ -16461,7 +16480,8 @@ impl ExportSummary {
                 }),
             SummaryHiddenDiamondMutationForTest::NominalParameterOrigin => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| identity.module() == defining_module)
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .is_some_and(|nominal| {
                     let Some(parameter) = nominal.parameters.first_mut() else {
@@ -16472,12 +16492,13 @@ impl ExportSummary {
                     true
                 }),
             SummaryHiddenDiamondMutationForTest::ConstructorOrigin => {
-                let identity =
-                    self.hidden_constructor_order
-                        .iter()
-                        .copied()
-                        .find(|identity| {
-                            self.nominals.values().any(|nominal| {
+                let identity = self
+                    .hidden_constructor_order
+                    .iter()
+                    .copied()
+                    .find(|identity| {
+                        identity.owner().module() == defining_module
+                            && (self.nominals.values().any(|nominal| {
                                 nominal.access == ExportedTypeAccess::Transparent
                                     && nominal.constructors.contains(identity)
                             }) || self.hidden_nominals.get(&identity.owner()).is_some_and(
@@ -16485,8 +16506,8 @@ impl ExportSummary {
                                     nominal.access == ImportedTypeAccess::Transparent
                                         && nominal.constructors.contains(identity)
                                 },
-                            )
-                        });
+                            ))
+                    });
                 identity
                     .and_then(|identity| self.hidden_constructors.get_mut(&identity))
                     .is_some_and(|constructor| {
@@ -16495,28 +16516,37 @@ impl ExportSummary {
                         true
                     })
             }
-            SummaryHiddenDiamondMutationForTest::InterfaceOrigin => {
-                self.hidden_interfaces.first_mut().is_some_and(|interface| {
+            SummaryHiddenDiamondMutationForTest::InterfaceOrigin => self
+                .hidden_interfaces
+                .iter_mut()
+                .find(|interface| interface.id.module() == defining_module)
+                .is_some_and(|interface| {
                     wrap_origin(&mut interface.origin);
                     true
-                })
-            }
-            SummaryHiddenDiamondMutationForTest::InterfaceParameterOrigin => {
-                self.hidden_interfaces.first_mut().is_some_and(|interface| {
+                }),
+            SummaryHiddenDiamondMutationForTest::InterfaceParameterOrigin => self
+                .hidden_interfaces
+                .iter_mut()
+                .find(|interface| interface.id.module() == defining_module)
+                .is_some_and(|interface| {
                     wrap_origin(&mut interface.parameters.make_mut_for_test()[0].origin);
                     true
-                })
-            }
+                }),
             SummaryHiddenDiamondMutationForTest::InterfaceMethodOrigin => self
                 .hidden_interfaces
-                .first_mut()
+                .iter_mut()
+                .find(|interface| interface.id.module() == defining_module)
                 .and_then(|interface| interface.methods.first_mut())
                 .is_some_and(|method| {
                     wrap_origin(&mut method.origin);
                     true
                 }),
             SummaryHiddenDiamondMutationForTest::InterfaceMethodSpan => {
-                let Some(interface) = self.hidden_interfaces.first_mut() else {
+                let Some(interface) = self
+                    .hidden_interfaces
+                    .iter_mut()
+                    .find(|interface| interface.id.module() == defining_module)
+                else {
                     return false;
                 };
                 let replacement = interface.span;
@@ -16532,11 +16562,10 @@ impl ExportSummary {
                     .iter()
                     .map(|implementation| implementation.fact.interface())
                     .collect::<HashSet<_>>();
-                let Some(interface) = self
-                    .hidden_interfaces
-                    .iter_mut()
-                    .find(|interface| !implementation_interfaces.contains(&interface.id))
-                else {
+                let Some(interface) = self.hidden_interfaces.iter_mut().find(|interface| {
+                    interface.id.module() == defining_module
+                        && !implementation_interfaces.contains(&interface.id)
+                }) else {
                     return false;
                 };
                 let parameter = interface.parameters[0].id;

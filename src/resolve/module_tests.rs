@@ -252,6 +252,16 @@ fn resolve_with(
     module: &LoadedModule,
     summaries: &[&ExportSummary],
 ) -> Result<ResolvedModule, ResolveError> {
+    resolve_with_budgets(
+        graph,
+        module,
+        summaries,
+        &mut TypeWorkBudget::default(),
+        &mut crate::interface::InterfaceConstraintBudget::default(),
+    )
+}
+
+fn implicit_service_summaries(graph: &ModuleGraph) -> Vec<ExportSummary> {
     let mut implicit = Vec::<ExportSummary>::new();
     for loaded in graph
         .modules()
@@ -278,6 +288,17 @@ fn resolve_with(
             .into_exports(),
         );
     }
+    implicit
+}
+
+fn resolve_with_budgets(
+    graph: &ModuleGraph,
+    module: &LoadedModule,
+    summaries: &[&ExportSummary],
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<ResolvedModule, ResolveError> {
+    let implicit = implicit_service_summaries(graph);
     let mut supplied = summaries.iter();
     let dependencies = module
         .dependencies()
@@ -301,7 +322,7 @@ fn resolve_with(
         supplied.next().is_none(),
         "every supplied source summary is consumed"
     );
-    resolve_module(module, &dependencies).map_err(|error| match error {
+    resolve_module_with_budget(module, &dependencies, type_work, constraint_work).map_err(|error| match error {
         ResolveModuleError::Resolution(error) => error,
         ResolveModuleError::Kind(error) => {
             panic!("module resolution fixture unexpectedly reached kind failure: {error:?}")
@@ -350,11 +371,25 @@ fn globals_and_implementation_methods_share_capture_scans_per_import_edge() {
         let entry = module_named(&graph, "entry.ash");
         let resolved = resolve_with(&graph, entry, &[checked.exports()])
             .expect("global and method capture metadata should fit the default import budget");
-        assert_eq!(resolved.imported_facts().globals().count(), 96);
+        assert_eq!(
+            resolved
+                .imported_facts()
+                .globals()
+                .filter(|global| global.binder.module() == Some(defining.id()))
+                .count(),
+            96
+        );
         assert_eq!(resolved.imported_facts().implementations().count(), 1);
 
-        let imports =
-            [DependencyExports::new(&entry.dependencies()[0], checked.exports()).unwrap()];
+        let imports = [DependencyExports::new(
+            entry
+                .dependencies()
+                .iter()
+                .find(|edge| edge.target() == defining.id())
+                .expect("the selected user import edge remains present"),
+            checked.exports(),
+        )
+        .unwrap()];
         let install = |limit| {
             let mut resolver = Resolver::with_budgets(
                 entry.id(),
@@ -512,25 +547,44 @@ fn malformed_summary_admission_precedes_later_type_resource_in_dependency_order(
         } else {
             [&clean_summary, &malformed_summary]
         };
-        let dependencies = importer
-            .dependencies()
+        let implicit = implicit_service_summaries(&graph);
+        let candidates = summaries
             .iter()
-            .zip(summaries)
-            .map(|(edge, summary)| {
-                DependencyExports::new(edge, summary).expect("the summary must match its edge")
-            })
-            .collect::<Vec<_>>();
-        let mut type_work = TypeWorkBudget::with_limit(3);
-        let error = resolve_module_with_budget(
+            .copied()
+            .chain(implicit.iter().filter(|summary| {
+                importer
+                    .dependencies()
+                    .iter()
+                    .any(|edge| edge.is_region_service() && edge.target() == summary.module())
+            }));
+        // Before summary authentication: three dependency cells, one entry
+        // candidate, Foreign candidate+bytes (218), Region candidate+bytes (612).
+        let prefix = importer.dependencies().len()
+            + 1
+            + candidates
+                .flat_map(|summary| summary.defining_sources())
+                .map(|(owner, source)| {
+                    1 + if owner.is_builtin_foreign()
+                        || owner.is_builtin_region()
+                        || owner.is_builtin_region_facade()
+                    {
+                        source.text().len() + 1
+                    } else {
+                        0
+                    }
+                })
+                .sum::<usize>();
+        assert_eq!(prefix, 834);
+        let boundary = prefix + 3;
+        let mut type_work = TypeWorkBudget::with_limit(boundary);
+        let error = resolve_with_budgets(
+            &graph,
             importer,
-            &dependencies,
+            &summaries,
             &mut type_work,
             &mut crate::interface::InterfaceConstraintBudget::default(),
         )
         .expect_err("the first dependency boundary must own the failure");
-        let ResolveModuleError::Resolution(error) = error else {
-            panic!("summary admission should fail before the local Kind gate")
-        };
         assert_eq!(
             error.reason,
             if malformed_first {
@@ -539,9 +593,12 @@ fn malformed_summary_admission_precedes_later_type_resource_in_dependency_order(
                 ResolveReason::TypeResourceExhausted
             },
         );
-        // The first summary's completed publication consumes the fixed
-        // original/provenance admission cells before this boundary fails.
-        assert_eq!(type_work.used(), 3);
+        // Malformed order refuses before Type admission; the clean first
+        // summary exhausts the original three-unit source cut afterward.
+        assert_eq!(
+            type_work.used(),
+            if malformed_first { prefix } else { boundary }
+        );
     }
 }
 
@@ -617,6 +674,7 @@ fn frozen_summary_retains_authoritative_declaration_order() {
     let retained_binders = retained
         .imported_facts()
         .globals()
+        .filter(|global| global.binder.module() == Some(dependency.id()))
         .map(|global| global.binder)
         .collect::<Vec<_>>();
     let expected_binders = summary
@@ -1655,16 +1713,11 @@ fn public_admission_rejects_one_short_constructor_closure_without_publishing_out
                 )],
                 Vec::new(),
             );
-            let exports = importer
-                .dependencies()
-                .iter()
-                .map(|edge| DependencyExports::new(edge, &summary).expect("matching dependency"))
-                .collect::<Vec<_>>();
-
             let mut measured = TypeWorkBudget::with_limit(usize::MAX);
-            let measured_module = resolve_module_with_budget(
+            let measured_module = resolve_with_budgets(
+                &graph,
                 importer,
-                &exports,
+                &[&summary],
                 &mut measured,
                 &mut crate::interface::InterfaceConstraintBudget::default(),
             )
@@ -1674,18 +1727,20 @@ fn public_admission_rejects_one_short_constructor_closure_without_publishing_out
             drop(measured_module);
 
             let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
-            resolve_module_with_budget(
+            resolve_with_budgets(
+                &graph,
                 importer,
-                &exports,
+                &[&summary],
                 &mut one_short,
                 &mut crate::interface::InterfaceConstraintBudget::default(),
             )
             .expect_err("one missing public-admission cell must publish no resolved module");
 
             let mut exact = TypeWorkBudget::with_limit(exact_work);
-            let resolved = resolve_module_with_budget(
+            let resolved = resolve_with_budgets(
+                &graph,
                 importer,
-                &exports,
+                &[&summary],
                 &mut exact,
                 &mut crate::interface::InterfaceConstraintBudget::default(),
             )
@@ -1951,7 +2006,7 @@ fn hidden_diamond_facts_require_complete_provenance_agreement_in_dependency_orde
             .expect("the right facade should check")
             .into_exports();
             assert!(
-                right_summary.corrupt_hidden_diamond_fact_for_test(mutation),
+                right_summary.corrupt_hidden_diamond_fact_for_test(base.id(), mutation),
                 "the hidden diamond carrier {mutation:?} should exist",
             );
             right_summary
@@ -2037,6 +2092,7 @@ fn interface_and_implementation_only_diamonds_compare_hidden_nominal_closure() {
             .expect("the right facade should check")
             .into_exports();
             assert!(right_summary.corrupt_hidden_diamond_fact_for_test(
+                base.id(),
                 SummaryHiddenDiamondMutationForTest::NominalOrigin,
             ));
             right_summary
@@ -2112,6 +2168,7 @@ fn targeted_constructor_diamond_authenticates_its_hidden_owner_before_deduplicat
             .expect("exact targeted constructor and hidden-owner mirrors should deduplicate");
 
         assert!(right_summary.corrupt_hidden_diamond_fact_for_test(
+            base.id(),
             SummaryHiddenDiamondMutationForTest::NominalOrigin
         ));
         right_summary
@@ -2172,6 +2229,7 @@ fn duplicate_constructor_payload_routes_compare_foreign_nominal_provenance() {
         .expect("the right facade should check")
         .into_exports();
         assert!(right_summary.corrupt_hidden_diamond_fact_for_test(
+            base.id(),
             SummaryHiddenDiamondMutationForTest::NominalOrigin,
         ));
         right_summary
@@ -2440,10 +2498,13 @@ fn one_targeted_selector_imports_same_spelled_type_and_constructor() {
     let resolved =
         resolve_with(&graph, importer, &[&summary]).expect("both namespaces should resolve");
     let definition = equational(&resolved, 0);
-    let Type::Function(_, codomain) = &definition.interface.annotation.ty else {
-        panic!("expected a function type");
-    };
-    assert_eq!(codomain.as_ref(), &Type::Nominal(nominal));
+    let function = definition
+        .interface
+        .annotation
+        .ty
+        .function_view()
+        .expect("the user annotation must remain a function");
+    assert_eq!(function.value(), &Type::Nominal(nominal));
     assert!(matches!(
         definition.equations[0].body.kind,
         ResolvedExprKind::Constructor(ref occurrence) if occurrence.constructor == constructor
@@ -2849,6 +2910,7 @@ fn qualified_import_charges_withheld_namespace_retention() {
     let dependencies = importer
         .dependencies()
         .iter()
+        .filter(|edge| edge.target() == dependency.id())
         .map(|edge| DependencyExports::new(edge, &summary).expect("matching summary"))
         .collect::<Vec<_>>();
     let mut resolver = Resolver::with_type_work(importer.id(), TypeWorkBudget::with_limit(1));
@@ -3636,7 +3698,13 @@ fn targeted_public_constructor_does_not_block_a_same_spelled_type_parameter() {
 
     assert_eq!(definition.interface.type_parameters.len(), 1);
     assert!(matches!(
-        definition.interface.annotation.ty,
-        Type::Function(ref domain, _) if matches!(domain.as_ref(), Type::Variable(_))
+        definition
+            .interface
+            .annotation
+            .ty
+            .function_view()
+            .expect("the user annotation must remain a function")
+            .domain(),
+        Type::Variable(_)
     ));
 }

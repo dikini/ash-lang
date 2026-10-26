@@ -19167,17 +19167,9 @@ mod tests {
         std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
             let source = format!("effect Adjust {{\npublish : Int -> Int\n}}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {{\n{}42{}\n}}\n",
                 "register Adjust identity {\n".repeat(24), "\n}".repeat(24));
-            let path = std::env::temp_dir().join(format!("ash-registration-stack-{}.ash", std::process::id()));
-            std::fs::write(&path, source).unwrap();
-            let graph = crate::module::load_module_graph(&path, &crate::module::ModuleRoots::empty()).unwrap();
-            std::fs::remove_file(path).unwrap();
-            let module = &graph.modules()[0];
-            let checked = crate::elaborate::check_module(crate::resolve::resolve_module(module, &[]).unwrap()).unwrap();
-            let linked = crate::evidence_validation::validate_interface_evidence(crate::elaborate::link_modules(vec![checked], graph.entry()).unwrap()).unwrap();
-            let mut elaborator = crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
-            let typed = elaborator.synthesize_effect_module_program(&linked).unwrap();
-            let core = elaborator.finish(typed.node).unwrap();
-            super::Validator::new_modules(&core, &[module.source()], &[(module.id(), module.source().id())]).unwrap().run_effect().unwrap();
+            let (core, sources, relations) = hook_source_fixture(&source);
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            super::Validator::new_modules(&core, &borrowed, &relations).unwrap().run_effect().unwrap();
             core.discard_iteratively();
         }).unwrap().join().unwrap();
     }
@@ -19196,10 +19188,12 @@ mod tests {
             super::super::transform::fold_effect_literal_primitives,
         ] {
             let core = transform(&program).unwrap();
-            super::Validator::new(&core, &borrowed)
+            super::Validator::new_modules(&core, &borrowed, &relations)
+                .unwrap()
                 .run_effect()
                 .unwrap();
-            let validated = super::super::effect::validate_effect(core, &borrowed).unwrap();
+            let validated =
+                super::super::effect::validate_effect_modules(core, &borrowed, &relations).unwrap();
             assert_eq!(
                 crate::eval::evaluate_effect(&validated)
                     .unwrap()
@@ -22933,14 +22927,31 @@ mod tests {
         );
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
         let checked = checked_linked_validation_graph(&graph);
-        let registry = Arc::clone(checked[0].registry());
-        let constructor = registry.constructors()[0].id;
+        let registry = Arc::clone(
+            checked
+                .iter()
+                .find(|module| module.module().is_builtin_cell())
+                .expect("the defining builtin Cell must remain checked")
+                .registry(),
+        );
+        let cell_handle = registry
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module().is_builtin_cell() && nominal.spelling == "Handle")
+            .expect("the canonical builtin Cell Handle must remain present");
+        let constructor = cell_handle.constructors[0];
         let parameter = registry.nominal_parameters(constructor.owner()).unwrap()[0].id;
         let ty = Type::Application(
             Box::new(Type::Nominal(constructor.owner())),
             Box::new(Type::Variable(parameter)),
         );
-        let origin = registry.constructors()[0].origin.clone();
+        let origin = registry
+            .constructors()
+            .iter()
+            .find(|candidate| candidate.id == constructor)
+            .expect("the selected Handle constructor must remain canonical")
+            .origin
+            .clone();
         let mut builder = CoreBuilder::with_registry(registry);
         let scheme = Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(ty.clone()));
         let root = builder

@@ -27246,77 +27246,81 @@ fn contains_resume_owner_with_budget(
     Ok(false)
 }
 
+fn effect_selection_resource() -> TypeError {
+    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+}
+
+fn schedule_effect_expression<'a>(
+    work: &mut Vec<&'a ResolvedExpr>,
+    expression: &'a ResolvedExpr,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    budget.charge(1).map_err(|()| effect_selection_resource())?;
+    work.try_reserve(1)
+        .map_err(|_| effect_selection_resource())?;
+    work.push(expression);
+    Ok(())
+}
+
+fn schedule_effect_declaration<'a>(
+    work: &mut Vec<&'a ResolvedExpr>,
+    declaration: &'a ResolvedLocalDeclaration,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    match declaration {
+        ResolvedLocalDeclaration::Evidence(source) => {
+            for equation in source
+                .method_groups
+                .iter()
+                .flat_map(|group| &group.equations)
+            {
+                schedule_effect_expression(work, &equation.body, budget)?;
+            }
+            Ok(())
+        }
+        ResolvedLocalDeclaration::Binding(binding) => {
+            schedule_effect_expression(work, &binding.initializer, budget)
+        }
+        ResolvedLocalDeclaration::Recursive(group) => {
+            for member in &group.members {
+                schedule_effect_expression(work, &member.initializer, budget)?;
+            }
+            Ok(())
+        }
+        ResolvedLocalDeclaration::Newtype(_) => Ok(()),
+    }
+}
+
+fn schedule_effect_block<'a>(
+    work: &mut Vec<&'a ResolvedExpr>,
+    block: &'a ResolvedBlock,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    schedule_effect_expression(work, &block.result, budget)?;
+    for declaration in &block.declarations {
+        schedule_effect_declaration(work, declaration, budget)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn checked_program_contains_effect_syntax(
     program: &ValidatedInterfaceProgram,
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, TypeError> {
-    fn resource() -> TypeError {
-        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-    }
-
-    fn schedule<'a>(
-        work: &mut Vec<&'a ResolvedExpr>,
-        expression: &'a ResolvedExpr,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), TypeError> {
-        budget.charge(1).map_err(|()| resource())?;
-        work.try_reserve(1).map_err(|_| resource())?;
-        work.push(expression);
-        Ok(())
-    }
-
-    fn schedule_declaration<'a>(
-        work: &mut Vec<&'a ResolvedExpr>,
-        declaration: &'a ResolvedLocalDeclaration,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), TypeError> {
-        match declaration {
-            ResolvedLocalDeclaration::Evidence(source) => {
-                for equation in source
-                    .method_groups
-                    .iter()
-                    .flat_map(|group| &group.equations)
-                {
-                    schedule(work, &equation.body, budget)?;
-                }
-                Ok(())
-            }
-            ResolvedLocalDeclaration::Binding(binding) => {
-                schedule(work, &binding.initializer, budget)
-            }
-            ResolvedLocalDeclaration::Recursive(group) => {
-                for member in &group.members {
-                    schedule(work, &member.initializer, budget)?;
-                }
-                Ok(())
-            }
-            ResolvedLocalDeclaration::Newtype(_) => Ok(()),
-        }
-    }
-
-    fn schedule_block<'a>(
-        work: &mut Vec<&'a ResolvedExpr>,
-        block: &'a ResolvedBlock,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), TypeError> {
-        schedule(work, &block.result, budget)?;
-        for declaration in &block.declarations {
-            schedule_declaration(work, declaration, budget)?;
-        }
-        Ok(())
-    }
-
     fn type_requires_effect_core<'a>(
         parameter_count: usize,
         mut parameters: impl Iterator<Item = &'a Kind>,
         value_type: &Type,
         budget: &mut TypeWorkBudget,
     ) -> Result<bool, TypeError> {
-        budget.charge(parameter_count).map_err(|()| resource())?;
+        budget
+            .charge(parameter_count)
+            .map_err(|()| effect_selection_resource())?;
         if parameters.any(|kind| matches!(kind, Kind::EffectRow)) {
             return Ok(true);
         }
-        requires_pure_core_projection(value_type, Some(budget)).map_err(|()| resource())
+        requires_pure_core_projection(value_type, Some(budget))
+            .map_err(|()| effect_selection_resource())
     }
 
     let registry = program.registry();
@@ -27327,7 +27331,7 @@ pub(crate) fn checked_program_contains_effect_syntax(
     {
         let parameters = registry
             .nominal_parameters(nominal.id)
-            .ok_or_else(resource)?;
+            .ok_or_else(effect_selection_resource)?;
         if let Some(representation) = &nominal.representation
             && type_requires_effect_core(
                 parameters.len(),
@@ -27339,7 +27343,9 @@ pub(crate) fn checked_program_contains_effect_syntax(
             return Ok(true);
         }
         for constructor in &nominal.constructors {
-            let constructor = registry.constructor(*constructor).ok_or_else(resource)?;
+            let constructor = registry
+                .constructor(*constructor)
+                .ok_or_else(effect_selection_resource)?;
             if let Some(payload) = &constructor.payload
                 && type_requires_effect_core(
                     parameters.len(),
@@ -27376,7 +27382,7 @@ pub(crate) fn checked_program_contains_effect_syntax(
                     .parameters
                     .len()
                     .checked_add(method.type_parameters.len())
-                    .ok_or_else(resource)?;
+                    .ok_or_else(effect_selection_resource)?;
                 if type_requires_effect_core(
                     parameter_count,
                     parameters,
@@ -27404,23 +27410,30 @@ pub(crate) fn checked_program_contains_effect_syntax(
                 ResolvedDefinitionKind::Equational(global)
                 | ResolvedDefinitionKind::ForeignConstant(global) => {
                     for equation in &global.equations {
-                        schedule(&mut work, &equation.body, budget)?;
+                        schedule_effect_expression(&mut work, &equation.body, budget)?;
                     }
                 }
                 ResolvedDefinitionKind::InlineOperational(global) => {
-                    schedule_block(&mut work, &global.body, budget)?;
+                    schedule_effect_block(&mut work, &global.body, budget)?;
                 }
             }
         }
         for implementation in group.implementations() {
             for method_group in implementation.method_groups() {
                 for equation in &method_group.equations {
-                    schedule(&mut work, &equation.body, budget)?;
+                    schedule_effect_expression(&mut work, &equation.body, budget)?;
                 }
             }
         }
     }
 
+    effect_expression_work_contains_syntax(work, budget)
+}
+
+fn effect_expression_work_contains_syntax(
+    mut work: Vec<&ResolvedExpr>,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
     while let Some(expression) = work.pop() {
         match &expression.kind {
             ResolvedExprKind::Cleanup(_)
@@ -27433,28 +27446,28 @@ pub(crate) fn checked_program_contains_effect_syntax(
             | ResolvedExprKind::Discard(_) => return Ok(true),
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
-                    schedule(&mut work, element, budget)?;
+                    schedule_effect_expression(&mut work, element, budget)?;
                 }
             }
             ResolvedExprKind::Apply(application) => {
-                schedule(&mut work, &application.argument, budget)?;
-                schedule(&mut work, &application.function, budget)?;
+                schedule_effect_expression(&mut work, &application.argument, budget)?;
+                schedule_effect_expression(&mut work, &application.function, budget)?;
             }
             ResolvedExprKind::Add(binary)
             | ResolvedExprKind::Multiply(binary)
             | ResolvedExprKind::Equal(binary) => {
-                schedule(&mut work, &binary.right, budget)?;
-                schedule(&mut work, &binary.left, budget)?;
+                schedule_effect_expression(&mut work, &binary.right, budget)?;
+                schedule_effect_expression(&mut work, &binary.left, budget)?;
             }
-            ResolvedExprKind::Block(block) => schedule_block(&mut work, block, budget)?,
+            ResolvedExprKind::Block(block) => schedule_effect_block(&mut work, block, budget)?,
             ResolvedExprKind::Function(function) => {
-                schedule_block(&mut work, &function.body, budget)?;
+                schedule_effect_block(&mut work, &function.body, budget)?;
             }
             ResolvedExprKind::Match(matched) => {
                 for arm in &matched.arms {
-                    schedule(&mut work, &arm.body, budget)?;
+                    schedule_effect_expression(&mut work, &arm.body, budget)?;
                 }
-                schedule(&mut work, &matched.scrutinee, budget)?;
+                schedule_effect_expression(&mut work, &matched.scrutinee, budget)?;
             }
             ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
@@ -28859,17 +28872,47 @@ mod tests {
             .name("effect-core-selection-budget".to_owned())
             .stack_size(64 * 1024)
             .spawn(move || {
-                let mut calibration = TypeWorkBudget::unbounded();
                 assert_eq!(
-                    checked_program_contains_effect_syntax(&program, &mut calibration),
-                    Ok(false)
+                    checked_program_contains_effect_syntax(
+                        &program,
+                        &mut TypeWorkBudget::default()
+                    ),
+                    Ok(true),
+                    "actual Source headers require Effect Core before body traversal",
                 );
+                let span = program
+                    .groups()
+                    .iter()
+                    .find(|group| group.module() == program.entry())
+                    .expect("the actual entry remains linked")
+                    .span();
+                let mut body = ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span,
+                };
+                for _ in 0..DEPTH {
+                    body = ResolvedExpr {
+                        kind: ResolvedExprKind::Block(ResolvedBlock {
+                            declarations: Vec::new(),
+                            result: Box::new(body),
+                            span,
+                        }),
+                        span,
+                    };
+                }
+                let scan = |budget: &mut TypeWorkBudget| {
+                    let mut work = Vec::new();
+                    schedule_effect_expression(&mut work, &body, budget)?;
+                    effect_expression_work_contains_syntax(work, budget)
+                };
+                let mut calibration = TypeWorkBudget::unbounded();
+                assert_eq!(scan(&mut calibration), Ok(false));
                 let exact_work = calibration.used();
-                assert!(exact_work > DEPTH);
+                assert_eq!(exact_work, DEPTH + 1, "root scheduling is paid too");
 
                 let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
                 assert_eq!(
-                    checked_program_contains_effect_syntax(&program, &mut one_short),
+                    scan(&mut one_short),
                     Err(TypeError::Internal(
                         ElaborationFailure::TypeResourceExhausted
                     ))
@@ -28878,12 +28921,10 @@ mod tests {
 
                 for _ in 0..2 {
                     let mut exact = TypeWorkBudget::with_limit(exact_work);
-                    assert_eq!(
-                        checked_program_contains_effect_syntax(&program, &mut exact),
-                        Ok(false)
-                    );
+                    assert_eq!(scan(&mut exact), Ok(false));
                     assert_eq!(exact.used(), exact_work);
                 }
+                crate::resolved::discard_resolved_expression_iteratively(body);
             })
             .expect("the small-stack selection worker should start")
             .join()
@@ -30177,9 +30218,23 @@ mod tests {
                 );
                 let graph = load_module_graph(&file.0, &ModuleRoots::empty())
                     .expect("the wide cyclic module should load");
+                let mut checked: Vec<CheckedModule> = Vec::new();
+                for dependency in graph.modules().iter().filter(|loaded| loaded.id() != graph.entry()) {
+                    let imports = dependency.dependencies().iter().map(|edge| {
+                        DependencyExports::new(edge, checked.iter()
+                            .find(|module| module.module() == edge.target())
+                            .expect("dependency order retains the actual service target").exports()).unwrap()
+                    }).collect::<Vec<_>>();
+                    checked.push(check_module(resolve_module(dependency, &imports).unwrap()).unwrap());
+                }
                 let loaded = graph.module(graph.entry()).expect("entry module");
+                let imports = loaded.dependencies().iter().map(|edge| {
+                    DependencyExports::new(edge, checked.iter()
+                        .find(|module| module.module() == edge.target())
+                        .expect("entry service targets are checked").exports()).unwrap()
+                }).collect::<Vec<_>>();
                 assert!(matches!(
-                    resolve_module(loaded, &[]),
+                    resolve_module(loaded, &imports),
                     Err(crate::resolve::ResolveModuleError::Representation(TypeError::Source(error)))
                         if error.reason == TypeReason::NewtypeRecursiveRepresentation
                 ));
@@ -30495,16 +30550,16 @@ mod tests {
         .expect("capture fixture links");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("capture catalog authenticates");
-        let mut measured = Elaborator::for_module_program(&program).expect("elaborator");
+        let mut measured = EffectElaborator::for_module_program(&program).expect("elaborator");
         measured.type_work = TypeWorkBudget::unbounded();
         measured
-            .synthesize_module_program_after_effect_scan(&program)
+            .synthesize_effect_module_program(&program)
             .expect("authentic final synthesis");
         assert!(measured.lexical_capture_uses.is_empty());
         let work = measured.type_work.used();
         for one_short in [true, false, false] {
             let mut elaborator =
-                Elaborator::for_module_program(&program).expect("fresh elaborator");
+                EffectElaborator::for_module_program(&program).expect("fresh elaborator");
             // A stale route must be cleared before the next module starts.
             elaborator.lexical_capture_uses.push(LexicalCaptureUse {
                 occurrence_address: usize::MAX,
@@ -30512,7 +30567,7 @@ mod tests {
                 ordinal: usize::MAX,
             });
             elaborator.type_work = TypeWorkBudget::with_limit(work - usize::from(one_short));
-            let result = elaborator.synthesize_module_program_after_effect_scan(&program);
+            let result = elaborator.synthesize_effect_module_program(&program);
             assert!(elaborator.lexical_capture_uses.is_empty());
             if one_short {
                 assert_eq!(
@@ -30525,7 +30580,7 @@ mod tests {
                 assert!(elaborator.final_root.is_none());
                 assert_eq!(
                     elaborator
-                        .synthesize_module_program_after_effect_scan(&program)
+                        .synthesize_effect_module_program(&program)
                         .map(|_| ()),
                     Err(invalid_state())
                 );
@@ -30919,15 +30974,16 @@ mod tests {
         .expect("the lexical fixture should link");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("the lexical fixture should authenticate");
-        let mut measured = Elaborator::for_module_program(&program).expect("final elaborator");
+        let mut measured =
+            EffectElaborator::for_module_program(&program).expect("final elaborator");
         measured.type_work = TypeWorkBudget::with_limit(usize::MAX);
         measured.constraint_work = InterfaceConstraintBudget::with_limit(usize::MAX);
         measured
-            .synthesize_module_program(&program)
+            .synthesize_effect_module_program(&program)
             .expect("measure final synthesis");
         let work = measured.constraint_work.used();
         assert!(work > 0);
-        let mut short = Elaborator::for_module_program(&program).expect("final elaborator");
+        let mut short = EffectElaborator::for_module_program(&program).expect("final elaborator");
         let private = short
             .builder
             .unit(
@@ -30945,25 +31001,26 @@ mod tests {
         short.type_work = TypeWorkBudget::with_limit(usize::MAX);
         short.constraint_work = InterfaceConstraintBudget::with_limit(work - 1);
         assert_eq!(
-            short.synthesize_module_program(&program).map(|_| ()),
+            short.synthesize_effect_module_program(&program).map(|_| ()),
             Err(constraint_resource())
         );
         assert_eq!(short.state, ElaboratorState::Poisoned);
         assert!(short.final_root.is_none());
         short.constraint_work = InterfaceConstraintBudget::with_limit(work);
         assert_eq!(
-            short.synthesize_module_program(&program).map(|_| ()),
+            short.synthesize_effect_module_program(&program).map(|_| ()),
             Err(invalid_state())
         );
         assert!(matches!(
             short.finish(private),
             Err(ElaborationFailure::InvalidState)
         ));
-        let mut retry = Elaborator::for_module_program(&program).expect("fresh final elaborator");
+        let mut retry =
+            EffectElaborator::for_module_program(&program).expect("fresh final elaborator");
         retry.type_work = TypeWorkBudget::with_limit(usize::MAX);
         retry.constraint_work = InterfaceConstraintBudget::with_limit(work);
         let root = retry
-            .synthesize_module_program(&program)
+            .synthesize_effect_module_program(&program)
             .expect("fresh exact synthesis");
         assert_eq!(retry.constraint_work.used(), work);
         retry

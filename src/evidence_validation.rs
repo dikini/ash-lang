@@ -9642,9 +9642,18 @@ mod tests {
                         ),
                         (deep_value_type(parameter), deep_value_type(parameter)),
                     ));
-                    let [row] = program.registry().global_parameter_rows() else {
-                        panic!("the deep fixture must retain exactly one global row");
-                    };
+                    let owner = entry_group(&program)
+                        .schemes()
+                        .iter()
+                        .find(|scheme| scheme.spelling == "identity")
+                        .expect("the defining user identity must remain checked")
+                        .binder;
+                    let row = program
+                        .registry()
+                        .global_parameter_rows()
+                        .iter()
+                        .find(|row| row.owner() == owner)
+                        .expect("the deep user identity row must remain canonical");
                     assert_eq!(row.parameters(), [parameter]);
                     let canonical = program
                         .registry()
@@ -14607,9 +14616,12 @@ mod tests {
     fn rejects_kind_invalid_selected_goal_and_matching_higher_kinded_substitution() {
         let program = higher_kinded_generic_program();
         let group = entry_group(&program);
-        let [wrapped] = program.registry().nominals() else {
-            panic!("the fixture should retain exactly one nominal constructor");
-        };
+        let wrapped = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module() == program.entry() && nominal.spelling == "Wrapped")
+            .expect("the defining user Wrapped must remain canonical");
         let [fact] = group.implementation_facts() else {
             panic!("the fixture should retain exactly one generic implementation");
         };
@@ -14971,7 +14983,7 @@ mod tests {
             Mutation::Payload,
             Mutation::DefiningOwner,
         ] {
-            let mut program = match mutation {
+            let donor = match mutation {
                 Mutation::Family => entry_program(concat!(
                     "type Choice<A> =\n",
                     "First(A)\n",
@@ -14981,17 +14993,36 @@ mod tests {
                 )),
                 _ => higher_kinded_generic_program(),
             };
+            let ValidatedInterfaceProgram {
+                source: mut program,
+                ..
+            } = validate_interface_evidence(donor)
+                .expect("the same honest nominal donor must validate before mutation");
+            let spelling = if matches!(mutation, Mutation::Family) {
+                "Choice"
+            } else {
+                "Wrapped"
+            };
+            let owner = program
+                .registry()
+                .nominals()
+                .iter()
+                .find(|nominal| {
+                    nominal.id.module() == program.entry() && nominal.spelling == spelling
+                })
+                .expect("the selected defining user nominal must remain canonical")
+                .id;
             let changed = match mutation {
                 Mutation::NominalParameter => {
-                    program.replace_first_linked_nominal_parameter_kind_for_test(Kind::Type)
+                    program.replace_first_linked_nominal_parameter_kind_for_test(owner, Kind::Type)
                 }
-                Mutation::Family => program.truncate_first_linked_constructor_family_for_test(),
-                Mutation::Payload => {
-                    let owner = program.registry().nominals()[0].id;
-                    program.replace_first_linked_constructor_payload_for_test(Type::Nominal(owner))
+                Mutation::Family => {
+                    program.truncate_first_linked_constructor_family_for_test(owner)
                 }
+                Mutation::Payload => program
+                    .replace_first_linked_constructor_payload_for_test(owner, Type::Nominal(owner)),
                 Mutation::DefiningOwner => {
-                    program.detach_first_linked_constructor_from_owner_for_test()
+                    program.detach_first_linked_constructor_from_owner_for_test(owner)
                 }
             };
             assert!(
@@ -15095,9 +15126,12 @@ mod tests {
         const LEXICAL_TYPE_WORK: usize = 2;
         let program = higher_kinded_generic_program();
         let group = entry_group(&program);
-        let [wrapped] = program.registry().nominals() else {
-            panic!("the fixture should retain exactly one nominal constructor");
-        };
+        let wrapped = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.id.module() == program.entry() && nominal.spelling == "Wrapped")
+            .expect("the defining user Wrapped must remain canonical");
         let [fact] = group.implementation_facts() else {
             panic!("the fixture should retain exactly one generic implementation");
         };
@@ -17492,19 +17526,40 @@ mod tests {
             .iter()
             .find(|group| group.module() == graph.entry())
             .expect("the entry group should remain linked");
-        let [route, _selector_route] = entry.direct_dependencies() else {
-            panic!("the entry should retain its name and implementation edges");
-        };
-
+        let defining = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                std::path::Path::new(module.source().display_path()).file_name()
+                    == Some("dependency.ash".as_ref())
+            })
+            .expect("the user dependency must remain loaded")
+            .id();
+        let (prefix, route) = entry
+            .direct_dependencies()
+            .iter()
+            .enumerate()
+            .find(|(_, route)| route.target() == defining)
+            .expect("the user name import edge must remain present");
+        assert_eq!(
+            entry
+                .direct_dependencies()
+                .iter()
+                .filter(|route| route.target() == defining)
+                .count(),
+            2
+        );
+        // Earlier compiler-service edges retain their own one-unit visits; the
+        // selected user edge independently needs exactly one further unit.
         assert_eq!(
             has_direct_dependency(
                 entry,
                 route.target(),
                 route.import_span(),
-                &mut InterfaceConstraintBudget::with_limit(0),
+                &mut InterfaceConstraintBudget::with_limit(prefix),
                 entry.span(),
             )
-            .expect_err("the first direct-edge visit must charge before inspection")
+            .expect_err("the selected direct-edge visit must charge after the paid prefix")
             .reason(),
             EvidenceValidationReason::ConstraintResourceExhausted,
         );
@@ -17513,7 +17568,7 @@ mod tests {
                 entry,
                 route.target(),
                 route.import_span(),
-                &mut InterfaceConstraintBudget::with_limit(1),
+                &mut InterfaceConstraintBudget::with_limit(prefix + 1),
                 entry.span(),
             )
             .expect("one exact direct-edge unit should fit")
