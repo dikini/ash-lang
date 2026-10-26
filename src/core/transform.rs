@@ -1307,7 +1307,7 @@ mod tests {
     use super::*;
     use crate::{
         core::NewtypeConversionDirection,
-        elaborate::{Elaborator, check_module, link_modules},
+        elaborate::{EffectElaborator, check_module, link_modules},
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{BinderId, CheckedModule, ResolvedRegistry},
@@ -1357,7 +1357,7 @@ mod tests {
     struct LinkedTransformFixture {
         _directory: LinkedTransformDirectory,
         graph: ModuleGraph,
-        program: ValidatedProgram,
+        program: super::super::ValidatedEffectProgram,
         module_sources: Vec<(crate::module::ModuleId, crate::source::SourceId)>,
     }
 
@@ -1413,10 +1413,10 @@ mod tests {
             .expect("the checked linked transform graph should link");
         let linked = validate_linked_facts_for_test(linked)
             .expect("the linked transform facts should authenticate");
-        let mut elaborator = Elaborator::for_module_program(&linked)
+        let mut elaborator = EffectElaborator::for_module_program(&linked)
             .expect("the linked transform binder namespace should fit");
         let typed = elaborator
-            .synthesize_module_program(&linked)
+            .synthesize_effect_module_program(&linked)
             .expect("the linked transform program should lower to Core");
         let unchecked = elaborator
             .finish(typed.node)
@@ -1431,9 +1431,8 @@ mod tests {
             .iter()
             .map(|module| (module.id(), module.source().id()))
             .collect::<Vec<_>>();
-        let program =
-            super::super::validate::validate_modules(unchecked, &sources, &module_sources)
-                .expect("the linked row-bearing transform Core should validate");
+        let program = super::super::validate_effect_modules(unchecked, &sources, &module_sources)
+            .expect("the linked row-bearing transform Core should validate");
         LinkedTransformFixture {
             _directory: directory,
             graph,
@@ -1471,10 +1470,10 @@ mod tests {
             .expect("the checked linked method transform graph should link");
         let linked = validate_linked_facts_for_test(linked)
             .expect("the linked method transform facts should authenticate");
-        let mut elaborator = Elaborator::for_module_program(&linked)
+        let mut elaborator = EffectElaborator::for_module_program(&linked)
             .expect("the linked method transform binder namespace should fit");
         let typed = elaborator
-            .synthesize_module_program(&linked)
+            .synthesize_effect_module_program(&linked)
             .expect("the linked method transform program should lower to Core");
         let unchecked = elaborator
             .finish(typed.node)
@@ -1489,9 +1488,8 @@ mod tests {
             .iter()
             .map(|module| (module.id(), module.source().id()))
             .collect::<Vec<_>>();
-        let program =
-            super::super::validate::validate_modules(unchecked, &sources, &module_sources)
-                .expect("the linked method transform Core should validate");
+        let program = super::super::validate_effect_modules(unchecked, &sources, &module_sources)
+            .expect("the linked method transform Core should validate");
         LinkedTransformFixture {
             _directory: directory,
             graph,
@@ -1589,11 +1587,11 @@ mod tests {
                 .node(NodeId::new(fixture.program.root().arena(), index as u32))
                 .unwrap()
                 .kind;
-            match kind {
-                PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
+            match EffectOperationFamily::pure(kind) {
+                Some(PureExprKind::Computation(PureComputation::Tuple(tuple))) => {
                     payload_carrier_work += tuple.elements().len()
                 }
-                PureExprKind::Computation(PureComputation::Match(matching)) => {
+                Some(PureExprKind::Computation(PureComputation::Match(matching))) => {
                     payload_carrier_work += matching.arms().len();
                     for arm in matching.arms() {
                         let mut patterns = vec![arm.pattern()];
@@ -1651,7 +1649,7 @@ mod tests {
             .expect("the exact anchor-remap allowance should fit");
             assert!(Arc::ptr_eq(&rebuilt.registry, &registry));
             assert!(Arc::ptr_eq(&rebuilt.method_evidence, &catalog));
-            super::super::validate::validate_modules(rebuilt, &sources, &fixture.module_sources)
+            super::super::validate_effect_modules(rebuilt, &sources, &fixture.module_sources)
                 .expect("the exactly rebuilt anchors should freshly validate");
         }
         drop(sources);
@@ -1672,12 +1670,45 @@ mod tests {
             .collect()
     }
 
-    fn has_constant_folded_literal(program: &UnvalidatedProgram) -> bool {
+    // Independent manual Pure contracts retain only their own ordinary
+    // canonical fold/F metadata, not a Source Effect program's registry.
+    fn isolated_pure_fold_registry(fixture: &LinkedTransformFixture) -> Arc<ResolvedRegistry> {
+        let rows = fixture.program.registry().global_parameter_rows();
+        let mut rows = rows
+            .iter()
+            .filter(|row| row.owner().module() == Some(fixture.graph.entry()));
+        let row = rows.next().expect("entry fold row");
+        assert!(rows.next().is_none());
+        let [parameter] = row.parameters() else {
+            panic!("fold F parameter")
+        };
+        let canonical = fixture
+            .program
+            .registry()
+            .type_variable(*parameter)
+            .unwrap()
+            .clone();
+        assert!(matches!(canonical.kind, Kind::Arrow(_, _)));
+        Arc::new(
+            ResolvedRegistry::default()
+                .with_image_global_parameters(
+                    vec![(row.owner(), vec![canonical])],
+                    &mut crate::types::TypeWorkBudget::default(),
+                )
+                .unwrap(),
+        )
+    }
+
+    fn has_constant_folded_literal<F: TransformFamily>(
+        program: &UnvalidatedCoreProgram<F>,
+    ) -> bool {
         program.nodes.iter().any(|node| {
-            matches!(node.kind, PureExprKind::Value(PureValue::Integer(_)))
-                && node.origin.as_ref().is_some_and(|origin| {
-                    origin.generated_reason() == Some(GeneratedReason::ConstantFolding)
-                })
+            matches!(
+                F::pure(&node.kind),
+                Some(PureExprKind::Value(PureValue::Integer(_)))
+            ) && node.origin.as_ref().is_some_and(|origin| {
+                origin.generated_reason() == Some(GeneratedReason::ConstantFolding)
+            })
         })
     }
 
@@ -1816,27 +1847,45 @@ mod tests {
         let fixture = linked_row_bearing_fold_fixture();
         let registry = Arc::clone(fixture.program.registry());
         let rows = global_row_shape(&registry);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1.len(), 1);
-        assert!(registry.type_variable(rows[0].1[0]).is_some());
+        let entry_rows = rows
+            .iter()
+            .filter(|(owner, _)| owner.module() == Some(fixture.graph.entry()))
+            .collect::<Vec<_>>();
+        assert_eq!(entry_rows.len(), 1);
+        assert_eq!(entry_rows[0].1.len(), 1);
+        assert!(matches!(
+            &registry.type_variable(entry_rows[0].1[0]).unwrap().kind,
+            Kind::Arrow(_, _)
+        ));
 
-        let identity = identity_traversal(&fixture.program)
+        let identity = identity_effect_traversal(&fixture.program)
             .expect("the row-bearing identity traversal should rebuild");
-        let folded = fold_literal_primitives(&fixture.program)
+        let folded = fold_effect_literal_primitives(&fixture.program)
             .expect("the row-bearing literal fold should rebuild independently");
         assert!(Arc::ptr_eq(&identity.registry, &registry));
         assert!(Arc::ptr_eq(&folded.registry, &registry));
         assert_eq!(global_row_shape(&identity.registry), rows);
         assert_eq!(global_row_shape(&folded.registry), rows);
         assert!(!has_constant_folded_literal(&identity));
-        assert!(has_constant_folded_literal(&folded));
+        // Source arithmetic retains RegionBuffer/default-allocation effects;
+        // the isolated Pure donor below proves actual scalar folding.
+        assert!(!has_constant_folded_literal(&folded));
+        let arithmetic = |nodes: &[super::super::dialect::StoredNode<EffectOperationFamily>]| {
+            nodes.iter().filter(|node| matches!(&node.kind,
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer))
+                if matches!(buffer.operation, super::super::region::RegionBufferOperation::IntegerArithmetic(_)))).count()
+        };
+        assert!(arithmetic(&identity.nodes) > 0);
+        assert_eq!(arithmetic(&folded.nodes), arithmetic(&identity.nodes));
+        assert_ne!(identity.arena, fixture.program.root().arena());
+        assert_ne!(folded.arena, fixture.program.root().arena());
 
         let sources = fixture.sources();
         let identity =
-            super::super::validate::validate_modules(identity, &sources, &fixture.module_sources)
+            super::super::validate_effect_modules(identity, &sources, &fixture.module_sources)
                 .expect("the row-bearing identity traversal should independently revalidate");
         let folded =
-            super::super::validate::validate_modules(folded, &sources, &fixture.module_sources)
+            super::super::validate_effect_modules(folded, &sources, &fixture.module_sources)
                 .expect("the row-bearing literal fold should independently revalidate");
         assert!(Arc::ptr_eq(identity.registry(), &registry));
         assert!(Arc::ptr_eq(folded.registry(), &registry));
@@ -1865,9 +1914,14 @@ mod tests {
                 const IDENTITY_WORK: usize = 6 + 8 + 20 + 18 + 2 + 7;
 
                 let fixture = linked_row_bearing_fold_fixture();
-                let registry = Arc::clone(fixture.program.registry());
+                let registry = isolated_pure_fold_registry(&fixture);
                 let rows = global_row_shape(&registry);
-                let [(owner, parameters)] = rows.as_slice() else {
+                let entry_rows = rows
+                    .iter()
+                    .filter(|(owner, _)| owner.module() == Some(fixture.graph.entry()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let [(owner, parameters)] = entry_rows.as_slice() else {
                     panic!("the exact construction fixture should retain one global row");
                 };
                 let [parameter] = parameters.as_slice() else {
@@ -1876,10 +1930,30 @@ mod tests {
                 let source = fixture
                     .graph
                     .modules()
-                    .first()
+                    .iter()
+                    .find(|module| module.id() == fixture.graph.entry())
                     .expect("the exact construction fixture should retain its entry module")
                     .source();
                 let origin = deep_origin(source, super::super::CORE_PAYLOAD_DEPTH_LIMIT - 1);
+                let mixed = row_bearing_fold_program_with_initial_type_work(
+                    Arc::clone(fixture.program.registry()),
+                    *owner,
+                    *parameter,
+                    Origin::Source(source.span(ByteRange::new(0, 1).unwrap()).unwrap()),
+                    0,
+                )
+                .unwrap();
+                assert_eq!(
+                    super::super::validate::validate_modules(
+                        mixed,
+                        &fixture.sources(),
+                        &fixture.module_sources,
+                    )
+                    .unwrap_err()
+                    .reason(),
+                    super::super::ValidationReason::Registry,
+                    "Pure admission must reject the complete Source Effect registry"
+                );
                 let registry_owners_before = Arc::strong_count(&registry);
 
                 let short = row_bearing_fold_program_with_initial_type_work(
@@ -1969,9 +2043,14 @@ mod tests {
                 // Exact old-to-new NodeId remap slots = 7.
                 const EXACT_WORK: usize = 2 + 8 + 16 + 4 + 18 + 2 + 7;
                 let fixture = linked_row_bearing_fold_fixture();
-                let registry = Arc::clone(fixture.program.registry());
+                let registry = isolated_pure_fold_registry(&fixture);
                 let rows = global_row_shape(&registry);
-                let [(owner, parameters)] = rows.as_slice() else {
+                let entry_rows = rows
+                    .iter()
+                    .filter(|(owner, _)| owner.module() == Some(fixture.graph.entry()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let [(owner, parameters)] = entry_rows.as_slice() else {
                     panic!("the exact fold fixture should retain one global row");
                 };
                 let [parameter] = parameters.as_slice() else {
@@ -1985,7 +2064,8 @@ mod tests {
                 let source = fixture
                     .graph
                     .modules()
-                    .first()
+                    .iter()
+                    .find(|module| module.id() == fixture.graph.entry())
                     .expect("the exact fold fixture should retain its entry module")
                     .source();
                 let origin = deep_origin(source, super::super::CORE_PAYLOAD_DEPTH_LIMIT - 1);
@@ -2080,20 +2160,12 @@ mod tests {
 
     #[test]
     fn generic_cell_core_builder_reconstruction_is_exact_and_fresh_retryable() {
-        let (program, sources) = crate::core::validate::generic_cell_validated_fixture_for_test();
+        let (program, sources, relation) =
+            crate::core::validate::generic_cell_source_fixture_for_test(
+                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Int> c = 41 {\nCell.read c + 1\n}\n",
+                None,
+            );
         let refs = sources.iter().collect::<Vec<_>>();
-        let relation = program
-            .registry()
-            .type_variables()
-            .map(|parameter| {
-                (
-                    parameter.id.module().unwrap(),
-                    parameter.origin.primary_span().source(),
-                )
-            })
-            .collect::<std::collections::BTreeMap<_, _>>()
-            .into_iter()
-            .collect::<Vec<_>>();
         for fold in [false, true] {
             // This is the CoreBuilder ledger, separate from source inference.
             // Find the exact smallest remaining allowance with fresh builders.
@@ -2358,9 +2430,14 @@ mod tests {
                 const BODY_WORK: usize = 1;
 
                 let fixture = linked_row_bearing_fold_fixture();
-                let registry = Arc::clone(fixture.program.registry());
+                let registry = isolated_pure_fold_registry(&fixture);
                 let rows = global_row_shape(&registry);
-                let [(owner, parameters)] = rows.as_slice() else {
+                let entry_rows = rows
+                    .iter()
+                    .filter(|(owner, _)| owner.module() == Some(fixture.graph.entry()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let [(owner, parameters)] = entry_rows.as_slice() else {
                     panic!("the integrated transform fixture must retain one global row");
                 };
                 let [resolved_parameter] = parameters.as_slice() else {
@@ -2378,12 +2455,27 @@ mod tests {
                 let source = fixture
                     .graph
                     .modules()
-                    .first()
+                    .iter()
+                    .find(|module| module.id() == fixture.graph.entry())
                     .expect("the integrated fixture must retain its source")
                     .source();
                 let span = source
                     .span(ByteRange::new(0, 1).expect("the integrated range is ordered"))
                     .expect("the integrated span belongs to its source");
+                let pure = row_bearing_fold_program_with_initial_type_work(
+                    Arc::clone(&registry),
+                    *owner,
+                    *resolved_parameter,
+                    Origin::Source(span),
+                    0,
+                )
+                .unwrap();
+                let pure = super::super::validate::validate_modules(
+                    pure,
+                    &fixture.sources(),
+                    &fixture.module_sources,
+                )
+                .unwrap();
                 let generated_parameter = TypeVariableId::generated(90_001);
                 let parameter_kind = deep_arrow_kind(KIND_DEPTH);
                 let expression = super::super::TypedExpr {
@@ -2396,7 +2488,7 @@ mod tests {
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
                         super::super::type_ops::TypeAbstractionNode::new(
                             vec![(generated_parameter, parameter_kind)],
-                            fixture.program.root(),
+                            pure.root(),
                         ),
                     )),
                 };
@@ -2412,7 +2504,7 @@ mod tests {
                 else {
                     panic!("the integrated input must remain a type abstraction");
                 };
-                assert_eq!(abstraction.body(), fixture.program.root());
+                assert_eq!(abstraction.body(), pure.root());
                 assert_eq!(abstraction.parameters()[0].0, generated_parameter);
                 assert_eq!(arrow_kind_depth(&abstraction.parameters()[0].1), KIND_DEPTH);
                 assert_eq!(
@@ -2426,17 +2518,15 @@ mod tests {
                 let body = output
                     .unit(Type::Unit, Origin::Source(span))
                     .expect("the mapped output body must fit");
-                let mut remapped = vec![None; fixture.program.node_count()];
-                remapped[node_index(fixture.program.root()).expect("the root index must fit")] =
-                    Some(body);
+                let mut remapped = vec![None; pure.node_count()];
+                remapped[node_index(pure.root()).expect("the root index must fit")] = Some(body);
                 output
                     .charge_type_work_for_test(TYPE_WORK_LIMIT - BODY_WORK - (REBUILD_WORK - 1))
                     .expect("the late one-short allowance must fit");
-                let error =
-                    rebuild_node(&mut output, &fixture.program, &remapped, &expression, false)
-                        .expect_err(
-                            "one missing final admission cell must reject the rebuilt abstraction",
-                        );
+                let error = rebuild_node(&mut output, &pure, &remapped, &expression, false)
+                    .expect_err(
+                        "one missing final admission cell must reject the rebuilt abstraction",
+                    );
                 assert_eq!(error, TransformError::Build(BuildError::TypeWorkExceeded));
                 drop(output);
                 assert_eq!(Arc::strong_count(&registry), owners_before);
@@ -2446,16 +2536,15 @@ mod tests {
                 let exact_body = exact_output
                     .unit(Type::Unit, Origin::Source(span))
                     .expect("the exact mapped output body must fit");
-                let mut exact_remapped = vec![None; fixture.program.node_count()];
-                exact_remapped
-                    [node_index(fixture.program.root()).expect("the exact root index must fit")] =
+                let mut exact_remapped = vec![None; pure.node_count()];
+                exact_remapped[node_index(pure.root()).expect("the exact root index must fit")] =
                     Some(exact_body);
                 exact_output
                     .charge_type_work_for_test(TYPE_WORK_LIMIT - BODY_WORK - REBUILD_WORK)
                     .expect("the exact integrated allowance must fit");
                 let rebuilt = rebuild_node(
                     &mut exact_output,
-                    &fixture.program,
+                    &pure,
                     &exact_remapped,
                     &expression,
                     false,

@@ -14704,7 +14704,23 @@ mod tests {
             let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
                 .expect("hook syntax should load");
             let entry = graph.module(graph.entry()).unwrap();
-            let resolved = resolve_module(entry, &[]).unwrap();
+            let checked = checked_import_dependencies(&graph);
+            let dependencies = entry
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(entry, &dependencies).unwrap();
             let ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[1].kind else {
                 panic!("equational main")
             };
@@ -16425,6 +16441,41 @@ mod tests {
         )
     }
 
+    fn checked_import_dependencies(
+        graph: &crate::module::ModuleGraph,
+    ) -> Vec<crate::resolved::CheckedModule> {
+        let mut checked = Vec::<crate::resolved::CheckedModule>::new();
+        for module in graph
+            .modules()
+            .iter()
+            .filter(|module| module.id() != graph.entry())
+        {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            checked.push(
+                check_module(
+                    resolve_module(module, &dependencies)
+                        .expect("fixture dependency should resolve with actual implicit services"),
+                )
+                .expect("fixture dependency should check"),
+            );
+        }
+        checked
+    }
+
     fn resolve_import_fixture_with_dependency_and_limit(
         entry: &str,
         dependency: &str,
@@ -16433,24 +16484,24 @@ mod tests {
         let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
-        let dependency = graph
-            .modules()
-            .iter()
-            .find(|module| {
-                Path::new(module.source().display_path()).file_name()
-                    == Some("dependency.ash".as_ref())
-            })
-            .expect("the import budget dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the dependency should check");
+        let checked = checked_import_dependencies(&graph);
         let entry = graph
             .module(graph.entry())
             .expect("the import budget entry should load");
         let dependencies = entry
             .dependencies()
             .iter()
-            .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::default();
         let mut constraint_work = InterfaceConstraintBudget::with_limit(limit);
@@ -16473,24 +16524,24 @@ mod tests {
         let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
-        let dependency = graph
-            .modules()
-            .iter()
-            .find(|module| {
-                Path::new(module.source().display_path()).file_name()
-                    == Some("dependency.ash".as_ref())
-            })
-            .expect("the import budget dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the dependency should check");
+        let checked = checked_import_dependencies(&graph);
         let entry = graph
             .module(graph.entry())
             .expect("the import budget entry should load");
         let dependencies = entry
             .dependencies()
             .iter()
-            .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::with_limit(limit);
         let mut constraint_work = InterfaceConstraintBudget::default();
@@ -16586,9 +16637,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-global dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the higher-kinded dependency should check");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-global entry should load");
@@ -16699,9 +16752,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-implementation dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the nominal-head implementation should check");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-implementation entry should load");
@@ -16928,8 +16983,11 @@ mod tests {
                 Path::new(module.source().display_path()).file_name() == Some("base.ash".as_ref())
             })
             .expect("the duplicate-interface base should load");
-        let base = check_module(resolve_module(base, &[]).expect("the base should resolve"))
-            .expect("the nominal method interface should check");
+        let checked = checked_import_dependencies(&graph);
+        let base = checked
+            .iter()
+            .find(|checked| checked.module() == base.id())
+            .unwrap();
         let facade = graph
             .modules()
             .iter()
@@ -16938,27 +16996,21 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-interface facade should load");
-        let facade_dependencies = facade
-            .dependencies()
+        let facade = checked
             .iter()
-            .map(|edge| DependencyExports::new(edge, base.exports()).unwrap())
-            .collect::<Vec<_>>();
-        let facade = check_module(
-            resolve_module(facade, &facade_dependencies).expect("the facade should resolve"),
-        )
-        .expect("the facade should check");
+            .find(|checked| checked.module() == facade.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-interface entry should load");
         let summary = facade.exports();
         let exported = summary
-            .interfaces()
-            .next()
+            .interface("Observe")
             .expect("the facade should re-export Observe");
         let secret = summary
             .hidden_nominals()
-            .next()
-            .expect("the method should retain Secret as hidden closure")
+            .find(|nominal| nominal.spelling == "Secret" && nominal.id.module() == base.module())
+            .expect("the method should retain defining Secret as hidden closure")
             .id;
         let span = entry.surface().imports[0].span;
         let snapshot = |resolver: &Resolver| {
@@ -17525,9 +17577,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the wide-selector dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("distinct nominal heads should check without overlap");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the wide-selector entry should load");
@@ -19718,10 +19772,11 @@ mod tests {
                             == Some("dependency.ash".as_ref())
                     })
                     .expect("the implementation-retention dependency should load");
-                let checked_dependency = check_module(
-                    resolve_module(dependency, &[]).expect("the dependency should resolve"),
-                )
-                .expect("the dependency interface should check");
+                let checked = checked_import_dependencies(&graph);
+                let checked_dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == dependency.id())
+                    .unwrap();
                 let entry = graph
                     .module(graph.entry())
                     .expect("the implementation-retention entry should load");

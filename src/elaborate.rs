@@ -27772,28 +27772,6 @@ fn collect_pattern_binders(
 }
 
 #[cfg(test)]
-pub(crate) fn cell_resource_core_fixture_for_test() -> (
-    crate::core::effect::UnvalidatedEffectProgram,
-    ResolvedModule,
-    Vec<crate::source::SourceFile>,
-    Arc<ResolvedRegistry>,
-    Vec<(crate::module::ModuleId, crate::source::SourceId)>,
-) {
-    tests::cell_resource_core_fixture()
-}
-
-#[cfg(test)]
-pub(crate) fn generic_cell_resource_core_fixture_for_test() -> (
-    crate::core::effect::UnvalidatedEffectProgram,
-    ResolvedModule,
-    Vec<crate::source::SourceFile>,
-    Arc<ResolvedRegistry>,
-    Vec<(crate::module::ModuleId, crate::source::SourceId)>,
-) {
-    tests::cell_resource_core_fixture_with_generic(true)
-}
-
-#[cfg(test)]
 pub(crate) fn cell_resource_linked_header_fixture_for_test() -> ResolvedModuleProgram {
     tests::cell_resource_linked_header_fixture()
 }
@@ -29507,55 +29485,6 @@ mod tests {
             .expect("builtin selector"),
         );
         elaborator
-    }
-
-    pub(crate) fn cell_resource_core_fixture() -> (
-        crate::core::effect::UnvalidatedEffectProgram,
-        ResolvedModule,
-        Vec<SourceFile>,
-        Arc<ResolvedRegistry>,
-        Vec<(crate::module::ModuleId, crate::source::SourceId)>,
-    ) {
-        cell_resource_core_fixture_with_generic(false)
-    }
-
-    pub(crate) fn cell_resource_core_fixture_with_generic(
-        generic: bool,
-    ) -> (
-        crate::core::effect::UnvalidatedEffectProgram,
-        ResolvedModule,
-        Vec<SourceFile>,
-        Arc<ResolvedRegistry>,
-        Vec<(crate::module::ModuleId, crate::source::SourceId)>,
-    ) {
-        let (module, sources, registry, checked) = if generic {
-            cell_module_fixture_sources(
-                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Bool> c = true {\n42\n}\n",
-            )
-        } else {
-            cell_resource_fixture_sources("resource cell<R> c = (40 + 1) {\n42\n}")
-        };
-        let mut elaborator = cell_resource_elaborator(&module);
-        let mut context = elaborator.base_context.clone();
-        let typed = elaborator
-            .elaborate_expression_with_context(
-                ElaborationTask::Synthesize {
-                    expression: fixture_result(&module),
-                    cause: None,
-                },
-                &mut context,
-            )
-            .expect("resource typed structure");
-        let core = elaborator
-            .builder
-            .finish(typed.node)
-            .expect("resource arena");
-        let relation = checked
-            .iter()
-            .map(|dependency| (dependency.module(), dependency.span().source()))
-            .chain(std::iter::once((module.module(), module.span().source())))
-            .collect();
-        (core, module, sources, registry, relation)
     }
 
     // Only the builtin becomes a checked group. The resource result is typed

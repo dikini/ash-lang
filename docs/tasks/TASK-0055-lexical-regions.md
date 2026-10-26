@@ -316,8 +316,13 @@ capture tests using complete dependency provenance and actual activation IDs.
 They also exposed and repaired stale resume-row finalization without cleanup
 equations and lost intermediate arrow rows in curried equation reconstruction.
 The latest complete all-feature library inventory executes all 1,595 tests:
-1,444 pass and 151 fail, restoring 258 original failures without a newly failing
-name. The policy/rewrite/catalog/row focused checks also pass. The remaining failures require classification across graph fixtures,
+1,471 pass and 124 fail, restoring 285 original failures without a newly failing
+name. The policy/rewrite/catalog/row focused checks also pass.
+Cell mutation donors now validate through the actual Source/Effect pipeline
+before corruption, with physical closure capture/layout metadata kept coherent.
+Source Effect transforms preserve region arithmetic and its allocation effects;
+the independent seven-node Pure contracts retain actual folding and exact
+budgets. Full dependency provenance replaces incomplete manual import setup. The remaining failures require classification across graph fixtures,
 selectors, exact ledgers and product behavior; this library run does not replace
 the canonical workspace gate.
 The final fresh full gate and independent review remain pending.
