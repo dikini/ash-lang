@@ -26,8 +26,9 @@ the accepted R2 contract and final matching bounded R1 proof are retained.
 Focused interface and scoped-evidence migrations now pass all 44 and 53 original
 tests respectively. The module-newtype and local-newtype targets now pass 23
 and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 original
-tests. Functions now passes all 19 original tests; its 14 restored names are
-disjoint from the prior 348, giving 362 staged restorations. Repeated passes are
+tests. Functions passes all 19 original tests. Polymorphism and interface-module
+controls now pass all 43 and 25 original tests; their 17 restored names are
+disjoint from the prior 362, giving 379 staged restorations. Repeated passes are
 counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
 These selected observations do not refresh Library9 (1,560/35) or Integration69
@@ -58,6 +59,21 @@ exact fifteen-event sequence includes main's once-created increment capture
 before entry and the later ordinary lookup, preserving function/argument/body
 order. Raw trace evidence remains; no creation is treated as administration.
 The deliberate Pure diagnostics and structural arrow rendering are unchanged.
+
+Polymorphism controls retain exact source binders, canonical partial Pair identity,
+ordered type arguments and fixed kinds, complete scheme/row/lacks traversal and
+fresh independent validation after both transforms. The paired higher-kind run
+keeps the complete non-erasure event vector, lookup count and frame high-water
+mark equal; generic record creation adds one abstraction entry and its call one
+application entry. Evidence retains all nine semantic IDs, including its
+metadata-only type application, in an exact ten-event capture/view sequence.
+Only that authenticated adapter forwards its known variable rather than entering
+its type-application body. A whole Effect depth sanity bound of 32 replaces the
+obsolete Pure depth 3; this does not assert absence of temporary ordinary evaluator frames.
+Interface-specific frame inventory remains excluded.
+All other retained-child checks and exhaustive runtime inventories remain.
+Interface-module admission preserves resolver-owned privacy errors and defining
+identities while authenticating every actual dependency edge's own summary.
 
 First-class constructor positives use existing inferred local functions because
 CP-0025 default-expands explicit callable annotations while erased constructor
