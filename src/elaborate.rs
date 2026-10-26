@@ -2838,6 +2838,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     row_inference_obligations: RowInferenceSolutionMap,
     cleanup_rows: cleanup_rows::CleanupRows,
     pending_region_closures: Vec<(NodeId, NodeId)>,
+    pending_cleanup_regions: Vec<(NodeId, Span)>,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
@@ -3300,6 +3301,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
             pending_region_closures: Vec::new(),
+            pending_cleanup_regions: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3438,6 +3440,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
             pending_region_closures: Vec::new(),
+            pending_cleanup_regions: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3561,6 +3564,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
             pending_region_closures: Vec::new(),
+            pending_cleanup_regions: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3999,6 +4003,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
             pending_region_closures: Vec::new(),
+            pending_cleanup_regions: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -13471,11 +13476,41 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         values: &mut TypedNodeBuffer,
     ) -> Result<(), TypeError> {
         let action = values.pop().ok_or_else(invalid_state)?;
+        // Registration queries only Unit after the callback has been evaluated.
+        // Cleanup calls that callback under its saved allocation association.
+        let deferred = self.cleanup_row_pending(&action.effects)
+            && !action.effects.known().iter().any(|effect| {
+                crate::resolved::RegionApi::for_module(effect.effect().module())
+                    .is_some_and(|api| effect.effect() == api.default_alloc())
+            });
+        let saved = if F::EFFECTS && !deferred {
+            self.active_region_api()?
+                .filter(|api| {
+                    action.effects.tail().is_some()
+                        || action
+                            .effects
+                            .known()
+                            .iter()
+                            .any(|effect| effect.effect() == api.default_alloc())
+                })
+                .map(|api| {
+                    self.saved_region_binding(api, span)
+                        .map(|saved| (api, saved))
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let action = if let Some((api, (view, _))) = &saved {
+            TypedNodeOwner::new(self.forward_cleanup_default(action, view, *api, span)?)
+        } else {
+            action
+        };
         let body = values.pop().ok_or_else(invalid_state)?;
         let ty = self.clone_type(&body.ty)?;
         let effects = self.union_effects(&body.effects, &action.effects, span)?;
         let core_effects = self.core_effect_row(&effects)?;
-        let node = self.push_effect_core(
+        let mut node = self.push_effect_core(
             ty,
             core_effects,
             Origin::Source(span),
@@ -13487,10 +13522,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 action_span: cleanup.action_span,
             }),
         )?;
+        if deferred && F::EFFECTS {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.pending_cleanup_regions
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.pending_cleanup_regions.push((node, span));
+        }
+        if let Some((_, (view, query))) = saved {
+            let result_type = self.clone_type(&body.ty)?;
+            node = self
+                .builder
+                .binding(view, query, node, result_type, Origin::Source(span))?;
+        }
         values.push(TypedNode {
             node,
             ty: self.clone_type(&body.ty)?,
-            effects,
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(node, &mut self.type_work)?,
             provenance: body.provenance.clone(),
         });
         Ok(())

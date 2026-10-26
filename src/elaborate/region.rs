@@ -36,6 +36,34 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .find_map(|effect| RegionApi::for_module(effect.id.module())))
     }
 
+    fn region_context_query(&mut self, api: RegionApi, span: Span) -> Result<NodeId, TypeError> {
+        let unit = self.builder.unit(Type::Unit, Origin::Source(span))?;
+        let instance = EffectInstance::new(api.default_alloc(), Box::new([]));
+        let row = self.core_effect_row(&EffectRow::singleton(instance.clone()))?;
+        Ok(self.push_effect_core(
+            Type::Nominal(api.region_view()),
+            row,
+            Origin::Source(span),
+            EffectOperation::Request(RequestNode::new(
+                instance,
+                crate::types::OperationId::new(api.default_alloc(), 1),
+                unit,
+            )),
+        )?)
+    }
+
+    pub(super) fn saved_region_binding(
+        &mut self,
+        api: RegionApi,
+        span: Span,
+    ) -> Result<(TypedBinder, NodeId), TypeError> {
+        let context = self
+            .builder
+            .binder(Type::Nominal(api.region_view()), Origin::Source(span))?;
+        let query = self.region_context_query(api, span)?;
+        Ok((context, query))
+    }
+
     pub(super) fn saved_region_context(
         &mut self,
         api: RegionApi,
@@ -49,20 +77,43 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Type::Nominal(api.region_view()),
             Origin::Source(span),
         )?;
-        let unit = self.builder.unit(Type::Unit, Origin::Source(span))?;
-        let instance = EffectInstance::new(api.default_alloc(), Box::new([]));
-        let row = self.core_effect_row(&EffectRow::singleton(instance.clone()))?;
-        let query = self.push_effect_core(
-            Type::Nominal(api.region_view()),
-            row,
-            Origin::Source(span),
-            EffectOperation::Request(RequestNode::new(
-                instance,
-                crate::types::OperationId::new(api.default_alloc(), 1),
-                unit,
-            )),
-        )?;
+        let query = self.region_context_query(api, span)?;
         Ok((context, context_value, query))
+    }
+
+    pub(super) fn finish_pending_cleanup_regions(&mut self) -> Result<(), TypeError> {
+        for (node, span) in std::mem::take(&mut self.pending_cleanup_regions) {
+            let action = F::effect_builder(&mut self.builder)
+                .ok_or_else(invalid_state)?
+                .pending_cleanup_action(node)?;
+            let effects = self
+                .builder
+                .clone_node_effects_with_budget(action, &mut self.type_work)?;
+            let Some(api) = self.active_region_api()? else {
+                continue;
+            };
+            if effects.tail().is_none()
+                && !effects
+                    .known()
+                    .iter()
+                    .any(|effect| effect.effect() == api.default_alloc())
+            {
+                continue;
+            }
+            let (view, query) = self.saved_region_binding(api, span)?;
+            let provenance = self.at_span_provenance(&Type::Unit, span)?;
+            let action = TypedNodeOwner::new(TypedNode {
+                node: action,
+                ty: Type::Unit,
+                effects,
+                provenance,
+            });
+            let action = self.forward_cleanup_default(action, &view, api, span)?;
+            F::effect_builder(&mut self.builder)
+                .ok_or_else(invalid_state)?
+                .bind_pending_cleanup(node, action.node, view, query)?;
+        }
+        Ok(())
     }
 
     pub(super) fn construct_function(
@@ -546,6 +597,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             return Ok(body.into_inner());
         }
+        self.forward_cleanup_default(body, view, api, span)
+    }
+
+    pub(super) fn forward_cleanup_default(
+        &mut self,
+        body: TypedNodeOwner,
+        view: &TypedBinder,
+        api: RegionApi,
+        span: Span,
+    ) -> Result<TypedNode, TypeError> {
         let default = EffectInstance::new(api.default_alloc(), Box::new([]));
         let required = EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
         let output = self.union_effects(&body.effects, &required, span)?;

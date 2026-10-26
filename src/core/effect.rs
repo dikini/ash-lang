@@ -336,7 +336,8 @@ pub struct RegistrationScopeNode {
     pub(crate) span: crate::source::Span,
 }
 
-/// A non-interpreting owner; `action` is the authenticated callback application.
+/// A non-interpreting owner; `action` is the authenticated callback application
+/// or its exact saved-region forwarding adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CleanupScopeNode {
     pub(crate) callback: crate::resolved::BinderId,
@@ -1352,6 +1353,68 @@ impl CoreBuilder<EffectOperationFamily> {
             }
         }
         result
+    }
+
+    pub(crate) fn pending_cleanup_action(&self, node: NodeId) -> Result<NodeId, super::BuildError> {
+        let index = node.index()?;
+        self.node_at_ordinal(node, index)?;
+        let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) = &self.nodes[index].kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        Ok(scope.action)
+    }
+
+    /// Keep the published owner ID as the saved-query binding. All original
+    /// children move into one appended Cleanup; no old arena node is orphaned.
+    pub(crate) fn bind_pending_cleanup(
+        &mut self,
+        node: NodeId,
+        action: NodeId,
+        view: super::TypedBinder,
+        query: NodeId,
+    ) -> Result<(), super::BuildError> {
+        self.charge_effect_metadata(4)?;
+        self.node_at_ordinal(action, action.index()?)?;
+        self.node_at_ordinal(query, query.index()?)?;
+        if view.arena() != node.arena() {
+            return Err(super::BuildError::ForeignBinder);
+        }
+        let index = node.index()?;
+        self.node_at_ordinal(node, index)?;
+        let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) = &self.nodes[index].kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        let mut scope = *scope;
+        scope.action = action;
+        let ty = crate::types::clone_type_with_budget(&self.nodes[index].ty, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        let effects = clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        let query_row = &self.nodes[query.index()?].effects;
+        let action_row = &self.nodes[action.index()?].effects;
+        let expected = self.nodes[scope.body.index()?]
+            .effects
+            .union_with_budget(action_row, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+            .map_err(|_| super::BuildError::InvalidPayload)?
+            .union_with_budget(query_row, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+            .map_err(|_| super::BuildError::InvalidPayload)?;
+        if !crate::types::same_effect_rows_with_budget(&effects, &expected, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+        {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        let moved = self.cleanup_scope(scope, ty, effects, Origin::Source(scope.span))?;
+        self.nodes[index].kind = EffectExprKind::Pure(PureExprKind::Computation(
+            super::PureComputation::Bind(super::binding::BindingNode::new(view, query, moved)),
+        ));
+        if let Some(settled) = self.settled_zonk_nodes.get_mut(index) {
+            *settled = false;
+        }
+        Ok(())
     }
 
     pub fn native_interpret(

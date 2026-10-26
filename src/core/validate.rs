@@ -12897,6 +12897,75 @@ enum ClauseOutput<'a> {
 }
 
 impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
+    /// Only the explicit two-clause saved-view adapter may surround the
+    /// original callback application. Ordinary cleanup ownership stays exact.
+    fn cleanup_invocation(&self, id: NodeId) -> Result<NodeId, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation, ResumeUse};
+        let action = self.node(id)?;
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &action.kind else {
+            return Ok(id);
+        };
+        let invalid = || ValidationError::with_cause(ValidationCause::CleanupActionShape, Some(id));
+        self.charge_type_work(16)?;
+        let api = crate::resolved::RegionApi::for_module(handler.effect.effect().module())
+            .ok_or_else(invalid)?;
+        let [allocate, context] = &*handler.clauses else {
+            return Err(invalid());
+        };
+        if handler.effect.effect() != api.default_alloc()
+            || !handler.effect.arguments().is_empty()
+            || handler.hook_root.is_some()
+            || handler.hook_registration.is_some()
+            || allocate.operation() != crate::types::OperationId::new(api.default_alloc(), 0)
+            || context.operation() != crate::types::OperationId::new(api.default_alloc(), 1)
+        {
+            return Err(invalid());
+        }
+        let CorePatternKind::Binder(input) = &allocate.pattern().kind else {
+            return Err(invalid());
+        };
+        let EffectExprKind::Operation(EffectOperation::Resume(allocation_resume)) =
+            &self.node(allocate.body())?.kind
+        else {
+            return Err(invalid());
+        };
+        let EffectExprKind::Operation(EffectOperation::Resume(context_resume)) =
+            &self.node(context.body())?.kind
+        else {
+            return Err(invalid());
+        };
+        for (clause, resumed) in [(allocate, allocation_resume), (context, context_resume)] {
+            if resumed.handler() != handler.id
+                || resumed.owner() != clause.resume()
+                || resumed.use_state() != ResumeUse::Consumed
+            {
+                return Err(invalid());
+            }
+        }
+        let EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) =
+            &self.node(allocation_resume.value())?.kind
+        else {
+            return Err(invalid());
+        };
+        let PureExprKind::Variable(request) = self.pure_kind(allocation.request)? else {
+            return Err(invalid());
+        };
+        let PureExprKind::Variable(selected) = self.pure_kind(allocation.context)? else {
+            return Err(invalid());
+        };
+        let PureExprKind::Variable(saved) = self.pure_kind(context_resume.value())? else {
+            return Err(invalid());
+        };
+        if allocation.api != api.module()
+            || request.binder() != input.id()
+            || selected.binder() != saved.binder()
+            || selected.binder() == input.id()
+        {
+            return Err(invalid());
+        }
+        Ok(handler.body)
+    }
+
     fn validate_cleanup_owner(
         &self,
         id: NodeId,
@@ -12907,8 +12976,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let invalid = |cause| ValidationError::with_cause(cause, Some(id));
         self.charge_type_work(4)?;
         let action = self.node(scope.action)?;
+        let invocation = self.node(self.cleanup_invocation(scope.action)?)?;
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
-            &action.kind
+            &invocation.kind
         else {
             return Err(invalid(ValidationCause::CleanupActionShape));
         };
@@ -12939,7 +13009,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             Some(ValidationCause::CleanupScopeEffects)
         } else if node.origin.as_ref().map(Origin::primary_span) != Some(scope.span) {
             Some(ValidationCause::CleanupScopeOrigin)
-        } else if [action, function, argument]
+        } else if [invocation, function, argument]
             .iter()
             .any(|child| child.origin.as_ref().map(Origin::primary_span) != Some(scope.action_span))
         {
@@ -13217,6 +13287,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             match &node.kind {
                 EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
                     let (count, parent) = parents[index];
+                    let mut owner_body = id;
+                    let mut owner_parent = parent
+                        .ok_or_else(|| invalid(ValidationCause::CallbackScopeMissingParent))?;
                     let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
                         binding,
                     ))) =
@@ -13228,19 +13301,79 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     else {
                         return Err(invalid(ValidationCause::CallbackScopeBindingShape));
                     };
+                    let binding = if matches!(
+                        &self.node(scope.action)?.kind,
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(_)))
+                    ) {
+                        binding
+                    } else {
+                        // Exactly one registration-time Unit context query may
+                        // sit between the callback binding and cleanup owner.
+                        let EffectExprKind::Operation(EffectOperation::Handler(adapter)) =
+                            &self.node(scope.action)?.kind
+                        else {
+                            return Err(invalid(ValidationCause::CallbackScopeBindingIdentity));
+                        };
+                        self.cleanup_invocation(scope.action)?;
+                        let api = crate::resolved::RegionApi::for_module(
+                            adapter.effect.effect().module(),
+                        )
+                        .ok_or_else(|| invalid(ValidationCause::CleanupActionShape))?;
+                        let EffectExprKind::Operation(EffectOperation::Request(query)) =
+                            &self.node(binding.initializer())?.kind
+                        else {
+                            return Err(invalid(ValidationCause::CallbackScopeBindingShape));
+                        };
+                        let EffectExprKind::Operation(EffectOperation::Resume(resumed)) =
+                            &self.node(adapter.clauses[1].body())?.kind
+                        else {
+                            return Err(invalid(ValidationCause::CleanupActionShape));
+                        };
+                        let PureExprKind::Variable(selected) = self.pure_kind(resumed.value())?
+                        else {
+                            return Err(invalid(ValidationCause::CleanupActionShape));
+                        };
+                        if binding.body() != id
+                            || selected.binder() != binding.binder().id()
+                            || query.effect().effect() != api.default_alloc()
+                            || !query.effect().arguments().is_empty()
+                            || query.operation()
+                                != crate::types::OperationId::new(api.default_alloc(), 1)
+                            || !matches!(
+                                self.pure_kind(query.operand())?,
+                                PureExprKind::Value(PureValue::Unit(_))
+                            )
+                        {
+                            return Err(invalid(ValidationCause::CallbackScopeBindingIdentity));
+                        }
+                        owner_body = owner_parent;
+                        let (count, parent) = parents[self.index(owner_parent)?];
+                        if count != 1 {
+                            return Err(invalid(ValidationCause::CallbackScopeParentCount));
+                        }
+                        owner_parent = parent
+                            .ok_or_else(|| invalid(ValidationCause::CallbackScopeMissingParent))?;
+                        let PureExprKind::Computation(PureComputation::Bind(callback)) =
+                            self.pure_kind(owner_parent)?
+                        else {
+                            return Err(invalid(ValidationCause::CallbackScopeBindingShape));
+                        };
+                        callback
+                    };
                     let cause = if count != 1 {
                         Some(ValidationCause::CallbackScopeParentCount)
-                    } else if binding.body() != id {
+                    } else if binding.body() != owner_body {
                         Some(ValidationCause::CallbackScopeBindingBody)
                     } else if binding.binder().id() != scope.callback {
                         Some(ValidationCause::CallbackScopeBindingIdentity)
                     } else if binding.binder().origin().primary_span() != scope.action_span {
                         Some(ValidationCause::CleanupBindingOrigin)
-                    } else if parents[scope
-                        .action
-                        .index()
-                        .map_err(|_| invalid(ValidationCause::CleanupActionIndex))?]
-                    .0 != 1
+                    } else if parents[self.index(self.cleanup_invocation(scope.action)?)?].0 != 1
+                        || parents[scope
+                            .action
+                            .index()
+                            .map_err(|_| invalid(ValidationCause::CleanupActionIndex))?]
+                        .0 != 1
                     {
                         Some(ValidationCause::CleanupActionParentCount)
                     } else {
@@ -20262,6 +20395,141 @@ mod tests {
                     .to_string(),
                 "()"
             );
+        }
+    }
+
+    #[test]
+    fn cleanup_saved_region_bridge_reconstructs_and_rejects_forged_association_and_replay() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let (donor, sources, relation) = generic_cell_source_fixture(
+            "main : Unit -> Unit\nmain () = region<A> owner {\ncleanup fn(ignored) {\nlet pair = (1, 2)\nmatch pair {\n(left, right) => ()\n}\n} {\n()\n}\n}\n",
+            None,
+        );
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transform in [
+            crate::core::transform::identity_effect_traversal,
+            crate::core::transform::fold_effect_literal_primitives,
+        ] {
+            let valid =
+                super::super::validate_effect_modules(transform(&donor).unwrap(), &refs, &relation)
+                    .unwrap();
+            for corruption in 0..4 {
+                let mut core = crate::core::transform::identity_effect_traversal(&valid).unwrap();
+                let (scope_index, scope) = core
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, node)| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                            Some((index, *scope))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let scope_id = node_id(core.arena, scope_index).unwrap();
+                let saved = core
+                    .nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                            binding,
+                        ))) if binding.body() == scope_id => Some(binding.binder().id()),
+                        _ => None,
+                    })
+                    .unwrap();
+                let owner = core
+                    .nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Region(region))
+                            if !region.entry =>
+                        {
+                            Some(region.access.id())
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let EffectExprKind::Operation(EffectOperation::Handler(adapter)) =
+                    &core.nodes[scope.action.index().unwrap()].kind
+                else {
+                    panic!("canonical adapter");
+                };
+                let invocation = adapter.body();
+                let expected = match corruption {
+                    0 => {
+                        // The alternative view is well typed and live in this
+                        // same scope, but is not the recorded registration query.
+                        for node in &mut core.nodes {
+                            if let EffectExprKind::Pure(PureExprKind::Variable(value)) =
+                                &mut node.kind
+                                && value.binder() == saved
+                            {
+                                *value = VariableNode::new(owner);
+                            }
+                        }
+                        ValidationCause::CallbackScopeBindingIdentity
+                    }
+                    1 => {
+                        let allocation_context = core.nodes.iter().find_map(|node| match &node.kind {
+                            EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) if matches!(&core.nodes[allocation.context.index().unwrap()].kind, EffectExprKind::Pure(PureExprKind::Variable(value)) if value.binder() == saved) => Some(allocation.context), _ => None,
+                        }).unwrap();
+                        core.nodes[allocation_context.index().unwrap()].kind =
+                            EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(owner)));
+                        ValidationCause::CleanupActionShape
+                    }
+                    2 => {
+                        // A strict same-scope Bind adds one incoming invocation
+                        // use and preserves every original node and full row.
+                        let index = scope.body.index().unwrap();
+                        let original = &core.nodes[index];
+                        let saved_body = node_id(core.arena, core.nodes.len()).unwrap();
+                        let copied = StoredNode {
+                            dialect: original.dialect,
+                            ty: original.ty.clone(),
+                            effects: original.effects.clone(),
+                            origin: original.origin.clone(),
+                            kind: original.kind.clone(),
+                        };
+                        let origin = original.origin.clone().unwrap();
+                        let row = core.nodes[invocation.index().unwrap()].effects.clone();
+                        assert_eq!(row.union(&original.effects).unwrap(), row);
+                        core.nodes.push(copied);
+                        core.nodes[index].effects = row;
+                        core.nodes[index].kind = EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::Bind(BindingNode::new(
+                                TypedBinder::new(
+                                    core.arena,
+                                    BinderId::Generated(u32::MAX - 91),
+                                    Type::Unit,
+                                    origin,
+                                ),
+                                invocation,
+                                saved_body,
+                            )),
+                        ));
+                        ValidationCause::CleanupActionParentCount
+                    }
+                    _ => {
+                        let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) =
+                            &mut core.nodes[scope_index].kind
+                        else {
+                            unreachable!();
+                        };
+                        scope.callback = BinderId::Generated(u32::MAX - 92);
+                        ValidationCause::CleanupCallbackIdentity
+                    }
+                };
+                let error =
+                    super::super::validate_effect_modules(core, &refs, &relation).unwrap_err();
+                assert_eq!(
+                    error.cause,
+                    Some(expected),
+                    "corruption {corruption}: {error:?}"
+                );
+            }
         }
     }
 

@@ -205,9 +205,10 @@ of an explicit-region payload sent through an unprotected outward request. The
 last case preserves the existing lexical payload rule; this delivery adds no
 source native-interpretation syntax. This partial delivery does not complete
 ordinary-construction acceptance.
-The host root retains backing through the existing observed heap, but
-observation-before-root-release ordering remains pending. Target-specific discharge correspondence/regression audit, full close/composition,
-connected R-core and all R3–R5 acceptance remain pending. Existing issues
+That construction checkpoint left observation-before-root-release and the
+bounded target-discharge correspondence audit for the following R4 root slice.
+Full close/composition, connected R-core and all whole R3–R5 acceptance remain
+pending. Existing issues
 [#65](https://github.com/dikini/ash-lang/issues/65),
 [#66](https://github.com/dikini/ash-lang/issues/66),
 [#67](https://github.com/dikini/ash-lang/issues/67),
@@ -215,7 +216,10 @@ connected R-core and all R3–R5 acceptance remain pending. Existing issues
 [#70](https://github.com/dikini/ash-lang/issues/70) retain their review,
 verification, integration and author-acceptance obligations.
 
-The active R4 candidate transfers only the fixed host entry's completion records
+The partial R4 root slice is retained by [PR #153](https://github.com/dikini/ash-lang/pull/153)
+at `dd4137703da03ca404939ecb7b0bf14c0a6e0541`; author and independent live acceptance
+confirmed that subset while preserving the whole criteria. It transfers only the
+fixed host entry's completion records
 to the existing shared observed heap. It authenticates the runtime host pair,
 owner, concrete locations and layouts and charges close preparation before
 consuming the boundary. Last-owner disposal clears current Rust representation
@@ -232,17 +236,66 @@ execution. Existing private-constructor, escape, request-payload and outer-Cell
 backpatch negatives retain the view-origin and dependency boundaries. These
 checks follow the existing explicit view/actual-dependency/owner-invocation chain;
 no admitted missing-owner example warrants another checker. They do not complete
-close-service/removed-backend correspondence. Owner-position H/J Console behavior
-for normal and allocation-only cleanup, required-backend rejection, action-local
-interpreter admission and shared allocator isolation still need the connected
-R4 composition evidence.
+close-service/removed-backend correspondence by themselves.
+
+For a DefaultAlloc-bearing or open-row invocation, the connected R4 composition
+candidate binds one Unit allocation-context query after the original cleanup
+callback is evaluated once. Closed invocations without DefaultAlloc retain the
+original direct callback form; no unused handler or context query is emitted. Cleanup-equation tails
+wait until the existing row-completion boundary. A final empty row stays direct;
+a final DefaultAlloc row receives a local appended cleanup and query binding at
+the original owner ID, with exact outward-row equality checked before retargeting.
+The nested allocating-discard regression exercises that latter branch through
+ordinary source execution and independent Core validation. Its explicit
+saved-view handler surrounds the eventual callback invocation. Independent Core
+validation authenticates both forwarding clauses, the query/binder association,
+the original callback/Unit/once/origin relationships and the invocation's unique
+incoming use. Current admitted Source donors survive identity/fold validation;
+well-typed alternative-view, mismatched-clause, extra-use and callback-identity
+mutations reach their exact independent refusals.
+
+Control analysis follows explicit view targets through the existing finite
+Resource occurrences. Its internal ordinary handler/call/resume equations run
+the real saved allocate member at the owner position, and an existing required
+cleanup equation runs the real release member before retiring the Resource.
+Their existing provider adapters supply the preceding allocation context. Public
+backend lookup and removed-handler refusal remain ordinary; no runtime service,
+callback package, frame family or registry is added.
+
+Regression checking exposed two value/control correspondence errors in the new
+analysis wrapper: its saved body result must remain available independently of
+the release's Unit result, and focused lifetime analysis must reuse the provider
+initializer completed before Resource entry. The synthetic completion now
+forwards the saved service result while ordinary control still executes release;
+the existing completed-input cut freezes the initializer without changing fresh
+owner identities. This restores progress through provider calls and preserves
+large-Int, nominal and Bytes escape checks. A measured outer-placed Score donor
+also reaches the same request first with no target facts and then with its actual
+owner after existing value-revision replay. Explicit requests check the transported
+independent descriptor as payload; their view remains target authority and an
+actual dependency. Ordinary request payload checking stays unchanged.
+
+Native fixtures cover allocating cleanup after normal return and discard under a
+different surviving default; helper-created cleanup and H/J provider routing;
+removed required allocation-only and release-only backends despite a live outer
+same-instance handler; corresponding action-local admission; and separate region
+handles/block lists sharing a refcounted backend. The isolation case closes A,
+reads B's pre-existing tuple, then allocates/reads another B tuple before the
+backend's single final close. The action-local backend fixture packages its
+outbound Cell write arguments before A entry; cleanup allocates and consumes its
+own A tuple, then gates the write on the computed sum. This preserves the existing
+conservative payload contract for symbolic generic callables, rather than claiming
+new opaque-call precision. These focused checks precede whole-slice review and
+retention; they do not establish the connected full gate.
 
 Five focused root checks cover structured exact/short/retry, forged pair/record
 rejection, shared Evaluation lifetime/weak expiry, repeated close, post-transfer
 primary plus teardown failure, and ambient-scope failure visibility. Existing
-Observation/value/parts accessors retain the same shared owner. Independent R4
-review and retention remain pending. The connected R-core full all-target/all-feature
-checkpoint remains root-owned; later R5/final/Main gates remain separate.
+Observation/value/parts accessors retain the same shared owner. The root subset's
+review, retention and partial acceptance are complete; the connected composition
+candidate still requires independent review, retention and author acceptance.
+The connected R-core full all-target/all-feature checkpoint remains root-owned;
+later R5/final/Main gates remain separate.
 
 Keep implementation tight: reuse existing Ash mechanisms and libraries, prefer
 removing duplicate machinery, and seek constructive planner/reviewer scrutiny

@@ -352,7 +352,332 @@ fn buffer_allocation_discard_before_payload_does_not_replay_earlier_operands() {
     );
 }
 
+fn allocating_cleanup_entry(discard: bool) -> String {
+    let completion = if discard { "discard" } else { "resume ()" };
+    format!(
+        r#"import @builtin.cell as Cell
+{provider}
+effect Stop {{
+    stop : Unit -> Unit
+}}
+main : Unit -> Int ! {{Raw.Make, Raw.Allocate, Raw.Release}}
+main () = resource cell<C> completed = 0 {{
+    let state = perform Raw.Make.call ()
+    let _ = region<A> owner = (provider state) {{
+        region<B> other {{
+            handle (using owner {{
+                cleanup fn(ignored) {{
+                    match (20, 22) {{
+                        (left, right) => match (left + right) == 42 {{
+                            true => Cell.write (completed, 42)
+                            false => Cell.write (completed, 0)
+                        }}
+                    }}
+                }} {{
+                    perform Stop.stop ()
+                }}
+            }}) with Stop {{
+                stop ignored => {completion}
+            }}
+        }}
+    }}
+    Cell.read completed
+}}
+"#,
+        provider = ENTRY.split_once("main :").unwrap().0,
+    )
+}
+
+#[test]
+fn allocating_cleanup_finishes_before_its_owner_releases() {
+    // B's allocate/release adapters (2), cleanup closure (1), cleanup tuple
+    // (1), and Cell.write argument tuple (1) all use A before its single close.
+    run_native(
+        "cleanup-normal",
+        &allocating_cleanup_entry(false),
+        b"maaaaar",
+    );
+}
+
+#[test]
+fn allocating_cleanup_discard_retains_saved_owner_under_another_default() {
+    run_native(
+        "cleanup-discard",
+        &allocating_cleanup_entry(true),
+        b"maaaaar",
+    );
+}
+
+fn provider_effect_cleanup_entry(discard: bool) -> String {
+    let provider = ENTRY.split_once("main :").unwrap().0
+        .replace("provider<R> :", "effect Console {\n    origin : Int -> Bool\n}\nprovider<R> :")
+        .replace("! {Raw.Allocate}", "! {Raw.Allocate, Console}")
+        .replace("let backing = perform Raw.Allocate.call state", "let origin = perform Console.origin 1\n        let backing = perform Raw.Allocate.call state\n        let extent = match origin {\n            true => 4096\n            false => 0\n        }")
+        .replace("Region.from_backing (request, backing, 4096, 64)", "Region.from_backing (request, backing, extent, 64)");
+    let completion = if discard { "discard" } else { "resume ()" };
+    format!(
+        r#"import @builtin.cell as Cell
+{provider}
+effect Stop {{
+    stop : Unit -> Unit
+}}
+exercise<C> : (Cell.Handle<C>, Int) -> Unit ! {{Cell.Ops<C>, Console, Stop}} where Cell.Provider<C>
+exercise writeback = cleanup fn(ignored) {{
+    let pair = (20, 22)
+    let sum = match pair {{
+        (left, right) => left + right
+    }}
+    match sum == 42 {{
+        true => Cell.write writeback
+        false => ()
+    }}
+}} {{
+    let _ = (1, 2)
+    let _ = perform Console.origin 0
+    perform Stop.stop ()
+}}
+within<C, D> : (F.Address, (Cell.Handle<C>, Int), (Cell.Handle<D>, Int)) -> Unit ! {{Raw.Allocate, Raw.Release, Console, Cell.Ops<C>, Cell.Ops<D>}} where Cell.Provider<C>, Cell.Provider<D>
+within (state, writeback, wrongback) = region<A> owner = (provider state) {{
+    handle (handle (exercise writeback) with Console {{
+        origin tag => match tag == 0 {{
+            true => resume false
+            false => {{
+                let _ = Cell.write wrongback
+                resume false
+            }}
+        }}
+    }}) with Stop {{
+        stop ignored => {completion}
+    }}
+}}
+main : Unit -> Int ! {{Raw.Make, Raw.Allocate, Raw.Release}}
+main () = resource cell<C> completed = 0 {{
+    resource cell<D> wrong = 0 {{
+        let state = perform Raw.Make.call ()
+        let _ = handle (within (state, (completed, 42), (wrong, 1))) with Console {{
+            origin ignored => resume true
+        }}
+        match (Cell.read wrong) == 0 {{
+            true => Cell.read completed
+            false => 0
+        }}
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn provider_effects_use_owner_position_for_normal_and_cleanup_allocation() {
+    run_native(
+        "cleanup-provider-normal",
+        &provider_effect_cleanup_entry(false),
+        b"maaaaar",
+    );
+}
+
+#[test]
+fn provider_effects_skip_discarded_inner_handler_during_cleanup_allocation() {
+    run_native(
+        "cleanup-provider-discard",
+        &provider_effect_cleanup_entry(true),
+        b"maaaaar",
+    );
+}
+
+fn removed_backend_cleanup_entry(action_local: bool, release_backend: bool) -> String {
+    let mut provider = ENTRY.split_once("main :").unwrap().0.to_owned();
+    let request = if action_local {
+        "handle (perform Console.origin ()) with Console {\n            origin ignored => resume ()\n        }"
+    } else {
+        "perform Console.origin ()"
+    };
+    if release_backend {
+        if !action_local {
+            provider = provider.replace("! {Raw.Release}", "! {Raw.Release, Console}");
+        }
+        provider = provider.replace(
+            "perform Raw.Release.call state",
+            &format!("let _ = {request}\n        perform Raw.Release.call state"),
+        );
+    } else {
+        if !action_local {
+            provider = provider.replace("! {Raw.Allocate}", "! {Raw.Allocate, Console}");
+        }
+        provider = provider.replace(
+            "let backing = perform Raw.Allocate.call state",
+            &format!("let _ = {request}\n        let backing = perform Raw.Allocate.call state"),
+        );
+    }
+    format!(
+        r#"import @builtin.cell as Cell
+{provider}
+effect Console {{
+    origin : Unit -> Unit
+}}
+effect Stop {{
+    stop : Unit -> Unit
+}}
+within<C> : (F.Address, (Cell.Handle<C>, Int)) -> Unit ! {{Raw.Allocate, Raw.Release, Console, Cell.Ops<C>, Stop}} where Cell.Provider<C>
+within (state, writeback) = region<A> owner = (provider state) {{
+    cleanup fn(ignored) {{
+        let pair = (20, 22)
+        let sum = match pair {{
+            (left, right) => left + right
+        }}
+        match sum == 42 {{
+            true => Cell.write writeback
+            false => ()
+        }}
+    }} {{
+        perform Stop.stop ()
+    }}
+}}
+main : Unit -> Int ! {{Raw.Make, Raw.Allocate, Raw.Release}}
+main () = resource cell<C> completed = 0 {{
+    let state = perform Raw.Make.call ()
+    let _ = handle {{
+        let _ = perform Console.origin ()
+        handle (handle {{
+            let _ = perform Console.origin ()
+            within (state, (completed, 42))
+        }} with Console {{
+            origin ignored => resume ()
+        }}) with Stop {{
+            stop ignored => discard
+        }}
+    }} with Console {{
+        origin ignored => resume ()
+    }}
+    Cell.read completed
+}}
+"#
+    )
+}
+
+fn assert_removed_backend_rejected(source: &str) {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!("ash-region-removed-backend-{nonce}"));
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("native.ash"), NATIVE).unwrap();
+    fs::write(directory.join("entry.ash"), source).unwrap();
+    let error = compile_path(RunConfiguration {
+        entry: directory.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    fs::remove_dir_all(directory).unwrap();
+    assert_eq!(error.reason_code(), "effect.cleanup-context", "{error:?}");
+}
+
+#[test]
+fn discarded_owner_cannot_replace_removed_allocate_backend_with_outer_handler() {
+    assert_removed_backend_rejected(&removed_backend_cleanup_entry(false, false));
+}
+
+#[test]
+fn discarded_owner_cannot_replace_removed_release_backend_with_outer_handler() {
+    assert_removed_backend_rejected(&removed_backend_cleanup_entry(false, true));
+}
+
+#[test]
+fn discarded_owner_allocate_backend_can_be_handled_action_locally() {
+    run_native(
+        "cleanup-allocate-local",
+        &removed_backend_cleanup_entry(true, false),
+        b"maar",
+    );
+}
+
+#[test]
+fn owner_allocate_backend_handles_normal_and_cleanup_action_locally() {
+    let source = removed_backend_cleanup_entry(true, false)
+        .replace("stop ignored => discard", "stop ignored => resume ()");
+    run_native("cleanup-allocate-local-normal", &source, b"maar");
+}
+
+#[test]
+fn discarded_owner_release_backend_can_be_handled_action_locally() {
+    run_native(
+        "cleanup-release-local",
+        &removed_backend_cleanup_entry(true, true),
+        b"maar",
+    );
+}
+
+fn shared_backend_c() -> String {
+    C.replace(
+        "struct state { struct block *blocks; };",
+        "struct backend { size_t owners; size_t created; };\nstatic struct backend *shared;\nstruct state { struct block *blocks; struct backend *backend; char tag; };",
+    )
+    .replace(
+        "    current = state;",
+        "    if (!shared) {\n        shared = calloc(1, sizeof *shared);\n        if (!shared) abort();\n        trace('s');\n    }\n    state->backend = shared;\n    shared->owners++;\n    state->tag = ++shared->created == 1 ? 'b' : 'a';\n    current = state;",
+    )
+    .replace(
+        "    struct state *state = opaque;",
+        "    struct state *state = opaque;\n    if (state->backend != shared || !shared->owners) abort();",
+    )
+    .replace("    trace('a');", "    trace(state->tag);")
+    .replace(
+        "    free(state);\n    current = NULL;",
+        "    if (--state->backend->owners == 0) {\n        trace('x');\n        free(shared);\n        shared = NULL;\n    }\n    if (current == state) current = NULL;\n    free(state);",
+    )
+}
+
+#[test]
+fn shared_backend_close_preserves_other_region_reads_and_later_allocation() {
+    let source = format!(
+        r#"{provider}
+check_old : (Int, Int) -> Bool
+check_old (left, right) = (left + right) == 42
+check_later : (Int, Int) -> Int
+check_later (first, second) = match (first + second) == 3 {{
+    true => 42
+    false => 0
+}}
+main : Unit -> Int ! {{Raw.Make, Raw.Allocate, Raw.Release}}
+main () = {{
+    let b_state = perform Raw.Make.call ()
+    region<B> b = (provider b_state) {{
+        let kept = (20, 22)
+        let a_state = perform Raw.Make.call ()
+        let _ = region<A> a = (provider a_state) {{
+            let temporary = (1, 2)
+            match temporary {{
+                (left, right) => ()
+            }}
+        }}
+        match check_old kept {{
+            true => check_later (1, 2)
+            false => 0
+        }}
+    }}
+}}
+"#,
+        provider = ENTRY.split_once("main :").unwrap().0
+    );
+    // B keeps one tuple, then prepares A's provider closures/pair (3) and
+    // preceding-context adapters (2). A owns its temporary; its backing-envelope
+    // argument and release bookkeeping allocate in preceding B (2). After A's
+    // r, B reads its old tuple and allocates/reads one more. The sole backend x
+    // follows both per-handle releases.
+    run_native_with_c(
+        "shared-backend",
+        &source,
+        concat!("sm", "b", "m", "bbbbb", "a", "bb", "r", "b", "rx").as_bytes(),
+        &shared_backend_c(),
+    );
+}
+
 fn run_native(name: &str, entry: &str, expected_trace: &[u8]) {
+    run_native_with_c(name, entry, expected_trace, C);
+}
+
+fn run_native_with_c(name: &str, entry: &str, expected_trace: &[u8], c: &str) {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -364,7 +689,7 @@ fn run_native(name: &str, entry: &str, expected_trace: &[u8]) {
     fs::create_dir(&directory).unwrap();
     fs::write(directory.join("native.ash"), NATIVE).unwrap();
     fs::write(directory.join("entry.ash"), entry).unwrap();
-    fs::write(directory.join("region.c"), C).unwrap();
+    fs::write(directory.join("region.c"), c).unwrap();
     let compiled = compile_path(RunConfiguration {
         entry: directory.join("entry.ash"),
         roots: ModuleRoots::empty(),

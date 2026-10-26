@@ -297,6 +297,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             )?;
         }
         F::finish_cleanup_effect_rows(&mut self.builder)?;
+        if !self.pending_cleanup_regions.is_empty() {
+            self.finish_pending_cleanup_regions()?;
+            F::finish_cleanup_effect_rows(&mut self.builder)?;
+        }
         Ok(())
     }
 
