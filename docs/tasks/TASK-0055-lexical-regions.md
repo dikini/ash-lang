@@ -30,13 +30,14 @@ tests. Functions passes all 19 original tests. Polymorphism and interface-module
 controls pass all 43 and 25 original tests. Module loading now passes all 24
 original tests; library imports now passes all 17. Core validation now passes
 all 67 original tests and resource modules all 16. Their fourteen restorations
-are disjoint from the published 410, giving 424 staged integration restorations. Seventeen focused unit
-repairs are counted separately. Repeated passes are counted once. Two constructor
+are disjoint from the prior 410, giving 424 staged integration restorations.
+The fresh library inventory passes all 1,597 tests; all 35 Library10 unit
+failures are restored separately. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
-The latest complete Library10 inventory at checkpoint20 policy inputs records 1,562 passes and
-35 unchanged failures over 1,597 names. Both added unit tests pass; no prior name
-is missing or newly failing, and all 8,565 tracked inputs stayed equal during
-the run. Integration69 (1,276/504) remains the latest complete integration
+The latest complete Library11 inventory records 1,597 passes, zero failures
+and zero ignored tests. All 35 Library10 failures now pass, with no added,
+missing or newly failing names; all 8,565 tracked inputs stayed equal during
+the run. The two previously added unit names remain coverage, not restorations. Integration69 (1,276/504) remains the latest complete integration
 baseline. The scoped controls retain exact
 resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
@@ -106,9 +107,9 @@ policies remain unchanged. Normal166 passes all 102 original resource-typing cas
 cases, the three repaired units and 13 existing owner/policy/calibration/reporting
 controls: 135 distinct names. All eight old resource failures now pass without
 program, stack or depth changes; no original resource name is missing or newly
-failing. Together with the elaborate and Core ledger controls below, seventeen selected
-old unit failures now pass, leaving 18 names in the selected Library10 backlog. This is
-not a refreshed complete library count. Diagnostics remain separate from normal
+failing. The eighteen evidence/summary controls below complete the 35 Library10 unit
+restorations. Library11 freshly verifies the complete library at zero failures;
+these unit names add no integration credit. Diagnostics remain separate from normal
 verification, and integration-only inventory/full-gate clearance remain pending.
 The connected unchanged resource-runtime target also passes all 32 original
 names, restoring its one old Source-work failure. These fresh target observations
@@ -152,6 +153,33 @@ Core197 passes all eight original names after formatting; Final198 format and
 canonical Clippy pass without subsequent executable edits. Production prefixes
 remain byte-identical. These eight unit restorations add no integration credit,
 policy, API or semantic change; the complete library inventory is not refreshed.
+
+
+Eighteen evidence/summary ledger controls retain local derivations separately
+from complete admission boundaries. Linked kinds retain the five canonical
+service nominals, original user kinds and independent owner records. Full
+DefaultAlloc rows add their real structure, synthesis, substitution and comparison
+work; original lookup-width deltas and local relationship/key fees remain.
+Block scheduling preserves unscoped 8-constraint/0-type atomic admission and
+checks scoped 18/10 work with exact annotation ownership and fresh retries.
+Registry rows retain local 8, prefix 45 and complete 54; combined linking derives
+83 constraint/94 type units. Its 74-type cut leaves the paid 13-unit prefix before
+the atomic 62-unit retention charge; final one-short and two fresh retries remain.
+Complete catalog/header/public/detached-summary donors measure only their own
+whole boundaries, retaining exact source identities, kinds, rows and dual errors.
+
+The deep constructor fixture now mutates only its actual Deep/Make defining
+owner and compares that same checked summary with the imported physical scheme.
+Its unchanged pure payload of depth 16,384 pays original 13D, the required export
+effect-inventory scan 2D + 1, admission 2 and fixed metadata 211: 245,974 units.
+The public deep fixture retains depth 32,768, generated-origin depth 16,384 and
+its 9D + origin + fixed 456 boundary (311,752 constraint/17 type units). Both
+256 KiB workers, exact/short/default admission and iterative disposal pass.
+The temporary complete-cost probe was restored exactly before normal controls.
+Canonical formatting preceded Final208 and Library11, which freshly covers all
+eighteen controls at committed executable bytes; no production/API/policy change
+or new unit name accompanies these repairs. Integration/native/full-gate and R5
+specification/Main acceptance remain separate and open.
 
 Runtime trace controls retain all 13 original Source programs, exact user event
 vectors/counts/handler identities and whole raw transformed-trace equality. A

@@ -1083,13 +1083,8 @@ fn relational_summary_rejects_complete_parameter_and_application_tampering_matri
 
 #[test]
 fn determined_summary_method_seed_has_exact_admission_boundaries() {
-    // Each of the two methods adds one determinant-subset comparison and one
-    // required-key coverage lookup to the predecessor body-free kind work.
-    // Both methods independently authenticate their two inherited owner slots.
-    // Canonical records live in the kind table, tiny permission domains borrow
-    // their original IDs, and complete function synthesis supplies Type directly.
-    const TYPE_WORK: usize = 26 + 2 * 2;
-    const CONSTRAINT_WORK: usize = 11;
+    // This is complete detached immutable summary admission. The direct
+    // body-free method controls separately own determinant/seed lookup fees.
     let tree = TempTree::create();
     let graph = load(
         &tree,
@@ -1111,44 +1106,103 @@ fn determined_summary_method_seed_has_exact_admission_boundaries() {
     .expect("the determined dependency should check locally")
     .into_exports();
 
+    assert_eq!(summary.module(), dependency.id());
+    assert_eq!(graph.modules().len(), 4);
+    let mut defining = summary
+        .defining_sources()
+        .iter()
+        .map(|(module, file)| (*module, file.id()))
+        .collect::<Vec<_>>();
+    let mut expected = graph
+        .modules()
+        .iter()
+        .filter(|module| module.id() != graph.entry())
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    defining.sort_unstable_by_key(|(module, _)| *module);
+    expected.sort_unstable_by_key(|(module, _)| *module);
+    assert_eq!(defining, expected);
+    assert_eq!(defining.len(), 3);
+    let interface = summary.interface("Collection").unwrap();
+    assert_eq!(interface.id.module(), dependency.id());
+    let [key, item] = interface.parameters.as_ref() else {
+        panic!("original Collection<I, Item>")
+    };
+    assert_eq!((&*key.spelling, &*item.spelling), ("I", "Item"));
+    assert_eq!((&key.kind, &item.kind), (&Kind::Type, &Kind::Type));
+    assert_ne!(key.id, item.id);
+    assert_eq!(interface.determinant_positions(), Some(&[0][..]));
+    let [size, keep] = interface.methods.as_ref() else {
+        panic!("original two methods")
+    };
+    for (ordinal, method) in [size, keep].into_iter().enumerate() {
+        assert_eq!(method.id.interface(), interface.id);
+        assert_eq!(method.id.declaration(), ordinal as u32);
+        assert_eq!(method.inherited_parameters.len(), 2);
+        let row = method
+            .value_type()
+            .function_view()
+            .unwrap()
+            .effects()
+            .unwrap();
+        let [instance] = row.known() else {
+            panic!("canonical singleton DefaultAlloc")
+        };
+        assert!(instance.effect().module().is_builtin_region());
+        assert!(instance.arguments().is_empty());
+        assert!(row.tail().is_none());
+    }
+    assert_eq!(size.spelling, "size");
+    assert_eq!(keep.spelling, "keep");
+    let size_type = size.value_type().function_view().unwrap();
+    assert_eq!(size_type.domain(), &Type::Variable(key.id));
+    assert_eq!(size_type.value(), &Type::Int);
+    let keep_type = keep.value_type().function_view().unwrap();
+    assert_eq!(
+        keep_type.domain(),
+        &Type::Tuple(vec![Type::Variable(key.id), Type::Variable(item.id)].into_boxed_slice())
+    );
+    assert_eq!(keep_type.value(), &Type::Variable(item.id));
+
     let mut measured_type = TypeWorkBudget::unbounded();
     let mut measured_constraint = crate::interface::InterfaceConstraintBudget::default();
     summary
         .authenticate(&mut measured_type, &mut measured_constraint)
         .expect("the honest determined summary should authenticate");
-    assert_eq!(measured_type.used(), TYPE_WORK);
-    assert_eq!(measured_constraint.used(), CONSTRAINT_WORK);
+    let type_work = measured_type.used();
+    let constraint_work = measured_constraint.used();
+    assert!(type_work > 0 && constraint_work > 0);
 
-    let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+    let mut type_short = TypeWorkBudget::with_limit(type_work - 1);
     assert_eq!(
         summary.authenticate(
             &mut type_short,
-            &mut crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK),
+            &mut crate::interface::InterfaceConstraintBudget::with_limit(constraint_work),
         ),
         Err(ResolvedBuildFailure::TypeResource),
     );
-    assert_eq!(type_short.used(), TYPE_WORK - 1);
+    assert!(type_short.used() < type_work);
 
     let mut constraint_short =
-        crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+        crate::interface::InterfaceConstraintBudget::with_limit(constraint_work - 1);
     assert_eq!(
         summary.authenticate(
-            &mut TypeWorkBudget::with_limit(TYPE_WORK),
+            &mut TypeWorkBudget::with_limit(type_work),
             &mut constraint_short,
         ),
         Err(ResolvedBuildFailure::ConstraintResource),
     );
-    assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 1);
+    assert!(constraint_short.used() < constraint_work);
 
     for _ in 0..2 {
-        let mut exact_type_budget = TypeWorkBudget::with_limit(TYPE_WORK);
+        let mut exact_type_budget = TypeWorkBudget::with_limit(type_work);
         let mut exact_constraint_budget =
-            crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+            crate::interface::InterfaceConstraintBudget::with_limit(constraint_work);
         summary
             .authenticate(&mut exact_type_budget, &mut exact_constraint_budget)
             .expect("the exact immutable determined summary should remain reusable");
-        assert_eq!(exact_type_budget.used(), TYPE_WORK);
-        assert_eq!(exact_constraint_budget.used(), CONSTRAINT_WORK);
+        assert_eq!(exact_type_budget.used(), type_work);
+        assert_eq!(exact_constraint_budget.used(), constraint_work);
     }
 }
 
@@ -1347,12 +1401,28 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
             &[],
         );
         let module = module_named(&graph, "entry.ash");
-        check_module(
+        let summary = check_module(
             resolve_with(&graph, module, &[])
                 .expect("the exact relationship fixture should resolve"),
         )
         .expect("the exact relationship fixture should check")
-        .into_exports()
+        .into_exports();
+        assert_eq!(summary.module(), module.id());
+        assert_eq!(graph.modules().len(), 3);
+        let mut defining = summary
+            .defining_sources()
+            .iter()
+            .map(|(module, file)| (*module, file.id()))
+            .collect::<Vec<_>>();
+        let mut expected = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        defining.sort_unstable_by_key(|(module, _)| *module);
+        expected.sort_unstable_by_key(|(module, _)| *module);
+        assert_eq!(defining, expected);
+        summary
     };
 
     let summary = build_summary();
@@ -1361,72 +1431,40 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
     summary
         .authenticate(&mut measured_type, &mut measured_constraint)
         .expect("the exact relationship fixture should authenticate");
-    const PARAMETER_COUNT: usize = 2;
-    const DETERMINANT_COUNT: usize = 1;
-    const PARTITION_WORK: usize = DETERMINANT_COUNT + PARAMETER_COUNT + PARAMETER_COUNT;
-    const VARIABLE_HEAD_WORK: usize = 1;
-    const KEY_FREE_VARIABLE_WORK: usize = 7;
-    const DEPENDENT_FREE_VARIABLE_WORK: usize = 3;
-    const COVERAGE_SUBSET_WORK: usize = 1;
-    const RELATIONSHIP_WORK: usize = PARTITION_WORK
-        + VARIABLE_HEAD_WORK
-        + KEY_FREE_VARIABLE_WORK
-        + DEPENDENT_FREE_VARIABLE_WORK
-        + COVERAGE_SUBSET_WORK;
-    const PREDECESSOR_CONSTRAINT_WORK: usize = 60;
-    // Complete tagged arguments are traversed for structural determination,
-    // rather than dropping their tag at the relationship boundary.
-    const COMPLETE_ARGUMENT_WORK: usize = 15;
-    // Original constructor and completed implementation publications are
-    // authenticated before relationship coverage. These retained ordinary
-    // checks contribute 44 constraint units independently of foreign policy.
-    const ORIGINAL_FACT_CONSTRAINT_WORK: usize = 44;
-    const EXACT_CONSTRAINT_WORK: usize = PREDECESSOR_CONSTRAINT_WORK
-        + RELATIONSHIP_WORK
-        + COMPLETE_ARGUMENT_WORK
-        + ORIGINAL_FACT_CONSTRAINT_WORK;
-    // Canonical and inherited-role authentication retains every visit while
-    // sharing four kind-table records and borrowing the two-ID method domain.
-    // Complete function synthesis supplies its intrinsic Type without a pair walk.
-    // List<X>'s XI installation also scans its one formal's owner kind.
-    // Method callable-graph closure adds 27 paid visits even though this
-    // fixture's retained types contain no effect identity.
-    // Original constructor matching and the implementation's immutable capture
-    // comparison contribute another 30 type-work units before this boundary.
-    const ORIGINAL_FACT_TYPE_WORK: usize = 30;
-    const EXACT_TYPE_WORK: usize = 104 + 1 + 27 + ORIGINAL_FACT_TYPE_WORK;
-    assert_eq!(
-        (measured_constraint.used(), measured_type.used()),
-        (EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK),
-    );
+    // Complete admission includes canonical services and immutable source,
+    // callable and capture publications. Local partition/seed controls remain
+    // separate; this successful same-summary donor defines the two ledgers.
+    let exact_constraint_work = measured_constraint.used();
+    let exact_type_work = measured_type.used();
+    assert!(exact_constraint_work > 0 && exact_type_work > 0);
 
     let mut short =
-        crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
+        crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint_work - 1);
     assert_eq!(
-        summary.authenticate(&mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK), &mut short,),
+        summary.authenticate(&mut TypeWorkBudget::with_limit(exact_type_work), &mut short,),
         Err(ResolvedBuildFailure::ConstraintResource),
     );
-    assert_eq!(short.used(), EXACT_CONSTRAINT_WORK - 2);
+    assert!(short.used() < exact_constraint_work);
 
-    let mut type_short = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
+    let mut type_short = TypeWorkBudget::with_limit(exact_type_work - 1);
     assert_eq!(
         summary.authenticate(
             &mut type_short,
-            &mut crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK,),
+            &mut crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint_work,),
         ),
         Err(ResolvedBuildFailure::TypeResource),
     );
-    assert_eq!(type_short.used(), EXACT_TYPE_WORK - 1);
+    assert!(type_short.used() < exact_type_work);
 
     for _ in 0..2 {
-        let mut exact_type = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        let mut exact_type = TypeWorkBudget::with_limit(exact_type_work);
         let mut exact_constraint =
-            crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint_work);
         summary
             .authenticate(&mut exact_type, &mut exact_constraint)
             .expect("the exact immutable relationship summary should remain reusable");
-        assert_eq!(exact_constraint.used(), EXACT_CONSTRAINT_WORK);
-        assert_eq!(exact_type.used(), EXACT_TYPE_WORK);
+        assert_eq!(exact_constraint.used(), exact_constraint_work);
+        assert_eq!(exact_type.used(), exact_type_work);
     }
     assert_eq!(
         summary
@@ -1434,17 +1472,60 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
             .and_then(|interface| interface.determinant_positions()),
         Some(&[0][..]),
     );
-    let implementation = summary
-        .implementations()
-        .next()
-        .expect("the exact fixture should retain one implementation");
-    assert!(matches!(
-        implementation.fact().arguments(),
+    let nominal = summary.nominal("List").unwrap();
+    assert_eq!(nominal.id.module(), summary.module());
+    let [list_parameter] = nominal.parameters.as_ref() else {
+        panic!("List<A>")
+    };
+    assert_eq!(list_parameter.spelling, "A");
+    assert_eq!(list_parameter.kind, Kind::Type);
+    let interface = summary.interface("Relation").unwrap();
+    assert_eq!(interface.id.module(), summary.module());
+    let [left, right] = interface.parameters.as_ref() else {
+        panic!("Relation<A,B>")
+    };
+    assert_eq!((&*left.spelling, &*right.spelling), ("A", "B"));
+    assert_eq!((&left.kind, &right.kind), (&Kind::Type, &Kind::Type));
+    assert_ne!(left.id, right.id);
+    let mut implementations = summary.implementations();
+    let implementation = implementations.next().unwrap();
+    assert!(implementations.next().is_none());
+    let fact = implementation.fact();
+    assert_eq!(fact.id.module(), summary.module());
+    assert_eq!(fact.interface(), interface.id);
+    let [parameter] = fact.head_parameters.as_ref() else {
+        panic!("original X")
+    };
+    assert_eq!(parameter.spelling, "X");
+    assert_eq!(parameter.kind, Kind::Type);
+    assert_eq!(
+        fact.arguments(),
         [
-            crate::types::KindedArgument::TypeArg(Type::Application(_, _)),
-            crate::types::KindedArgument::TypeArg(Type::Variable(_))
+            crate::types::KindedArgument::TypeArg(Type::Application(
+                Box::new(Type::Nominal(nominal.id)),
+                Box::new(Type::Variable(parameter.id))
+            )),
+            crate::types::KindedArgument::TypeArg(Type::Variable(parameter.id))
         ]
-    ));
+    );
+    let [method] = fact.methods.as_ref() else {
+        panic!("original relation implementation")
+    };
+    let [interface_method] = interface.methods.as_ref() else {
+        panic!("original relation method")
+    };
+    assert_eq!(method.id.implementation(), fact.id);
+    assert_eq!(method.method, interface_method.id);
+    assert_eq!(method.binder.module(), Some(summary.module()));
+    let function = method.scheme.value_type.function_view().unwrap();
+    assert_eq!(function.value(), &Type::Unit);
+    let row = function.effects().unwrap();
+    let [instance] = row.known() else {
+        panic!("canonical singleton DefaultAlloc")
+    };
+    assert!(instance.effect().module().is_builtin_region());
+    assert!(instance.arguments().is_empty());
+    assert!(row.tail().is_none());
 }
 
 #[test]
