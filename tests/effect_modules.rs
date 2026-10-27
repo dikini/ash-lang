@@ -10,7 +10,7 @@ use ash::{
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{CheckedModule, ResolvedDefinitionKind},
-    types::{EffectId, Kind, OperationId, Type},
+    types::{EffectId, EffectInstance, EffectRow, Kind, OperationId, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -272,6 +272,24 @@ fn inline_result_rows_survive_resolution_and_checking() {
         .expect("the inline result-row fixture should load");
     let module = module_named(&graph, "entry.ash");
     let checked = check_graph(&graph);
+    let service = checked
+        .iter()
+        .find(|checked| {
+            graph
+                .module(checked.module())
+                .unwrap()
+                .source()
+                .display_path()
+                == "@compiler.region"
+        })
+        .unwrap();
+    let [allocation] = service.effects() else {
+        panic!("one canonical DefaultAlloc")
+    };
+    assert_eq!(allocation.spelling, "DefaultAlloc");
+    assert_eq!(allocation.id.module(), service.module());
+    assert!(allocation.parameters.is_empty());
+    let allocation = EffectInstance::new(allocation.id, Box::new([]));
     let checked = checked
         .iter()
         .find(|checked| checked.module() == module.id())
@@ -286,16 +304,14 @@ fn inline_result_rows_survive_resolution_and_checking() {
         panic!("the pure global should remain inline operational")
     };
 
-    let [instance] = explicit.header.result_effects.known() else {
-        panic!("the explicit result should retain exactly one effect")
-    };
-    assert_eq!(instance.effect(), EffectId::new(module.id(), 0));
+    let state = EffectInstance::new(EffectId::new(module.id(), 0), Box::new([Type::Int]));
+    assert_eq!(checked.effects()[0].spelling, "State");
+    assert_eq!(checked.effects()[0].id, state.effect());
     assert_eq!(
-        instance.arguments(),
-        &[ash::types::KindedArgument::TypeArg(Type::Int)]
+        explicit.header.result_effects,
+        EffectRow::closed(vec![state, allocation.clone()].into_boxed_slice())
     );
-    assert!(explicit.header.result_effects.tail().is_none());
-    assert!(pure.header.result_effects.is_empty());
+    assert_eq!(pure.header.result_effects, EffectRow::singleton(allocation));
 }
 
 #[test]

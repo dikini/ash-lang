@@ -57,8 +57,14 @@ fn checked_registry() -> (Arc<ResolvedRegistry>, SourceFile, EffectId, Operation
         .module(graph.entry())
         .expect("entry module should remain loaded");
     let source = module.source().clone();
-    let checked = check_module(resolve_module(module, &[]).expect("fixture should resolve"))
-        .expect("fixture should check");
+    let checked = check_graph(&graph);
+    let checked = checked
+        .iter()
+        .find(|checked| checked.module() == graph.entry())
+        .unwrap();
+    assert_eq!(checked.effects().len(), 1);
+    assert_eq!(checked.effects()[0].spelling, "Cell");
+    assert_eq!(checked.effects()[0].id.module(), module.id());
     let registry = Arc::clone(checked.registry());
     let effect = checked.effects()[0].id;
     let operation = checked.effects()[0].operations[0].id;

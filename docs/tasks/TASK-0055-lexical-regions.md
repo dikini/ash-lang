@@ -29,8 +29,10 @@ and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 origin
 tests. Functions passes all 19 original tests. Polymorphism and interface-module
 controls pass all 43 and 25 original tests. Module loading now passes all 24
 original tests; library imports now passes all 17. Core validation now passes
-all 67 original tests and resource modules all 16. Their fourteen restorations
-are disjoint from the prior 410, giving 424 staged integration restorations.
+all 67 original tests and resource modules all 16. Effect Core, typing and
+module targets pass all 6, 30 and 15 original tests. Their thirteen new
+restorations are disjoint from the prior 424, giving 437 staged integration
+restorations.
 The fresh library inventory passes all 1,597 tests; all 35 Library10 unit
 failures are restored separately. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
@@ -180,6 +182,23 @@ Canonical formatting preceded Final208 and Library11, which freshly covers all
 eighteen controls at committed executable bytes; no production/API/policy change
 or new unit name accompanies these repairs. Integration/native/full-gate and R5
 specification/Main acceptance remain separate and open.
+
+
+The effects fixtures use complete checked dependency summaries and the actual
+entry's defining effect/operation. Source row controls compare complete canonical
+DefaultAlloc instances with every original user instance; open rows retain the
+exact rigid binder and lacks facts. Cell discharge leaves only DefaultAlloc,
+while forwarding and delegation retain precisely their original State instances.
+Inline explicit and omitted rows retain State<Int> plus DefaultAlloc and
+DefaultAlloc alone. No row is projected or selected by spelling alone.
+The discard/resume fixture still synthesizes Unit with an empty expression row
+before capture proof, then independently validates and identity-revalidates with
+all actual source/module pairs. Manual Core mutation/reason/identity/transform
+checks and 32,768-node/64 KiB disposal remain unchanged. Effects210 freshly
+passes all 51 original names, retaining 22 prior restorations and adding thirteen;
+Final211 format and canonical Clippy pass at identical executable bytes. Library11
+is carried without a repeat; these integration-test edits change no product/API,
+Source program, policy or library-test input.
 
 Runtime trace controls retain all 13 original Source programs, exact user event
 vectors/counts/handler identities and whole raw transformed-trace equality. A
