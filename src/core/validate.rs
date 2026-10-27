@@ -13863,6 +13863,32 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         }
     }
 
+    fn store_outward_row(
+        &self,
+        body: &EffectRow,
+        store: &super::effect::StoreScopeNode,
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+            .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+        self.charge_type_work(2)?;
+        let drive = EffectInstance::new(
+            api.drive(),
+            Box::new([Type::Variable(store.acquisition.identity)]),
+        );
+        let mut budget =
+            TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
+        let result = body.remove_exact_with_budget(&drive, &mut budget);
+        self.charge_type_work(budget.used())?;
+        match result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
+            Ok(row) => Ok(row),
+            Err(crate::types::EffectRowError::Missing) => {
+                self.union_effect_rows_charged(&EffectRow::empty(), body, id)
+            }
+            Err(error) => Err(ValidationError::row_removal_failure(error, id)),
+        }
+    }
+
     fn validate_resource_node(
         &self,
         id: NodeId,
@@ -15410,12 +15436,15 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 id,
                             )?
                         }
-                        EffectExprKind::Operation(EffectOperation::Store(store)) => self
-                            .union_effect_rows_charged(
+                        EffectExprKind::Operation(EffectOperation::Store(store)) => {
+                            let outward =
+                                self.store_outward_row(child_row(store.body)?, store, id)?;
+                            self.union_effect_rows_charged(
                                 child_row(store.initializer)?,
-                                child_row(store.body)?,
+                                &outward,
                                 id,
-                            )?,
+                            )?
+                        }
                         EffectExprKind::Operation(EffectOperation::Continue(continuation)) => self
                             .continue_row(
                                 id,
@@ -20660,6 +20689,123 @@ mod tests {
                 assert_eq!(error.node(), Some(id));
             }
         }
+    }
+
+    #[test]
+    fn retained_store_effect_replay_discharges_only_its_own_drive() {
+        use super::super::effect::{
+            EffectCoreBuilder, EffectOperation, HandlerId, ResumeUse, StoreScopeNode,
+        };
+        use crate::{resolved::ResumeId, types::EffectId};
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            "import @builtin.retained_control as Control\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let checked = checked_linked_validation_graph(&graph);
+        let registry = Arc::clone(
+            checked
+                .iter()
+                .find(|module| module.module().is_builtin_retained_control())
+                .unwrap()
+                .registry(),
+        );
+        let api = registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::StoreApi::for_module(effect.id.module()))
+            .unwrap();
+        let source = graph.module(graph.entry()).unwrap().source();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let origin = Origin::Source(span);
+        let mut builder = EffectCoreBuilder::with_effect_registry(registry);
+        let unit = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let resume = builder
+            .resume(
+                HandlerId::new(5),
+                ResumeId::new(7),
+                ResumeUse::Consumed,
+                unit,
+                Type::Unit,
+                EffectRow::empty(),
+                origin.clone(),
+            )
+            .unwrap();
+        let identity = crate::types::TypeVariableId::generated(123);
+        let handle = builder.binder(Type::Unit, origin.clone()).unwrap();
+        let scope = StoreScopeNode::new(
+            crate::resolved::StoreAcquisition {
+                builtin: api.module(),
+                identity,
+                handle: handle.id(),
+                span,
+            },
+            handle,
+            unit,
+            resume,
+        );
+        let other = EffectInstance::new(EffectId::new(graph.entry(), 99), Box::new([]));
+        let drive = EffectInstance::new(api.drive(), Box::new([Type::Variable(identity)]));
+        let expected = EffectRow::singleton(other.clone());
+        let store = builder
+            .store_scope(Box::new(scope), Type::Unit, expected.clone(), origin)
+            .unwrap();
+        let output = EffectRow::closed(Box::new([other, drive]));
+        builder
+            .recompute_effect_rows_in_range(
+                0..store.index().unwrap() + 1,
+                &output,
+                HandlerId::new(5),
+                ResumeId::new(7),
+            )
+            .unwrap();
+        assert_eq!(builder.nodes[store.index().unwrap()].effects, expected);
+
+        let rows = builder
+            .nodes
+            .iter()
+            .map(|node| node.effects.clone())
+            .collect::<Vec<_>>();
+        let unknown = EffectRow::open(
+            crate::types::EffectRowVariable::rigid(crate::types::TypeVariableId::generated(124)),
+            Box::new([]),
+        );
+        assert_eq!(
+            builder.recompute_effect_rows_in_range(
+                0..store.index().unwrap() + 1,
+                &unknown,
+                HandlerId::new(5),
+                ResumeId::new(7),
+            ),
+            Err(super::super::BuildError::InvalidPayload)
+        );
+        assert_eq!(
+            builder
+                .nodes
+                .iter()
+                .map(|node| node.effects.clone())
+                .collect::<Vec<_>>(),
+            rows
+        );
+
+        let program = builder.finish(store).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validator = Validator::new(&program, &sources);
+        let EffectExprKind::Operation(EffectOperation::Store(scope)) =
+            &program.nodes[store.index().unwrap()].kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            validator.store_outward_row(&output, scope, store).unwrap(),
+            expected
+        );
+        assert!(validator.store_outward_row(&unknown, scope, store).is_err());
     }
 
     #[test]
