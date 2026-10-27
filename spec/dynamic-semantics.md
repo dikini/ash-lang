@@ -7,39 +7,47 @@ of their external calls; it does not determine or guarantee those outcomes.
 The heap is
 fresh for one evaluation and maps numeric locations to tuples, completed
 constructors, uninitialized slots for recursive data, or
-aliases. Tuple elements
-and constructor payloads are runtime values. The environment maps resolved term
+aliases. It also retains region-owned allocation records with pending or
+initialized disposition, backing locator, extent/alignment and actual residency.
+Tuple elements and constructor payloads are runtime values. The environment maps resolved term
 identities to runtime values. Effect execution also retains lexical type/row
 instantiation in the environment, separately from term bindings. This metadata
 is not a source value. The continuation records the remaining strict
-work, including ordered lexical handler boundaries. A selected operation moves
+work, including ordered lexical handler boundaries, selected allocation views,
+prospective/live/closing region activations, pending initialization and saved
+paired completion. These extend the same configuration, not another machine. A selected operation moves
 one suffix of that continuation into a clause-owned captured continuation. The
 suffix is moved, not copied. Its clause boundary records whether the unique
 resume capability still owns that captured control or has consumed it.
 
-Runtime values are arbitrary-precision integers, Booleans, unit, independent
-immutable byte sequences, validated UTF-8 strings, lexical
+Runtime values are arbitrary-precision integers, Booleans, unit, immutable
+byte sequences, validated UTF-8 strings, lexical
 functions, canonical builtin functions, internal lexical polymorphic functions,
 payload-constructor functions, opaque data-pointer Address values, opaque non-owning resource handles,
 or heap locations. A function
-template becomes a lexical function with the recursive environment when its
-binder is looked up. A location is an internal handle, not source-level
+template is code metadata. Effect execution stores the lexical callable once
+when its function expression or recursive member is materialized; lookup returns
+that stored callable. Pure execution retains its allocation-free template lookup. A location is an internal handle, not source-level
 identity or observable mutation.
 
 Pure Core type abstractions and applications erase without extending the
 environment or allocating heap cells. Effect execution retains lexical
 polymorphic functions and their validated instantiation so exact operation
 identities remain meaningful across generic calls. No type or kind becomes a
-source-inspectable value, and instantiation allocates no ordinary heap cell.
+source-inspectable value, and type/row instantiation alone allocates no ordinary
+heap cell.
 Validated newtype conversions and local nominal scopes are likewise erased
 static operations rather than values.
 
 ## Initial configuration
 
-Elaboration produces one validated linked Core expression: dependency-ordered
-recursive global groups around the generated application of the entry module's
-local `main` to unit. The final linked expression has an empty outward effect
-row after exact native interpretation when required. Evaluation starts
+Elaboration produces one validated linked Core expression: an explicit host-backed
+root outside dependency-ordered recursive global groups and the generated
+application of local main to unit, with required native interpretation. Root
+establishment precedes every module closure record. Host startup/control storage
+prepares the initial provider; no arbitrary Source computation runs without a
+selection and no alternate Source heap supplies fallback storage. The final
+outer expression has an empty row; the inner main application retains its row. Evaluation starts
 with that expression as control, a fresh empty heap and environment, and an
 empty continuation:
 
@@ -52,7 +60,8 @@ E-Program-Start :=
   INITIAL(modules, entry) = CONFIG(empty_heap, empty_environment, linked_program, empty_continuation)
 ```
 
-`linked_program` is the dependency-ordered groups around `main ()` described in
+`linked_program` includes the generated root around the dependency-ordered groups
+and `main ()` described in
 [Elaboration](elaboration.md). The second premise requires independent
 whole-program validation before evaluation. Neither premise performs module
 loading at runtime. The ordinary recursive-binding and application rules enter
@@ -67,6 +76,66 @@ requires the entry for that exact original symbol. A missing selected entry is
 a terminal runtime failure after operand evaluation and boundary selection,
 before the callback is called. A nearer ordinary source handler requires no
 callback lookup. Admission performs no implicit native compilation or linking.
+
+## Region construction and close steps
+
+Write `CONFIG(H, E, c, K)` for the same configuration above. H retains region
+allocation records and K retains selection, pending construction and completion.
+The following named steps refine that relation. A prospective activation is not
+live access; a pending record exposes no readable initialized object. Allocate
+and release remain the fixed ordinary pair of one successful region setup.
+
+| Step | Preconditions and state change |
+| --- | --- |
+| EnterPrepare | Reserve fresh prospective a; bind R to a for provider/body lexical instantiation. Evaluate the provider once under the preceding selection. Failure publishes no live access or completion owner. |
+| EnterLive | Complete preparation, publish that same a with its fixed pair/discipline and one completion owner, then bind body access r. |
+| SelectEnter/Return | Require live actual access, install explicit default forwarding to that owner and restore preceding selection on return. Acquire no owner and relocate no value. |
+| ContextQuery | A Unit request returns the selected dependency-bearing view. Cleanup retains it beside its once-evaluated action; the action/payload does not cross that query. |
+| RegionAllocate | Evaluate explicit context/request operands. Keep the serviced segment separate from outside control. At the actual live/closing owner's structural interpretation position, call its saved allocate member with lexical instantiation and saved preceding allocation selection. Body-local handlers do not move into callback control. |
+| Request | After required children evaluate in order, retain fields/captures/layout locally, form an independent immediate usable-bytes/alignment descriptor, and perform the exact explicit request. Existing one-shot handler selection moves its captured segment. |
+| Supply/Register | Under the native/module contract, obtain fresh disjoint backing; check actual owner, requested layout and stated extent/alignment; register one pending record. Refusal creates no successful record or initialized access. |
+| ResumeStorage | Consume the ordinary continuation capability once; restore same activations, selections, serviced segment and pending construction. Check owner/record/layout compatibility without replaying operands. |
+| Initialize/Publish | Write through compatible fresh pending storage using retained local fields/captures and their actual dependencies. After complete initialization/reply preparation, mark initialized once and return access with residency/dependency facts. Reused/mismatched records fail construction. |
+| Project/Use | Require initialized storage and valid dependencies. An independent outer referenced value can shed its container dependency; an inline view retains it. Aliases/views never relocate values. |
+| Capture/Resume | Move/restore the segment and its pending progress once above the saved clause continuation. Preserve outside frames and original owner enclosure; do not recompute activation identities or reset completed construction. |
+| Discard | Check structural owned close and surviving interpreters, consume the capture once, revoke unpublished access and account/dispose pending records under their allocator contract. Close inner obligations in order without replaying abandoned code. |
+| CloseBegin | Require that an ordinary result does not depend on the closing region; finish inner cleanup/dependent uses while backing is live. Root observation completes before root close. Begin the saved original release once; its unfinished completion remains required. |
+| CloseFinish | After successful release completion, revoke access and bulk-retire that region's records; restore enclosing control. Other regions/shared allocator state remain valid. Copies of access own no close. |
+
+A successful supplied layout includes the object's complete persistent
+representation: tuple fields, nominal discriminant/payload, actual closure
+captures, and persistent Bytes/String/large-Int backing where applicable.
+Charging capacity while retaining that representation elsewhere is not supplied
+storage. Request size arithmetic is checked; alignment is nonzero and supported,
+and stated extent/alignment must satisfy the request. A zero-byte success grants
+no readable bytes and initializes only a genuinely zero-readable-storage layout;
+it still has its own allocation record/accounting. The backing adapter checks
+association/layout and creates pending storage; a raw Address or phantom R alone
+proves neither native validity nor initialized access.
+
+The owner service remains available through required cleanup and release, at its
+original position and preceding allocation selection. It does not restore a
+removed public backend handler. Action-local handlers or surviving interpreters
+must discharge the actual backend requirements; the existing cleanup-context and
+running-completion restrictions still apply.
+
+An ordinary function expression requests its record/captures once at creation.
+Calls retain its lexical values/type context but use the caller's selection for
+fresh construction. Integer results retain the conservative residency required
+by static admission even when their runtime representation is immediate.
+
+Refusal uses ordinary effects: a clause may resume only with valid successful
+storage or, when checked, discard and return its ordinary result. Old objects and
+performed effects are not rolled back. Reporting uses pre-existing/surrounding
+storage or host entry reporting, not construction in a failed region. Internal
+work/control/storage exhaustion remains terminal and has no source-cleanup
+guarantee. At root entry, declared allocation refusal uses checked disposal and
+the existing host observation/reporting foundation, distinguishing it from
+internal exhaustion without constructing an error in the failed root. If required
+close fails, report that actual failure rather than a clean refusal. Physical validity, freshness/disjointness and successful reclamation
+remain native/module contract assumptions; returning from a broken native
+release does not prove its physical promise. No fallback, source unwind or
+quarantine protocol is introduced.
 
 ## Type instantiation and erasure
 
@@ -112,19 +181,25 @@ representation values and execute its lexical code after this step's body
 returns; no runtime scope authority needs to survive with it.
 
 Effect execution instead retains a type abstraction as a lexical polymorphic
-function. Independent Core validation admits only inert values or variables,
-transparent type operations, and authenticated generated evidence adapters
+function. Independent Core validation admits ordinary function materialization,
+inert constructor values or variables, transparent type operations, and
+authenticated generated evidence adapters
 inside that abstraction, as described in [Elaboration](elaboration.md#explicit-rank-1-operations).
 Retaining these forms does not delay a source effect or source function body.
 
-A type application evaluates its function before entering the retained body.
-It saves the caller's instantiation, substitutes all ordinary type and complete
-row arguments under that caller context, and simultaneously binds the retained
-parameters in the function's definition environment. Ordinary function creation
-then captures that environment. A later call uses the closure's context, not
-the caller's current type bindings. Recursive lookup likewise materializes a
-polymorphic function from the definition context, rather than specializing a
-shared template in place. Parameterized ordinary constructors retain their
+Evaluating an admitted abstraction that directly materializes a function creates
+its generic record once, with actual term captures and lexical metadata but its
+generalized parameters unbound. Authenticated deferred captures are retained
+without eagerly executing evidence adapter spines. Transparent aliases/variables
+and constructors forward without copying.
+
+A type application evaluates its function, saves caller instantiation, substitutes
+ordinary type and complete row arguments under that caller context, and binds
+them simultaneously in an immutable view of the retained definition context.
+Direct-callable instantiation does not recreate the record, enter a source
+function body or mutate sibling views. A later call uses that lexical type/term context while fresh construction
+uses the caller's allocation selection. Recursive lookup returns the stored
+generic callable. Parameterized ordinary constructors retain their
 existing constructor behavior; their type application needs no effect context.
 
 The same lexical context travels with handlers and captured control. Request
@@ -135,7 +210,21 @@ including higher-kinded applications and function effect rows, participate in
 the same validated substitution. Pure execution keeps the erasure rules above.
 
 These Effect-only steps make retention and instantiation explicit.
-`POLYMORPHIC` is an internal lexical function, not a type value.
+`POLYMORPHIC` retains the stored generic callable, not a type value.
+`prepare_generic` follows the admitted body shape. It materializes a direct
+generic function or a capture-bearing deferred record once through the
+selected-region path, retaining pending progress, actual captures and definition
+metadata with generalized parameters unbound. Forwarding an existing callable
+reuses its record; code-only constructors need no callable record. An
+authenticated deferred body remains unevaluated at creation. In
+`POLYMORPHIC(parameters, stored, definition_environment)`, `stored` distinguishes
+a direct callable from an authenticated deferred body, and the retained
+environment includes its captured term values. `direct_callable(stored)` selects
+the first case; `authenticated_deferred_body(stored)` yields the second case's
+retained body. `instantiate_view` changes only immutable lexical instantiation
+metadata. Instantiating a deferred body instead evaluates its ordinary term
+computation under the bound capture environment; any genuinely new Function
+result materializes there in the existing prerequisite order.
 `arguments` contains the ordered ordinary type and complete row arguments.
 `instantiate_arguments` uses the saved caller context, and `bind_parameters`
 extends the definition context simultaneously without changing term bindings.
@@ -147,7 +236,7 @@ family effect-type-steps:
   E-Effect-Type-Abstraction :=
     execution uses Effect Core
     ===>
-    CONFIG(heap, environment, TypeAbstraction(parameters, body), continuation) -> CONFIG(heap, environment, POLYMORPHIC(parameters, body, environment), continuation)
+    CONFIG(heap, environment, TypeAbstraction(parameters, body), continuation) -> CONFIG(heap, environment, prepare_generic(parameters, body, environment), continuation)
 
   E-Effect-Type-Application :=
     execution uses Effect Core
@@ -155,10 +244,18 @@ family effect-type-steps:
     CONFIG(heap, environment, TypeApplication(function, arguments), continuation) -> CONFIG(heap, environment, function, TYPE-ARGUMENTS(arguments, instantiation(environment)) :: continuation)
 
   E-Effect-Type-Instantiate :=
+    direct_callable(stored)
     instantiated = instantiate_arguments(arguments, caller_instantiation)
     body_environment = bind_parameters(definition_environment, parameters, instantiated)
     ===>
-    CONFIG(heap, environment_value, POLYMORPHIC(parameters, body, definition_environment), TYPE-ARGUMENTS(arguments, caller_instantiation) :: continuation) -> CONFIG(heap, body_environment, body, continuation)
+    CONFIG(heap, environment_value, POLYMORPHIC(parameters, stored, definition_environment), TYPE-ARGUMENTS(arguments, caller_instantiation) :: continuation) -> CONFIG(heap, environment_value, instantiate_view(stored, body_environment), continuation)
+
+  E-Effect-Deferred-Instantiate :=
+    authenticated_deferred_body(stored) = body
+    instantiated = instantiate_arguments(arguments, caller_instantiation)
+    body_environment = bind_parameters(definition_environment, parameters, instantiated)
+    ===>
+    CONFIG(heap, environment_value, POLYMORPHIC(parameters, stored, definition_environment), TYPE-ARGUMENTS(arguments, caller_instantiation) :: continuation) -> CONFIG(heap, body_environment, body, continuation)
 
   E-Effect-Constructor-Instantiate :=
     constructor_value(value)
@@ -177,15 +274,15 @@ already been substituted into authenticated method types, and the evaluator
 does not inspect those relationships or make them control or state.
 An abstract evidence method becomes an ordinary function parameter. A
 polymorphic occurrence type-applies that parameter to its retained method-local
-arguments; entering the Core application uses the type-instantiation behavior
-above. A monomorphic concrete evidence method becomes a binder occurrence for the
-implementation method in its defining module's recursive group. A polymorphic
-concrete or exact-current method first enters its generated adapter type
-abstraction and then the implementation method's complete type application.
-Pure execution erases both operations; Effect execution retains the lexical
-instantiation needed by operation identities. Looking up
-the recursive function binder materializes a lexical closure under the existing
-recursive-binding behavior.
+arguments; an entered Core application uses the type-instantiation behavior
+above. A monomorphic concrete evidence method becomes a binder occurrence for
+the implementation method in its defining module's recursive group. A polymorphic
+concrete or exact-current method retains a generated adapter over the
+implementation method's complete type application. Pure execution erases these
+operations; Effect execution preserves their validated arguments in lexical
+instantiation, including authenticated forwarding without executing the retained
+adapter spine. Effect lookup returns the once-materialized recursive callable;
+Pure lookup retains its allocation-free template behavior.
 
 A supplied lexical method uses ordinary nonrecursive binding, function closure,
 and binder lookup. Its closure captures the preceding ordinary values required
@@ -195,14 +292,16 @@ The lexical source identity and selection scope create no runtime value,
 registry, scope frame, revocation check, or transition family.
 
 The validated Core program may retain method authentication records and method
-schemes as static authority, and a Core type application carries its retained
-method arguments in control until the type application is entered.
+schemes as static authority. A retained Core type application records its complete
+method arguments; Effect execution preserves their validated instantiation in
+lexical metadata, including when an authenticated adapter forwards an existing
+callable without entering that application node.
 The evaluator does not inspect method authentication records or method schemes.
-It does not turn an interface identity, selection record, implementation
-authorization route, method scheme, or method argument into a runtime value,
-term binding, heap cell, interface lookup, or interface-specific transition.
-Effect type applications retain instantiation as described above; this does
-not turn method authentication or selection into runtime authority.
+It does not turn an interface identity, selection record, implementation authorization route, method scheme,
+or method argument into a runtime value, term binding, heap cell, interface
+lookup, or interface-specific transition. Effect type applications retain
+instantiation as described above; this does not turn method authentication or
+selection into runtime authority.
 
 For a generic implementation method, lowering uses the recorded head
 substitution to form an ordinary Core type application. When evaluation enters
@@ -216,7 +315,8 @@ a constrained-global call, the same transitions apply its evidence functions
 before the surrounding source arguments because elaboration nested the
 applications in that order. Abstract prerequisite evidence uses ordinary
 environment lookup; concrete prerequisite evidence uses ordinary recursive
-function lookup and closure materialization.
+function lookup. A genuinely new Function result from a prerequisite term
+application materializes at that ordered creation site.
 
 There is no runtime interface value, dictionary, interface or implementation
 registry, implementation lookup, interface dispatch, registration step, or
@@ -259,11 +359,10 @@ generic method's type application, and the variable occurrences for the
 generic implementation method and concrete prerequisite method in that order.
 A trace event enters an occurrence node, not a binder identity. The trace enters
 the prerequisite occurrence before the source `Wrap(42)` argument and produces
-`42`. It contains at most 32 node-entry events, and the machine reaches at most
-six continuation frames. These bounds describe this fixed program. They follow
-from the existing erasure, lookup, recursive-binding, and application
-transitions; they are not a new transition or a bound on arbitrary prerequisite
-chains.
+`42`. Root startup and once-created capture records add ordinary construction
+work around this named ordering. The test's fixed-program resource ceilings do
+not define allocation budgets, semantic limits or a bound on arbitrary
+prerequisite chains.
 
 ## Bindings
 
@@ -290,17 +389,21 @@ separate semantic fields; Ash source does not contain semicolons.
 
 ## Recursive bindings
 
-Entering a recursive group allocates one uninitialized slot per data member.
-It then installs all direct-function templates and data locations in one
-recursive environment entry. Constructor-guarded data initializers evaluate in
+In Effect execution, entering a recursive group reserves its recursive identities
+and uninitialized data slots. It materializes direct ordinary function members
+once in source member order, retaining their recursive environment and selected
+residency, before guarded data initialization. Lookup returns stored callables.
+In Pure execution, the existing allocation-free templates and data locations
+are installed together as follows. Constructor-guarded data initializers evaluate in
 source order. Completing a data member stores an alias from its slot to the
 initializer's constructed location. Lookup of a recursive data member returns
-its slot without forcing the alias; lookup of a function member materializes a
-lexical function from its template and the recursive environment.
+its slot without forcing the alias. Only Pure lookup materializes a lexical
+function from its template and the recursive environment.
 
 ```sequent
 family recursive-binding-steps:
   E-Let-Rec-Allocate :=
+    execution uses Pure Core
     allocate_uninitialized(heap, data_members) = heap_1, data_bindings, pending
     environment_1 = extend_recursive(environment, function_templates, data_bindings)
     ===>
@@ -320,7 +423,8 @@ family recursive-binding-steps:
     CONFIG(heap, recursive_environment, initialize(empty, body), continuation) -> CONFIG(heap, recursive_environment, body, continuation)
 ```
 
-Function templates and data locations enter scope before data initialization.
+In the Pure rules, function templates and data locations enter scope before
+data initialization.
 `data_bindings` maps every data member's binder identity to its preallocated
 location. `pending` separately pairs each guarded data initializer with that
 member's location in source order. `E-Let-Rec-Initialize` enters only the first
@@ -333,13 +437,43 @@ therefore source order, explicit. A function-only group has an empty `pending`
 sequence and proceeds through `E-Let-Rec-Body`; its templates were installed by
 `E-Let-Rec-Allocate`.
 
+Effect function materialization uses these steps in the same configuration.
+`reserve_recursive` publishes only internal recursive identities/data slots;
+`functions` lists direct function initializers in source order. The existing
+`initialize` control below runs guarded data only after all stored callables are
+ready. Completed materialization and pending data state survive capture/resume
+without replay. Abandonment accounts for unpublished construction but does not
+roll back previous effects or initialized records.
+
+```sequent
+family effect-recursive-materialization:
+  E-Effect-Rec-Reserve :=
+    execution uses Effect Core
+    reserve_recursive(heap, environment, members) = heap_1, environment_1, functions, data
+    ===>
+    CONFIG(heap, environment, let rec members; body, continuation) -> CONFIG(heap_1, environment_1, materialize(functions, data, body), continuation)
+
+  E-Effect-Rec-Function :=
+    ===>
+    CONFIG(heap, environment, materialize((binder, initializer) :: rest, data, body), continuation) -> CONFIG(heap, environment, initializer, STORE_FUNCTION(binder, rest, data, body, environment) :: continuation)
+
+  E-Effect-Rec-Store :=
+    environment_1 = store_recursive_callable(recursive_environment, binder, callable)
+    ===>
+    CONFIG(heap, environment_value, callable, STORE_FUNCTION(binder, rest, data, body, recursive_environment) :: continuation) -> CONFIG(heap, environment_1, materialize(rest, data, body), continuation)
+
+  E-Effect-Rec-Data :=
+    ===>
+    CONFIG(heap, environment, materialize(empty, data, body), continuation) -> CONFIG(heap, environment, initialize(data, body), continuation)
+```
+
 A polymorphic function member has one outer `TypeAbstraction` node whose
 nonempty parameter sequence contains all generalized parameters. Allocation
 in Pure execution follows that wrapper to install the same function template;
-ordinary evaluation still uses `E-Type-Abstraction`. Effect execution retains
-the abstraction and definition instantiation with the template. Each lookup
-materializes its own lexical polymorphic function; instantiating one occurrence
-does not mutate the template or a sibling occurrence.
+ordinary Pure evaluation still uses `E-Type-Abstraction`. Effect execution
+materializes and retains the generic record once with its lexical captures.
+Lookup and type application reuse that record; instantiated views do not mutate
+it or a sibling view.
 
 Reaching an uninitialized cell, an alias loop, or an invalid location is an
 internal runtime failure. The static guardedness judgment makes those states
@@ -369,8 +503,11 @@ main () = {
 
 Application evaluates the function before the argument. Once both are runtime
 values, a lexical function matches its domain pattern, extends its captured
-environment, and enters its body. A payload constructor allocates one
-constructor cell with the argument value as its payload.
+environment, and enters its body. Its lexical instantiation remains fixed while
+fresh body construction uses the caller's selected allocation context. The
+callable record and captures do not move or reinitialize. A payload constructor
+initializes a supplied nominal record with the argument as payload in Effect
+execution; the direct allocation rule below applies to Pure Core.
 
 ```sequent
 family application-steps:
@@ -390,6 +527,7 @@ family application-steps:
     CONFIG(heap, environment, argument_value, APPLY_ARGUMENT(function_value) :: continuation) -> CONFIG(heap, body_environment, body, continuation)
 
   E-Constructor-Apply :=
+    execution uses Pure Core
     function_value = constructor_function(constructor)
     heap_1, result_location = allocate(heap, constructor(constructor, argument_value))
     ===>
@@ -402,10 +540,15 @@ constructor value.
 
 ## Tuples, constructors, and matches
 
-Tuple elements evaluate strictly from left to right, after which one tuple cell
-stores their runtime values. A nullary constructor occurrence allocates its completed
-constructor cell. A payload constructor occurrence produces the callable value
-used by `E-Constructor-Apply`.
+Tuple elements evaluate strictly from left to right before their completed
+record is published. Effect construction requests the selected owner's supplied
+storage and initializes it locally with these retained operands; Pure Core uses
+its ordinary tuple cell. Effect nullary constructors use the same supplied
+nominal-record path. Code-only payload-constructor values allocate no closure
+record; generated wrappers do so only when lowered to ordinary Function.
+Persistent Bytes/String backing, large Int digits and actual closure captures
+follow the same selected-owner request, initialization and publication discipline.
+Known immediate values need no backing record.
 
 Those allocation and tag-inspection rules apply to ordinary data constructors.
 A newtype constructor and pattern have already lowered to validated wrap and
@@ -1017,8 +1160,12 @@ source outcome.
 
 ## Observation
 
-Successful evaluation of the generated entry application retains the heap
-with the result value. The observation pairs that value with the closed result
+Successful evaluation retains root backing through result observation and
+required completion. The existing host observation foundation retains the
+observed root storage after successful ownership transfer and releases it with
+its last observation owner; no closed custom region remains live and no value
+is relocated. This is distinct from source region access or a source finalizer.
+The result value remains paired with its heap. The observation pairs that value with the closed result
 type established for `main`. Observation renders tuples and constructors
 structurally. A constructor with a tuple
 payload renders its components as constructor fields. A location already on

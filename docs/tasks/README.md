@@ -9,7 +9,11 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active task is listed.
+No active tasks are listed. The lexical-region product's language rules are in
+the [specification](../../spec/README.md); its existing
+[model evidence](../design/lexical-regions/evidence.md) retains the bounded proof
+scope. [R5 #70](https://github.com/dikini/ash-lang/issues/70) records product
+acceptance and the separately authorized Main-delivery boundary.
 
 [TASK-0053](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0053-checked-owner-core-execution.md) and
 [TASK-0054](https://github.com/dikini/ash-lang/blob/2766e8260e2590d9ebdca7abd699115b3cd02a8a/docs/tasks/TASK-0054-checked-sqlite-source-policy.md) are superseded
@@ -19,7 +23,7 @@ The generic cell product checkpoint is integrated into local `main`. Its
 [case map, verification and local history](../design/generic-cell/evidence.md)
 record the completed transition, Main integration and exact scope.
 [DN-0054](../design/DN-0054-base-lexical-region-memory-contracts.md)
-remains separate design work.
+retains informative questions about broader ownership and reclamation schemes.
 
 ## Completed source/static work
 

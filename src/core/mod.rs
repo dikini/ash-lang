@@ -9,6 +9,7 @@ pub mod function;
 pub mod literal;
 pub mod packed;
 pub mod primitive;
+pub mod region;
 
 pub mod recursion;
 

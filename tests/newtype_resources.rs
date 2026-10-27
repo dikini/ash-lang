@@ -11,14 +11,17 @@ use std::{
 };
 
 use ash::{
-    core::{PureComputation, PureExprKind, ValidatedProgram, validate_modules},
+    core::{
+        EffectExprKind, PureComputation, PureExprKind, ValidatedEffectProgram,
+        validate_effect_modules,
+    },
     driver::{RunConfiguration, run_path},
-    elaborate::{Elaborator, check_module, link_modules},
-    eval::{Value, evaluate},
+    elaborate::{EffectElaborator, check_module, link_modules},
+    eval::{Value, evaluate_effect},
     evidence_validation::validate_interface_evidence,
     module::{ModuleRoots, load_module_graph},
     render,
-    resolve::resolve_module,
+    resolve::{DependencyExports, resolve_module},
 };
 
 const PARSER: &str = include_str!("../src/parser/grammar.rs");
@@ -161,7 +164,7 @@ const OWNERS: &[OwnerEvidence] = &[
         source: CORE_VALIDATE,
         exact_probe: "fn parameterized_newtype_validation_is_exact_atomic_and_retryable()",
         boundary_markers: &[
-            "RESERVED_SOURCE_SCAN_WORK + VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;",
+            "const NEWTYPE_PARAMETER_WORK: usize = 4 * 2 + 1;",
             "let one_short = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1));",
             "let retry = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);",
         ],
@@ -199,21 +202,34 @@ impl Fixture {
         .expect("public resource fixture should run")
     }
 
-    fn core(&self) -> ValidatedProgram {
+    fn core(&self) -> ValidatedEffectProgram {
         let graph =
             load_module_graph(&self.0, &ModuleRoots::empty()).expect("resource graph should load");
-        let module = graph
-            .module(graph.entry())
-            .expect("entry should remain loaded");
-        let checked = check_module(resolve_module(module, &[]).expect("fixture should resolve"))
-            .expect("fixture should check");
-        let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+        let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let target = checked
+                        .iter()
+                        .find(|checked| checked.module() == edge.target())
+                        .expect("dependencies precede their importer");
+                    DependencyExports::new(edge, target.exports())
+                        .expect("the target summary authenticates its edge")
+                })
+                .collect::<Vec<_>>();
+            let resolved =
+                resolve_module(module, &dependencies).expect("the resource fixture resolves");
+            checked.push(check_module(resolved).expect("the resource fixture checks"));
+        }
+        let linked = link_modules(checked, graph.entry()).expect("the complete graph links");
         let linked =
             validate_interface_evidence(linked).expect("linked evidence should authenticate");
         let mut elaborator =
-            Elaborator::for_module_program(&linked).expect("Core namespace should fit");
+            EffectElaborator::for_module_program(&linked).expect("Core namespace should fit");
         let typed = elaborator
-            .synthesize_module_program(&linked)
+            .synthesize_effect_module_program(&linked)
             .expect("fixture should elaborate");
         let unchecked = elaborator.finish(typed.node).expect("Core should finish");
         let sources = graph
@@ -226,7 +242,7 @@ impl Fixture {
             .iter()
             .map(|module| (module.id(), module.source().id()))
             .collect::<Vec<_>>();
-        validate_modules(unchecked, &sources, &module_sources)
+        validate_effect_modules(unchecked, &sources, &module_sources)
             .expect("Core should independently validate")
     }
 }
@@ -239,7 +255,7 @@ impl Drop for Fixture {
     }
 }
 
-fn conversion_count(program: &ValidatedProgram) -> usize {
+fn conversion_count(program: &ValidatedEffectProgram) -> usize {
     let mut pending = vec![program.root()];
     let mut visited = HashSet::new();
     let mut conversions = 0;
@@ -253,7 +269,9 @@ fn conversion_count(program: &ValidatedProgram) -> usize {
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
         conversions += usize::from(matches!(
             node.kind,
-            PureExprKind::Computation(PureComputation::NewtypeConversion(_))
+            EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::NewtypeConversion(_)
+            ))
         ));
     }
     conversions
@@ -317,8 +335,8 @@ fn module_newtype_resource_matrix_accounts_all_new_carriers() {
     ));
     let wrapped_core = wrapped.core();
     assert_eq!(conversion_count(&wrapped_core), 1);
-    let first = evaluate(&wrapped_core).expect("newtype Core should evaluate");
-    let retry = evaluate(&wrapped_core).expect("immutable newtype Core should retry");
+    let first = evaluate_effect(&wrapped_core).expect("newtype Core should evaluate");
+    let retry = evaluate_effect(&wrapped_core).expect("immutable newtype Core should retry");
     assert_eq!(first.value.to_string(), "42");
     assert_eq!(first.trace, retry.trace);
     let observation = wrapped.run();
@@ -328,14 +346,16 @@ fn module_newtype_resource_matrix_accounts_all_new_carriers() {
 
     let predecessor = Fixture::new("main : Unit -> Int\nmain () = 42\n");
     let predecessor_core = predecessor.core();
-    assert_eq!(predecessor_core.node_count(), 8);
+    // Source startup now retains canonical services and allocation contexts;
+    // the former Pure startup's 8 nodes/7 events are not a local tariff.
     assert_eq!(conversion_count(&predecessor_core), 0);
-    let before = evaluate(&predecessor_core).expect("predecessor Core should evaluate");
-    let after = evaluate(&predecessor_core).expect("predecessor Core should remain reusable");
-    assert!(matches!(before.value, Value::Integer(_)));
+    let before = evaluate_effect(&predecessor_core).expect("predecessor Core should evaluate");
+    let after =
+        evaluate_effect(&predecessor_core).expect("predecessor Core should remain reusable");
+    assert!(matches!(before.value, Value::SmallInteger(_)));
     assert_eq!(before.value.to_string(), "42");
     assert_eq!(before.trace, after.trace);
-    assert_eq!(before.trace.len(), 7);
+
     assert_eq!(before.max_frame_depth, after.max_frame_depth);
     let observation = predecessor.run();
     assert_eq!(observation.value_display(), "42");

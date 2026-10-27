@@ -202,8 +202,9 @@ fn constructor_original_routes_reject_reminted_facade_original() {
     check_routes(RouteControl::RemintedFacadeOriginal);
 }
 
-// Use the same ordinary producer as the route tests, and an actual resolved
-// importer whose constructor metadata is retained even without a pattern use.
+// Keep Leaf reachable only through constructor payload metadata. Scalar
+// globals make the no-outward/no-capture checks nonvacuous; the separate
+// ordinary producer above retains real construction and reexport coverage.
 fn constructor_authority_fixture() -> (ExportSummary, ResolvedModule) {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -213,7 +214,10 @@ fn constructor_authority_fixture() -> (ExportSummary, ResolvedModule) {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir(&directory).unwrap();
-    std::fs::write(directory.join("producer.ash"), PRODUCER).unwrap();
+    let declarations = PRODUCER.split_once("pub make :").unwrap().0;
+    std::fs::write(directory.join("producer.ash"), format!(
+        "{declarations}pub make : Int -> Int\nmake value = value\npub inspect : Int -> Int\ninspect value = value\n"
+    )).unwrap();
     std::fs::write(
         directory.join("entry.ash"),
         "import producer as Producer\nmain : Unit -> Int\nmain () = Producer.inspect (Producer.make 7)\n",

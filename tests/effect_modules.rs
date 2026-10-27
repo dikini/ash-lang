@@ -10,7 +10,7 @@ use ash::{
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{CheckedModule, ResolvedDefinitionKind},
-    types::{EffectId, Kind, OperationId, Type},
+    types::{EffectId, EffectInstance, EffectRow, Kind, OperationId, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -272,6 +272,24 @@ fn inline_result_rows_survive_resolution_and_checking() {
         .expect("the inline result-row fixture should load");
     let module = module_named(&graph, "entry.ash");
     let checked = check_graph(&graph);
+    let service = checked
+        .iter()
+        .find(|checked| {
+            graph
+                .module(checked.module())
+                .unwrap()
+                .source()
+                .display_path()
+                == "@compiler.region"
+        })
+        .unwrap();
+    let [allocation] = service.effects() else {
+        panic!("one canonical DefaultAlloc")
+    };
+    assert_eq!(allocation.spelling, "DefaultAlloc");
+    assert_eq!(allocation.id.module(), service.module());
+    assert!(allocation.parameters.is_empty());
+    let allocation = EffectInstance::new(allocation.id, Box::new([]));
     let checked = checked
         .iter()
         .find(|checked| checked.module() == module.id())
@@ -286,16 +304,14 @@ fn inline_result_rows_survive_resolution_and_checking() {
         panic!("the pure global should remain inline operational")
     };
 
-    let [instance] = explicit.header.result_effects.known() else {
-        panic!("the explicit result should retain exactly one effect")
-    };
-    assert_eq!(instance.effect(), EffectId::new(module.id(), 0));
+    let state = EffectInstance::new(EffectId::new(module.id(), 0), Box::new([Type::Int]));
+    assert_eq!(checked.effects()[0].spelling, "State");
+    assert_eq!(checked.effects()[0].id, state.effect());
     assert_eq!(
-        instance.arguments(),
-        &[ash::types::KindedArgument::TypeArg(Type::Int)]
+        explicit.header.result_effects,
+        EffectRow::closed(vec![state, allocation.clone()].into_boxed_slice())
     );
-    assert!(explicit.header.result_effects.tail().is_none());
-    assert!(pure.header.result_effects.is_empty());
+    assert_eq!(pure.header.result_effects, EffectRow::singleton(allocation));
 }
 
 #[test]
@@ -544,7 +560,10 @@ fn hidden_effect_signature_closure_survives_facade_and_diamond_routes() {
     let hidden = EffectId::new(base.id(), 0);
     for module in &checked {
         assert!(module.exports().effect("Hidden").is_none());
-        if module.module() != entry.id() {
+        if ["base.ash", "facade.ash", "left.ash", "right.ash"]
+            .iter()
+            .any(|name| module.module() == module_named(&graph, name).id())
+        {
             assert_eq!(
                 module
                     .exports()
@@ -568,4 +587,57 @@ fn hidden_effect_signature_closure_survives_facade_and_diamond_routes() {
             .id,
         hidden
     );
+}
+
+#[test]
+fn selected_global_retains_hidden_effect_operation_nominals() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        "import facade as Facade\nmain : Unit -> Unit\nmain () = ()\n",
+    );
+    tree.write(
+        "base.ash",
+        concat!(
+            "type Payload = PayloadValue\n",
+            "effect Hidden {\nget : Unit -> Payload\n}\n",
+            "pub f : Unit -> Unit ! {Hidden}\nf () = ()\n",
+        ),
+    );
+    tree.write("facade.ash", "pub import base (f)\n");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    let checked = check_graph(&graph);
+    for module in &checked {
+        assert!(module.exports().effect("Hidden").is_none());
+    }
+    tree.write("entry.ash", "import facade as Facade\nprobe : Facade.Payload -> Unit\nprobe value = ()\nmain : Unit -> Unit\nmain () = ()\n");
+    let failure = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    assert!(format!("{failure:?}").contains("Resolve"), "{failure:?}");
+}
+
+#[test]
+fn selected_global_retains_a_chain_of_hidden_effect_signatures() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        "import facade as Facade\nmain : Unit -> Unit\nmain () = ()\n",
+    );
+    let mut base = String::from("type Payload = PayloadValue\n");
+    for index in 0..64 {
+        base.push_str(&format!(
+            "effect E{index} {{\nget : Unit -> (Unit -> Unit ! {{E{}}})\n}}\n",
+            index + 1
+        ));
+    }
+    base.push_str(
+        "effect E64 {\nget : Unit -> Payload\n}\npub f : Unit -> Unit ! {E0}\nf () = ()\n",
+    );
+    tree.write("base.ash", &base);
+    tree.write("facade.ash", "pub import base (f)\n");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    check_graph(&graph);
 }

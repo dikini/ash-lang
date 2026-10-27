@@ -1,6 +1,8 @@
 //! Bidirectional typed elaboration from resolved surface syntax to pure Core.
 
 mod cleanup_rows;
+mod region;
+use region::{RegionProgress, SelectionProgress};
 
 use std::{
     cell::RefCell,
@@ -2835,6 +2837,8 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     row_inference_solutions: RowInferenceSolutionMap,
     row_inference_obligations: RowInferenceSolutionMap,
     cleanup_rows: cleanup_rows::CleanupRows,
+    pending_region_closures: Vec<(NodeId, NodeId)>,
+    pending_cleanup_regions: Vec<(NodeId, Span)>,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
@@ -2856,7 +2860,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     // Addresses identify only immutably borrowed source occurrences during one
     // module synthesis. They are never dereferenced or retained in Core.
     lexical_capture_uses: Vec<LexicalCaptureUse>,
-    method_capture_uses: Vec<(NodeId, usize, MethodId)>,
+    method_capture_uses: Vec<(NodeId, usize, MethodId, Option<NodeId>)>,
     method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
     global_capture_uses: Vec<(NodeId, RequirementId, usize)>,
 
@@ -3003,11 +3007,32 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::RegionValueRequest(request) => builder.region_operation(
+                EffectOperation::RegionValueRequest(request),
+                ty,
+                effects,
+                origin,
+            ),
+            EffectOperation::RegionBuffer(buffer) => {
+                builder.region_operation(EffectOperation::RegionBuffer(buffer), ty, effects, origin)
+            }
+            EffectOperation::RegionTuple(tuple) => {
+                builder.region_operation(EffectOperation::RegionTuple(tuple), ty, effects, origin)
+            }
+            EffectOperation::RegionClosure(closure) => builder.region_operation(
+                EffectOperation::RegionClosure(closure),
+                ty,
+                effects,
+                origin,
+            ),
             EffectOperation::NativeInterpret(boundary) => {
                 let (body, interpretations) = boundary.into_parts();
                 builder.native_interpret(body, interpretations, ty, effects, origin)
             }
 
+            operation @ (EffectOperation::Region(_) | EffectOperation::RegionAllocate(_)) => {
+                builder.region_operation(operation, ty, effects, origin)
+            }
             EffectOperation::Cleanup(scope) => builder.cleanup_scope(scope, ty, effects, origin),
             EffectOperation::Registration(scope) => {
                 builder.registration_scope(scope, ty, effects, origin)
@@ -3275,6 +3300,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
+            pending_cleanup_regions: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3345,6 +3372,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &mut type_work,
             coverage_work,
             None,
+            None,
         )
     }
 
@@ -3353,10 +3381,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         registry: Arc<ResolvedRegistry>,
         type_work: &mut TypeWorkBudget,
         coverage_work: UsefulnessBudget,
+        primary_work: Option<TypeWorkBudget>,
         rewrite_work: Option<TypeWorkBudget>,
     ) -> Result<Self, TypeError> {
-        let mut builder = CoreBuilder::<F>::with_registry_and_rewrite_work(
+        let mut builder = CoreBuilder::<F>::with_registry_and_arena_work(
             Arc::clone(&registry),
+            primary_work.unwrap_or_default(),
             rewrite_work.unwrap_or_default(),
         );
         let binders = resolved_module_binders(module, |units| builder.charge_rebuild_work(units))
@@ -3412,6 +3442,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
+            pending_cleanup_regions: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3457,12 +3489,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         program: &ValidatedInterfaceProgram,
         type_work: TypeWorkBudget,
     ) -> Result<Self, (ElaborationFailure, usize)> {
-        Self::for_module_program_with_budgets(program, type_work, TypeWorkBudget::default())
+        Self::for_module_program_with_budgets(
+            program,
+            type_work,
+            TypeWorkBudget::default(),
+            TypeWorkBudget::default(),
+        )
     }
 
     pub(crate) fn for_module_program_with_budgets(
         program: &ValidatedInterfaceProgram,
         type_work: TypeWorkBudget,
+        primary_work: TypeWorkBudget,
         rewrite_work: TypeWorkBudget,
     ) -> Result<Self, (ElaborationFailure, usize)> {
         let prefix = type_work.used();
@@ -3472,6 +3510,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             program.result(),
             Arc::clone(program.method_evidence()),
             type_work,
+            primary_work,
             rewrite_work,
         )
         .map_err(|failure| (failure, prefix))?;
@@ -3496,12 +3535,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         result: &ResolvedExpr,
         catalog: Arc<crate::core::dialect::MethodEvidenceCatalog>,
         type_work: TypeWorkBudget,
+        primary_work: TypeWorkBudget,
         rewrite_work: TypeWorkBudget,
     ) -> Result<Self, ElaborationFailure> {
         let registry = Arc::clone(registry);
-        let mut builder = CoreBuilder::<F>::with_registry_method_evidence_and_rewrite_work(
+        let mut builder = CoreBuilder::<F>::with_registry_method_evidence_and_arena_work(
             Arc::clone(&registry),
             catalog,
+            primary_work,
             rewrite_work,
         )?;
         let mut binders = Vec::new();
@@ -3534,6 +3575,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
+            pending_cleanup_regions: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -3776,6 +3819,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let requirements =
             self.lower_evidence_requirements(&scheme.requirements, lowering, owner)?;
 
+        let evidence_creation_row = if F::EFFECTS {
+            self.active_region_api()?.map(|api| {
+                EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])))
+            })
+        } else {
+            None
+        };
         let mut core_body = IterativeTypeOwner::new(self.pure_core_type(&value_type)?);
         for requirement in requirements.iter().rev() {
             for method in requirement.methods.iter().rev() {
@@ -3783,10 +3833,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let domain = self.pure_core_type(&method.ty)?;
-                core_body = IterativeTypeOwner::new(Type::Function(
-                    Box::new(domain),
-                    Box::new(core_body.into_inner()),
-                ));
+                core_body = IterativeTypeOwner::new(if let Some(row) = &evidence_creation_row {
+                    Type::function_computation(
+                        domain,
+                        ComputationType::new(
+                            core_body.into_inner(),
+                            clone_effect_row_with_budget(row, &mut self.type_work)
+                                .map_err(|()| type_resource())?,
+                        ),
+                    )
+                } else {
+                    Type::Function(Box::new(domain), Box::new(core_body.into_inner()))
+                });
             }
         }
         if let Some(source_parameters) = source_type_parameters.as_deref() {
@@ -3956,6 +4014,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
+            pending_region_closures: Vec::new(),
+            pending_cleanup_regions: Vec::new(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -4163,7 +4223,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if !F::EFFECTS {
             return Err(invalid_state());
         }
-        let result = self.elaborate_module_program(program);
+        let result = self
+            .elaborate_module_program(program)
+            .and_then(|body| self.wrap_region_entry(body));
         self.clear_capture_uses();
         match result {
             Ok(typed) => {
@@ -4378,7 +4440,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let generic_type_origin = self
             .builder
-            .generic_cell_dependency_origin(&mut self.type_work)
+            .cell_dependency_origin(&mut self.type_work)
             .map_err(|()| type_resource())?;
         if self
             .generic_dependency_origin
@@ -4470,8 +4532,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &method_routes,
             &method_adapters,
             &mut self.type_work,
-        )
-        .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
+        );
+        let captures = captures.map_err(|failure| capture_failure(failure, &mut self.type_work))?;
         Ok(captures)
     }
 
@@ -5100,9 +5162,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(identity)
     }
 
-    fn lower_newtype_constructor_value(
+    fn lower_constructor_function(
         &mut self,
         owner: crate::types::NominalTypeId,
+        constructor: Option<crate::types::ConstructorId>,
         source_scheme: Type,
         origin: &Origin,
         span: Span,
@@ -5152,44 +5215,56 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
             );
-            let body = body.into_inner();
-            let Type::Function(domain, codomain) = body else {
-                discard_type_iteratively(body);
-                return Err(invalid_state());
+            let (domain, codomain, effects) = match body.into_inner() {
+                Type::Function(domain, codomain) => (*domain, *codomain, EffectRow::empty()),
+                Type::EffectfulFunction(domain, computation) => {
+                    (*domain, computation.value, computation.effects)
+                }
+                other => {
+                    discard_type_iteratively(other);
+                    return Err(invalid_state());
+                }
             };
-            let domain = IterativeTypeOwner::new(*domain);
-            let codomain = IterativeTypeOwner::new(*codomain);
+            let domain = IterativeTypeOwner::new(domain);
+            let codomain = IterativeTypeOwner::new(codomain);
             let parameter_type = self.clone_type(&domain)?;
             let parameter = self.builder.binder(parameter_type, origin.clone())?;
             let child_type = self.clone_type(&domain)?;
             let child = self
                 .builder
                 .variable(parameter.id(), child_type, origin.clone())?;
-            let conversion_type = self.clone_type(&codomain)?;
-            let conversion = self.builder.newtype_conversion(
-                owner,
-                NewtypeConversionDirection::Wrap,
-                child,
-                conversion_type,
-                origin.clone(),
-            )?;
-            let function_type = IterativeTypeOwner::new(Type::Function(
-                Box::new(domain.into_inner()),
-                Box::new(codomain.into_inner()),
+            let conversion = if let Some(constructor) = constructor {
+                self.initialize_region_record(
+                    Some(constructor),
+                    vec![child],
+                    &codomain,
+                    &effects,
+                    span,
+                )?
+            } else {
+                let conversion_type = self.clone_type(&codomain)?;
+                self.builder.newtype_conversion(
+                    owner,
+                    NewtypeConversionDirection::Wrap,
+                    child,
+                    conversion_type,
+                    origin.clone(),
+                )?
+            };
+            let function_type = IterativeTypeOwner::new(Type::function_computation(
+                domain.into_inner(),
+                ComputationType::new(codomain.into_inner(), effects),
             ));
             if generated_parameters.is_empty() {
-                return self
-                    .builder
-                    .function(
-                        parameter,
-                        conversion,
-                        function_type.into_inner(),
-                        origin.clone(),
-                    )
-                    .map_err(Into::into);
+                return self.construct_function(
+                    parameter,
+                    conversion,
+                    function_type.into_inner(),
+                    origin.clone(),
+                );
             }
             let retained_function_type = self.clone_type(&function_type)?;
-            let function = self.builder.function(
+            let function = self.construct_function(
                 parameter,
                 conversion,
                 retained_function_type,
@@ -5885,7 +5960,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut routes = Vec::new();
         let mut adapters = Vec::new();
         for index in 0..self.method_capture_uses.len() {
-            let (node, slot, method) = self.method_capture_uses[index];
+            let (node, slot, method, context) = self.method_capture_uses[index];
             let (selection, arguments) = publication
                 .capture_selection(slot, Some(method), &mut self.type_work)
                 .map_err(|failure| selection_failure(failure, None))?;
@@ -5909,6 +5984,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 method,
                 requirement: None,
                 arguments,
+                context,
             });
         }
         for index in 0..self.global_capture_uses.len() {
@@ -5926,7 +6002,35 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     method,
                     requirement: Some(requirement),
                     arguments: 0,
+                    context: None,
                 });
+            }
+        }
+        // Selected imported methods have checked declarations but no local
+        // initializer/Variable node. Retain their full Source callable type for
+        // the same physical capture preparation used by completed local roots.
+        for implementation in imported.implementations() {
+            for method in &implementation.fact.methods {
+                self.type_work
+                    .charge(routes.len() + adapters.len())
+                    .map_err(|()| type_resource())?;
+                let selected = routes.iter().any(|route| matches!(route.target,
+                    crate::core::capture::MethodTarget::Binder(binder) | crate::core::capture::MethodTarget::Adapter { binder, .. } if binder == method.binder))
+                    || adapters.iter().any(|adapter| adapter.binder == method.binder);
+                if !selected {
+                    continue;
+                }
+                let parameters =
+                    F::project_parameters(&method.scheme.type_parameters, &mut self.type_work)
+                        .map_err(|()| type_resource())?;
+                let body = self.pure_core_type(&method.scheme.value_type)?;
+                let ty = if parameters.is_empty() {
+                    body
+                } else {
+                    retain_implementation_capture_type(body, &parameters, &mut self.type_work)?
+                };
+                self.builder
+                    .variable(method.binder, ty, method.origin.clone())?;
             }
         }
         Ok((routes, adapters))
@@ -6284,12 +6388,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 core_ty,
                 occurrence.origin.clone(),
             )?;
+            let method_node = node;
+            let mut context_value = None;
+            if F::EFFECTS
+                && let Some(api) = self.active_region_api()?
+            {
+                let (context, value, query) = self.saved_region_context(api, span)?;
+                context_value = Some(value);
+                let result_type = self.pure_core_type(&ty)?;
+                node = self.builder.binding(
+                    context,
+                    query,
+                    node,
+                    result_type,
+                    occurrence.origin.clone(),
+                )?;
+            }
             self.type_work.charge(1).map_err(|()| type_resource())?;
             self.method_capture_uses
                 .try_reserve(1)
                 .map_err(|_| type_resource())?;
-            self.method_capture_uses
-                .push((node, occurrence.evidence[0].storage_id(), method));
+            self.method_capture_uses.push((
+                method_node,
+                occurrence.evidence[0].storage_id(),
+                method,
+                context_value,
+            ));
 
             let TypeFact {
                 ty: fact_ty,
@@ -6300,7 +6424,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Ok(TypedNode {
                 node,
                 ty: ty.into_inner(),
-                effects: EffectRow::empty(),
+                effects: self
+                    .builder
+                    .clone_node_effects_with_budget(node, &mut self.type_work)?,
                 provenance,
             })
         })();
@@ -6440,7 +6566,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let provenance = self.at_span_provenance(&ty, declaration_span)?;
         Ok(TypedNode {
             node: selected.node,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(selected.node, &mut self.type_work)?,
             provenance,
             ty: ty.into_inner(),
         })
@@ -6663,12 +6791,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let binder_id = binder.id();
             let domain = IterativeTypeOwner::new(self.clone_type(binder.ty())?);
             let codomain = self.clone_type(&function.ty)?;
-            let ty = IterativeTypeOwner::new(Type::Function(
-                Box::new(domain.into_inner()),
-                Box::new(codomain),
-            ));
+            let ty = IterativeTypeOwner::new(if F::EFFECTS {
+                Type::function_computation(
+                    domain.into_inner(),
+                    ComputationType::new(
+                        codomain,
+                        clone_effect_row_with_budget(&function.effects, &mut self.type_work)
+                            .map_err(|()| type_resource())?,
+                    ),
+                )
+            } else {
+                Type::Function(Box::new(domain.into_inner()), Box::new(codomain))
+            });
             let core_ty = self.clone_type(&ty)?;
-            let node = self.builder.function(
+            let node = self.construct_function(
                 binder,
                 function.node,
                 core_ty,
@@ -6691,6 +6827,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 drop(application);
             }
             function.set_node(node);
+            function.replace_effects(
+                self.builder
+                    .clone_node_effects_with_budget(node, &mut self.type_work)?,
+            );
             function.replace_type(ty.into_inner());
             let provenance = self.at_span_provenance(&function.ty, cause.primary_span())?;
             function.set_provenance(provenance);
@@ -7243,10 +7383,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         occurrence: usize,
     ) -> Result<TypedNode, TypeError> {
         let function = TypedNodeOwner::new(function);
-        let Type::Function(domain, codomain) = &function.ty else {
-            return Err(invalid_state());
-        };
-        let polymorphic = matches!(domain.as_ref(), Type::Forall(_, _));
+        let signature = function.ty.function_view().ok_or_else(invalid_state)?;
+        let (domain, codomain) = (signature.domain(), signature.value());
+        let polymorphic = matches!(domain, Type::Forall(_, _));
         if polymorphic {
             let producer_matches = match argument.producer {
                 PolymorphicEvidenceProducer::Abstract { .. } => {
@@ -7380,7 +7519,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty: ty.into_inner(),
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(node, &mut self.type_work)?,
             provenance,
         })
     }
@@ -7912,9 +8053,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         Box::new(scheme_body),
                                     ));
                                     let abstraction_type = self.clone_type(&scheme)?;
+                                    let capture_type = self.clone_type(&current.ty)?;
+                                    let captured = if adapter_edge_ordinal == 0 {
+                                        current.node
+                                    } else {
+                                        self.construct_adapter_captures(
+                                            current.node,
+                                            capture_type,
+                                            origin.clone(),
+                                        )?
+                                    };
                                     let abstraction = self.builder.type_abstraction(
                                         adapter_parameters,
-                                        current.node,
+                                        captured,
                                         abstraction_type,
                                         origin.clone(),
                                     )?;
@@ -9916,12 +10067,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 prepared
                     .context
                     .set_quantified(method.binder, source_quantified.clone())?;
-                if prepared
-                    .quantifiers
-                    .insert(method.binder, source_quantified)
-                    .is_some()
-                {
-                    return Err(invalid_state());
+                match prepared.quantifiers.entry(method.binder) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(source_quantified);
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => {
+                        return Err(invalid_state());
+                    }
                 }
             }
         }
@@ -10486,6 +10638,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let Some(module) = name.id.module() else {
             return Ok(None);
         };
+        if module.is_builtin_region() {
+            return Ok(Some(match name.spelling.as_str() {
+                "usable_bytes" => Intrinsic::RegionRequestBytes,
+                "alignment" => Intrinsic::RegionRequestAlignment,
+                "from_backing" => {
+                    let function = ty.function_view().ok_or_else(invalid_state)?;
+                    let Type::Application(_, owner) = function.value() else {
+                        return Err(invalid_state());
+                    };
+                    let Type::Variable(owner) = &**owner else {
+                        return Err(invalid_state());
+                    };
+                    let Type::Tuple(fields) = function.domain() else {
+                        return Err(invalid_state());
+                    };
+                    let [_, Type::Nominal(address), _, _] = fields.as_ref() else {
+                        return Err(invalid_state());
+                    };
+                    Intrinsic::RegionFromBacking {
+                        owner: *owner,
+                        address_module: address.module(),
+                    }
+                }
+                _ => return Err(invalid_state()),
+            }));
+        }
         if module.is_builtin_foreign() {
             return Ok(Some(match name.spelling.as_str() {
                 "null" => Intrinsic::AddressNull,
@@ -10601,18 +10779,37 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             self.builtin_intrinsic(&equational.interface.name, &function_type.ty)?
                         {
                             let ty = self.clone_type(&function_type.ty)?;
-                            let core_ty = self.clone_type(&ty)?;
-                            let node = self.builder.intrinsic(
+                            let core_ty = self.pure_core_type(&ty)?;
+                            let intrinsic_module = equational
+                                .interface
+                                .name
+                                .id
+                                .module()
+                                .ok_or_else(invalid_state)?;
+                            let descriptor = crate::core::packed::IntrinsicNode::new(
                                 intrinsic,
-                                equational
-                                    .interface
-                                    .name
-                                    .id
-                                    .module()
-                                    .ok_or_else(invalid_state)?,
-                                core_ty,
-                                equational.interface.name.origin.clone(),
-                            )?;
+                                intrinsic_module,
+                            );
+                            let node = if F::EFFECTS && descriptor.constructs_buffer_or_reply() {
+                                self.lower_buffer_intrinsic(
+                                    intrinsic,
+                                    intrinsic_module,
+                                    &ty,
+                                    definition.span(),
+                                )?
+                            } else {
+                                self.builder.intrinsic(
+                                    intrinsic,
+                                    equational
+                                        .interface
+                                        .name
+                                        .id
+                                        .module()
+                                        .ok_or_else(invalid_state)?,
+                                    core_ty,
+                                    equational.interface.name.origin.clone(),
+                                )?
+                            };
                             TypedNode {
                                 node,
                                 ty,
@@ -13164,21 +13361,29 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         ComputationType::new(*codomain, effects),
                     ));
                 } else if !infer_effects {
-                    let expected_effects = match ty
-                        .function_view()
-                        .and_then(|function| function.effects())
-                    {
-                        Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?,
-                        None => EffectRow::empty(),
-                    };
+                    let expected_effects =
+                        match ty.function_view().and_then(|function| function.effects()) {
+                            Some(effects) => self.zonk_effect_row(effects)?,
+                            None => EffectRow::empty(),
+                        };
                     let expected_is_inference = expected_effects.tail().is_some_and(|tail| {
                         matches!(tail.variable(), EffectRowVariable::Inference(_))
                     });
                     if expected_is_inference {
-                        self.unify_effect_rows(&expected_effects, &body.effects)
+                        // Checking may weaken to the contextual row's known
+                        // requirements. Infer only its still-unsolved residual;
+                        // retain the original tail/lacks in the exact unifier.
+                        let known_prefix = rebuild_effect_row_with_budget(
+                            expected_effects.known().iter(),
+                            None,
+                            std::iter::empty(),
+                            clone_type_with_budget,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| type_resource())?;
+                        let weakened =
+                            self.union_effects(&body.effects, &known_prefix, effect_span)?;
+                        self.unify_effect_rows(&expected_effects, &weakened)
                             .map_err(|failure| match failure {
                                 UnificationFailure::RowExclusion => {
                                     row_exclusion_error(effect_span, None)
@@ -13265,12 +13470,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 let core_ty = self.pure_core_type(&ty)?;
                 let node =
-                    self.builder
-                        .function(binder, body.node, core_ty, origin.into_inner())?;
+                    self.construct_function(binder, body.node, core_ty, origin.into_inner())?;
                 values.push(TypedNode {
                     node,
                     ty: ty.into_inner(),
-                    effects: EffectRow::empty(),
+                    effects: self
+                        .builder
+                        .clone_node_effects_with_budget(node, &mut self.type_work)?,
                     provenance,
                 });
             }
@@ -13289,11 +13495,41 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         values: &mut TypedNodeBuffer,
     ) -> Result<(), TypeError> {
         let action = values.pop().ok_or_else(invalid_state)?;
+        // Registration queries only Unit after the callback has been evaluated.
+        // Cleanup calls that callback under its saved allocation association.
+        let deferred = self.cleanup_row_pending(&action.effects)
+            && !action.effects.known().iter().any(|effect| {
+                crate::resolved::RegionApi::for_module(effect.effect().module())
+                    .is_some_and(|api| effect.effect() == api.default_alloc())
+            });
+        let saved = if F::EFFECTS && !deferred {
+            self.active_region_api()?
+                .filter(|api| {
+                    action.effects.tail().is_some()
+                        || action
+                            .effects
+                            .known()
+                            .iter()
+                            .any(|effect| effect.effect() == api.default_alloc())
+                })
+                .map(|api| {
+                    self.saved_region_binding(api, span)
+                        .map(|saved| (api, saved))
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let action = if let Some((api, (view, _))) = &saved {
+            TypedNodeOwner::new(self.forward_cleanup_default(action, view, *api, span)?)
+        } else {
+            action
+        };
         let body = values.pop().ok_or_else(invalid_state)?;
         let ty = self.clone_type(&body.ty)?;
         let effects = self.union_effects(&body.effects, &action.effects, span)?;
         let core_effects = self.core_effect_row(&effects)?;
-        let node = self.push_effect_core(
+        let mut node = self.push_effect_core(
             ty,
             core_effects,
             Origin::Source(span),
@@ -13305,10 +13541,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 action_span: cleanup.action_span,
             }),
         )?;
+        if deferred && F::EFFECTS {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.pending_cleanup_regions
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.pending_cleanup_regions.push((node, span));
+        }
+        if let Some((_, (view, query))) = saved {
+            let result_type = self.clone_type(&body.ty)?;
+            node = self
+                .builder
+                .binding(view, query, node, result_type, Origin::Source(span))?;
+        }
         values.push(TypedNode {
             node,
             ty: self.clone_type(&body.ty)?,
-            effects,
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(node, &mut self.type_work)?,
             provenance: body.provenance.clone(),
         });
         Ok(())
@@ -13991,27 +14242,80 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<(), TypeError> {
         match &current.kind {
             ResolvedExprKind::String(value) => {
-                let node = self.builder.string(
-                    value.as_bytes(),
-                    Type::String,
-                    Origin::Source(current.span),
-                )?;
+                let api =
+                    self.registry.effects().iter().find_map(|effect| {
+                        crate::resolved::RegionApi::for_module(effect.id.module())
+                    });
+                let effects = api.map_or_else(EffectRow::empty, |api| {
+                    EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])))
+                });
+                let node = if F::EFFECTS && api.is_some() {
+                    self.type_work
+                        .charge(value.len())
+                        .map_err(|()| type_resource())?;
+                    let mut bytes = Vec::new();
+                    bytes
+                        .try_reserve_exact(value.len())
+                        .map_err(|_| type_resource())?;
+                    bytes.extend_from_slice(value.as_bytes());
+                    self.initialize_region_buffer(
+                        crate::core::region::RegionBufferOperation::StringLiteral(Arc::from(bytes)),
+                        None,
+                        None,
+                        &Type::String,
+                        &effects,
+                        current.span,
+                    )?
+                } else {
+                    self.builder.string(
+                        value.as_bytes(),
+                        Type::String,
+                        Origin::Source(current.span),
+                    )?
+                };
                 values.push(TypedNode {
                     node,
                     ty: Type::String,
-                    effects: EffectRow::empty(),
+                    effects,
                     provenance: TypeProvenance::atom(Some(current.span)),
                 });
             }
             ResolvedExprKind::Integer(value) => {
                 let ty = Type::Int;
-                let node =
+                let api = self.active_region_api()?;
+                let effects = if F::EFFECTS && api.is_some() && value.to_i128().is_none() {
+                    EffectRow::singleton(EffectInstance::new(
+                        api.ok_or_else(invalid_state)?.default_alloc(),
+                        Box::new([]),
+                    ))
+                } else {
+                    EffectRow::empty()
+                };
+                let node = if effects.is_empty() {
                     self.builder
-                        .integer(value.clone(), Type::Int, Origin::Source(current.span))?;
+                        .integer(value.clone(), Type::Int, Origin::Source(current.span))?
+                } else {
+                    self.type_work
+                        .charge(
+                            usize::try_from(value.magnitude_byte_length())
+                                .map_err(|_| type_resource())?,
+                        )
+                        .map_err(|()| type_resource())?;
+                    self.initialize_region_buffer(
+                        crate::core::region::RegionBufferOperation::IntegerLiteral(Arc::new(
+                            value.clone(),
+                        )),
+                        None,
+                        None,
+                        &Type::Int,
+                        &effects,
+                        current.span,
+                    )?
+                };
                 values.push(TypedNode {
                     node,
                     ty,
-                    effects: EffectRow::empty(),
+                    effects,
                     provenance: TypeProvenance::atom(Some(current.span)),
                 });
             }
@@ -14138,8 +14442,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     );
                     Type::apply_arguments(Type::Nominal(constructor_owner), arguments)
                 };
+                let has_payload = payload.is_some();
+                let region_api = (!is_newtype)
+                    .then(|| {
+                        self.registry.effects().iter().find_map(|effect| {
+                            crate::resolved::RegionApi::for_module(effect.id.module())
+                        })
+                    })
+                    .flatten();
+                let allocation = region_api.map_or_else(EffectRow::empty, |api| {
+                    EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])))
+                });
                 let scheme = IterativeTypeOwner::new(if let Some(payload) = payload {
-                    Type::Function(Box::new(payload.into_inner()), Box::new(result))
+                    Type::function_computation(
+                        payload.into_inner(),
+                        crate::types::ComputationType::new(result, allocation.clone()),
+                    )
                 } else {
                     result
                 });
@@ -14170,21 +14488,34 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     })?;
                     Type::Forall(quantified, Box::new(fact_ty.into_inner()))
                 };
-                let mut node = if is_newtype {
-                    self.lower_newtype_constructor_value(
+                let mut node = if is_newtype || (F::EFFECTS && region_api.is_some() && has_payload)
+                {
+                    self.lower_constructor_function(
                         constructor_owner,
+                        (!is_newtype).then_some(occurrence.constructor),
                         core_scheme,
                         &occurrence.origin,
                         current.span,
                     )?
+                } else if F::EFFECTS && region_api.is_some() && !has_payload {
+                    discard_type_iteratively(core_scheme);
+                    self.initialize_region_record(
+                        Some(occurrence.constructor),
+                        Vec::new(),
+                        &ty,
+                        &allocation,
+                        current.span,
+                    )?
                 } else {
+                    let projected = self.pure_core_type(&core_scheme)?;
+                    discard_type_iteratively(core_scheme);
                     self.builder.constructor(
                         occurrence.constructor,
-                        core_scheme,
+                        projected,
                         occurrence.origin.clone(),
                     )?
                 };
-                if !arguments.is_empty() {
+                if !arguments.is_empty() && (has_payload || region_api.is_none() || !F::EFFECTS) {
                     let core_ty =
                         clone_type_with_budget(&ty, &mut self.type_work).map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -14199,7 +14530,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let provenance = self.at_span_provenance(&ty, declaration_span)?;
                 values.push(TypedNode {
                     node,
-                    effects: EffectRow::empty(),
+                    effects: self
+                        .builder
+                        .clone_node_effects_with_budget(node, &mut self.type_work)?,
                     provenance,
                     ty: ty.into_inner(),
                 });
@@ -14255,6 +14588,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             ResolvedExprKind::Resource(resource) => {
                 self.schedule_resource(resource, current.span, tasks)?;
+            }
+            ResolvedExprKind::Region(region) => {
+                self.schedule_region(region, current.span, tasks)?
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                self.schedule_selection(selection, current.span, tasks)?
             }
             ResolvedExprKind::Perform(request) => {
                 self.schedule_perform(request, current.span, tasks)?;
@@ -14393,6 +14732,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ElaborationTask::ResourceBody { resource, span } => {
                 self.step_resource_body(resource, span, context, tasks, values)?;
             }
+            ElaborationTask::RegionBody { source, span } => {
+                self.region_body(source, span, context, tasks, values)?
+            }
+            ElaborationTask::FinishRegion(progress) => {
+                self.finish_region(*progress, context, values)?
+            }
+            ElaborationTask::SelectionBody { source, span } => {
+                self.selection_body(source, span, tasks, values)?
+            }
+            ElaborationTask::FinishSelection(progress) => {
+                self.finish_selection(*progress, values)?
+            }
             ElaborationTask::FinishResource(progress) => {
                 self.step_resource_completion(progress, context, values)?;
             }
@@ -14498,10 +14849,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     primary: Box::new(Origin::Source(whole_span)),
                     related: vec![operator_span],
                 };
-                let effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
-                let node =
+                let mut effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
+                let node = if F::EFFECTS
+                    && self.active_region_api()?.is_some()
+                    && primitive != Primitive::Equal
+                {
+                    let api = self.active_region_api()?.ok_or_else(invalid_state)?;
+                    effects = self.union_effects(
+                        &effects,
+                        &EffectRow::singleton(EffectInstance::new(
+                            api.default_alloc(),
+                            Box::new([]),
+                        )),
+                        whole_span,
+                    )?;
+                    self.initialize_region_buffer(
+                        crate::core::region::RegionBufferOperation::IntegerArithmetic(primitive),
+                        Some(left.node),
+                        Some(right.node),
+                        &ty,
+                        &effects,
+                        whole_span,
+                    )?
+                } else {
                     self.builder
-                        .primitive(primitive, left.node, right.node, ty.clone(), origin)?;
+                        .primitive(primitive, left.node, right.node, ty.clone(), origin)?
+                };
                 values.push(TypedNode {
                     node,
                     ty,
@@ -14821,6 +15194,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     | ElaboratedDeclaration::Recursive {
                         effects, origin, ..
                     } => Some(self.union_effects(effects, &body.effects, origin.primary_span())?),
+                    ElaboratedDeclaration::Evidence {
+                        members, origin, ..
+                    } => {
+                        let span = origin.primary_span();
+                        let mut effects =
+                            self.union_effects(&EffectRow::empty(), &body.effects, span)?;
+                        for (_, initializer) in members {
+                            self.type_work.charge(1).map_err(|()| type_resource())?;
+                            let creation = self.builder.clone_node_effects_with_budget(
+                                *initializer,
+                                &mut self.type_work,
+                            )?;
+                            effects = self.union_effects(&creation, &effects, span)?;
+                        }
+                        Some(effects)
+                    }
                     _ => None,
                 }
             } else {
@@ -15235,8 +15624,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .charge(1)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let ty = IterativeTypeOwner::new(Type::Tuple(types.into_boxed_slice()));
-        let core_ty = self.clone_type(&ty)?;
-        let node = self.builder.tuple(nodes, core_ty, Origin::Source(span))?;
+        let api = self
+            .registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()));
+        if let Some(api) = api {
+            let allocation =
+                EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+            effects = self.union_effects(&effects, &allocation, span)?;
+        }
+        let node = if F::EFFECTS && api.is_some() {
+            self.initialize_region_tuple(nodes, &ty, &effects, span)?
+        } else {
+            let core_ty = self.clone_type(&ty)?;
+            self.builder.tuple(nodes, core_ty, Origin::Source(span))?
+        };
         Ok(TypedNode {
             node,
             effects,
@@ -15697,7 +16100,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ),
             ));
             let core_type = self.clone_type(&next_type)?;
-            body = self.builder.function(
+            body = self.construct_function(
                 binder,
                 body,
                 core_type,
@@ -15706,6 +16109,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     reason: GeneratedReason::FunctionLowering,
                 },
             )?;
+            body_effects = self
+                .builder
+                .clone_node_effects_with_budget(body, &mut self.type_work)?;
             function_type = next_type;
         }
         application_types.0.reverse();
@@ -17617,7 +18023,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut expected_body_effects = EffectRow::empty();
-        for _ in 0..arity {
+        let mut outer_arrow_effects = Vec::new();
+        if F::ALLOWS_EFFECTFUL_TYPES {
+            self.type_work
+                .charge(arity - 1)
+                .map_err(|()| type_resource())?;
+            outer_arrow_effects
+                .try_reserve_exact(arity - 1)
+                .map_err(|_| type_resource())?;
+        }
+        for arrow in 0..arity {
+            if F::ALLOWS_EFFECTFUL_TYPES && arrow != 0 {
+                outer_arrow_effects.push(expected_body_effects);
+            }
             if remainder.ty.function_view().is_none() {
                 return Err(equation_arity_error(
                     EquationArityCause::DeclaredArrows,
@@ -17686,6 +18104,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             parameters,
             domain_types,
             expected_body_effects,
+            outer_arrow_effects,
             coverage_matrix,
             clause_bodies,
             contains_newtype: false,
@@ -17873,6 +18292,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             mut parameters,
             domain_types,
             mut expected_body_effects,
+            mut outer_arrow_effects,
             mut coverage_matrix,
             mut clause_bodies,
             contains_newtype,
@@ -18008,13 +18428,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             )?
         };
         let mut body_type = IterativeTypeOwner::new(self.pure_core_type(&remainder.ty)?);
-        for (parameter, domain) in parameters.into_iter().zip(domains.iter()).rev() {
+        for (arrow, (parameter, domain)) in
+            parameters.into_iter().zip(domains.iter()).rev().enumerate()
+        {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let domain_type = self.pure_core_type(&domain.ty)?;
             let effects = if F::ALLOWS_EFFECTFUL_TYPES {
-                std::mem::replace(&mut expected_body_effects, EffectRow::empty())
+                if arrow == 0 {
+                    std::mem::replace(&mut expected_body_effects, EffectRow::empty())
+                } else {
+                    outer_arrow_effects.pop().ok_or_else(invalid_state)?
+                }
             } else {
                 EffectRow::empty()
             };
@@ -18023,7 +18449,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ComputationType::new(body_type.into_inner(), effects),
             ));
             let core_ty = self.clone_type(&ty)?;
-            body_node = self.builder.function(
+            body_node = self.construct_function(
                 parameter,
                 body_node,
                 core_ty,
@@ -18046,7 +18472,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node: body_node,
             ty: original_function_type,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(body_node, &mut self.type_work)?,
             provenance,
         })
     }
@@ -18218,7 +18646,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             body.set_node(node);
         }
         let core_function_type = self.pure_core_type(&function_type.ty)?;
-        let node = self.builder.function(
+        let node = self.construct_function(
             parameter,
             body.node,
             core_function_type,
@@ -18231,7 +18659,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty: function_type.ty,
-            effects: EffectRow::empty(),
+            effects: self
+                .builder
+                .clone_node_effects_with_budget(node, &mut self.type_work)?,
             provenance: function_type.provenance,
         })
     }
@@ -20706,6 +21136,11 @@ pub(crate) fn check_newtype_representation_cycles(
     Ok(())
 }
 
+// Public standalone Source checking owns one cumulative allowance per module.
+// Complete capture publication needs more work than the shared structural base;
+// explicit caller/driver budgets and independent builder/rewrite owners are separate.
+const DEFAULT_MODULE_SOURCE_TYPE_WORK_LIMIT: usize = 15_663_104;
+
 /// Checks every local definition and publishes an immutable dependency summary.
 ///
 /// No Core program escapes this phase. A summary is created only after all
@@ -20716,7 +21151,10 @@ pub(crate) fn check_newtype_representation_cycles(
 /// Returns the first source typing error or bounded internal elaboration
 /// failure. Failed modules do not produce a [`CheckedModule`].
 pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
-    let mut type_work = TypeWorkBudget::default();
+    let mut type_work = TypeWorkBudget::with_limit(crate::calibration::limit(
+        DEFAULT_MODULE_SOURCE_TYPE_WORK_LIMIT,
+        crate::calibration::DiagnosticOwner::Structural,
+    ));
     let mut coverage_work = UsefulnessBudget::default();
     let mut constraint_work = InterfaceConstraintBudget::default();
     check_module_with_budget(
@@ -20740,6 +21178,7 @@ pub(crate) fn check_module_with_budget(
         coverage_work,
         constraint_work,
         None,
+        None,
     )
 }
 pub(crate) fn check_module_with_budget_and_rewrite_work(
@@ -20747,6 +21186,7 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
+    primary_work: Option<TypeWorkBudget>,
     rewrite_work: Option<TypeWorkBudget>,
 ) -> Result<CheckedModule, TypeError> {
     let mut effects = !resolved.effects().is_empty()
@@ -20774,6 +21214,7 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
             type_work,
             coverage_work,
             constraint_work,
+            primary_work,
             rewrite_work,
         )
     } else {
@@ -20782,6 +21223,7 @@ pub(crate) fn check_module_with_budget_and_rewrite_work(
             type_work,
             coverage_work,
             constraint_work,
+            primary_work,
             rewrite_work,
         )
     }
@@ -20796,6 +21238,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
+    primary_work: Option<TypeWorkBudget>,
     rewrite_work: Option<TypeWorkBudget>,
 ) -> Result<CheckedModule, TypeError> {
     resolved
@@ -20829,6 +21272,7 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
         registry,
         type_work,
         coverage_work.clone(),
+        primary_work,
         rewrite_work,
     )?;
     let result: Result<_, TypeError> = (|| {
@@ -21348,6 +21792,7 @@ struct EquationsProgress<'a> {
     parameters: Vec<TypedBinder>,
     domain_types: OwnedTypeBuffer,
     expected_body_effects: EffectRow,
+    outer_arrow_effects: Vec<EffectRow>,
     coverage_matrix: CorePatternMatrixBuffer,
     clause_bodies: Vec<(NodeId, Span)>,
     contains_newtype: bool,
@@ -21388,6 +21833,16 @@ struct CleanupActionProgress {
 }
 
 enum ElaborationTask<'a> {
+    RegionBody {
+        source: &'a crate::resolved::ResolvedRegionExpr,
+        span: Span,
+    },
+    FinishRegion(Box<RegionProgress<'a>>),
+    SelectionBody {
+        source: &'a crate::resolved::ResolvedRegionSelectionExpr,
+        span: Span,
+    },
+    FinishSelection(Box<SelectionProgress>),
     FinishFunction {
         has_ambient_rows: bool,
         direct_binder: Option<BinderId>,
@@ -22763,7 +23218,11 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
         ElaborationTask::Equation(_) => {}
         ElaborationTask::FinishCleanupAction(_) => {}
-        ElaborationTask::ResourceBody { .. }
+        ElaborationTask::RegionBody { .. }
+        | ElaborationTask::FinishRegion(_)
+        | ElaborationTask::SelectionBody { .. }
+        | ElaborationTask::FinishSelection(_)
+        | ElaborationTask::ResourceBody { .. }
         | ElaborationTask::FinishCleanup { .. }
         | ElaborationTask::BeginCleanupBinding { .. }
         | ElaborationTask::FinishHookBody { .. }
@@ -23994,6 +24453,16 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.extend(match_expression.arms.iter().map(|arm| &arm.body));
             }
 
+            ResolvedExprKind::Region(region) => {
+                work.push(&region.body);
+                if let Some(provider) = &region.provider {
+                    work.push(provider);
+                }
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                work.push(&selection.body);
+                work.push(&selection.region);
+            }
             ResolvedExprKind::Resource(resource) => {
                 work.push(&resource.body);
                 work.push(&resource.initializer);
@@ -26469,6 +26938,16 @@ fn resume_usage_with_budget(
                     push(&mut tasks, Task::Visit(&matched.scrutinee), budget)?;
                 }
 
+                ResolvedExprKind::Region(region) => {
+                    push(&mut tasks, Task::Visit(&region.body), budget)?;
+                    if let Some(provider) = &region.provider {
+                        push(&mut tasks, Task::Visit(provider), budget)?;
+                    }
+                }
+                ResolvedExprKind::RegionSelection(selection) => {
+                    push(&mut tasks, Task::Visit(&selection.body), budget)?;
+                    push(&mut tasks, Task::Visit(&selection.region), budget)?;
+                }
                 ResolvedExprKind::Resource(resource) => {
                     push(&mut tasks, Task::Visit(&resource.body), budget)?;
                     push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
@@ -26675,6 +27154,16 @@ fn contains_resume_owner_with_budget(
                 }
             }
 
+            ResolvedExprKind::Region(region) => {
+                schedule(&mut pending, &region.body, budget)?;
+                if let Some(provider) = &region.provider {
+                    schedule(&mut pending, provider, budget)?;
+                }
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                schedule(&mut pending, &selection.body, budget)?;
+                schedule(&mut pending, &selection.region, budget)?;
+            }
             ResolvedExprKind::Resource(resource) => {
                 schedule(&mut pending, &resource.body, budget)?;
                 schedule(&mut pending, &resource.initializer, budget)?;
@@ -26774,77 +27263,81 @@ fn contains_resume_owner_with_budget(
     Ok(false)
 }
 
+fn effect_selection_resource() -> TypeError {
+    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+}
+
+fn schedule_effect_expression<'a>(
+    work: &mut Vec<&'a ResolvedExpr>,
+    expression: &'a ResolvedExpr,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    budget.charge(1).map_err(|()| effect_selection_resource())?;
+    work.try_reserve(1)
+        .map_err(|_| effect_selection_resource())?;
+    work.push(expression);
+    Ok(())
+}
+
+fn schedule_effect_declaration<'a>(
+    work: &mut Vec<&'a ResolvedExpr>,
+    declaration: &'a ResolvedLocalDeclaration,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    match declaration {
+        ResolvedLocalDeclaration::Evidence(source) => {
+            for equation in source
+                .method_groups
+                .iter()
+                .flat_map(|group| &group.equations)
+            {
+                schedule_effect_expression(work, &equation.body, budget)?;
+            }
+            Ok(())
+        }
+        ResolvedLocalDeclaration::Binding(binding) => {
+            schedule_effect_expression(work, &binding.initializer, budget)
+        }
+        ResolvedLocalDeclaration::Recursive(group) => {
+            for member in &group.members {
+                schedule_effect_expression(work, &member.initializer, budget)?;
+            }
+            Ok(())
+        }
+        ResolvedLocalDeclaration::Newtype(_) => Ok(()),
+    }
+}
+
+fn schedule_effect_block<'a>(
+    work: &mut Vec<&'a ResolvedExpr>,
+    block: &'a ResolvedBlock,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    schedule_effect_expression(work, &block.result, budget)?;
+    for declaration in &block.declarations {
+        schedule_effect_declaration(work, declaration, budget)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn checked_program_contains_effect_syntax(
     program: &ValidatedInterfaceProgram,
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, TypeError> {
-    fn resource() -> TypeError {
-        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-    }
-
-    fn schedule<'a>(
-        work: &mut Vec<&'a ResolvedExpr>,
-        expression: &'a ResolvedExpr,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), TypeError> {
-        budget.charge(1).map_err(|()| resource())?;
-        work.try_reserve(1).map_err(|_| resource())?;
-        work.push(expression);
-        Ok(())
-    }
-
-    fn schedule_declaration<'a>(
-        work: &mut Vec<&'a ResolvedExpr>,
-        declaration: &'a ResolvedLocalDeclaration,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), TypeError> {
-        match declaration {
-            ResolvedLocalDeclaration::Evidence(source) => {
-                for equation in source
-                    .method_groups
-                    .iter()
-                    .flat_map(|group| &group.equations)
-                {
-                    schedule(work, &equation.body, budget)?;
-                }
-                Ok(())
-            }
-            ResolvedLocalDeclaration::Binding(binding) => {
-                schedule(work, &binding.initializer, budget)
-            }
-            ResolvedLocalDeclaration::Recursive(group) => {
-                for member in &group.members {
-                    schedule(work, &member.initializer, budget)?;
-                }
-                Ok(())
-            }
-            ResolvedLocalDeclaration::Newtype(_) => Ok(()),
-        }
-    }
-
-    fn schedule_block<'a>(
-        work: &mut Vec<&'a ResolvedExpr>,
-        block: &'a ResolvedBlock,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<(), TypeError> {
-        schedule(work, &block.result, budget)?;
-        for declaration in &block.declarations {
-            schedule_declaration(work, declaration, budget)?;
-        }
-        Ok(())
-    }
-
     fn type_requires_effect_core<'a>(
         parameter_count: usize,
         mut parameters: impl Iterator<Item = &'a Kind>,
         value_type: &Type,
         budget: &mut TypeWorkBudget,
     ) -> Result<bool, TypeError> {
-        budget.charge(parameter_count).map_err(|()| resource())?;
+        budget
+            .charge(parameter_count)
+            .map_err(|()| effect_selection_resource())?;
         if parameters.any(|kind| matches!(kind, Kind::EffectRow)) {
             return Ok(true);
         }
-        requires_pure_core_projection(value_type, Some(budget)).map_err(|()| resource())
+        requires_pure_core_projection(value_type, Some(budget))
+            .map_err(|()| effect_selection_resource())
     }
 
     let registry = program.registry();
@@ -26855,7 +27348,7 @@ pub(crate) fn checked_program_contains_effect_syntax(
     {
         let parameters = registry
             .nominal_parameters(nominal.id)
-            .ok_or_else(resource)?;
+            .ok_or_else(effect_selection_resource)?;
         if let Some(representation) = &nominal.representation
             && type_requires_effect_core(
                 parameters.len(),
@@ -26867,7 +27360,9 @@ pub(crate) fn checked_program_contains_effect_syntax(
             return Ok(true);
         }
         for constructor in &nominal.constructors {
-            let constructor = registry.constructor(*constructor).ok_or_else(resource)?;
+            let constructor = registry
+                .constructor(*constructor)
+                .ok_or_else(effect_selection_resource)?;
             if let Some(payload) = &constructor.payload
                 && type_requires_effect_core(
                     parameters.len(),
@@ -26904,7 +27399,7 @@ pub(crate) fn checked_program_contains_effect_syntax(
                     .parameters
                     .len()
                     .checked_add(method.type_parameters.len())
-                    .ok_or_else(resource)?;
+                    .ok_or_else(effect_selection_resource)?;
                 if type_requires_effect_core(
                     parameter_count,
                     parameters,
@@ -26932,26 +27427,35 @@ pub(crate) fn checked_program_contains_effect_syntax(
                 ResolvedDefinitionKind::Equational(global)
                 | ResolvedDefinitionKind::ForeignConstant(global) => {
                     for equation in &global.equations {
-                        schedule(&mut work, &equation.body, budget)?;
+                        schedule_effect_expression(&mut work, &equation.body, budget)?;
                     }
                 }
                 ResolvedDefinitionKind::InlineOperational(global) => {
-                    schedule_block(&mut work, &global.body, budget)?;
+                    schedule_effect_block(&mut work, &global.body, budget)?;
                 }
             }
         }
         for implementation in group.implementations() {
             for method_group in implementation.method_groups() {
                 for equation in &method_group.equations {
-                    schedule(&mut work, &equation.body, budget)?;
+                    schedule_effect_expression(&mut work, &equation.body, budget)?;
                 }
             }
         }
     }
 
+    effect_expression_work_contains_syntax(work, budget)
+}
+
+fn effect_expression_work_contains_syntax(
+    mut work: Vec<&ResolvedExpr>,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
     while let Some(expression) = work.pop() {
         match &expression.kind {
             ResolvedExprKind::Cleanup(_)
+            | ResolvedExprKind::Region(_)
+            | ResolvedExprKind::RegionSelection(_)
             | ResolvedExprKind::Resource(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
@@ -26959,28 +27463,28 @@ pub(crate) fn checked_program_contains_effect_syntax(
             | ResolvedExprKind::Discard(_) => return Ok(true),
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
-                    schedule(&mut work, element, budget)?;
+                    schedule_effect_expression(&mut work, element, budget)?;
                 }
             }
             ResolvedExprKind::Apply(application) => {
-                schedule(&mut work, &application.argument, budget)?;
-                schedule(&mut work, &application.function, budget)?;
+                schedule_effect_expression(&mut work, &application.argument, budget)?;
+                schedule_effect_expression(&mut work, &application.function, budget)?;
             }
             ResolvedExprKind::Add(binary)
             | ResolvedExprKind::Multiply(binary)
             | ResolvedExprKind::Equal(binary) => {
-                schedule(&mut work, &binary.right, budget)?;
-                schedule(&mut work, &binary.left, budget)?;
+                schedule_effect_expression(&mut work, &binary.right, budget)?;
+                schedule_effect_expression(&mut work, &binary.left, budget)?;
             }
-            ResolvedExprKind::Block(block) => schedule_block(&mut work, block, budget)?,
+            ResolvedExprKind::Block(block) => schedule_effect_block(&mut work, block, budget)?,
             ResolvedExprKind::Function(function) => {
-                schedule_block(&mut work, &function.body, budget)?;
+                schedule_effect_block(&mut work, &function.body, budget)?;
             }
             ResolvedExprKind::Match(matched) => {
                 for arm in &matched.arms {
-                    schedule(&mut work, &arm.body, budget)?;
+                    schedule_effect_expression(&mut work, &arm.body, budget)?;
                 }
-                schedule(&mut work, &matched.scrutinee, budget)?;
+                schedule_effect_expression(&mut work, &matched.scrutinee, budget)?;
             }
             ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
@@ -27205,6 +27709,17 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                 }
             }
 
+            ResolvedExprKind::Region(region) => {
+                binders.push(region.handle.id);
+                expressions.push(&region.body);
+                if let Some(provider) = &region.provider {
+                    expressions.push(provider);
+                }
+            }
+            ResolvedExprKind::RegionSelection(selection) => {
+                expressions.push(&selection.body);
+                expressions.push(&selection.region);
+            }
             ResolvedExprKind::Resource(resource) => {
                 binders.push(resource.handle.id);
                 expressions.push(&resource.body);
@@ -27284,26 +27799,6 @@ fn collect_pattern_binders(
             | crate::resolved::ResolvedPatternKind::Unit => {}
         }
     }
-}
-
-#[cfg(test)]
-pub(crate) fn cell_resource_core_fixture_for_test() -> (
-    crate::core::effect::UnvalidatedEffectProgram,
-    ResolvedModule,
-    Vec<crate::source::SourceFile>,
-    Arc<ResolvedRegistry>,
-) {
-    tests::cell_resource_core_fixture()
-}
-
-#[cfg(test)]
-pub(crate) fn generic_cell_resource_core_fixture_for_test() -> (
-    crate::core::effect::UnvalidatedEffectProgram,
-    ResolvedModule,
-    Vec<crate::source::SourceFile>,
-    Arc<ResolvedRegistry>,
-) {
-    tests::cell_resource_core_fixture_with_generic(true)
 }
 
 #[cfg(test)]
@@ -28375,11 +28870,18 @@ mod tests {
         let mut body = "{\n".repeat(DEPTH);
         body.push_str("()");
         body.push_str(&"\n}".repeat(DEPTH));
-        let resolved = resolved_module_fixture("deep-effect-selection.ash", "", "Unit", &body);
+        let (resolved, mut dependencies) =
+            resolved_module_fixture_component("deep-effect-selection.ash", "", "Unit", &body);
         let module = resolved.module();
         let checked = check_module(resolved).expect("the deep selection fixture should check");
-        let linked =
-            link_modules(vec![checked], module).expect("the deep selection fixture should link");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the deep selection fixture should link");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("the deep selection fixture evidence should validate");
 
@@ -28387,17 +28889,47 @@ mod tests {
             .name("effect-core-selection-budget".to_owned())
             .stack_size(64 * 1024)
             .spawn(move || {
-                let mut calibration = TypeWorkBudget::unbounded();
                 assert_eq!(
-                    checked_program_contains_effect_syntax(&program, &mut calibration),
-                    Ok(false)
+                    checked_program_contains_effect_syntax(
+                        &program,
+                        &mut TypeWorkBudget::default()
+                    ),
+                    Ok(true),
+                    "actual Source headers require Effect Core before body traversal",
                 );
+                let span = program
+                    .groups()
+                    .iter()
+                    .find(|group| group.module() == program.entry())
+                    .expect("the actual entry remains linked")
+                    .span();
+                let mut body = ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span,
+                };
+                for _ in 0..DEPTH {
+                    body = ResolvedExpr {
+                        kind: ResolvedExprKind::Block(ResolvedBlock {
+                            declarations: Vec::new(),
+                            result: Box::new(body),
+                            span,
+                        }),
+                        span,
+                    };
+                }
+                let scan = |budget: &mut TypeWorkBudget| {
+                    let mut work = Vec::new();
+                    schedule_effect_expression(&mut work, &body, budget)?;
+                    effect_expression_work_contains_syntax(work, budget)
+                };
+                let mut calibration = TypeWorkBudget::unbounded();
+                assert_eq!(scan(&mut calibration), Ok(false));
                 let exact_work = calibration.used();
-                assert!(exact_work > DEPTH);
+                assert_eq!(exact_work, DEPTH + 1, "root scheduling is paid too");
 
                 let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
                 assert_eq!(
-                    checked_program_contains_effect_syntax(&program, &mut one_short),
+                    scan(&mut one_short),
                     Err(TypeError::Internal(
                         ElaborationFailure::TypeResourceExhausted
                     ))
@@ -28406,12 +28938,10 @@ mod tests {
 
                 for _ in 0..2 {
                     let mut exact = TypeWorkBudget::with_limit(exact_work);
-                    assert_eq!(
-                        checked_program_contains_effect_syntax(&program, &mut exact),
-                        Ok(false)
-                    );
+                    assert_eq!(scan(&mut exact), Ok(false));
                     assert_eq!(exact.used(), exact_work);
                 }
+                crate::resolved::discard_resolved_expression_iteratively(body);
             })
             .expect("the small-stack selection worker should start")
             .join()
@@ -28880,6 +29410,15 @@ mod tests {
         result_type: &str,
         result: &str,
     ) -> ResolvedModule {
+        resolved_module_fixture_component(display_path, declarations, result_type, result).0
+    }
+
+    fn resolved_module_fixture_component(
+        display_path: &str,
+        declarations: &str,
+        result_type: &str,
+        result: &str,
+    ) -> (ResolvedModule, Vec<CheckedModule>) {
         let separator = if !declarations.is_empty() && !declarations.ends_with('\n') {
             "\n"
         } else {
@@ -28887,14 +29426,7 @@ mod tests {
         };
         let text =
             format!("{declarations}{separator}main : Unit -> {result_type}\nmain () = {result}\n");
-        let file = ModuleFixtureFile::write(display_path, &text);
-        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
-            .expect("the module fixture should load");
-        let loaded = graph
-            .module(graph.entry())
-            .expect("the module fixture should retain its entry");
-        assert!(loaded.dependencies().is_empty());
-        let resolved = resolve_module(loaded, &[]).expect("the module fixture should resolve");
+        let (resolved, _, _, dependencies) = cell_module_fixture_sources_at(display_path, &text);
         let wrapper = resolved
             .definitions()
             .last()
@@ -28904,7 +29436,7 @@ mod tests {
         };
         assert_eq!(wrapper.interface.name.spelling, "main");
         assert_eq!(wrapper.equations.len(), 1);
-        resolved
+        (resolved, dependencies)
     }
 
     fn cell_resource_fixture(result: &str) -> ResolvedModule {
@@ -28932,7 +29464,19 @@ mod tests {
         Arc<ResolvedRegistry>,
         Vec<CheckedModule>,
     ) {
-        let file = ModuleFixtureFile::write("cell-resource-typed.ash", text);
+        cell_module_fixture_sources_at("cell-resource-typed.ash", text)
+    }
+
+    fn cell_module_fixture_sources_at(
+        display_path: &str,
+        text: &str,
+    ) -> (
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+        Vec<CheckedModule>,
+    ) {
+        let file = ModuleFixtureFile::write(display_path, text);
         let graph = load_module_graph(&file.0, &ModuleRoots::empty()).expect("resource graph");
         let mut checked = Vec::<CheckedModule>::new();
         for loaded in graph.modules() {
@@ -29001,48 +29545,6 @@ mod tests {
         elaborator
     }
 
-    pub(crate) fn cell_resource_core_fixture() -> (
-        crate::core::effect::UnvalidatedEffectProgram,
-        ResolvedModule,
-        Vec<SourceFile>,
-        Arc<ResolvedRegistry>,
-    ) {
-        cell_resource_core_fixture_with_generic(false)
-    }
-
-    pub(crate) fn cell_resource_core_fixture_with_generic(
-        generic: bool,
-    ) -> (
-        crate::core::effect::UnvalidatedEffectProgram,
-        ResolvedModule,
-        Vec<SourceFile>,
-        Arc<ResolvedRegistry>,
-    ) {
-        let (module, sources, registry, _) = if generic {
-            cell_module_fixture_sources(
-                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Bool> c = true {\n42\n}\n",
-            )
-        } else {
-            cell_resource_fixture_sources("resource cell<R> c = (40 + 1) {\n42\n}")
-        };
-        let mut elaborator = cell_resource_elaborator(&module);
-        let mut context = elaborator.base_context.clone();
-        let typed = elaborator
-            .elaborate_expression_with_context(
-                ElaborationTask::Synthesize {
-                    expression: fixture_result(&module),
-                    cause: None,
-                },
-                &mut context,
-            )
-            .expect("resource typed structure");
-        let core = elaborator
-            .builder
-            .finish(typed.node)
-            .expect("resource arena");
-        (core, module, sources, registry)
-    }
-
     // Only the builtin becomes a checked group. The resource result is typed
     // internal input for linked header tests, never a published module.
     pub(crate) fn cell_resource_linked_header_fixture() -> ResolvedModuleProgram {
@@ -29085,6 +29587,12 @@ mod tests {
         ] {
             let module = cell_resource_fixture(source);
             let mut elaborator = cell_resource_elaborator(&module);
+            let api = elaborator
+                .active_region_api()
+                .expect("the region API lookup should fit")
+                .expect("the resource fixture should retain its canonical allocation API");
+            let expected_row =
+                EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
             let mut context = elaborator.base_context.clone();
             let typed = elaborator
                 .elaborate_expression_with_context(
@@ -29096,7 +29604,9 @@ mod tests {
                 )
                 .expect("resource typed structure");
             assert_eq!(typed.ty, Type::Int);
-            assert!(typed.effects.is_empty());
+            // Resource discharge removes its exact Cell.Ops instance; allocation
+            // retained by initializer/body calls remains in the closed outward row.
+            assert_eq!(typed.effects, expected_row);
             let _core = elaborator
                 .builder
                 .finish(typed.node)
@@ -29733,9 +30243,23 @@ mod tests {
                 );
                 let graph = load_module_graph(&file.0, &ModuleRoots::empty())
                     .expect("the wide cyclic module should load");
+                let mut checked: Vec<CheckedModule> = Vec::new();
+                for dependency in graph.modules().iter().filter(|loaded| loaded.id() != graph.entry()) {
+                    let imports = dependency.dependencies().iter().map(|edge| {
+                        DependencyExports::new(edge, checked.iter()
+                            .find(|module| module.module() == edge.target())
+                            .expect("dependency order retains the actual service target").exports()).unwrap()
+                    }).collect::<Vec<_>>();
+                    checked.push(check_module(resolve_module(dependency, &imports).unwrap()).unwrap());
+                }
                 let loaded = graph.module(graph.entry()).expect("entry module");
+                let imports = loaded.dependencies().iter().map(|edge| {
+                    DependencyExports::new(edge, checked.iter()
+                        .find(|module| module.module() == edge.target())
+                        .expect("entry service targets are checked").exports()).unwrap()
+                }).collect::<Vec<_>>();
                 assert!(matches!(
-                    resolve_module(loaded, &[]),
+                    resolve_module(loaded, &imports),
                     Err(crate::resolve::ResolveModuleError::Representation(TypeError::Source(error)))
                         if error.reason == TypeReason::NewtypeRecursiveRepresentation
                 ));
@@ -29761,7 +30285,11 @@ mod tests {
     }
 
     fn lexical_resource_fixture() -> ResolvedModule {
-        resolved_module_fixture(
+        lexical_resource_fixture_component().0
+    }
+
+    fn lexical_resource_fixture_component() -> (ResolvedModule, Vec<CheckedModule>) {
+        resolved_module_fixture_component(
             "lexical-preparation-work.ash",
             "interface Read<A, B> where A -> B {\nread : A -> B\n}\n",
             "Unit",
@@ -29903,8 +30431,8 @@ mod tests {
             .expect("unpublished checked scheme dismantles iteratively");
     }
 
-    fn lexical_capture_resource_fixture() -> ResolvedModule {
-        resolved_module_fixture(
+    fn lexical_capture_resource_fixture_component() -> (ResolvedModule, Vec<CheckedModule>) {
+        resolved_module_fixture_component(
             "lexical-capture-work.ash",
             "interface Read<A> {\nread : A -> Int\n}\n",
             "Int",
@@ -29914,11 +30442,18 @@ mod tests {
 
     #[test]
     fn lexical_capture_collection_and_routing_have_exact_retry_boundaries() {
-        let resolved = lexical_capture_resource_fixture();
+        let (resolved, mut dependencies) = lexical_capture_resource_fixture_component();
         let source = lexical_resource_source(&resolved).clone();
         let module = resolved.module();
         let checked = check_module(resolved).expect("capture fixture checks");
-        let linked = link_modules(vec![checked], module).expect("capture fixture links");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("capture fixture links");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("capture catalog authenticates");
         let prepare = || {
@@ -30027,22 +30562,29 @@ mod tests {
 
     #[test]
     fn lexical_capture_module_boundaries_clear_routes_and_poison_failed_synthesis() {
-        let resolved = lexical_capture_resource_fixture();
+        let (resolved, mut dependencies) = lexical_capture_resource_fixture_component();
         let module = resolved.module();
         let checked = check_module(resolved).expect("capture fixture checks");
-        let linked = link_modules(vec![checked], module).expect("capture fixture links");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("capture fixture links");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("capture catalog authenticates");
-        let mut measured = Elaborator::for_module_program(&program).expect("elaborator");
+        let mut measured = EffectElaborator::for_module_program(&program).expect("elaborator");
         measured.type_work = TypeWorkBudget::unbounded();
         measured
-            .synthesize_module_program_after_effect_scan(&program)
+            .synthesize_effect_module_program(&program)
             .expect("authentic final synthesis");
         assert!(measured.lexical_capture_uses.is_empty());
         let work = measured.type_work.used();
         for one_short in [true, false, false] {
             let mut elaborator =
-                Elaborator::for_module_program(&program).expect("fresh elaborator");
+                EffectElaborator::for_module_program(&program).expect("fresh elaborator");
             // A stale route must be cleared before the next module starts.
             elaborator.lexical_capture_uses.push(LexicalCaptureUse {
                 occurrence_address: usize::MAX,
@@ -30050,7 +30592,7 @@ mod tests {
                 ordinal: usize::MAX,
             });
             elaborator.type_work = TypeWorkBudget::with_limit(work - usize::from(one_short));
-            let result = elaborator.synthesize_module_program_after_effect_scan(&program);
+            let result = elaborator.synthesize_effect_module_program(&program);
             assert!(elaborator.lexical_capture_uses.is_empty());
             if one_short {
                 assert_eq!(
@@ -30063,7 +30605,7 @@ mod tests {
                 assert!(elaborator.final_root.is_none());
                 assert_eq!(
                     elaborator
-                        .synthesize_module_program_after_effect_scan(&program)
+                        .synthesize_effect_module_program(&program)
                         .map(|_| ()),
                     Err(invalid_state())
                 );
@@ -30300,11 +30842,18 @@ mod tests {
 
     #[test]
     fn lexical_block_cleanup_charges_retained_map_capacity_at_exact_boundaries() {
-        let resolved = lexical_resource_fixture();
+        let (resolved, mut dependencies) = lexical_resource_fixture_component();
         let source = lexical_resource_source(&resolved).clone();
         let module = resolved.module();
         let checked = check_module(resolved).expect("the lexical fixture should check");
-        let linked = link_modules(vec![checked], module).expect("the lexical fixture should link");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the lexical fixture should link");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("the lexical fixture should authenticate");
         let method = source.method_groups[0].method.expect("one supplied method");
@@ -30437,47 +30986,66 @@ mod tests {
 
     #[test]
     fn lexical_final_synthesis_resource_failure_poisoning_prevents_publication() {
-        let resolved = lexical_resource_fixture();
+        let (resolved, mut dependencies) = lexical_resource_fixture_component();
         let module = resolved.module();
         let checked = check_module(resolved).expect("the lexical fixture should check");
-        let linked = link_modules(vec![checked], module).expect("the lexical fixture should link");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the lexical fixture should link");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("the lexical fixture should authenticate");
-        let mut measured = Elaborator::for_module_program(&program).expect("final elaborator");
+        let mut measured =
+            EffectElaborator::for_module_program(&program).expect("final elaborator");
         measured.type_work = TypeWorkBudget::with_limit(usize::MAX);
         measured.constraint_work = InterfaceConstraintBudget::with_limit(usize::MAX);
         measured
-            .synthesize_module_program(&program)
+            .synthesize_effect_module_program(&program)
             .expect("measure final synthesis");
         let work = measured.constraint_work.used();
         assert!(work > 0);
-        let mut short = Elaborator::for_module_program(&program).expect("final elaborator");
+        let mut short = EffectElaborator::for_module_program(&program).expect("final elaborator");
         let private = short
             .builder
-            .unit(Type::Unit, Origin::Source(program.groups()[0].span()))
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    program
+                        .groups()
+                        .iter()
+                        .find(|group| group.module() == program.entry())
+                        .expect("entry group")
+                        .span(),
+                ),
+            )
             .expect("private Core");
         short.type_work = TypeWorkBudget::with_limit(usize::MAX);
         short.constraint_work = InterfaceConstraintBudget::with_limit(work - 1);
         assert_eq!(
-            short.synthesize_module_program(&program).map(|_| ()),
+            short.synthesize_effect_module_program(&program).map(|_| ()),
             Err(constraint_resource())
         );
         assert_eq!(short.state, ElaboratorState::Poisoned);
         assert!(short.final_root.is_none());
         short.constraint_work = InterfaceConstraintBudget::with_limit(work);
         assert_eq!(
-            short.synthesize_module_program(&program).map(|_| ()),
+            short.synthesize_effect_module_program(&program).map(|_| ()),
             Err(invalid_state())
         );
         assert!(matches!(
             short.finish(private),
             Err(ElaborationFailure::InvalidState)
         ));
-        let mut retry = Elaborator::for_module_program(&program).expect("fresh final elaborator");
+        let mut retry =
+            EffectElaborator::for_module_program(&program).expect("fresh final elaborator");
         retry.type_work = TypeWorkBudget::with_limit(usize::MAX);
         retry.constraint_work = InterfaceConstraintBudget::with_limit(work);
         let root = retry
-            .synthesize_module_program(&program)
+            .synthesize_effect_module_program(&program)
             .expect("fresh exact synthesis");
         assert_eq!(retry.constraint_work.used(), work);
         retry
@@ -30603,20 +31171,49 @@ mod tests {
     }
 
     #[test]
-    fn private_pure_module_keeps_unused_capture_summaries_empty() {
+    fn private_region_source_functions_retain_required_lifetime_summaries() {
         let resolved = resolved_module_fixture(
-            "private-pure-capture.ash",
+            "private-region-capture.ash",
             "hidden : Unit -> Int\nhidden () = 42\n",
             "Int",
             "hidden ()",
         );
-        let checked = check_module(resolved).expect("the private pure module checks");
+        let mut effect = EffectElaborator::for_module(&resolved)
+            .expect("the actual region-using Source family should be available");
+        let schemes = effect
+            .checked_module_schemes(resolved.definitions())
+            .unwrap();
+        assert_eq!(schemes.len(), 2);
+        for scheme in &schemes {
+            assert!(
+                resolved.export_candidate().term(&scheme.spelling).is_none(),
+                "neither private user global has a portable export consumer"
+            );
+            let function = scheme
+                .scheme
+                .value_type
+                .function_view()
+                .expect("the user function arrow");
+            let row = function
+                .effects()
+                .expect("unwritten Source arrows retain DefaultAlloc");
+            assert_eq!(row.known().len(), 1);
+            assert!(row.known()[0].effect().module().is_builtin_region());
+        }
+        assert!(
+            effect
+                .capture_publication_required(&resolved, &schemes)
+                .unwrap(),
+            "Effect functions require their local lifetime proofs without exports"
+        );
+        drop(effect);
+        let checked =
+            check_module(resolved).expect("the private region-using Source module checks");
         assert_eq!(checked.schemes().len(), 2);
         for scheme in checked.schemes() {
-            assert_eq!(
-                scheme.capture,
-                crate::core::capture::CaptureValueSummary::default(),
-                "a private pure module has no portable-summary consumer"
+            assert!(
+                scheme.capture.is_retained(),
+                "private region-using functions retain their required local lifetime summaries"
             );
         }
     }
@@ -30875,7 +31472,7 @@ mod tests {
 
     #[test]
     fn final_effect_binder_preparation_matches_completed_source_and_exact_retry() {
-        let resolved = resolved_module_fixture(
+        let (resolved, mut dependencies) = resolved_module_fixture_component(
             "prepared-final-binder.ash",
             "value : Unit -> Unit\nvalue argument = argument\n",
             "Unit",
@@ -30883,10 +31480,21 @@ mod tests {
         );
         let module = resolved.module();
         let checked = check_module(resolved).expect("source checks");
-        let linked = link_modules(vec![checked], module).expect("module links");
+        let linked = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("module links");
         let program = crate::evidence_validation::validate_interface_evidence(linked)
             .expect("original evidence authenticates");
-        let group = &program.groups()[0];
+        let group = program
+            .groups()
+            .iter()
+            .find(|group| group.module() == program.entry())
+            .expect("entry group");
         let prepare = |allowance| {
             let mut elaborator =
                 EffectElaborator::for_module_program(&program).expect("completed global lowering");
@@ -30992,7 +31600,7 @@ mod tests {
 
     #[test]
     fn program_elaborator_reserves_hidden_impl_binders() {
-        let resolved = resolved_module_fixture(
+        let (resolved, mut dependencies) = resolved_module_fixture_component(
             "impl-program-reservation.ash",
             "interface Convert<A> {\nconvert : A -> A\n}\n\nimpl Convert<Int> {\nconvert value = value\n}\n",
             "Unit",
@@ -31001,11 +31609,24 @@ mod tests {
         let module = resolved.module();
         let hidden = resolved.implementations()[0].method_groups[0].binder.id;
         let checked = check_module(resolved).expect("Task 3 ignores impl bodies while checking");
-        let program = link_modules(vec![checked], module)
-            .expect("the checked fixture should link into one module program");
+        let program = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the checked fixture should link into one module program");
         let program = crate::evidence_validation::validate_interface_evidence(program)
             .expect("the linked fixture evidence should validate");
-        let origin = Origin::Source(program.groups()[0].span());
+        let origin = Origin::Source(
+            program
+                .groups()
+                .iter()
+                .find(|group| group.module() == program.entry())
+                .expect("entry group")
+                .span(),
+        );
         let mut elaborator = Elaborator::for_module_program(&program)
             .expect("the complete resolved namespace should reserve");
 
@@ -31017,18 +31638,35 @@ mod tests {
 
     #[test]
     fn final_elaborator_requires_the_authorized_module_program_root() {
-        let resolved = resolved_module_fixture("final-root-authorization.ash", "", "Unit", "()");
+        let (resolved, mut dependencies) =
+            resolved_module_fixture_component("final-root-authorization.ash", "", "Unit", "()");
         let module = resolved.module();
         let checked = check_module(resolved).expect("the fixture module should check");
-        let program = link_modules(vec![checked], module)
-            .expect("the checked fixture should link into one module program");
+        let program = link_modules(
+            {
+                dependencies.push(checked);
+                dependencies
+            },
+            module,
+        )
+        .expect("the checked fixture should link into one module program");
         let program = crate::evidence_validation::validate_interface_evidence(program)
             .expect("the linked fixture evidence should validate");
         let mut elaborator = Elaborator::for_module_program(&program)
             .expect("the complete resolved namespace should reserve");
         let unrelated = elaborator
             .builder
-            .unit(Type::Unit, Origin::Source(program.groups()[0].span()))
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    program
+                        .groups()
+                        .iter()
+                        .find(|group| group.module() == program.entry())
+                        .expect("entry group")
+                        .span(),
+                ),
+            )
             .expect("the adversarial root should allocate");
 
         assert!(matches!(
@@ -31245,15 +31883,21 @@ mod tests {
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        // A monomorphic private interface retains no method-binder authority.
-        // Unconditional arity preflight adds one interface-map cell plus the
-        // interface and global declaration visits.
-        // Producer authentication visits three withheld names, charging one
-        // map cell and two ordered-index cells for each name.
-        // Shared clone preflights remove three pending-worklist cells from
-        // both checked-fact construction and selector admission.
-        const EXACT_WORK: usize = 39 + 1 + 2 + 3 * 3 - 2 * 3 - 2;
-        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        // This control owns complete checking and export freeze, including
+        // authenticated imported services. Measure that whole boundary once;
+        // local charge formulas are tested separately.
+        let donor = resolved_module_fixture("donor-constraint.ash", interface, "Unit", "()");
+        let mut measured = InterfaceConstraintBudget::with_limit(usize::MAX);
+        check_module_with_budget(
+            donor,
+            &mut TypeWorkBudget::default(),
+            &mut UsefulnessBudget::default(),
+            &mut measured,
+        )
+        .unwrap();
+        let exact_work = measured.used();
+        assert!(exact_work > 0);
+        let mut short = InterfaceConstraintBudget::with_limit(exact_work - 1);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -31262,11 +31906,14 @@ mod tests {
             failure,
             TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
         );
-        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert!(
+            short.used() < exact_work,
+            "a refused bulk charge leaves its prefix atomically spent"
+        );
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut constraint_work = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(exact_work);
 
         check_module_with_budget(
             first,
@@ -31275,7 +31922,7 @@ mod tests {
             &mut constraint_work,
         )
         .expect("one interface should fit the exact constraint budget");
-        assert_eq!(constraint_work.used(), EXACT_WORK);
+        assert_eq!(constraint_work.used(), exact_work);
         assert_eq!(constraint_work.charge(1), Err(()));
         let failure = check_module_with_budget(
             second,
@@ -31293,11 +31940,12 @@ mod tests {
 
     #[test]
     fn relational_interface_shape_has_an_exact_declaration_guard_boundary() {
-        // Application arity preflight owns one interface-map cell and visits
-        // the interface and global declarations once. One interface-vector
-        // cell, one declaration cell, and one method cell then precede complete
-        // occurrence walks for First (five cells) and absent Second (six).
-        const EXACT_WORK: usize = (1 + 2) + 1 + 1 + 1 + 5 + 1;
+        // Preflight: one local interface-map cell plus two declarations.
+        // Retain one interface vector, declaration and method cell. The
+        // EffectfulFunction walk schedules root+domain+value+row (4) before
+        // finding First; missing Second also schedules DefaultAlloc's
+        // zero-argument instance (5). This visitor charges no computation box.
+        const EXACT_WORK: usize = (1 + 2) + 1 + 1 + 1 + 4 + 5;
         let declarations =
             "interface Relational<First, Second> {\nrelational : First -> First\n}\n";
 
@@ -31306,6 +31954,33 @@ mod tests {
             declarations,
             "Unit",
             "()",
+        );
+        assert_eq!(short_module.interfaces().len(), 1);
+        assert_eq!(short_module.imported_facts().interface_imports().count(), 0);
+        assert_eq!(short_module.declaration_order().len(), 2);
+        let interface = &short_module.interfaces()[0];
+        let [first, second] = interface.parameters.as_ref() else {
+            panic!("the guard retains both declared parameters")
+        };
+        assert_eq!(first.spelling, "First");
+        assert_eq!(second.spelling, "Second");
+        let [method] = interface.methods.as_ref() else {
+            panic!("one method owns the occurrence walk")
+        };
+        assert!(method.type_parameters.is_empty());
+        let api = short_module
+            .imported_facts()
+            .effects()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .unwrap();
+        let allocation =
+            EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+        assert_eq!(
+            method.annotation.ty,
+            Type::EffectfulFunction(
+                Box::new(Type::Variable(first.id)),
+                Box::new(ComputationType::new(Type::Variable(first.id), allocation))
+            )
         );
         let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
         assert_eq!(
@@ -31956,24 +32631,80 @@ mod tests {
         let (exact, exact_used) = link_public_authorization_fixture_with_limit(WIDTH, exact_limit);
         let program = exact.expect("the measured link budget should retain every public route");
         assert_eq!(exact_used, exact_limit);
-        assert_eq!(program.groups().len(), 3);
+        assert_eq!(program.groups().len(), 5);
 
         let group_for_route_length = |route_length| {
-            program
+            let groups = program
                 .groups()
                 .iter()
-                .find(|group| {
+                .filter(|group| {
                     let table = group.public_implementation_authorizations();
                     table.len() == WIDTH
                         && table.iter().all(|authorization| {
                             authorization.authorization().hops().len() == route_length
                         })
                 })
-                .expect("each dependency layer should retain one uniform lightweight table")
+                .collect::<Vec<_>>();
+            let [group] = groups.as_slice() else {
+                panic!(
+                    "each source dependency layer should retain exactly one uniform lightweight table"
+                );
+            };
+            *group
         };
         let base = group_for_route_length(0);
         let facade = group_for_route_length(1);
         let entry = group_for_route_length(2);
+        let foreign_groups = program
+            .groups()
+            .iter()
+            .filter(|group| group.module().is_builtin_foreign())
+            .collect::<Vec<_>>();
+        let region_groups = program
+            .groups()
+            .iter()
+            .filter(|group| group.module().is_builtin_region())
+            .collect::<Vec<_>>();
+        let [foreign] = foreign_groups.as_slice() else {
+            panic!("the complete graph should retain one canonical Foreign group");
+        };
+        let [region] = region_groups.as_slice() else {
+            panic!("the complete graph should retain one canonical Region group");
+        };
+        let expected_ids = HashSet::from([
+            foreign.module(),
+            region.module(),
+            base.module(),
+            facade.module(),
+            entry.module(),
+        ]);
+        assert_eq!(expected_ids.len(), 5);
+        assert_eq!(
+            program
+                .groups()
+                .iter()
+                .map(ResolvedModuleGroup::module)
+                .collect::<HashSet<_>>(),
+            expected_ids
+        );
+        assert_eq!(entry.module(), program.entry());
+        let dependency_ids = |group: &ResolvedModuleGroup| {
+            group
+                .direct_dependencies()
+                .iter()
+                .map(|edge| edge.target())
+                .collect::<Vec<_>>()
+        };
+        assert!(foreign.direct_dependencies().is_empty());
+        assert_eq!(dependency_ids(region), [foreign.module()]);
+        assert_eq!(dependency_ids(base), [region.module()]);
+        assert_eq!(dependency_ids(facade), [base.module(), region.module()]);
+        assert_eq!(dependency_ids(entry), [facade.module(), region.module()]);
+        for service in [*foreign, *region] {
+            assert!(service.public_implementation_authorizations().is_empty());
+            assert!(service.implementations().is_empty());
+            assert!(service.implementation_facts().is_empty());
+        }
         let implementation_ids = |group: &ResolvedModuleGroup| {
             group
                 .public_implementation_authorizations()
@@ -31982,6 +32713,11 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
+        assert!(
+            implementation_ids(base)
+                .iter()
+                .all(|identity| identity.module() == base.module())
+        );
         assert_eq!(implementation_ids(facade), implementation_ids(base));
         assert_eq!(implementation_ids(entry), implementation_ids(base));
         assert_eq!(base.implementations().len(), WIDTH);
@@ -31994,20 +32730,40 @@ mod tests {
 
     #[test]
     fn impl_method_substitution_uses_the_exact_constraint_budget() {
-        // The interface and implementation method relation form one complete
-        // check-and-freeze boundary. Complete-application staging and matching
-        // add eight aligned root cells to the predecessor boundary. Global
-        // arity preflight adds one interface-map cell, visits the interface,
-        // implementation, and global declarations, and checks the head.
-        // Producer authentication also visits the three withheld names,
-        // charging one map cell and two ordered-index cells for each name.
-        // Checked-fact and selector clones each avoid three cells from the
-        // former separate type-counting worklist.
-        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1 + 3 * 3 - 2 * 3;
+        // The interface, rigid method substitution and summary freeze form
+        // one complete boundary; preserve its exact/short admission instead
+        // of treating a historical whole-module total as a local tariff.
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",
         );
+        let donor = resolved_module_fixture(
+            "donor-impl-method-constraint.ash",
+            declarations,
+            "Unit",
+            "()",
+        );
+        let mut measured = InterfaceConstraintBudget::with_limit(usize::MAX);
+        let checked = check_module_with_budget(
+            donor,
+            &mut TypeWorkBudget::default(),
+            &mut UsefulnessBudget::default(),
+            &mut measured,
+        )
+        .unwrap();
+        let [implementation] = checked.implementation_facts() else {
+            panic!("one substituted implementation is retained")
+        };
+        let [method] = implementation.methods.as_ref() else {
+            panic!("one substituted method is retained")
+        };
+        assert!(method.scheme.type_parameters.is_empty());
+        assert!(method.scheme.requirements.is_empty());
+        let function = method.scheme.value_type.function_view().unwrap();
+        assert_eq!(function.domain(), &Type::Int);
+        assert_eq!(function.value(), &Type::Int);
+        let exact_work = measured.used();
+        assert!(exact_work > 0);
         let short_module = resolved_module_fixture(
             "short-impl-method-constraint.ash",
             declarations,
@@ -32018,7 +32774,7 @@ mod tests {
             resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        let mut short = InterfaceConstraintBudget::with_limit(exact_work - 1);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -32030,11 +32786,11 @@ mod tests {
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        let mut exact = InterfaceConstraintBudget::with_limit(exact_work);
         check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
             .expect("the exact budget should admit one implementation method");
 
-        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.used(), exact_work);
         assert_eq!(exact.charge(1), Err(()));
     }
 
@@ -32891,10 +33647,28 @@ mod tests {
             resolved_module_fixture("ordinary-tuple-budget.ash", "", "(Int, Int)", "(1, 2)");
 
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        let effect_count = short.registry.effects().len();
+        assert_eq!(
+            effect_count, 1,
+            "the admitted fixture retains exactly DefaultAlloc"
+        );
+        let api = short
+            .registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .unwrap();
+        let allocation =
+            EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+        // Each integer scans E effect declarations. Tuple retention then pays
+        // wrapper1, qualify(empty)2 + qualify(singleton)4 + union2, and the
+        // complete Tuple(Int,Int) copy (root1 + leaves2).
+        let local_work = 2 * effect_count + 1 + (2 + 4 + 2) + (1 + 2);
+        let short_setup = short.type_work.used();
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 3)
-            .expect("the fixture leaves only the complete Core type copy");
+            .charge(crate::types::TYPE_WORK_LIMIT - short_setup - (local_work - 1))
+            .expect("the fixture leaves one fewer unit than complete local tuple retention");
         assert_eq!(
             short.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -32909,10 +33683,14 @@ mod tests {
         );
 
         let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        assert_eq!(exact.registry.effects().len(), effect_count);
+        let exact_setup = exact.type_work.used();
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 4)
-            .expect("the fixture leaves the tuple wrapper and complete Core type copy");
+            .charge(crate::types::TYPE_WORK_LIMIT - exact_setup - local_work)
+            .expect(
+                "the fixture leaves the complete tuple wrapper, allocation union and Core copy",
+            );
         let typed = exact
             .elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -32926,20 +33704,19 @@ mod tests {
             typed.ty,
             Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice())
         );
+        assert_eq!(typed.effects, allocation);
         assert_eq!(exact.type_work.charge(1), Err(()));
     }
 
     #[test]
     fn inferred_anonymous_function_type_precharges_fixed_inference_records() {
-        // Predecessor module/expression work (28), fixed Omega Kind retention
-        // added to two fresh variables (4), and fused authenticated
-        // transactional alias solving plus zonking (14), with three units
-        // for module setup. The ordinary Type root comparison runs once.
-        const PREVIOUS_WORK: usize = 28 + 4 + 14 + 3;
-        // The single body check now validates post-zonk provenance: one
-        // traversal slot and one visit to its aligned inference leaf.
-        const POST_ZONK_LEAF_ALIGNMENT: usize = 1 + 1;
-        const EXACT_WORK: usize = PREVIOUS_WORK + POST_ZONK_LEAF_ALIGNMENT;
+        // Local predecessor expression work (28), fixed Omega Kind records
+        // for two fresh variables (4), transactional alias solving/zonking
+        // (14), and post-zonk alignment (one slot plus one leaf). Module
+        // admission is paid separately and remains in this same owner.
+        // FinishFunction also retrieves the actual constructed node row:
+        // one authenticated node lookup and one closed empty-row clone.
+        const LOCAL_WORK: usize = 28 + 4 + 14 + (1 + 1) + (1 + 1);
         let resolved = resolved_module_fixture(
             "inferred-anonymous-function-budget.ash",
             "",
@@ -32947,6 +33724,8 @@ mod tests {
             "fn(value) {\nvalue\n}",
         );
 
+        let setup_work = Elaborator::for_module(&resolved).unwrap().type_work.used();
+        let exact_work = setup_work + LOCAL_WORK;
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         let short_setup_work = short.type_work.used();
         short
@@ -32974,6 +33753,7 @@ mod tests {
             let mut elaborator =
                 Elaborator::for_module_with_work(&resolved, work, UsefulnessBudget::default())
                     .expect("the binder namespace should fit");
+            assert_eq!(elaborator.type_work.used(), prefix + setup_work);
             elaborator.purpose = ElaborationPurpose::Standalone;
             let result = elaborator.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -32987,21 +33767,21 @@ mod tests {
         let (measured, work) = run(0, usize::MAX);
         let typed = measured.expect("the complete inferred function synthesis should succeed");
         assert!(matches!(typed.ty, Type::Function(_, _)));
-        assert_eq!(work.used(), EXACT_WORK);
+        assert_eq!(work.used(), exact_work);
         for prefix in [0usize, 17] {
-            let (short, work) = run(prefix, prefix + EXACT_WORK - 1);
+            let (short, work) = run(prefix, prefix + exact_work - 1);
             assert_eq!(
                 short,
                 Err(TypeError::Internal(
                     ElaborationFailure::TypeResourceExhausted
                 ))
             );
-            assert!(work.used() < prefix + EXACT_WORK);
+            assert!(work.used() < prefix + exact_work);
             for _ in 0..2 {
-                let (exact, mut work) = run(prefix, prefix + EXACT_WORK);
+                let (exact, mut work) = run(prefix, prefix + exact_work);
                 let typed = exact.expect("the exact inferred function type cost should fit");
                 assert!(matches!(typed.ty, Type::Function(_, _)));
-                assert_eq!(work.used(), prefix + EXACT_WORK);
+                assert_eq!(work.used(), prefix + exact_work);
                 assert_eq!(work.charge(1), Err(()));
             }
         }
@@ -33016,9 +33796,15 @@ mod tests {
             "match true {\ntrue => 1\nfalse => 0\n}",
         );
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        // Retained arm/matrix/type storage remains17; each of the two
+        // integer arms additionally scans the admitted effect catalog.
+        let effect_count = short.registry.effects().len();
+        assert_eq!(effect_count, 1);
+        let local_work = 17 + 2 * effect_count;
+        let short_setup = short.type_work.used();
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 16)
+            .charge(crate::types::TYPE_WORK_LIMIT - short_setup - (local_work - 1))
             .expect("the fixture leaves one fewer unit than complete match storage requires");
 
         assert_eq!(
@@ -33035,9 +33821,10 @@ mod tests {
         );
 
         let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        let exact_setup = exact.type_work.used();
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 17)
+            .charge(crate::types::TYPE_WORK_LIMIT - exact_setup - local_work)
             .expect("the fixture leaves type copies plus both progress and Core arm storage");
         let typed = exact
             .elaborate_expression_with_context(
@@ -33178,10 +33965,28 @@ mod tests {
             panic!("the fixture should resolve to an equational definition");
         };
         let annotation = &equational.interface.annotation;
+        let api = resolved
+            .imported_facts()
+            .effects()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .expect("the annotation should retain its canonical defining allocation API");
+        let expected_row =
+            EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+        let Type::EffectfulFunction(domain, computation) = &annotation.ty else {
+            panic!("the source arrow should retain its complete computation annotation");
+        };
+        assert_eq!(domain.as_ref(), &Type::Int);
+        assert_eq!(computation.value(), &Type::Bool);
+        assert_eq!(computation.effects(), &expected_row);
+        // Function root + computation box + two scalar leaves + row + its
+        // zero-argument DefaultAlloc instance are six structural cells.
+        // The retained provenance adds one shared arena handle.
+        const TYPE_CELLS: usize = 1 + 1 + 2 + 1 + 1;
+        const EXACT_WORK: usize = TYPE_CELLS + 1;
 
         let mut short = TypeWorkBudget::default();
         short
-            .charge(crate::types::TYPE_WORK_LIMIT - 3)
+            .charge(crate::types::TYPE_WORK_LIMIT - (EXACT_WORK - 1))
             .expect("the fixture leaves one fewer unit than type plus the shared arena handle");
         assert_eq!(
             ProvenancedType::from_resolved_with_budget(annotation, &mut short),
@@ -33192,11 +33997,12 @@ mod tests {
 
         let mut exact = TypeWorkBudget::default();
         exact
-            .charge(crate::types::TYPE_WORK_LIMIT - 4)
-            .expect("the fixture leaves three type cells and one shared arena handle");
+            .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
+            .expect("the fixture leaves all six structural cells and one shared arena handle");
         let copied = ProvenancedType::from_resolved_with_budget(annotation, &mut exact)
             .expect("the exact retained copy should fit");
         assert_eq!(copied.ty, annotation.ty);
+        assert_eq!(exact.used(), crate::types::TYPE_WORK_LIMIT);
         assert_eq!(exact.charge(1), Err(()));
     }
 
@@ -34157,7 +34963,7 @@ mod tests {
         elaborator.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
 
         assert_eq!(
-            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            elaborator.lower_constructor_function(owner, None, scheme.clone(), &origin, span),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             )),
@@ -34172,7 +34978,7 @@ mod tests {
 
         elaborator.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
         let root = elaborator
-            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .lower_constructor_function(owner, None, scheme, &origin, span)
             .expect("the exact fresh whole-constructor budget should retry");
         assert_eq!(elaborator.type_work.used(), EXACT_WORK);
         assert_eq!(elaborator.generated_type_variables.len(), PARAMETER_COUNT);
@@ -34230,7 +35036,7 @@ mod tests {
         elaborator.type_work = TypeWorkBudget::with_limit(ONE_SHORT_REGISTRATION);
 
         assert_eq!(
-            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            elaborator.lower_constructor_function(owner, None, scheme.clone(), &origin, span),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             ))
@@ -34240,7 +35046,7 @@ mod tests {
 
         elaborator.type_work = TypeWorkBudget::unbounded();
         elaborator
-            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .lower_constructor_function(owner, None, scheme, &origin, span)
             .expect("a fresh budget should retry the unpublished generated identity");
         let generated = TypeVariableId::generated(u32::MAX);
         assert_eq!(elaborator.generated_type_variables.len(), 1);
@@ -34283,7 +35089,7 @@ mod tests {
         elaborator.type_work = TypeWorkBudget::with_limit(LATE_FAILURE_WORK);
 
         assert_eq!(
-            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            elaborator.lower_constructor_function(owner, None, scheme.clone(), &origin, span),
             Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted
             )),
@@ -34294,7 +35100,7 @@ mod tests {
 
         elaborator.type_work = TypeWorkBudget::unbounded();
         let root = elaborator
-            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .lower_constructor_function(owner, None, scheme, &origin, span)
             .expect("the same elaborator should retry after rolling back Core");
         assert_eq!(elaborator.generated_type_variables.len(), 1);
         assert_eq!(elaborator.next_generated_type_variable, u32::MAX - 1);
@@ -34341,9 +35147,39 @@ mod tests {
         );
     }
 
+    fn admitted_newtype_pattern_fixture(
+        display_path: &str,
+        text: &str,
+    ) -> crate::core::effect::ValidatedEffectProgram {
+        let (resolved, sources, _, mut checked) =
+            cell_module_fixture_sources_at(display_path, text);
+        let entry = resolved.module();
+        checked.push(check_module(resolved).expect("the complete pattern entry should check"));
+        let relation = checked
+            .iter()
+            .map(|module| (module.module(), module.span().source()))
+            .collect::<Vec<_>>();
+        let linked =
+            link_modules(checked, entry).expect("the complete pattern component should link");
+        let linked = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the complete pattern component should authenticate its evidence");
+        let mut elaborator = EffectElaborator::for_module_program(&linked)
+            .expect("the pattern Effect namespace should fit");
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .expect("the complete pattern component should lower");
+        let unchecked = elaborator
+            .finish(typed.node)
+            .expect("the pattern Effect root should finish");
+        drop(linked);
+        let refs = sources.iter().collect::<Vec<_>>();
+        crate::core::validate_effect_modules(unchecked, &refs, &relation)
+            .expect("the complete pattern Effect Core should independently validate")
+    }
+
     #[test]
     fn local_parameterized_newtype_constructor_is_a_generated_unary_wrap_function() {
-        let file = ModuleFixtureFile::write(
+        let program = admitted_newtype_pattern_fixture(
             "local-parameterized-newtype-constructor.ash",
             concat!(
                 "newtype Box<A> = Box(A)\n",
@@ -34354,84 +35190,73 @@ mod tests {
                 "}\n",
             ),
         );
-        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
-            .expect("the local constructor fixture should load");
-        let loaded = graph
-            .module(graph.entry())
-            .expect("the local constructor entry should remain loaded");
-        let resolved = resolve_module(loaded, &[])
-            .expect("the local parameterized constructor should resolve");
-        let checked = check_module(resolved)
-            .expect("the locally bound parameterized constructor should check");
-        let linked = link_modules(vec![checked], graph.entry())
-            .expect("the local constructor fixture should link");
-        let linked = crate::evidence_validation::validate_interface_evidence(linked)
-            .expect("the local constructor fixture has no interface evidence");
-        let registry = Arc::clone(linked.registry());
-        let mut elaborator = Elaborator::for_module_program(&linked)
-            .expect("the local constructor Core namespace should fit");
-        let typed = elaborator
-            .synthesize_module_program(&linked)
-            .expect("the local constructor program should synthesize");
-        let unchecked = elaborator
-            .finish(typed.node)
-            .expect("the local constructor Core should finish unchecked");
-        let kinds = unchecked.expression_kinds_for_test().collect::<Vec<_>>();
+        let registry = program.registry();
+        let box_owner = registry
+            .nominals()
+            .iter()
+            .find(|owner| owner.spelling == "Box")
+            .expect("the defining user Box must remain canonical")
+            .id;
         let mut generated_wrap_functions = 0;
-        for kind in &kinds {
-            match kind {
-                crate::core::PureExprKind::Value(crate::core::PureValue::Function(function)) => {
-                    let body = kinds
-                        .get(function.body().value() as usize)
-                        .expect("the generated function body should remain in its arena");
-                    let crate::core::PureExprKind::Computation(
-                        crate::core::PureComputation::NewtypeConversion(conversion),
-                    ) = body
-                    else {
-                        continue;
-                    };
-                    if conversion.direction() != NewtypeConversionDirection::Wrap {
-                        continue;
-                    }
-                    let owner = registry
-                        .nominal(conversion.owner())
-                        .expect("the generated wrap owner should remain canonical");
-                    if owner.declaration_kind != ResolvedNominalDeclarationKind::Newtype {
-                        continue;
-                    }
+        for node in program.nodes() {
+            let function = match &node.kind {
+                crate::core::effect::EffectExprKind::Pure(crate::core::PureExprKind::Value(
+                    crate::core::PureValue::Function(function),
+                )) => Some(function),
+                crate::core::effect::EffectExprKind::Operation(
+                    crate::core::effect::EffectOperation::RegionClosure(closure),
+                ) => closure.code.function(),
+                _ => None,
+            };
+            if let Some(function) = function {
+                let body = program
+                    .node(function.body())
+                    .expect("the generated code body must remain in its validated arena");
+                if let Some(crate::core::PureExprKind::Computation(
+                    crate::core::PureComputation::NewtypeConversion(conversion),
+                )) = EffectOperationFamily::pure(&body.kind)
+                    && conversion.direction() == NewtypeConversionDirection::Wrap
+                    && conversion.owner() == box_owner
+                {
                     assert!(matches!(
-                        kinds.get(conversion.child().value() as usize),
+                        program.node(conversion.child()).and_then(|node| EffectOperationFamily::pure(&node.kind)),
                         Some(crate::core::PureExprKind::Variable(variable))
                             if variable.binder() == function.parameter().id()
                     ));
                     generated_wrap_functions += 1;
                 }
-                crate::core::PureExprKind::Value(crate::core::PureValue::Constructor(value)) => {
-                    let constructor = registry
-                        .constructor(value.constructor())
-                        .expect("an ordinary Core constructor should remain canonical");
-                    let owner = registry
-                        .nominal(constructor.owner)
-                        .expect("the ordinary Core constructor owner should remain canonical");
-                    assert_ne!(
-                        owner.declaration_kind,
-                        ResolvedNominalDeclarationKind::Newtype,
-                        "newtype constructor escaped through the allocating constructor route",
-                    );
-                }
-                _ => {}
+            }
+            let constructor = match &node.kind {
+                crate::core::effect::EffectExprKind::Operation(
+                    crate::core::effect::EffectOperation::RegionTuple(tuple),
+                ) => tuple.constructor,
+                kind => match EffectOperationFamily::pure(kind) {
+                    Some(crate::core::PureExprKind::Value(
+                        crate::core::PureValue::Constructor(value),
+                    )) => Some(value.constructor()),
+                    _ => None,
+                },
+            };
+            if let Some(constructor) = constructor {
+                let constructor = registry
+                    .constructor(constructor)
+                    .expect("an ordinary Core constructor should remain canonical");
+                let owner = registry
+                    .nominal(constructor.owner)
+                    .expect("the ordinary Core constructor owner should remain canonical");
+                assert_ne!(
+                    owner.declaration_kind,
+                    ResolvedNominalDeclarationKind::Newtype,
+                    "newtype constructor escaped through the allocating constructor route"
+                );
             }
         }
         assert_eq!(generated_wrap_functions, 1);
-
-        let source = loaded.source();
-        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-            .expect("the canonical local wrap conversion should independently authenticate");
     }
 
     #[test]
     fn mixed_fallbacks_remove_nested_parameterized_newtypes_from_core_patterns() {
-        let file = ModuleFixtureFile::write(
+        let program = admitted_newtype_pattern_fixture(
             "nested-newtype-fallback.ash",
             concat!(
                 "newtype Box<A> = Box(A)\n",
@@ -34453,30 +35278,13 @@ mod tests {
                 "main () = classify_binder(Envelope(Box(Flag(false)))) + classify_wildcard(Envelope(Box(Flag(true))))\n",
             ),
         );
-        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
-            .expect("the nested fallback fixture should load");
-        let loaded = graph
-            .module(graph.entry())
-            .expect("the nested fallback entry should remain loaded");
-        let resolved = resolve_module(loaded, &[])
-            .expect("the nested parameterized newtype patterns should resolve");
-        let checked =
-            check_module(resolved).expect("the binder and wildcard fallback patterns should check");
-        let linked = link_modules(vec![checked], graph.entry())
-            .expect("the nested fallback fixture should link");
-        let linked = crate::evidence_validation::validate_interface_evidence(linked)
-            .expect("the nested fallback fixture has no unauthenticated interface evidence");
-        let registry = Arc::clone(linked.registry());
-        let mut elaborator = Elaborator::for_module_program(&linked)
-            .expect("the nested fallback Core namespace should fit");
-        let typed = elaborator
-            .synthesize_module_program(&linked)
-            .expect("the nested fallback program should synthesize");
-        let unchecked = elaborator
-            .finish(typed.node)
-            .expect("the nested fallback Core should finish unchecked");
+        let registry = program.registry();
 
-        for kind in unchecked.expression_kinds_for_test() {
+        for kind in program
+            .nodes()
+            .iter()
+            .filter_map(|node| EffectOperationFamily::pure(&node.kind))
+        {
             let crate::core::PureExprKind::Computation(crate::core::PureComputation::Match(
                 matched,
             )) = kind
@@ -34518,36 +35326,17 @@ mod tests {
                 }
             }
         }
-
-        let source = loaded.source();
-        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-            .expect("the canonical nested conversions should independently authenticate");
     }
 
     fn assert_nested_newtype_patterns_lower_to_conversions(display_path: &str, text: &str) {
-        let file = ModuleFixtureFile::write(display_path, text);
-        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
-            .expect("the nested pattern fixture should load");
-        let loaded = graph
-            .module(graph.entry())
-            .expect("the nested pattern entry should remain loaded");
-        let resolved = resolve_module(loaded, &[]).expect("the nested patterns should resolve");
-        let checked = check_module(resolved).expect("the nested fallback patterns should check");
-        let linked = link_modules(vec![checked], graph.entry())
-            .expect("the nested pattern fixture should link");
-        let linked = crate::evidence_validation::validate_interface_evidence(linked)
-            .expect("the nested pattern fixture has no unauthenticated interface evidence");
-        let registry = Arc::clone(linked.registry());
-        let mut elaborator = Elaborator::for_module_program(&linked)
-            .expect("the nested pattern Core namespace should fit");
-        let typed = elaborator
-            .synthesize_module_program(&linked)
-            .expect("the nested pattern program should synthesize");
-        let unchecked = elaborator
-            .finish(typed.node)
-            .expect("the nested pattern Core should finish unchecked");
+        let program = admitted_newtype_pattern_fixture(display_path, text);
+        let registry = program.registry();
 
-        for kind in unchecked.expression_kinds_for_test() {
+        for kind in program
+            .nodes()
+            .iter()
+            .filter_map(|node| EffectOperationFamily::pure(&node.kind))
+        {
             let crate::core::PureExprKind::Computation(crate::core::PureComputation::Match(
                 matched,
             )) = kind
@@ -34589,10 +35378,6 @@ mod tests {
                 }
             }
         }
-
-        let source = loaded.source();
-        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-            .expect("the canonical nested conversions should independently authenticate");
     }
 
     #[test]
@@ -39108,6 +39893,135 @@ mod tests {
             ),
             Err(invalid_state()),
         );
+    }
+
+    #[test]
+    fn contextual_callback_inference_retains_known_rows_and_solves_only_the_residual() {
+        use crate::core::effect::{EffectExprKind, EffectOperation};
+        let relay = "relay<R : EffectRow, T> : (Unit -> T ! {| R}) -> T ! {| R}\nrelay f = f ()\n";
+        for (name, source, public_residual) in [
+            (
+                "pure",
+                format!("{relay}main : Unit -> Bool\nmain () = relay (fn(ignored) {{\ntrue\n}})\n"),
+                false,
+            ),
+            (
+                "allocating",
+                format!(
+                    "{relay}main : Unit -> Bool\nmain () = relay (fn(ignored) {{\nlet pair = (true, false)\nmatch pair {{\n(left, _) => left\n}}\n}})\n"
+                ),
+                false,
+            ),
+            (
+                "public",
+                format!(
+                    "effect Ask<A> {{\nask : Unit -> Bool\n}}\n{relay}main : Unit -> Bool\nmain () = handle (relay (fn(ignored) {{\nperform Ask<Int>.ask ()\n}})) with Ask<Int> {{\nask ignored => resume true\n}}\n"
+                ),
+                true,
+            ),
+            (
+                "captured-method",
+                format!(
+                    "{relay}interface Read<A> {{\nread<T> : (A, T) -> T\n}}\nimpl Read<Int> {{\nread (ignored, extra) = relay (fn(ignored) {{\nextra\n}})\n}}\nmain : Unit -> Bool\nmain () = read (0, true)\n"
+                ),
+                false,
+            ),
+        ] {
+            let program =
+                admitted_newtype_pattern_fixture(&format!("callback-{name}.ash"), &source);
+            let registry = program.registry();
+            let mut rows = registry.global_parameter_rows().iter().filter(|row| {
+                row.parameters()
+                    .iter()
+                    .any(|id| registry.type_variable(*id).unwrap().kind == Kind::EffectRow)
+            });
+            let row = rows.next().expect("the original relay row owner");
+            assert!(rows.next().is_none());
+            let row_parameter = row
+                .parameters()
+                .iter()
+                .find_map(|id| {
+                    let parameter = registry.type_variable(*id).unwrap();
+                    (parameter.kind == Kind::EffectRow).then_some(parameter)
+                })
+                .unwrap();
+            let entry_source = row_parameter.origin.primary_span().source();
+            let residual = if public_residual {
+                let ask = registry
+                    .effects()
+                    .iter()
+                    .find(|effect| {
+                        effect.spelling == "Ask"
+                            && effect.origin.primary_span().source() == entry_source
+                    })
+                    .unwrap();
+                EffectRow::singleton(EffectInstance::new(ask.id, Box::new([Type::Int])))
+            } else {
+                EffectRow::empty()
+            };
+            let default = registry
+                .effects()
+                .iter()
+                .find_map(|effect| {
+                    crate::resolved::RegionApi::for_module(effect.id.module())
+                        .filter(|api| effect.id == api.default_alloc())
+                        .map(|_| effect.id)
+                })
+                .unwrap();
+            let contextual = EffectRow::singleton(EffectInstance::new(default, Box::new([])))
+                .union(&residual)
+                .unwrap();
+            let mut applications = 0;
+            let mut callbacks = 0;
+            for node in program.nodes() {
+                match &node.kind {
+                    EffectExprKind::Pure(crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::TypeApplication(application),
+                    )) if matches!(&program.node(application.function()).unwrap().kind,
+                            EffectExprKind::Pure(crate::core::PureExprKind::Variable(variable))
+                                if variable.binder() == row.owner()) =>
+                    {
+                        assert_eq!(
+                            application.row_arguments(),
+                            std::slice::from_ref(&residual),
+                            "{name}"
+                        );
+                        applications += 1;
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                        let Some(function) = closure.code.function() else {
+                            continue;
+                        };
+                        let span = function.parameter().origin().primary_span();
+                        if span.source() == entry_source
+                            && &source[span.range().start() as usize..span.range().end() as usize]
+                                == "ignored"
+                            && node
+                                .ty
+                                .function_view()
+                                .is_some_and(|ty| ty.domain() == &Type::Unit)
+                        {
+                            assert_eq!(
+                                node.ty.function_view().unwrap().effects(),
+                                Some(&contextual),
+                                "{name}"
+                            );
+                            callbacks += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(applications, 1, "{name}");
+            assert_eq!(callbacks, 1, "{name}");
+            assert_eq!(
+                crate::eval::evaluate_effect(&program)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "true"
+            );
+        }
     }
 
     #[test]

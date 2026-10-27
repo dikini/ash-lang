@@ -336,7 +336,8 @@ pub struct RegistrationScopeNode {
     pub(crate) span: crate::source::Span,
 }
 
-/// A non-interpreting owner; `action` is the authenticated callback application.
+/// A non-interpreting owner; `action` is the authenticated callback application
+/// or its exact saved-region forwarding adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CleanupScopeNode {
     pub(crate) callback: crate::resolved::BinderId,
@@ -428,6 +429,12 @@ pub enum EffectOperation {
     Cleanup(CleanupScopeNode),
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
+    Region(Box<super::region::RegionScopeNode>),
+    RegionAllocate(super::region::RegionAllocateNode),
+    RegionValueRequest(super::region::RegionValueRequestNode),
+    RegionBuffer(super::region::RegionBufferNode),
+    RegionTuple(super::region::RegionTupleNode),
+    RegionClosure(super::region::RegionClosureNode),
 
     Request(RequestNode),
     Handler(HandlerNode),
@@ -475,6 +482,32 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(_) => None,
         }
     }
+    fn region_closure(kind: &Self::Kind) -> Option<&super::region::RegionClosureNode> {
+        match kind {
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => Some(closure),
+            _ => None,
+        }
+    }
+    fn region_tuple(kind: &Self::Kind) -> Option<&super::region::RegionTupleNode> {
+        match kind {
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => Some(tuple),
+            _ => None,
+        }
+    }
+    fn request_metadata(
+        kind: &Self::Kind,
+    ) -> Option<(
+        &crate::types::EffectInstance,
+        crate::types::OperationId,
+        super::NodeId,
+    )> {
+        match kind {
+            EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                Some((request.effect(), request.operation(), request.operand()))
+            }
+            _ => None,
+        }
+    }
     fn pure_mut(kind: &mut Self::Kind) -> Option<&mut PureExprKind> {
         match kind {
             EffectExprKind::Pure(kind) => Some(kind),
@@ -488,6 +521,14 @@ impl CoreOperationFamily for EffectOperationFamily {
     ) {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             visit(&resource.handle);
+        }
+        if let EffectExprKind::Operation(EffectOperation::Region(region)) = kind {
+            visit(&region.access);
+        }
+        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind
+            && let Some(function) = closure.code.function()
+        {
+            visit(function.parameter());
         }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
@@ -523,6 +564,24 @@ impl CoreOperationFamily for EffectOperationFamily {
                 ));
                 None
             }
+            EffectOperation::Region(region) => {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    region.access.ty(),
+                ));
+                None
+            }
+            EffectOperation::RegionClosure(closure) => {
+                if let Some(function) = closure.code.function() {
+                    visit(super::dialect::OperationTypeMetadata::Type(
+                        function.parameter().ty(),
+                    ));
+                }
+                None
+            }
+            EffectOperation::RegionAllocate(_)
+            | EffectOperation::RegionValueRequest(_)
+            | EffectOperation::RegionTuple(_)
+            | EffectOperation::RegionBuffer(_) => None,
             EffectOperation::Request(request) => Some(&request.effect),
             EffectOperation::Handler(handler) => {
                 if let Some(registration) = &handler.hook_registration {
@@ -577,6 +636,20 @@ impl CoreOperationFamily for EffectOperationFamily {
                 resource.handle.rewrite_type(&mut |ty| rewrite(ty))?;
                 return Ok(());
             }
+            EffectExprKind::Operation(EffectOperation::Region(region)) => {
+                charge(1)?;
+                region.access.rewrite_type(&mut |ty| rewrite(ty))?;
+                return Ok(());
+            }
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                if let super::region::RegionClosureCode::Function(function) = &mut closure.code {
+                    charge(1)?;
+                    function
+                        .parameter_mut()
+                        .rewrite_type(&mut |ty| rewrite(ty))?;
+                }
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Request(request)) => &mut request.effect,
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                 if let Some(registration) = &mut handler.hook_registration {
@@ -613,6 +686,18 @@ impl CoreOperationFamily for EffectOperationFamily {
 
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::Region(_)) => 3,
+            EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => 0,
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
+                1 + usize::from(buffer.operand.is_some()) + usize::from(buffer.right.is_some())
+            }
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
+                tuple.fields.len() + 2
+            }
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                closure.captures.len() + 3
+            }
 
             EffectExprKind::Operation(
                 EffectOperation::NativeInterpret(_)
@@ -647,6 +732,42 @@ impl CoreOperationFamily for EffectOperationFamily {
                 1 => Some(resource.body),
                 _ => None,
             },
+            EffectExprKind::Operation(EffectOperation::Region(region)) => match index {
+                0 => Some(region.preceding),
+                1 => Some(region.provider),
+                2 => Some(region.body),
+                _ => None,
+            },
+            EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => match index {
+                0 => Some(allocation.context),
+                1 => Some(allocation.request),
+                _ => None,
+            },
+            EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => None,
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => match index {
+                0 => Some(buffer.context),
+                1 => buffer.operand,
+                2 => buffer.right,
+                _ => None,
+            },
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                if index == 0 {
+                    Some(closure.context)
+                } else if index <= closure.captures.len() {
+                    closure.captures.get(index - 1).copied()
+                } else if index == closure.captures.len() + 1 {
+                    Some(closure.storage)
+                } else if index == closure.captures.len() + 2 {
+                    Some(closure.code.body())
+                } else {
+                    None
+                }
+            }
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => match index {
+                0 => Some(tuple.context),
+                _ if index == tuple.fields.len() + 1 => Some(tuple.storage),
+                _ => tuple.fields.get(index - 1).copied(),
+            },
             EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
                 (index == 0).then_some(boundary.body)
@@ -677,7 +798,19 @@ impl CoreOperationFamily for EffectOperationFamily {
                 EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
+            EffectExprKind::Operation(EffectOperation::Region(region)) => drop(region),
+            EffectExprKind::Operation(
+                EffectOperation::RegionAllocate(_)
+                | EffectOperation::RegionValueRequest(_)
+                | EffectOperation::RegionTuple(_)
+                | EffectOperation::RegionBuffer(_),
+            ) => {}
 
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                if let super::region::RegionClosureCode::Function(function) = closure.code {
+                    function.discard_metadata();
+                }
+            }
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
                 let (_, arguments) = std::mem::replace(&mut node.effect, placeholder).into_parts();
@@ -705,6 +838,15 @@ pub type UnvalidatedEffectProgram = UnvalidatedCoreProgram<EffectOperationFamily
 pub type ValidatedEffectProgram = ValidatedCoreProgram<EffectOperationFamily>;
 
 impl CoreBuilder<EffectOperationFamily> {
+    pub(crate) fn region_operation(
+        &mut self,
+        operation: EffectOperation,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, operation)
+    }
     pub(crate) fn resource_scope(
         &mut self,
         resource: Box<ResourceScopeNode>,
@@ -738,6 +880,12 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<(), super::BuildError> {
         self.invalidate_settled_zonk_range(range.clone())?;
         enum Equation {
+            Region(super::region::RegionScopeNode),
+            RegionAllocate(super::region::RegionAllocateNode),
+            RegionBuffer(super::region::RegionBufferNode),
+            RegionTuple(super::region::RegionTupleNode),
+            RegionClosure(Vec<NodeId>),
+            Empty,
             Registration(NodeId),
             Cleanup(NodeId, NodeId),
             Pure,
@@ -761,6 +909,48 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::Region(scope)) => {
+                        Equation::Region((**scope).clone())
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => {
+                        Equation::RegionAllocate(allocation.clone())
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => {
+                        Equation::Empty
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
+                        Equation::RegionBuffer(buffer.clone())
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
+                        self.type_work
+                            .charge(tuple.fields.len())
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+                        let mut fields = Vec::new();
+                        fields
+                            .try_reserve_exact(tuple.fields.len())
+                            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+                        fields.extend_from_slice(&tuple.fields);
+                        Equation::RegionTuple(super::region::RegionTupleNode {
+                            constructor: tuple.constructor,
+                            api: tuple.api,
+                            context: tuple.context,
+                            storage: tuple.storage,
+                            fields: fields.into_boxed_slice(),
+                        })
+                    }
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                        self.type_work
+                            .charge(closure.captures.len() + 2)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+                        let mut children = Vec::new();
+                        children
+                            .try_reserve_exact(closure.captures.len() + 2)
+                            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+                        children.push(closure.context);
+                        children.extend(closure.captures.iter().copied());
+                        children.push(closure.storage);
+                        Equation::RegionClosure(children)
+                    }
                     EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
                         Equation::Cleanup(scope.body, scope.action)
                     }
@@ -822,6 +1012,109 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                 };
                 let effects = match equation {
+                    Equation::Empty => EffectRow::empty(),
+                    Equation::RegionBuffer(buffer) => {
+                        let api = crate::resolved::RegionApi::for_module(buffer.api)
+                            .ok_or(super::BuildError::InvalidPayload)?;
+                        let mut row = EffectRow::singleton(crate::types::EffectInstance::new(
+                            api.default_alloc(),
+                            Box::new([]),
+                        ));
+                        for child in std::iter::once(buffer.context)
+                            .chain(buffer.operand)
+                            .chain(buffer.right)
+                        {
+                            row = row
+                                .union_with_budget(
+                                    &self
+                                        .nodes
+                                        .get(child.index()?)
+                                        .ok_or(super::BuildError::InvalidNodeId)?
+                                        .effects,
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        row
+                    }
+                    Equation::RegionClosure(children) => {
+                        let mut row = EffectRow::empty();
+                        for child in children {
+                            row = row
+                                .union_with_budget(
+                                    &self
+                                        .nodes
+                                        .get(child.index()?)
+                                        .ok_or(super::BuildError::InvalidNodeId)?
+                                        .effects,
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        row
+                    }
+                    Equation::RegionTuple(tuple) => {
+                        let mut row = EffectRow::empty();
+                        for child in std::iter::once(&tuple.context)
+                            .chain(tuple.fields.iter())
+                            .chain(std::iter::once(&tuple.storage))
+                        {
+                            row = row
+                                .union_with_budget(
+                                    &self
+                                        .nodes
+                                        .get(child.index()?)
+                                        .ok_or(super::BuildError::InvalidNodeId)?
+                                        .effects,
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        row
+                    }
+                    Equation::Region(scope) => {
+                        let preceding = self
+                            .nodes
+                            .get(scope.preceding.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        let provider = self
+                            .nodes
+                            .get(scope.provider.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        let body = self
+                            .nodes
+                            .get(scope.body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        super::region::owner_effects(
+                            &scope,
+                            &provider.ty,
+                            &preceding.effects,
+                            &provider.effects,
+                            &body.effects,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::RegionAllocate(allocation) => {
+                        let context = self
+                            .nodes
+                            .get(allocation.context.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        let request = self
+                            .nodes
+                            .get(allocation.request.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        super::region::allocation_effects(
+                            &allocation,
+                            &context.effects,
+                            &request.effects,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| super::BuildError::InvalidPayload)?
+                    }
                     Equation::Cleanup(body, action) => {
                         let body = clone_effect_row_with_budget(
                             &self
@@ -1073,6 +1366,68 @@ impl CoreBuilder<EffectOperationFamily> {
             }
         }
         result
+    }
+
+    pub(crate) fn pending_cleanup_action(&self, node: NodeId) -> Result<NodeId, super::BuildError> {
+        let index = node.index()?;
+        self.node_at_ordinal(node, index)?;
+        let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) = &self.nodes[index].kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        Ok(scope.action)
+    }
+
+    /// Keep the published owner ID as the saved-query binding. All original
+    /// children move into one appended Cleanup; no old arena node is orphaned.
+    pub(crate) fn bind_pending_cleanup(
+        &mut self,
+        node: NodeId,
+        action: NodeId,
+        view: super::TypedBinder,
+        query: NodeId,
+    ) -> Result<(), super::BuildError> {
+        self.charge_effect_metadata(4)?;
+        self.node_at_ordinal(action, action.index()?)?;
+        self.node_at_ordinal(query, query.index()?)?;
+        if view.arena() != node.arena() {
+            return Err(super::BuildError::ForeignBinder);
+        }
+        let index = node.index()?;
+        self.node_at_ordinal(node, index)?;
+        let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) = &self.nodes[index].kind
+        else {
+            return Err(super::BuildError::InvalidPayload);
+        };
+        let mut scope = *scope;
+        scope.action = action;
+        let ty = crate::types::clone_type_with_budget(&self.nodes[index].ty, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        let effects = clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        let query_row = &self.nodes[query.index()?].effects;
+        let action_row = &self.nodes[action.index()?].effects;
+        let expected = self.nodes[scope.body.index()?]
+            .effects
+            .union_with_budget(action_row, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+            .map_err(|_| super::BuildError::InvalidPayload)?
+            .union_with_budget(query_row, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+            .map_err(|_| super::BuildError::InvalidPayload)?;
+        if !crate::types::same_effect_rows_with_budget(&effects, &expected, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+        {
+            return Err(super::BuildError::InvalidPayload);
+        }
+        let moved = self.cleanup_scope(scope, ty, effects, Origin::Source(scope.span))?;
+        self.nodes[index].kind = EffectExprKind::Pure(PureExprKind::Computation(
+            super::PureComputation::Bind(super::binding::BindingNode::new(view, query, moved)),
+        ));
+        if let Some(settled) = self.settled_zonk_nodes.get_mut(index) {
+            *settled = false;
+        }
+        Ok(())
     }
 
     pub fn native_interpret(

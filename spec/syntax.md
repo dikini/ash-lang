@@ -155,6 +155,10 @@ hook_expression ::= "hook" effect_instance block ;
 registration_expression ::=
   "register" effect_instance primary_expression block ;
 cleanup_expression ::= "cleanup" expression block ;
+region_expression ::=
+  "region" "<" upper_identifier ">" identifier
+    [ "=" primary_expression ] block ;
+region_selection_expression ::= "using" primary_expression block ;
 
 expression ::=
     block
@@ -163,6 +167,8 @@ expression ::=
   | handler_expression
   | resume_expression
   | resource_expression
+  | region_expression
+  | region_selection_expression
   | equality_expression ;
 equality_expression ::= additive_expression [ "==" additive_expression ] ;
 additive_expression ::=
@@ -399,12 +405,24 @@ no explicit type abstraction or type-application form; `value<Type>` is not an
 expression.
 
 A function result may carry a row of exact effect instances and at most one row
-tail. Omitting `! effect_row` means the empty row. A row tail is one uppercase
+tail. Source value-function annotations include the purity-compatible allocation
+default, whether the row is omitted or written, including `! {}`. The default
+expands idempotently at every arrow, including nested arrows; other written
+instances remain visible. The outer arrow declaring an effect operation is an
+operation shape, not a value-function annotation. The
+[computation-row rules](static-semantics.md#computation-types-and-effect-rows)
+define this expansion. A row tail is one uppercase
 variable after `|`; name resolution and static semantics require it to denote an
 admitted `EffectRow` binder. Effect arguments use the same nonempty ordered
 `type_arguments` form as named types. Empty rows write `{}`, closed rows list
 instances, and open rows either append `| R` to known instances or write only
 `| R`.
+
+A `region<R> r [= provider] { body }` establishes a lexical region. The optional
+provider is an ordinary primary expression returning the allocate/release pair;
+omission selects the host-backed default pair. `using r { body }` selects live
+access for construction in the body without creating an owner. Their operands
+retain ordinary expression precedence and lexical scope.
 
 `perform` consumes one primary-expression operand. A non-primary operand must be
 parenthesized. A handler contains one or more clauses, each with one operation

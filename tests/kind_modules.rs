@@ -9,7 +9,7 @@ use std::{
 use ash::{
     elaborate::check_module,
     interface::{ImplId, InterfaceId},
-    module::{LoadedModule, ModuleRoots, load_module_graph},
+    module::{LoadedModule, ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{BinderId, ExportSummary, ImportedTypeAccess, ResolvedDefinitionKind},
     types::{ConstructorId, Kind, NominalTypeId, Type, TypeVariableId},
@@ -56,6 +56,27 @@ fn module_named<'a>(graph: &'a ash::module::ModuleGraph, file_name: &str) -> &'a
         .expect("the named route module should be loaded")
 }
 
+fn summaries_before_entry(graph: &ModuleGraph) -> HashMap<ModuleId, ExportSummary> {
+    let mut summaries = HashMap::<ModuleId, ExportSummary>::new();
+    for module in graph.modules() {
+        if module.id() == graph.entry() {
+            return summaries;
+        }
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(edge, summaries.get(&edge.target()).unwrap())
+                    .expect("each detached summary should match its actual dependency")
+            })
+            .collect::<Vec<_>>();
+        let checked = check_module(resolve_module(module, &dependencies).unwrap())
+            .expect("each defining module should check before discarding its body");
+        summaries.insert(module.id(), checked.into_exports());
+    }
+    panic!("the entry should be admitted");
+}
+
 #[test]
 fn body_free_summary_supplies_direct_kinds() {
     let tree = ModuleTree::create();
@@ -89,29 +110,29 @@ fn body_free_summary_supplies_direct_kinds() {
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("the direct kind fixture should load");
-    let dependency = graph
-        .modules()
-        .iter()
-        .find(|module| module.id() != graph.entry())
-        .expect("the dependency should load before the entry");
-    let dependency = check_module(
-        resolve_module(dependency, &[]).expect("the defining module should resolve and kind-check"),
-    )
-    .expect("the defining module should type-check");
+    let dependency = module_named(&graph, "dependency.ash");
+    let summaries = summaries_before_entry(&graph);
+    assert!(summaries.contains_key(&dependency.id()));
     let entry = graph
         .module(graph.entry())
         .expect("the entry module should remain loaded");
     let dependencies = entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+        .map(|edge| DependencyExports::new(edge, summaries.get(&edge.target()).unwrap()).unwrap())
         .collect::<Vec<_>>();
 
     let resolved = resolve_module(entry, &dependencies)
         .expect("direct body-free nominal, interface, and scheme kinds should authenticate");
     assert_eq!(resolved.definitions().len(), 1);
     assert!(resolved.interfaces().is_empty());
-    assert!(resolved.registry().nominals().is_empty());
+    assert!(
+        resolved
+            .registry()
+            .nominals()
+            .iter()
+            .all(|nominal| nominal.id.module() != graph.entry())
+    );
 }
 
 #[test]
@@ -147,31 +168,29 @@ fn body_free_summary_preserves_defining_kinds() {
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("the detached body-free fixture should load");
-    let dependency = graph
-        .modules()
-        .iter()
-        .find(|module| module.id() != graph.entry())
-        .expect("the dependency should load before the entry");
-    let dependency = check_module(
-        resolve_module(dependency, &[]).expect("the defining module should resolve and kind-check"),
-    )
-    .expect("the defining module should type-check");
-
-    let summary = dependency.into_exports();
+    let dependency = module_named(&graph, "dependency.ash");
+    let summaries = summaries_before_entry(&graph);
+    assert!(summaries.contains_key(&dependency.id()));
     let entry = graph
         .module(graph.entry())
         .expect("the entry module should remain loaded");
     let dependencies = entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, &summary).unwrap())
+        .map(|edge| DependencyExports::new(edge, summaries.get(&edge.target()).unwrap()).unwrap())
         .collect::<Vec<_>>();
 
     let resolved = resolve_module(entry, &dependencies)
         .expect("all defining kinds should authenticate after dependency bodies are discarded");
     assert_eq!(resolved.definitions().len(), 1);
     assert!(resolved.interfaces().is_empty());
-    assert!(resolved.registry().nominals().is_empty());
+    assert!(
+        resolved
+            .registry()
+            .nominals()
+            .iter()
+            .all(|nominal| nominal.id.module() != graph.entry())
+    );
 }
 
 #[test]

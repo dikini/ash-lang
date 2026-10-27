@@ -5,7 +5,8 @@ use ash::{
     eval::evaluate_effect,
     evidence_validation::validate_interface_evidence,
     module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
+    resolve::{DependencyExports, resolve_module},
+    resolved::CheckedModule,
     source::SourceFile,
 };
 
@@ -216,13 +217,21 @@ fn nested_root_pipeline_and_disposal_fit_a_small_stack() {
         std::fs::write(&path, source).unwrap();
         let graph = load_module_graph(&path, &ModuleRoots::empty()).unwrap();
         std::fs::remove_file(path).unwrap();
-        let module = &graph.modules()[0];
-        let checked = check_module(resolve_module(module, &[]).unwrap()).unwrap();
-        let linked = validate_interface_evidence(link_modules(vec![checked], graph.entry()).unwrap()).unwrap();
+        let mut checked = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module.dependencies().iter().map(|edge| {
+                let target = checked.iter().find(|target: &&CheckedModule| target.module() == edge.target()).unwrap();
+                DependencyExports::new(edge, target.exports()).unwrap()
+            }).collect::<Vec<_>>();
+            checked.push(check_module(resolve_module(module, &dependencies).unwrap()).unwrap());
+        }
+        let linked = validate_interface_evidence(link_modules(checked, graph.entry()).unwrap()).unwrap();
         let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
         let typed = elaborator.synthesize_effect_module_program(&linked).unwrap();
         let core = elaborator.finish(typed.node).unwrap();
-        let program = validate_effect_modules(core, &[module.source()], &[(module.id(), module.source().id())]).unwrap();
+        let sources = graph.modules().iter().map(|module| module.source()).collect::<Vec<_>>();
+        let relation = graph.modules().iter().map(|module| (module.id(), module.source().id())).collect::<Vec<_>>();
+        let program = validate_effect_modules(core, &sources, &relation).unwrap();
         assert_eq!(evaluate_effect(&program).unwrap().value.to_string(), "42");
     }).unwrap().join().unwrap();
 }

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
@@ -6,8 +7,10 @@ use std::{
 
 use ash::{
     driver::{RunConfiguration, run_path},
+    elaborate::check_module,
     module::{ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
+    resolved::ExportSummary,
     types::Type,
 };
 
@@ -55,11 +58,29 @@ fn resolve_local(text: &str) {
     let fixture = TempModule::create(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the local module fixture should load");
-    let module = graph
-        .module(graph.entry())
-        .expect("the entry module should remain admitted");
-    let dependencies: &[DependencyExports<'_>] = &[];
-    resolve_module(module, dependencies).expect("the local module should resolve");
+    let mut summaries = HashMap::<_, ExportSummary>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(edge, summaries.get(&edge.target()).unwrap())
+                    .expect("each dependency summary should authenticate its actual edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("the local module should resolve");
+        if module.id() == graph.entry() {
+            return;
+        }
+        summaries.insert(
+            module.id(),
+            check_module(resolved)
+                .expect("the canonical dependency should check")
+                .into_exports(),
+        );
+    }
+    panic!("the local entry should remain admitted");
 }
 
 #[test]

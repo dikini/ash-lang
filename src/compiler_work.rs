@@ -5,11 +5,27 @@
 
 use crate::{module::ModuleGraph, source::SourceFile, types::TypeWorkBudget};
 
-const SOURCE_PER_BYTE: usize = 800;
+const SOURCE_PER_BYTE: usize = 10000;
 
 /// Separate per-arena capacity from the already-paid canonical source size.
 pub(crate) fn rewrite_total(bytes: usize) -> Result<usize, ()> {
     bytes.checked_mul(16).ok_or(())
+}
+
+/// Separate program-arena payload admission; standalone builders keep their cap.
+pub(crate) fn primary_total(bytes: usize) -> Result<usize, ()> {
+    bytes
+        .checked_mul(12)
+        .map(|total| total.max(crate::types::TYPE_WORK_LIMIT))
+        .ok_or(())
+}
+
+/// Separate cumulative program resolution; standalone resolvers keep their cap.
+pub(crate) fn resolution_total(bytes: usize) -> Result<usize, ()> {
+    bytes
+        .checked_mul(80)
+        .map(|total| total.max(crate::types::TYPE_WORK_LIMIT))
+        .ok_or(())
 }
 
 fn source_total(bytes: usize) -> Result<usize, ()> {
@@ -17,11 +33,12 @@ fn source_total(bytes: usize) -> Result<usize, ()> {
 }
 
 fn phase_total(phase: CompilationPhase, bytes: usize) -> Result<usize, ()> {
-    match phase {
+    let total = match phase {
         CompilationPhase::SourceChecking => source_total(bytes),
         CompilationPhase::FinalElaboration => bytes.checked_mul(800).ok_or(()),
-        CompilationPhase::IndependentCore => bytes.checked_mul(345).ok_or(()),
-    }
+        CompilationPhase::IndependentCore => bytes.checked_mul(25000).ok_or(()),
+    }?;
+    Ok(total)
 }
 
 fn size_sources<'a>(
@@ -206,7 +223,28 @@ mod tests {
         let (source_work, bytes) =
             resident_phase_work(CompilationPhase::SourceChecking, &[&source]).unwrap();
         assert_eq!(bytes, source.text().len());
-        assert_eq!((source_work.used(), source_work.limit()), (2, 800 * bytes));
+        assert_eq!(
+            (source_work.used(), source_work.limit()),
+            (2, 10000 * bytes)
+        );
+        assert_eq!(primary_total(0), Ok(crate::types::TYPE_WORK_LIMIT));
+        let floor = crate::types::TYPE_WORK_LIMIT;
+        assert_eq!(primary_total(floor / 12), Ok(floor));
+        let first_scaled = floor / 12 + 1;
+        assert_eq!(primary_total(first_scaled), Ok(12 * first_scaled));
+        assert_eq!(primary_total(398_678), Ok(4_784_136));
+        assert!(primary_total(usize::MAX / 12 + 1).is_err());
+        assert_eq!(resolution_total(0), Ok(floor));
+        assert_eq!(resolution_total(floor / 80), Ok(floor));
+        assert_eq!(resolution_total(floor / 80 + 1), Ok(floor + 80));
+        assert_eq!(resolution_total(11_791), Ok(943_280));
+        assert!(resolution_total(usize::MAX / 80 + 1).is_err());
+        let mut resolution = TypeWorkBudget::with_limit(resolution_total(bytes).unwrap());
+        resolution.charge(resolution.remaining()).unwrap();
+        assert!(resolution.charge(1).is_err());
+        let mut primary = TypeWorkBudget::with_limit(primary_total(bytes).unwrap());
+        primary.charge(primary.remaining()).unwrap();
+        assert!(primary.charge(1).is_err());
         assert_eq!(rewrite_total(bytes), Ok(16 * bytes));
         assert_eq!(rewrite_total(0), Ok(0));
         assert!(rewrite_total(usize::MAX / 16 + 1).is_err());
@@ -221,7 +259,7 @@ mod tests {
         let source = SourceFile::new("phase.ash", "main : Unit -> Int\nmain () = 42\n").unwrap();
         for (phase, coefficient) in [
             (CompilationPhase::FinalElaboration, 800),
-            (CompilationPhase::IndependentCore, 345),
+            (CompilationPhase::IndependentCore, 25000),
         ] {
             let total = coefficient * source.text().len();
             let (fresh, bytes) = resident_phase_work(phase, &[&source]).unwrap();
@@ -257,8 +295,8 @@ mod tests {
     #[test]
     fn source_gas_is_paid_carried_checked_and_has_no_extra_ten_percent() {
         let source = SourceFile::new("source.ash", "main : Unit -> Int\nmain () = 42\n").unwrap();
-        let total = source.text().len() * 800;
-        assert!(source_total(usize::MAX / 800 + 1).is_err());
+        let total = source.text().len() * 10000;
+        assert!(source_total(usize::MAX / 10000 + 1).is_err());
         let mut empty = TypeWorkBudget::with_limit(1);
         assert_eq!(
             size_sources(

@@ -119,6 +119,17 @@ where
                 pending.extend(matched.arms.iter().map(|arm| &arm.body));
             }
 
+            ResolvedExprKind::Region(region) => {
+                reserve_and_extend(&mut pending, [region.body.as_ref()], budget)?;
+                if let Some(provider) = &region.provider {
+                    reserve_and_extend(&mut pending, [provider.as_ref()], budget)?;
+                }
+            }
+            ResolvedExprKind::RegionSelection(selection) => reserve_and_extend(
+                &mut pending,
+                [selection.region.as_ref(), selection.body.as_ref()],
+                budget,
+            )?,
             ResolvedExprKind::Resource(resource) => reserve_and_extend(
                 &mut pending,
                 [resource.initializer.as_ref(), resource.body.as_ref()],

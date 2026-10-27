@@ -1,18 +1,23 @@
 use std::{
+    collections::HashSet,
     fs,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use ash::{
-    core::{PureComputation, PureExprKind, PureValue, ValidatedProgram, validate_modules},
+    core::{
+        EffectExprKind, EffectOperation, EffectOperationFamily, NodeId, PureComputation,
+        PureExprKind, ValidatedEffectProgram, dialect::CoreOperationFamily,
+        validate_effect_modules,
+    },
     driver::PipelineFailure,
-    elaborate::{Elaborator, TypeContext, TypeError, TypeReason, check_module, link_modules},
+    elaborate::{EffectElaborator, TypeError, TypeReason, check_module, link_modules},
     evidence_validation::validate_interface_evidence,
     module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
+    resolve::{DependencyExports, resolve_module},
     resolved::{
-        Binder, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind, ResolvedLocalDeclaration,
-        ResolvedModule, ResolvedPattern, ResolvedPatternKind,
+        Binder, CheckedModule, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
+        ResolvedLocalDeclaration, ResolvedModule, ResolvedPattern, ResolvedPatternKind,
     },
     source::{GeneratedReason, Origin, SourceFile, Span},
 };
@@ -45,63 +50,141 @@ fn with_graph<T>(name: &str, text: &str, action: impl FnOnce(&ash::module::Modul
     result
 }
 
-fn resolved(name: &str, text: &str) -> (SourceFile, ResolvedModule) {
-    with_graph(name, text, |graph| {
-        let source = graph.modules()[0].source().clone();
-        let resolved = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
-        (source, resolved)
-    })
+fn resolve_entry(graph: &ash::module::ModuleGraph) -> (ResolvedModule, Vec<CheckedModule>) {
+    let mut checked: Vec<CheckedModule> = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|dependency| dependency.module() == edge.target())
+                    .expect("dependency should precede importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("exact target summary should authenticate")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies).expect("fixture should resolve");
+        if module.id() == graph.entry() {
+            return (resolved, checked);
+        }
+        checked.push(check_module(resolved).expect("dependency should check"));
+    }
+    panic!("entry should belong to graph")
 }
 
 fn resolved_typing_error(name: &str, text: &str) -> (ResolvedModule, PipelineFailure) {
     with_graph(name, text, |graph| {
-        let inspection = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
-        let error = check_module(
-            resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve again"),
-        )
-        .expect_err("fixture should fail checking");
+        let (inspection, _) = resolve_entry(graph);
+        let (target, _) = resolve_entry(graph);
+        let error = check_module(target).expect_err("fixture should fail checking");
         (inspection, PipelineFailure::Typing(error))
     })
 }
 
-fn validated_entry_body(
-    source: &SourceFile,
-    module: &ResolvedModule,
-    expression: &ResolvedExpr,
-) -> ValidatedProgram {
-    let mut elaborator = Elaborator::for_resolved_expression(module, expression)
-        .expect("binder namespace should fit");
-    let typed = elaborator
-        .synthesize(expression, &TypeContext::new())
-        .expect("test program should elaborate");
-    validate_modules(
-        elaborator.finish(typed.node).expect("root should finish"),
-        &[source],
-        &[(module.module(), source.id())],
-    )
-    .expect("elaborated Core should validate")
-}
-
-fn validated_module(name: &str, text: &str) -> (SourceFile, ResolvedModule, ValidatedProgram) {
+fn validated_module(
+    name: &str,
+    text: &str,
+) -> (SourceFile, ResolvedModule, ValidatedEffectProgram) {
     with_graph(name, text, |graph| {
-        let source = graph.modules()[0].source().clone();
-        let inspection = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
-        let checked = check_module(
-            resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve again"),
-        )
-        .expect("fixture should check");
-        let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+        let source = graph.module(graph.entry()).unwrap().source().clone();
+        let (inspection, _) = resolve_entry(graph);
+        let (target, mut checked) = resolve_entry(graph);
+        checked.push(check_module(target).expect("entry should check"));
+        let linked = link_modules(checked, graph.entry()).expect("fixture should link");
         let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
         let mut elaborator =
-            Elaborator::for_module_program(&linked).expect("binder namespace should fit");
+            EffectElaborator::for_module_program(&linked).expect("binder namespace should fit");
         let typed = elaborator
-            .synthesize_module_program(&linked)
+            .synthesize_effect_module_program(&linked)
             .expect("fixture should elaborate");
         let unchecked = elaborator.finish(typed.node).expect("root should finish");
-        let validated = validate_modules(unchecked, &[&source], &[(graph.entry(), source.id())])
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let module_sources = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let validated = validate_effect_modules(unchecked, &sources, &module_sources)
             .expect("Core should validate");
         (source, inspection, validated)
     })
+}
+
+fn owned_nodes(core: &ValidatedEffectProgram, root: NodeId) -> Vec<NodeId> {
+    let mut pending = vec![root];
+    let mut seen = HashSet::new();
+    let mut nodes = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let node = core.node(id).unwrap();
+        pending
+            .extend((0..node.kind.child_count()).map(|index| node.kind.child_at(index).unwrap()));
+        nodes.push(id);
+    }
+    nodes
+}
+
+fn core_source_group(core: &ValidatedEffectProgram, binder: ash::resolved::BinderId) -> NodeId {
+    let groups = owned_nodes(core, core.root()).into_iter().filter(|id| {
+        matches!(&core.node(*id).unwrap().kind, EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(group)))
+            if group.members().iter().any(|member| member.binder().id() == binder))
+    }).collect::<Vec<_>>();
+    let [group] = groups.as_slice() else {
+        panic!("source binder should own one recursive group")
+    };
+    *group
+}
+
+fn source_closure(core: &ValidatedEffectProgram, initializer: NodeId, span: Span) -> NodeId {
+    let closures = owned_nodes(core, initializer)
+        .into_iter()
+        .filter(|id| {
+            let node = core.node(*id).unwrap();
+            node.origin.primary_span() == span
+                && matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+                )
+        })
+        .collect::<Vec<_>>();
+    let [closure] = closures.as_slice() else {
+        panic!("source initializer should own one closure at its exact function span")
+    };
+    assert_eq!(
+        core.node(*closure).unwrap().ty,
+        core.node(initializer).unwrap().ty
+    );
+    assert!(core.node(*closure).unwrap().ty.function_view().is_some());
+    *closure
+}
+
+fn parameter(core: &ValidatedEffectProgram, closure: NodeId) -> ash::core::TypedBinder {
+    let mut parameters = Vec::new();
+    EffectOperationFamily::visit_operation_binders(
+        &core.node(closure).unwrap().kind,
+        &mut |parameter| parameters.push(parameter.clone()),
+    );
+    let [parameter] = parameters.as_slice() else {
+        panic!("source closure should have one parameter")
+    };
+    assert_eq!(
+        parameter.ty(),
+        core.node(closure)
+            .unwrap()
+            .ty
+            .function_view()
+            .unwrap()
+            .domain()
+    );
+    parameter.clone()
 }
 
 fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
@@ -131,7 +214,7 @@ fn assert_check_origin(origin: &Origin, expression: Span, expected: Span) {
 
 #[test]
 fn recursive_group_retains_group_member_function_and_occurrence_causes() {
-    let (source, program) = resolved(
+    let (_source, program, core) = validated_module(
         "recursive-origins.ash",
         "main : Unit -> Int\nmain () = {\nlet rec repeat : Unit -> Int = fn(ignored) {\nrepeat ()\n}\nrepeat ()\n}\n",
     );
@@ -149,9 +232,12 @@ fn recursive_group_retains_group_member_function_and_occurrence_causes() {
         panic!("expected recursive call")
     };
 
-    let core = validated_entry_body(&source, &program, main_body(&program));
-    let root = core.node(core.root()).expect("recursive root");
-    let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &root.kind else {
+    let root = core
+        .node(core_source_group(&core, source_member.binder.id))
+        .expect("recursive root");
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(group))) =
+        &root.kind
+    else {
         panic!("expected recursive Core group")
     };
     assert_eq!(
@@ -171,26 +257,41 @@ fn recursive_group_retains_group_member_function_and_occurrence_causes() {
         source_member.binder.origin.primary_span()
     );
 
-    let function = core
-        .node(group.members()[0].initializer())
-        .expect("function initializer");
+    let closure = source_closure(
+        &core,
+        group.members()[0].initializer(),
+        source_member.initializer.span,
+    );
+    let function = core.node(closure).unwrap();
     assert_eq!(
         function.origin.primary_span(),
         source_member.initializer.span
     );
-    let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
-        panic!("expected function Core")
-    };
     assert_eq!(
-        function_node.parameter().origin().primary_span(),
+        parameter(&core, closure).origin().primary_span(),
         pattern_binder(&source_function.pattern)
             .origin
             .primary_span()
     );
-    let body = core.node(function_node.body()).expect("recursive body");
+    let calls = owned_nodes(&core, closure)
+        .into_iter()
+        .filter(|id| {
+            let node = core.node(*id).unwrap();
+            node.origin.primary_span() == source_function.body.result.span
+                && matches!(
+                    node.kind,
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(_)))
+                )
+        })
+        .collect::<Vec<_>>();
+    let [body] = calls.as_slice() else {
+        panic!("one owned recursive source application")
+    };
+    let body = core.node(*body).unwrap();
     assert_eq!(body.origin.primary_span(), source_function.body.result.span);
-    let PureExprKind::Computation(PureComputation::Apply(call)) = &body.kind else {
-        panic!("expected recursive application Core")
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(call))) = &body.kind
+    else {
+        unreachable!()
     };
     let occurrence = core.node(call.function()).expect("recursive occurrence");
     assert_eq!(occurrence.origin.primary_span(), source_call.function.span);
@@ -209,17 +310,53 @@ fn successful_definition_checks_retain_the_body_and_declared_result_origins() {
         ),
     ] {
         let (_source, program, core) = validated_module(path, text);
-        let root = core.node(core.root()).expect("global binding");
-        let PureExprKind::Computation(PureComputation::RecursiveBind(global)) = &root.kind else {
+        let binder = match &program.definitions()[0].kind {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => global.interface.name.id,
+            ResolvedDefinitionKind::InlineOperational(global) => global.header.name.id,
+        };
+        let root = core
+            .node(core_source_group(&core, binder))
+            .expect("global binding");
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(global))) =
+            &root.kind
+        else {
             panic!("expected global recursive group")
         };
-        let function = core
-            .node(global.members()[0].initializer())
-            .expect("function initializer");
-        let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
-            panic!("expected function value")
+        let member = global
+            .members()
+            .iter()
+            .find(|member| member.binder().id() == binder)
+            .expect("original source member");
+        let function_span = match &program.definitions()[0].kind {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => global.equations[0].span,
+            ResolvedDefinitionKind::InlineOperational(_) => program.definitions()[0].span,
         };
-        let body = core.node(function_node.body()).expect("function body");
+        let closure = source_closure(&core, member.initializer(), function_span);
+
+        let body_span = match &program.definitions()[0].kind {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => global.equations[0].body.span,
+            ResolvedDefinitionKind::InlineOperational(global) => global.body.result.span,
+        };
+        // initialize_region_buffer returns the context binding around the buffer;
+        // successful checking records its cause on that returned expression.
+        let bodies = owned_nodes(&core, closure)
+            .into_iter()
+            .filter(|id| {
+                let node = core.node(*id).unwrap();
+                node.origin.primary_span() == body_span
+                    && matches!(
+                        node.kind,
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(_)))
+                    )
+            })
+            .collect::<Vec<_>>();
+        let [body] = bodies.as_slice() else {
+            panic!("one owned checked arithmetic expression")
+        };
+        let body = core.node(*body).unwrap();
 
         match &program.definitions()[0].kind {
             ResolvedDefinitionKind::Equational(definition)
@@ -259,8 +396,17 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
     ] {
         let (_source, program, core) = validated_module(path, text);
         let definition = &program.definitions()[0];
-        let root = core.node(core.root()).expect("global binding");
-        let PureExprKind::Computation(PureComputation::RecursiveBind(global)) = &root.kind else {
+        let binder = match &program.definitions()[0].kind {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => global.interface.name.id,
+            ResolvedDefinitionKind::InlineOperational(global) => global.header.name.id,
+        };
+        let root = core
+            .node(core_source_group(&core, binder))
+            .expect("global binding");
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(global))) =
+            &root.kind
+        else {
             panic!("expected global recursive group")
         };
         assert_eq!(
@@ -269,30 +415,34 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
         );
         assert_eq!(root.origin.primary_span(), program.span());
 
-        let function = core
-            .node(global.members()[0].initializer())
-            .expect("function initializer");
-        let PureExprKind::Value(PureValue::Function(function_node)) = &function.kind else {
-            panic!("expected function value")
+        let member = global
+            .members()
+            .iter()
+            .find(|member| member.binder().id() == binder)
+            .expect("original source member");
+        let function_span = match &program.definitions()[0].kind {
+            ResolvedDefinitionKind::Equational(global)
+            | ResolvedDefinitionKind::ForeignConstant(global) => global.equations[0].span,
+            ResolvedDefinitionKind::InlineOperational(_) => program.definitions()[0].span,
         };
+        let closure = source_closure(&core, member.initializer(), function_span);
+        let function = core.node(closure).unwrap();
+        let function_parameter = parameter(&core, closure);
         assert_eq!(
             function.origin.generated_reason(),
             Some(GeneratedReason::FunctionLowering)
         );
         assert_eq!(
-            function_node.parameter().origin().generated_reason(),
+            function_parameter.origin().generated_reason(),
             Some(GeneratedReason::FunctionLowering)
         );
 
         match &definition.kind {
             ResolvedDefinitionKind::Equational(equational)
             | ResolvedDefinitionKind::ForeignConstant(equational) => {
+                assert_eq!(member.binder().id(), equational.interface.name.id);
                 assert_eq!(
-                    global.members()[0].binder().id(),
-                    equational.interface.name.id
-                );
-                assert_eq!(
-                    global.members()[0].binder().origin().primary_span(),
+                    member.binder().origin().primary_span(),
                     equational.interface.name.origin.primary_span()
                 );
                 assert_eq!(function.origin.primary_span(), equational.equations[0].span);
@@ -305,19 +455,16 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
                     assert!(function.origin.related_spans().contains(&expected));
                 }
                 assert_eq!(
-                    function_node.parameter().origin().primary_span(),
+                    function_parameter.origin().primary_span(),
                     pattern_binder(&equational.equations[0].patterns[0])
                         .origin
                         .primary_span()
                 );
             }
             ResolvedDefinitionKind::InlineOperational(operational) => {
+                assert_eq!(member.binder().id(), operational.header.name.id);
                 assert_eq!(
-                    global.members()[0].binder().id(),
-                    operational.header.name.id
-                );
-                assert_eq!(
-                    global.members()[0].binder().origin().primary_span(),
+                    member.binder().origin().primary_span(),
                     operational.header.name.origin.primary_span()
                 );
                 assert_eq!(function.origin.primary_span(), definition.span);
@@ -330,7 +477,7 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
                     assert!(function.origin.related_spans().contains(&expected));
                 }
                 assert_eq!(
-                    function_node.parameter().origin().primary_span(),
+                    function_parameter.origin().primary_span(),
                     pattern_binder(&operational.header.parameters[0].pattern)
                         .origin
                         .primary_span()
@@ -343,34 +490,44 @@ fn both_global_presentations_retain_exact_binding_function_parameter_and_applica
         else {
             panic!("expected resolved application")
         };
-        let mut pending = vec![
-            global
-                .members()
-                .last()
-                .expect("main should be the final global")
-                .initializer(),
-        ];
-        let (application, application_node) = loop {
-            let node = core
-                .node(
-                    pending
-                        .pop()
-                        .expect("main Core should contain its application"),
-                )
-                .expect("main Core node should exist");
-            if node.origin.primary_span() == source_result.span
-                && let PureExprKind::Computation(PureComputation::Apply(application)) = &node.kind
-            {
-                break (node, application);
-            }
-            for index in 0..node.kind.child_count() {
-                pending.push(node.kind.child_at(index).expect("Core child should exist"));
-            }
+        let main = program
+            .definitions()
+            .iter()
+            .find_map(|definition| match &definition.kind {
+                ResolvedDefinitionKind::Equational(main)
+                    if main.interface.name.spelling == "main" =>
+                {
+                    Some(main)
+                }
+                _ => None,
+            })
+            .expect("main should be equational");
+        let main_initializer = global
+            .members()
+            .iter()
+            .find(|member| member.binder().id() == main.interface.name.id)
+            .expect("main binder owns an initializer")
+            .initializer();
+        let applications = owned_nodes(&core, main_initializer)
+            .into_iter()
+            .filter(|id| {
+                let node = core.node(*id).unwrap();
+                node.origin.primary_span() == source_result.span
+                    && matches!(
+                        node.kind,
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(_)))
+                    )
+            })
+            .collect::<Vec<_>>();
+        let [application] = applications.as_slice() else {
+            panic!("one source-owned main application")
         };
-        let ResolvedDefinitionKind::Equational(main) =
-            &program.definitions().last().expect("main definition").kind
+        let application = core.node(*application).unwrap();
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(
+            application_node,
+        ))) = &application.kind
         else {
-            panic!("main should be equational")
+            unreachable!()
         };
         let (_, main_result) = main
             .interface

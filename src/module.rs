@@ -43,6 +43,26 @@ const GENERIC_CELL_SOURCE: &str = concat!(
     "pub interface Provider<R,T> {\nread : Cell<R,T> -> T ! {Ops<R,T>}\nwrite : (Cell<R,T>, T) -> Unit ! {Ops<R,T>}\n}\n",
 );
 
+// One authenticated identity supplies the public binding facade and private
+// generated allocation service. Importing the facade never exposes ownership.
+const REGION_SOURCE: &str = concat!(
+    "import @builtin.foreign as Foreign\n",
+    "pub opaque type Request = HiddenRequest\n",
+    "pub opaque type Storage<R> = HiddenStorage\n",
+    "pub opaque type StorageView = HiddenStorageView\n",
+    "pub opaque type RegionView = HiddenRegionView\n",
+    "effect DefaultAlloc {\n",
+    "allocate : Request -> StorageView\n",
+    "context : Unit -> RegionView\n",
+    "}\n",
+    "pub usable_bytes : Request -> Int ! {DefaultAlloc}\nusable_bytes request = usable_bytes request\n",
+    "pub alignment : Request -> Int ! {DefaultAlloc}\nalignment request = alignment request\n",
+    "pub from_backing<R> : (Request, Foreign.Address, Int, Int) -> Storage<R> ! {DefaultAlloc}\nfrom_backing value = from_backing value\n",
+);
+
+// Ordinary selected reexports keep the generated service and views private.
+const REGION_FACADE_SOURCE: &str = "pub import @builtin.region_service (Request, Storage, usable_bytes, alignment, from_backing)\n";
+
 const BYTES_SOURCE: &str = concat!(
     "pub type AppendResult = BytesAppended(Bytes)\n| InvalidByte\n",
     "pub empty : Unit -> Bytes\nempty value = empty value\n",
@@ -198,6 +218,8 @@ enum ModuleIdNamespace {
     Admitted,
     BuiltinCell,
     BuiltinGenericCell,
+    BuiltinRegion,
+    BuiltinRegionFacade,
     BuiltinBytes,
     BuiltinString,
     BuiltinForeign,
@@ -236,6 +258,14 @@ impl ModuleId {
 
     pub(crate) const fn is_builtin_generic_cell(self) -> bool {
         matches!(self.namespace, ModuleIdNamespace::BuiltinGenericCell)
+    }
+
+    pub(crate) const fn is_builtin_region_facade(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinRegionFacade)
+    }
+
+    pub(crate) const fn is_builtin_region(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinRegion)
     }
 
     pub(crate) const fn is_builtin_cell(self) -> bool {
@@ -306,6 +336,14 @@ impl fmt::Display for ModuleId {
             ModuleIdNamespace::BuiltinCell => {
                 write!(formatter, "builtin.cell:{}:{}", self.graph, self.value)
             }
+            ModuleIdNamespace::BuiltinRegionFacade => write!(
+                formatter,
+                "builtin.region.facade:{}:{}",
+                self.graph, self.value
+            ),
+            ModuleIdNamespace::BuiltinRegion => {
+                write!(formatter, "builtin.region:{}:{}", self.graph, self.value)
+            }
             ModuleIdNamespace::DirectCoreSource => write!(formatter, "source:{}", self.value),
         }
     }
@@ -316,9 +354,14 @@ impl fmt::Display for ModuleId {
 pub struct ModuleDependency {
     target: ModuleId,
     import_span: Span,
+    // A compiler dependency is not a fabricated SurfaceImport and binds no names.
+    region_service: bool,
 }
 
 impl ModuleDependency {
+    pub(crate) const fn is_region_service(self) -> bool {
+        self.region_service
+    }
     /// Returns the imported module identity.
     #[must_use]
     pub const fn target(&self) -> ModuleId {
@@ -1401,13 +1444,54 @@ pub fn load_module_graph(
         let mut builtin_bytes = None;
         let mut builtin_string = None;
         let mut builtin_foreign = None;
+        let mut builtin_region = None;
+        let mut builtin_region_facade = None;
 
         while let Some(frame) = frames.last() {
             let module = frame.module;
             let module_index = module.index();
             let import_index = frame.next_import;
+            if import_index == 0
+                && staged[module_index].dependencies.is_empty()
+                && matches!(module.namespace, ModuleIdNamespace::Admitted)
+            {
+                let span = staged[module_index].surface.span;
+                let target = if let Some(region) = builtin_region {
+                    region
+                } else {
+                    let region = admit_builtin_region(
+                        graph_identity,
+                        span,
+                        &mut budget,
+                        &mut staged,
+                        &mut dependency_order,
+                        &mut builtin_foreign,
+                    )?;
+                    builtin_region = Some(region);
+                    region
+                };
+                budget.charge_edge()?;
+                staged[module_index]
+                    .dependencies
+                    .try_reserve(1)
+                    .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+                staged[module_index].dependencies.push(ModuleDependency {
+                    target,
+                    import_span: span,
+                    region_service: true,
+                });
+            }
             if import_index == staged[module_index].surface.imports.len() {
                 let completed = module;
+                // Source import ordinals stay unchanged. The private compiler
+                // dependency follows the explicit imports and binds no namespace.
+                if staged[module_index]
+                    .dependencies
+                    .first()
+                    .is_some_and(|edge| edge.region_service)
+                {
+                    staged[module_index].dependencies.rotate_left(1);
+                }
                 staged[module_index].state = VisitState::Finished;
                 dependency_order.push(completed);
                 frames.pop();
@@ -1439,7 +1523,7 @@ pub fn load_module_graph(
                 if segments.len() != 1
                     || !matches!(
                         segments[0].text.as_str(),
-                        "cell" | "generic_cell" | "bytes" | "string" | "foreign"
+                        "cell" | "generic_cell" | "bytes" | "string" | "foreign" | "regions"
                     )
                 {
                     return Err(ModuleFailure::source(
@@ -1450,7 +1534,9 @@ pub fn load_module_graph(
                     .into());
                 }
                 let packed = matches!(segments[0].text.as_str(), "bytes" | "string");
-                let cached = if segments[0].text == "bytes" {
+                let cached = if segments[0].text == "regions" {
+                    &mut builtin_region_facade
+                } else if segments[0].text == "bytes" {
                     &mut builtin_bytes
                 } else if segments[0].text == "string" {
                     &mut builtin_string
@@ -1464,7 +1550,19 @@ pub fn load_module_graph(
                 let target = if let Some(id) = *cached {
                     id
                 } else {
-                    let id = if segments[0].text == "foreign" {
+                    let id = if segments[0].text == "regions" {
+                        let service = builtin_region.ok_or_else(|| {
+                            ModuleFailure::source(ModuleReason::UnknownBuiltin, import.span, None)
+                        })?;
+                        admit_builtin_region_facade(
+                            graph_identity,
+                            import.span,
+                            service,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?
+                    } else if segments[0].text == "foreign" {
                         admit_builtin_foreign(
                             graph_identity,
                             import.span,
@@ -1475,6 +1573,8 @@ pub fn load_module_graph(
                     } else if packed {
                         admit_builtin_packed(
                             segments[0].text == "bytes",
+                            builtin_region
+                                .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?,
                             graph_identity,
                             import.span,
                             &mut budget,
@@ -1501,6 +1601,7 @@ pub fn load_module_graph(
                 staged[module_index].dependencies.push(ModuleDependency {
                     target,
                     import_span: import.span,
+                    region_service: false,
                 });
                 continue;
             }
@@ -1527,6 +1628,7 @@ pub fn load_module_graph(
             staged[module_index].dependencies.push(ModuleDependency {
                 target,
                 import_span: import.span,
+                region_service: false,
             });
             if relative {
                 staged[module_index].relative_edges.push(RelativeEdge {
@@ -1579,6 +1681,129 @@ pub fn load_module_graph(
     })
 }
 
+fn admit_builtin_region_facade(
+    graph: u32,
+    import_span: Span,
+    service: ModuleId,
+    budget: &mut GraphBudget,
+    staged: &mut Vec<StagedModule>,
+    dependency_order: &mut Vec<ModuleId>,
+) -> Result<ModuleId, LoadGraphError> {
+    budget.charge_sources()?;
+    budget.charge_edge()?;
+    staged
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    dependency_order
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let mut text = String::new();
+    text.try_reserve_exact(REGION_FACADE_SOURCE.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    text.push_str(REGION_FACADE_SOURCE);
+    let path = PathBuf::from("@builtin.regions");
+    let (source, surface) =
+        parse_surface_module(&path, text, Some(import_span), &mut budget.syntax_work)?;
+    let value = u32::try_from(staged.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let id = ModuleId {
+        namespace: ModuleIdNamespace::BuiltinRegionFacade,
+        graph,
+        value,
+    };
+    let mut dependencies = Vec::new();
+    dependencies
+        .try_reserve_exact(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+    let span = surface
+        .imports
+        .first()
+        .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?
+        .span;
+    dependencies.push(ModuleDependency {
+        target: service,
+        import_span: span,
+        region_service: false,
+    });
+    staged.push(StagedModule {
+        id,
+        canonical_path: path,
+        owners: OwnerSet::from_paths(&[], budget)?,
+        source,
+        surface,
+        dependencies,
+        relative_edges: Vec::new(),
+        state: VisitState::Finished,
+    });
+    dependency_order.push(id);
+    Ok(id)
+}
+
+fn admit_builtin_region(
+    graph: u32,
+    owner_span: Span,
+    budget: &mut GraphBudget,
+    staged: &mut Vec<StagedModule>,
+    dependency_order: &mut Vec<ModuleId>,
+    builtin_foreign: &mut Option<ModuleId>,
+) -> Result<ModuleId, LoadGraphError> {
+    let foreign = if let Some(module) = *builtin_foreign {
+        module
+    } else {
+        let module = admit_builtin_foreign(graph, owner_span, budget, staged, dependency_order)?;
+        *builtin_foreign = Some(module);
+        module
+    };
+    budget.charge_sources()?;
+    staged
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    dependency_order
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let mut text = String::new();
+    text.try_reserve_exact(REGION_SOURCE.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    text.push_str(REGION_SOURCE);
+    let path = PathBuf::from("@compiler.region");
+    let (source, surface) =
+        parse_surface_module(&path, text, Some(owner_span), &mut budget.syntax_work)?;
+    let value = u32::try_from(staged.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let id = ModuleId {
+        namespace: ModuleIdNamespace::BuiltinRegion,
+        graph,
+        value,
+    };
+    budget.charge_edge()?;
+    let mut dependencies = Vec::new();
+    dependencies
+        .try_reserve_exact(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+    let import_span = surface
+        .imports
+        .first()
+        .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?
+        .span;
+    dependencies.push(ModuleDependency {
+        target: foreign,
+        import_span,
+        region_service: false,
+    });
+    staged.push(StagedModule {
+        id,
+        canonical_path: path,
+        owners: OwnerSet::from_paths(&[], budget)?,
+        source,
+        surface,
+        dependencies,
+        relative_edges: Vec::new(),
+        state: VisitState::Finished,
+    });
+    dependency_order.push(id);
+    Ok(id)
+}
+
 fn admit_builtin_foreign(
     graph: u32,
     import_span: Span,
@@ -1624,6 +1849,7 @@ fn admit_builtin_foreign(
 
 fn admit_builtin_packed(
     bytes: bool,
+    region: ModuleId,
     graph: u32,
     import_span: Span,
     budget: &mut GraphBudget,
@@ -1659,13 +1885,19 @@ fn admit_builtin_packed(
         graph,
         value,
     };
+    budget.charge_edge()?;
+    let service_span = surface.span;
     staged.push(StagedModule {
         id,
         canonical_path: path,
         owners: OwnerSet::from_paths(&[], budget)?,
         source,
         surface,
-        dependencies: Vec::new(),
+        dependencies: vec![ModuleDependency {
+            target: region,
+            import_span: service_span,
+            region_service: true,
+        }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
     });
@@ -2362,6 +2594,8 @@ pub enum ForeignOperationRole {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ImageModuleRole {
     Ordinary,
+    BuiltinRegion,
+    BuiltinRegionFacade,
     BuiltinForeign,
     BuiltinCell,
     BuiltinGenericCell,
@@ -2384,11 +2618,17 @@ pub(crate) fn restore_image_module(
     match role {
         ImageModuleRole::Ordinary => Ok(ModuleId::from(source.id())),
         ImageModuleRole::BuiltinForeign
+        | ImageModuleRole::BuiltinRegion
+        | ImageModuleRole::BuiltinRegionFacade
         | ImageModuleRole::BuiltinGenericCell
         | ImageModuleRole::BuiltinCell
         | ImageModuleRole::BuiltinString
         | ImageModuleRole::BuiltinBytes => {
             let (canonical, namespace) = match role {
+                ImageModuleRole::BuiltinRegion => (REGION_SOURCE, ModuleIdNamespace::BuiltinRegion),
+                ImageModuleRole::BuiltinRegionFacade => {
+                    (REGION_FACADE_SOURCE, ModuleIdNamespace::BuiltinRegionFacade)
+                }
                 ImageModuleRole::BuiltinForeign => {
                     (FOREIGN_SOURCE, ModuleIdNamespace::BuiltinForeign)
                 }
@@ -2422,4 +2662,12 @@ pub(crate) fn restore_image_module(
 
 pub(crate) fn foreign_builtin_source_text() -> &'static str {
     FOREIGN_SOURCE
+}
+
+pub(crate) fn region_facade_builtin_source_text() -> &'static str {
+    REGION_FACADE_SOURCE
+}
+
+pub(crate) fn region_builtin_source_text() -> &'static str {
+    REGION_SOURCE
 }

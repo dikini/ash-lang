@@ -142,15 +142,19 @@ fn validate_builtin_core(
 
 #[test]
 fn builtin_intrinsic_cannot_change_its_signature() {
-    let (graph, registry) = builtin_fixture();
-    let builtin = &graph.modules()[0];
+    let (graph, _) = builtin_fixture();
+    let builtin = graph
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path() == "@builtin.bytes")
+        .unwrap();
     let origin = Origin::Source(
         builtin
             .source()
             .span(ByteRange::new(0, 1).unwrap())
             .unwrap(),
     );
-    let mut builder = CoreBuilder::with_registry(registry);
+    let mut builder = CoreBuilder::new();
     let root = builder
         .intrinsic(
             Intrinsic::BytesEmpty,
@@ -169,47 +173,111 @@ fn builtin_intrinsic_cannot_change_its_signature() {
 
 #[test]
 fn intrinsic_result_rejects_constructor_substitution() {
-    use ash::types::{ConstructorId, NominalTypeId};
-    let (graph, registry) = builtin_fixture();
-    let bytes = &graph.modules()[0];
-    let string = &graph.modules()[1];
-    let origin = Origin::Source(bytes.source().span(ByteRange::new(0, 1).unwrap()).unwrap());
-    let wrong_owner = NominalTypeId::new(string.id(), 0);
-    let operation = Intrinsic::BytesAppendByte {
-        appended: ConstructorId::new(wrong_owner, 0),
-        invalid: ConstructorId::new(wrong_owner, 1),
+    use ash::{
+        resolved::ResolvedRegistry,
+        types::{ConstructorId, NominalTypeId},
     };
-    let mut builder = CoreBuilder::with_registry(registry);
-    let root = builder
-        .intrinsic(
-            operation,
-            bytes.id(),
-            Type::Function(
-                Box::new(Type::Tuple(Box::new([Type::Bytes, Type::Int]))),
-                Box::new(Type::Nominal(wrong_owner)),
-            ),
-            origin,
-        )
-        .unwrap();
-    assert_eq!(
-        validate_builtin_core(&graph, builder.finish(root).unwrap())
-            .unwrap_err()
-            .reason(),
-        ValidationReason::Registry
+    let (graph, source_registry) = builtin_fixture();
+    let named = |path| {
+        graph
+            .modules()
+            .iter()
+            .find(|module| module.source().display_path() == path)
+            .unwrap()
+    };
+    let (bytes, string) = (named("@builtin.bytes"), named("@builtin.string"));
+    // This is a closed manual Pure donor, retaining the original builtin data
+    // facts and parameter rows rather than the Source function/effect catalogue.
+    let nominals = source_registry
+        .nominals()
+        .iter()
+        .filter(|nominal| nominal.id.module() == bytes.id() || nominal.id.module() == string.id())
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(nominals.len(), 3);
+    let parameter_rows = nominals
+        .iter()
+        .map(|nominal| {
+            let row = source_registry.nominal_parameters(nominal.id).unwrap();
+            assert!(row.is_empty());
+            (nominal.id, row.to_vec())
+        })
+        .collect();
+    let constructors = source_registry
+        .constructors()
+        .iter()
+        .filter(|constructor| {
+            constructor.owner.module() == bytes.id() || constructor.owner.module() == string.id()
+        })
+        .cloned()
+        .collect();
+    let registry = std::sync::Arc::new(
+        ResolvedRegistry::new(nominals, constructors).with_type_parameters(parameter_rows),
     );
+    let owner = NominalTypeId::new(bytes.id(), 0);
+    let substituted = NominalTypeId::new(string.id(), 0);
+    assert_eq!(registry.nominal(owner).unwrap().spelling, "AppendResult");
+    assert_eq!(
+        registry.nominal(substituted).unwrap().spelling,
+        "DecodeResult"
+    );
+    assert_eq!(
+        registry.nominal(owner).unwrap().constructors.as_ref(),
+        [ConstructorId::new(owner, 0), ConstructorId::new(owner, 1)]
+    );
+    assert_eq!(
+        registry.nominal(substituted).unwrap().constructors.as_ref(),
+        [
+            ConstructorId::new(substituted, 0),
+            ConstructorId::new(substituted, 1)
+        ]
+    );
+    let origin = Origin::Source(bytes.source().span(ByteRange::new(0, 1).unwrap()).unwrap());
+    let build = |result_owner| {
+        let mut builder = CoreBuilder::with_registry(std::sync::Arc::clone(&registry));
+        let root = builder
+            .intrinsic(
+                Intrinsic::BytesAppendByte {
+                    appended: ConstructorId::new(result_owner, 0),
+                    invalid: ConstructorId::new(result_owner, 1),
+                },
+                bytes.id(),
+                Type::Function(
+                    Box::new(Type::Tuple(Box::new([Type::Bytes, Type::Int]))),
+                    Box::new(Type::Nominal(owner)),
+                ),
+                origin.clone(),
+            )
+            .unwrap();
+        (builder.finish(root).unwrap(), root)
+    };
+    let (correct, _) = build(owner);
+    drop(
+        validate_builtin_core(&graph, correct)
+            .expect("the authentic closed Pure intrinsic donor must validate"),
+    );
+    let (substituted, root) = build(substituted);
+    let error = validate_builtin_core(&graph, substituted)
+        .expect_err("another builtin's coherent constructors cannot replace Bytes results");
+    assert_eq!(error.reason(), ValidationReason::Registry);
+    assert_eq!(error.node(), Some(root));
 }
 
 #[test]
 fn pure_intrinsic_application_and_transform_preserve_packed_data() {
-    let (graph, registry) = builtin_fixture();
-    let builtin = &graph.modules()[1];
+    let (graph, _) = builtin_fixture();
+    let builtin = graph
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path() == "@builtin.string")
+        .unwrap();
     let origin = Origin::Source(
         builtin
             .source()
             .span(ByteRange::new(0, 1).unwrap())
             .unwrap(),
     );
-    let mut builder = CoreBuilder::with_registry(registry);
+    let mut builder = CoreBuilder::new();
     let callable = builder
         .intrinsic(
             Intrinsic::StringToUtf8,

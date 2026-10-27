@@ -106,6 +106,10 @@ pub enum NodeKind {
     ResumeExpression,
     /// One builtin cell acquisition with an identity binder and scoped body.
     ResourceExpression,
+    /// One lexical region owner with an optional explicit allocator pair.
+    RegionExpression,
+    /// Selection of an existing live allocation owner.
+    RegionSelectionExpression,
     /// A module-owned experimental resource assembly.
     ResourceDefinition,
     /// Experimental assembly field or clause block.
@@ -919,6 +923,8 @@ fn retained_token(kind: &TokenKind) -> FoundToken {
         TokenKind::With => FoundToken::Spelling("with"),
         TokenKind::Resume => FoundToken::Spelling("resume"),
         TokenKind::Resource => FoundToken::Spelling("resource"),
+        TokenKind::Region => FoundToken::Spelling("region"),
+        TokenKind::Using => FoundToken::Spelling("using"),
         TokenKind::Hook => FoundToken::Spelling("hook"),
         TokenKind::Register => FoundToken::Spelling("register"),
         TokenKind::Cleanup => FoundToken::Spelling("cleanup"),

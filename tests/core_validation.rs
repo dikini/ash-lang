@@ -1,24 +1,29 @@
 use ash::{
     core::{
         BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
-        CorePatternKind, Primitive, PureComputation, PureExprKind, PureValue, ValidatedProgram,
+        CorePatternKind, EffectExprKind, EffectOperation, EffectOperationFamily, Primitive,
+        PureComputation, PureExprKind, PureValue, ValidatedEffectProgram, ValidatedProgram,
         ValidationReason,
-        transform::{fold_literal_primitives, identity_traversal},
+        dialect::CoreOperationFamily,
+        transform::{
+            fold_effect_literal_primitives, fold_literal_primitives, identity_effect_traversal,
+            identity_traversal,
+        },
         validate,
     },
     driver::{RunConfiguration, run_path},
-    elaborate::{Elaborator, check_module, link_modules},
-    eval::{Value, evaluate},
+    elaborate::{EffectElaborator, check_module, link_modules},
+    eval::{Value, evaluate, evaluate_effect},
     evidence_validation::validate_interface_evidence,
     integer::Integer,
     interface::{EvidenceNode, ImplId, ImplMethodId, InterfaceId},
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{
-        BinderId, ResolvedConstructor, ResolvedDefinitionKind, ResolvedExprKind,
+        BinderId, CheckedModule, ResolvedConstructor, ResolvedDefinitionKind, ResolvedExprKind,
         ResolvedNominalType, ResolvedRegistry, ResolvedTermName, ResolvedTypeVariable,
     },
-    source::{ByteRange, GeneratedReason, Origin, SourceFile},
+    source::{ByteRange, GeneratedReason, Origin, SourceFile, Span},
     surface::SurfaceKindKind,
     types::{
         ConstructorId, InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, same_type,
@@ -68,27 +73,70 @@ impl Drop for InterfaceCoreFixture {
     }
 }
 
-fn validated_interface_core(text: &str) -> ValidatedProgram {
-    validated_interface_core_with_graph(text).0
+fn checked_before(graph: &ModuleGraph, target: &LoadedModule) -> Vec<CheckedModule> {
+    let mut checked: Vec<CheckedModule> = Vec::new();
+    for module in graph.modules() {
+        if module.id() == target.id() {
+            return checked;
+        }
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("dependency order should retain the exact target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the summary should authenticate its actual edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("the preceding module should resolve");
+        checked.push(check_module(resolved).expect("the preceding module should check"));
+    }
+    panic!("the graph should contain its target")
 }
 
-fn validated_interface_core_with_graph(text: &str) -> (ValidatedProgram, ModuleGraph) {
+fn resolve_with_dependencies(
+    graph: &ModuleGraph,
+    target: &LoadedModule,
+) -> ash::resolved::ResolvedModule {
+    let checked = checked_before(graph, target);
+    let dependencies = target
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            let dependency = checked
+                .iter()
+                .find(|checked| checked.module() == edge.target())
+                .unwrap();
+            DependencyExports::new(edge, dependency.exports())
+                .expect("the target edge should authenticate")
+        })
+        .collect::<Vec<_>>();
+    resolve_module(target, &dependencies)
+        .expect("the target should resolve with its actual dependencies")
+}
+
+fn validated_interface_effect_with_graph(text: &str) -> (ValidatedEffectProgram, ModuleGraph) {
     let fixture = InterfaceCoreFixture::create(text);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the Core interface fixture should load");
     let module = graph
         .module(graph.entry())
         .expect("the Core interface entry should remain admitted");
-    let resolved = resolve_module(module, &[]).expect("the Core interface fixture should resolve");
-    let checked = check_module(resolved).expect("the Core interface fixture should check");
+    let mut checked = checked_before(&graph, module);
+    let resolved = resolve_with_dependencies(&graph, module);
+    checked.push(check_module(resolved).expect("the Core interface fixture should check"));
     let linked =
-        link_modules(vec![checked], graph.entry()).expect("the Core interface fixture should link");
+        link_modules(checked, graph.entry()).expect("the Core interface fixture should link");
     let linked = validate_interface_evidence(linked)
         .expect("the Core interface evidence should authenticate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the linked namespace should reserve");
+        EffectElaborator::for_module_program(&linked).expect("the linked namespace should reserve");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("the authenticated interface evidence should lower");
     let unchecked = elaborator
         .finish(typed.node)
@@ -103,13 +151,20 @@ fn validated_interface_core_with_graph(text: &str) -> (ValidatedProgram, ModuleG
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let program = ash::core::validate_modules(unchecked, &sources, &module_sources)
+    let program = ash::core::validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("the authenticated interface Core should independently validate");
     (program, graph)
 }
 
-fn reachable_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
-    let mut pending = vec![program.root()];
+fn reachable_effect_nodes(program: &ValidatedEffectProgram) -> Vec<ash::core::NodeId> {
+    owned_effect_nodes(program, program.root())
+}
+
+fn owned_effect_nodes(
+    program: &ValidatedEffectProgram,
+    root: ash::core::NodeId,
+) -> Vec<ash::core::NodeId> {
+    let mut pending = vec![root];
     let mut visited = HashSet::new();
     let mut nodes = Vec::new();
     while let Some(id) = pending.pop() {
@@ -125,14 +180,124 @@ fn reachable_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
     nodes
 }
 
-fn assert_authenticated_user_id_wrap(program: &ValidatedProgram, owner: NominalTypeId) {
+fn effect_source_initializer(
+    program: &ValidatedEffectProgram,
+    graph: &ModuleGraph,
+    spelling: &str,
+) -> ash::core::NodeId {
+    let entry = graph.module(graph.entry()).unwrap();
+    let checked = check_module(resolve_with_dependencies(graph, entry))
+        .expect("the original entry should check");
+    let binder = checked
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == spelling)
+        .expect("the original source definition should remain checked")
+        .binder;
+    let initializers = reachable_effect_nodes(program)
+        .into_iter()
+        .filter_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &program.node(id)?.kind
+            else {
+                return None;
+            };
+            group
+                .members()
+                .iter()
+                .find(|member| member.binder().id() == binder)
+                .map(|member| member.initializer())
+        })
+        .collect::<Vec<_>>();
+    let [initializer] = initializers.as_slice() else {
+        panic!("the original source binder should own one initializer");
+    };
+    *initializer
+}
+
+fn owned_effect_parameter(
+    program: &ValidatedEffectProgram,
+    root: ash::core::NodeId,
+    callable: &Type,
+) -> (ash::core::NodeId, BinderId) {
+    let closures = owned_effect_nodes(program, root)
+        .into_iter()
+        .filter(|id| {
+            let node = program.node(*id).unwrap();
+            &node.ty == callable
+                && matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+                )
+        })
+        .collect::<Vec<_>>();
+    let [closure] = closures.as_slice() else {
+        panic!("the owned subtree should contain one complete typed evidence closure")
+    };
+    let mut parameters = Vec::new();
+    EffectOperationFamily::visit_operation_binders(
+        &program.node(*closure).unwrap().kind,
+        &mut |parameter| parameters.push((parameter.id(), parameter.ty().clone())),
+    );
+    let [(binder, domain)] = parameters.as_slice() else {
+        panic!("the evidence closure should have one parameter")
+    };
+    assert_eq!(domain, callable.function_view().unwrap().domain());
+    (*closure, *binder)
+}
+
+fn effect_adapters(
+    program: &ValidatedEffectProgram,
+    root: ash::core::NodeId,
+) -> Vec<ash::core::NodeId> {
+    let nodes = owned_effect_nodes(program, root);
+    let initializers = nodes
+        .iter()
+        .filter_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &program.node(*id)?.kind
+            else {
+                return None;
+            };
+            Some(group.members().iter().map(|member| member.initializer()))
+        })
+        .flatten()
+        .collect::<HashSet<_>>();
+    nodes
+        .into_iter()
+        .filter(|id| {
+            !initializers.contains(id)
+                && matches!(
+                    program.node(*id).unwrap().kind,
+                    EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeAbstraction(_)
+                    ))
+                )
+        })
+        .collect()
+}
+
+fn assert_effect_integer_evaluation(program: &ValidatedEffectProgram, expected: &str) {
+    let evaluation =
+        evaluate_effect(program).expect("validated Source Effect Core should evaluate");
+    let Value::SmallInteger(value) = evaluation.value else {
+        panic!("the transformed linked program should evaluate to an integer");
+    };
+    assert_eq!(value.to_string(), expected);
+}
+
+fn assert_authenticated_user_id_wrap(program: &ValidatedEffectProgram, owner: NominalTypeId) {
     let mut wraps = 0;
-    for id in reachable_nodes(program) {
+    for id in reachable_effect_nodes(program) {
         let node = program
             .node(id)
             .expect("every reachable Core node should remain validated");
         match &node.kind {
-            PureExprKind::Computation(PureComputation::NewtypeConversion(conversion)) => {
+            EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::NewtypeConversion(conversion),
+            )) => {
                 assert_eq!(conversion.owner(), owner);
                 assert_eq!(
                     conversion.direction(),
@@ -145,7 +310,7 @@ fn assert_authenticated_user_id_wrap(program: &ValidatedProgram, owner: NominalT
                 assert_eq!(node.ty, Type::Nominal(owner));
                 wraps += 1;
             }
-            PureExprKind::Value(PureValue::Constructor(constructor)) => {
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Constructor(constructor))) => {
                 let fact = program
                     .registry()
                     .constructor(constructor.constructor())
@@ -153,6 +318,13 @@ fn assert_authenticated_user_id_wrap(program: &ValidatedProgram, owner: NominalT
                 assert_ne!(
                     fact.owner, owner,
                     "UserId must not lower through an allocating constructor node",
+                );
+            }
+            EffectExprKind::Operation(EffectOperation::RegionTuple(_)) => {
+                assert_ne!(
+                    node.ty,
+                    Type::Nominal(owner),
+                    "a newtype wrap must not allocate an ordinary nominal record"
                 );
             }
             _ => {}
@@ -173,18 +345,19 @@ fn module_newtype_conversion_authenticates_representation() {
     let module = graph
         .module(graph.entry())
         .expect("the module-newtype entry should remain loaded");
-    let checked = check_module(
-        resolve_module(module, &[]).expect("the module-newtype fixture should resolve"),
-    )
-    .expect("the module-newtype fixture should check");
+    let mut checked = checked_before(&graph, module);
+    checked.push(
+        check_module(resolve_with_dependencies(&graph, module))
+            .expect("the module-newtype fixture should check"),
+    );
     let linked =
-        link_modules(vec![checked], graph.entry()).expect("the module-newtype fixture should link");
+        link_modules(checked, graph.entry()).expect("the module-newtype fixture should link");
     let linked = validate_interface_evidence(linked)
         .expect("the module-newtype fixture has no unauthenticated interface evidence");
-    let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the linked Core namespace should fit");
+    let mut elaborator = EffectElaborator::for_module_program(&linked)
+        .expect("the linked Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("the module-newtype fixture should lower");
     let unchecked = elaborator
         .finish(typed.node)
@@ -200,7 +373,7 @@ fn module_newtype_conversion_authenticates_representation() {
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
 
-    let original = ash::core::validate_modules(unchecked, &sources, &module_sources)
+    let original = ash::core::validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("the canonical newtype conversion should independently authenticate");
     let owner = original
         .registry()
@@ -211,20 +384,20 @@ fn module_newtype_conversion_authenticates_representation() {
         .id;
     assert_authenticated_user_id_wrap(&original, owner);
 
-    let identity = identity_traversal(&original).expect("identity traversal should rebuild");
-    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+    let identity = identity_effect_traversal(&original).expect("identity traversal should rebuild");
+    let identity = ash::core::validate_effect_modules(identity, &sources, &module_sources)
         .expect("identity traversal should independently reauthenticate the conversion");
     assert_authenticated_user_id_wrap(&identity, owner);
 
-    let folded = fold_literal_primitives(&original).expect("literal folding should rebuild");
-    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+    let folded = fold_effect_literal_primitives(&original).expect("literal folding should rebuild");
+    let folded = ash::core::validate_effect_modules(folded, &sources, &module_sources)
         .expect("literal folding should independently reauthenticate the conversion");
     assert_authenticated_user_id_wrap(&folded, owner);
 }
 
 #[test]
 fn core_transforms_preserve_local_nominal_scope_authentication() {
-    let (program, graph) = validated_interface_core_with_graph(concat!(
+    let (program, graph) = validated_interface_effect_with_graph(concat!(
         "main : Unit -> Int\n",
         "main () = {\n",
         "    newtype Hidden = Hidden(Int)\n",
@@ -243,24 +416,55 @@ fn core_transforms_preserve_local_nominal_scope_authentication() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
+    let hidden = program
+        .registry()
+        .lexical_nominals()
+        .iter()
+        .filter(|nominal| nominal.spelling == "Hidden" && nominal.id.module() == graph.entry())
+        .map(|nominal| nominal.id)
+        .collect::<Vec<_>>();
+    let [hidden] = hidden.as_slice() else {
+        panic!("the entry should retain its unique lexical Hidden identity");
+    };
     for transformed in [
-        identity_traversal(&program).expect("identity transform should rebuild the scope"),
-        fold_literal_primitives(&program).expect("literal fold should rebuild the scope"),
+        identity_effect_traversal(&program).expect("identity transform should rebuild the scope"),
+        fold_effect_literal_primitives(&program).expect("literal fold should rebuild the scope"),
     ] {
-        let transformed = ash::core::validate_modules(transformed, &sources, &module_sources)
-            .expect("the transformed local scope should reauthenticate");
-        let scopes = reachable_nodes(&transformed)
+        let transformed =
+            ash::core::validate_effect_modules(transformed, &sources, &module_sources)
+                .expect("the transformed local scope should reauthenticate");
+        let scopes = reachable_effect_nodes(&transformed)
             .into_iter()
             .filter(|id| {
                 matches!(
                     transformed.node(*id).map(|node| &node.kind),
-                    Some(PureExprKind::Computation(
+                    Some(EffectExprKind::Pure(PureExprKind::Computation(
                         PureComputation::LocalNominalScope(_)
-                    ))
+                    )))
                 )
             })
             .count();
         assert_eq!(scopes, 1);
+        let conversions = reachable_effect_nodes(&transformed)
+            .into_iter()
+            .filter_map(|id| {
+                let node = transformed.node(id).unwrap();
+                if let EffectExprKind::Operation(EffectOperation::RegionTuple(_)) = &node.kind {
+                    assert_ne!(node.ty, Type::Nominal(*hidden));
+                }
+                let EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::NewtypeConversion(conversion),
+                )) = &node.kind
+                else {
+                    return None;
+                };
+                assert_eq!(conversion.owner(), *hidden);
+                Some(conversion.direction())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(conversions.len(), 2);
+        assert!(conversions.contains(&ash::core::NewtypeConversionDirection::Wrap));
+        assert!(conversions.contains(&ash::core::NewtypeConversionDirection::Unwrap));
     }
 }
 
@@ -298,7 +502,7 @@ fn assert_surface_type_to_type(kind: &SurfaceKindKind) {
 }
 
 fn assert_higher_kinded_linked_core(
-    program: &ValidatedProgram,
+    program: &ValidatedEffectProgram,
     option: NominalTypeId,
     relay: BinderId,
     relay_parameter: TypeVariableId,
@@ -311,7 +515,9 @@ fn assert_higher_kinded_linked_core(
             .node(id)
             .expect("every linked Core child should belong to the validated arena");
         match &node.kind {
-            PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) => {
                 for member in group.members() {
                     if member.binder().id() == relay {
                         assert!(
@@ -321,13 +527,15 @@ fn assert_higher_kinded_linked_core(
                     }
                 }
             }
-            PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                application,
+            ))) => {
                 let function = program
                     .node(application.function())
                     .expect("the linked type application function should exist");
                 if matches!(
                     function.kind,
-                    PureExprKind::Variable(variable) if variable.binder() == relay
+                    EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == relay
                 ) {
                     assert!(
                         relay_instantiation.replace(id).is_none(),
@@ -335,9 +543,9 @@ fn assert_higher_kinded_linked_core(
                     );
                 }
             }
-            PureExprKind::Value(_)
-            | PureExprKind::Variable(_)
-            | PureExprKind::Computation(
+            EffectExprKind::Pure(PureExprKind::Value(_))
+            | EffectExprKind::Pure(PureExprKind::Variable(_))
+            | EffectExprKind::Pure(PureExprKind::Computation(
                 PureComputation::Bind(_)
                 | PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
@@ -346,7 +554,8 @@ fn assert_higher_kinded_linked_core(
                 | PureComputation::NewtypeConversion(_)
                 | PureComputation::LocalNominalScope(_)
                 | PureComputation::TypeAbstraction(_),
-            ) => {}
+            )) => {}
+            EffectExprKind::Operation(_) => {}
         }
         work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
     }
@@ -355,8 +564,9 @@ fn assert_higher_kinded_linked_core(
     let abstraction_node = program
         .node(abstraction_id)
         .expect("relay's linked initializer should exist");
-    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-        &abstraction_node.kind
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+        abstraction,
+    ))) = &abstraction_node.kind
     else {
         panic!("relay should retain an explicit outer type abstraction");
     };
@@ -380,8 +590,9 @@ fn assert_higher_kinded_linked_core(
     let instantiation_node = program
         .node(instantiation_id)
         .expect("relay's linked type application should exist");
-    let PureExprKind::Computation(PureComputation::TypeApplication(instantiation)) =
-        &instantiation_node.kind
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+        instantiation,
+    ))) = &instantiation_node.kind
     else {
         panic!("relay should be used through an explicit type application");
     };
@@ -391,8 +602,17 @@ fn assert_higher_kinded_linked_core(
     assert!(same_type(&function.ty, &abstraction_node.ty));
     assert_eq!(instantiation.arguments(), &[Type::Nominal(option)]);
     let option_int = Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int));
-    let substituted = Type::Function(Box::new(option_int.clone()), Box::new(option_int));
-    assert!(same_type(&instantiation_node.ty, &substituted));
+    let substituted = instantiation_node
+        .ty
+        .function_view()
+        .expect("relay retains its complete callable row");
+    assert_eq!(substituted.domain(), &option_int);
+    assert_eq!(substituted.value(), &option_int);
+    assert_eq!(
+        substituted.effects(),
+        scheme_body.function_view().unwrap().effects()
+    );
+    assert!(instantiation.row_arguments().is_empty());
 }
 
 fn assert_primitive_profile(
@@ -435,18 +655,15 @@ fn assert_primitive_profile(
 
 fn assert_integer_evaluation(program: &ValidatedProgram, expected: &str) {
     let evaluation = evaluate(program).expect("validated linked Core should erase and evaluate");
-    let Value::Integer(value) = evaluation.value else {
+    let Value::SmallInteger(value) = evaluation.value else {
         panic!("the transformed linked program should evaluate to an integer");
     };
-    assert_eq!(
-        value,
-        Integer::parse_decimal(expected).expect("the expected integer should parse"),
-    );
+    assert_eq!(value.to_string(), expected);
 }
 
 #[test]
 fn abstract_polymorphic_method_evidence_instantiates_at_retained_arguments() {
-    let program = validated_interface_core(concat!(
+    let (program, graph) = validated_interface_effect_with_graph(concat!(
         "interface Pairing<I> {\n",
         "pair<A, B> : (I, A, B) -> (A, B)\n",
         "}\n\n",
@@ -459,28 +676,54 @@ fn abstract_polymorphic_method_evidence_instantiates_at_retained_arguments() {
         "main () = use_pairing(42)\n",
     ));
 
-    let mut evidence_binder = None;
-    for id in reachable_nodes(&program) {
-        let node = program.node(id).expect("the reachable node should exist");
-        let PureExprKind::Value(PureValue::Function(function)) = &node.kind else {
-            continue;
-        };
-        if matches!(function.parameter().ty(), Type::Forall(parameters, _) if parameters.len() == 2)
-        {
-            assert!(
-                evidence_binder.replace(function.parameter().id()).is_none(),
-                "the constrained definition should expose one polymorphic evidence binder",
-            );
-        }
-    }
-    let evidence_binder =
-        evidence_binder.expect("the generated evidence domain should retain the method scheme");
+    let initializer = effect_source_initializer(&program, &graph, "use_pairing");
+    let Type::Forall(_, evidence_type) = &program.node(initializer).unwrap().ty else {
+        panic!("use_pairing should retain its outer scheme");
+    };
+    let evidence_domain = evidence_type
+        .function_view()
+        .expect("the source scheme should retain its complete evidence arrow")
+        .domain();
+    let Type::Forall(parameters, _) = evidence_domain else {
+        panic!("the evidence domain should retain its method scheme");
+    };
+    assert_eq!(
+        parameters
+            .iter()
+            .map(|(_, kind)| kind.clone())
+            .collect::<Vec<_>>(),
+        vec![Kind::Type, Kind::Type]
+    );
+    let closures = owned_effect_nodes(&program, initializer)
+        .into_iter()
+        .filter(|id| {
+            let node = program.node(*id).unwrap();
+            node.ty == **evidence_type
+                && matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+                )
+        })
+        .collect::<Vec<_>>();
+    let [closure] = closures.as_slice() else {
+        panic!("use_pairing should own one fulltyped evidence closure");
+    };
+    let mut parameters = Vec::new();
+    EffectOperationFamily::visit_operation_binders(
+        &program.node(*closure).unwrap().kind,
+        &mut |parameter| parameters.push((parameter.id(), parameter.ty().clone())),
+    );
+    let [(evidence_binder, parameter_type)] = parameters.as_slice() else {
+        panic!("the evidence closure should retain its sole parameter");
+    };
+    assert_eq!(parameter_type, evidence_domain);
+    let evidence_binder = *evidence_binder;
 
-    let applications = reachable_nodes(&program)
+    let applications = owned_effect_nodes(&program, initializer)
         .into_iter()
         .filter_map(|id| {
             let node = program.node(id)?;
-            let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
                 &node.kind
             else {
                 return None;
@@ -488,7 +731,7 @@ fn abstract_polymorphic_method_evidence_instantiates_at_retained_arguments() {
             let function = program.node(application.function())?;
             matches!(
                 function.kind,
-                PureExprKind::Variable(variable) if variable.binder() == evidence_binder
+                EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == evidence_binder
             )
             .then(|| application.arguments().to_vec())
         })
@@ -502,7 +745,7 @@ fn abstract_polymorphic_method_evidence_instantiates_at_retained_arguments() {
 
 #[test]
 fn complete_interface_application_authenticates_before_method_arguments() {
-    let (program, graph) = validated_interface_core_with_graph(concat!(
+    let (program, graph) = validated_interface_effect_with_graph(concat!(
         "type Option<A> =\nNone\n| Some(A)\n\n",
         "type Wrap<A> = Wrap(A)\n\n",
         "interface Combine<F : Type -> Type, Item> {\n",
@@ -517,27 +760,34 @@ fn complete_interface_application_authenticates_before_method_arguments() {
         "main () = use_combine((Some(Wrap(0)), Wrap(42)))\n",
     ));
 
-    assert_integer_evaluation(&program, "42");
+    assert_effect_integer_evaluation(&program, "42");
     let option = program
         .registry()
         .nominals()
         .iter()
-        .find(|nominal| nominal.spelling == "Option")
+        .find(|nominal| nominal.spelling == "Option" && nominal.id.module() == graph.entry())
         .expect("the higher-kinded interface argument should retain Option")
         .id;
     let mut aligned_adapter_application = None;
     let mut method_local_application = None;
-    for id in reachable_nodes(&program) {
+    for id in reachable_effect_nodes(&program) {
         let node = program
             .node(id)
             .expect("the reachable Core node should exist");
-        let PureExprKind::Computation(PureComputation::TypeApplication(application)) = &node.kind
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+            application,
+        ))) = &node.kind
         else {
             continue;
         };
         let function = program
             .node(application.function())
             .expect("the aligned method application function should exist");
+        assert!(application.row_arguments().is_empty());
+        if node.origin.primary_span().source() != graph.module(graph.entry()).unwrap().source().id()
+        {
+            continue;
+        }
         match application.arguments() {
             [
                 Type::Nominal(actual_option),
@@ -589,21 +839,21 @@ fn complete_interface_application_authenticates_before_method_arguments() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let identity = identity_traversal(&program)
+    let identity = identity_effect_traversal(&program)
         .expect("identity traversal should preserve the complete interface application");
-    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+    let identity = ash::core::validate_effect_modules(identity, &sources, &module_sources)
         .expect("identity traversal should independently revalidate complete authentication");
-    assert_integer_evaluation(&identity, "42");
-    let folded = fold_literal_primitives(&program)
+    assert_effect_integer_evaluation(&identity, "42");
+    let folded = fold_effect_literal_primitives(&program)
         .expect("literal folding should preserve the complete interface application");
-    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+    let folded = ash::core::validate_effect_modules(folded, &sources, &module_sources)
         .expect("literal folding should independently revalidate complete authentication");
-    assert_integer_evaluation(&folded, "42");
+    assert_effect_integer_evaluation(&folded, "42");
 }
 
 #[test]
 fn concrete_method_evidence_uses_one_generated_adapter() {
-    let program = validated_interface_core(concat!(
+    let (program, graph) = validated_interface_effect_with_graph(concat!(
         "type Wrap<A> = Wrap(A)\n\n",
         "interface Base<I> {\n",
         "base : I -> I\n",
@@ -621,76 +871,83 @@ fn concrete_method_evidence_uses_one_generated_adapter() {
         "main () = convert((Wrap(42), true))\n",
     ));
 
-    let mut recursive_initializers = HashSet::new();
-    for id in reachable_nodes(&program) {
-        let node = program.node(id).expect("the reachable node should exist");
-        if let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind {
-            recursive_initializers
-                .extend(group.members().iter().map(|member| member.initializer()));
-        }
-    }
-
-    let adapters = reachable_nodes(&program)
-        .into_iter()
-        .filter(|id| {
-            matches!(
-                &program.node(*id).expect("the reachable node should exist").kind,
-                PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))
-                    if abstraction.parameters().len() == 1 && !recursive_initializers.contains(id)
-            )
+    let resolved = resolve_with_dependencies(&graph, graph.module(graph.entry()).unwrap());
+    let implementation = resolved
+        .implementations()
+        .iter()
+        .find(|implementation| implementation.method_groups[0].binder.spelling == "convert")
+        .unwrap();
+    let method = implementation.method_groups[0].binder.id;
+    let prerequisite = resolved
+        .implementations()
+        .iter()
+        .find(|implementation| implementation.method_groups[0].binder.spelling == "base")
+        .unwrap()
+        .method_groups[0]
+        .binder
+        .id;
+    let adapters = effect_adapters(&program, effect_source_initializer(&program, &graph, "main")).into_iter().filter(|id| {
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) = &program.node(*id).unwrap().kind else { unreachable!() };
+        let [(parameter, Kind::Type)] = abstraction.parameters() else { return false };
+        owned_effect_nodes(&program, abstraction.body()).into_iter().any(|child| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(types))) = &program.node(child).unwrap().kind else { return false };
+            types.arguments() == [Type::Int, Type::Variable(*parameter)]
+                && matches!(program.node(types.function()).unwrap().kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == method)
         })
-        .collect::<Vec<_>>();
+    }).collect::<Vec<_>>();
     let [adapter] = adapters.as_slice() else {
-        panic!("the concrete method selection should create exactly one expression-local adapter");
+        panic!("the concrete selection should create exactly one expression-local adapter")
     };
-    let adapter_node = program.node(*adapter).expect("the adapter should exist");
-    let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-        &adapter_node.kind
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+        abstraction,
+    ))) = &program.node(*adapter).unwrap().kind
     else {
-        unreachable!("the selected adapter node is a type abstraction")
+        unreachable!()
     };
     let [(method_parameter, Kind::Type)] = abstraction.parameters() else {
-        panic!("the adapter should bind the one declared method parameter at its exact kind");
+        panic!("the method's one parameter retains its exact kind")
     };
-    let body = program
-        .node(abstraction.body())
-        .expect("the adapter body should exist");
-    let PureExprKind::Computation(PureComputation::Apply(prerequisite_application)) = &body.kind
+    let Type::Forall(adapter_parameters, adapter_result) = &program.node(*adapter).unwrap().ty
     else {
-        panic!("the adapter should apply prerequisite evidence after type instantiation");
+        panic!("the adapter retains its full scheme")
     };
-    let type_application = program
-        .node(prerequisite_application.function())
-        .expect("the adapter's type application should exist");
-    let PureExprKind::Computation(PureComputation::TypeApplication(type_application)) =
-        &type_application.kind
-    else {
-        panic!("the implementation method must be type-applied before prerequisites");
+    assert_eq!(adapter_parameters.as_ref(), abstraction.parameters());
+    let applications = owned_effect_nodes(&program, abstraction.body()).into_iter().filter_map(|id| {
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) = &program.node(id)?.kind else { return None };
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(types))) = &program.node(application.function())?.kind else { return None };
+        (matches!(program.node(types.function())?.kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == method)
+            && types.arguments() == [Type::Int, Type::Variable(*method_parameter)]
+            && &program.node(id)?.ty == adapter_result.as_ref())
+            .then_some((application, types))
+    }).collect::<Vec<_>>();
+    let [(application, types)] = applications.as_slice() else {
+        panic!("the owned adapter should apply its exact method before one prerequisite")
     };
     assert_eq!(
-        type_application.arguments(),
-        &[Type::Int, Type::Variable(*method_parameter)],
-        "implementation head arguments must precede the adapter's method arguments",
+        types.arguments(),
+        &[Type::Int, Type::Variable(*method_parameter)]
+    );
+    assert!(types.row_arguments().is_empty());
+    let argument = program.node(application.argument()).unwrap();
+    assert_eq!(
+        &argument.ty,
+        program
+            .node(application.function())
+            .unwrap()
+            .ty
+            .function_view()
+            .unwrap()
+            .domain()
     );
     assert!(matches!(
-        program
-            .node(type_application.function())
-            .expect("the original implementation-method occurrence should exist")
-            .kind,
-        PureExprKind::Variable(_)
-    ));
-    assert!(matches!(
-        program
-            .node(prerequisite_application.argument())
-            .expect("the prerequisite evidence occurrence should exist")
-            .kind,
-        PureExprKind::Variable(_)
+        program.node(application.argument()).unwrap().kind,
+        EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == prerequisite
     ));
 }
 
 #[test]
 fn polymorphic_method_domains_follow_declaration_order() {
-    let program = validated_interface_core(concat!(
+    let (program, graph) = validated_interface_effect_with_graph(concat!(
         "interface Ordered<I> {\n",
         "first<A> : (I, A) -> A\n",
         "second<A, B> : (I, A, B) -> B\n",
@@ -705,39 +962,31 @@ fn polymorphic_method_domains_follow_declaration_order() {
         "main () = use(42)\n",
     ));
 
-    let mut ordered_chain = None;
-    for id in reachable_nodes(&program) {
-        let Some(node) = program.node(id) else {
-            continue;
-        };
-        let PureExprKind::Value(PureValue::Function(first)) = &node.kind else {
-            continue;
-        };
-        let Type::Forall(first_parameters, _) = first.parameter().ty() else {
-            continue;
-        };
-        let Some(second_node) = program.node(first.body()) else {
-            continue;
-        };
-        let PureExprKind::Value(PureValue::Function(second)) = &second_node.kind else {
-            continue;
-        };
-        let Type::Forall(second_parameters, _) = second.parameter().ty() else {
-            continue;
-        };
-        if first_parameters.len() == 1 && second_parameters.len() == 2 {
-            assert!(ordered_chain.replace((id, first.body())).is_none());
-        }
-    }
-    assert!(
-        ordered_chain.is_some(),
-        "the two polymorphic domains must link in declaration order"
-    );
+    let initializer = effect_source_initializer(&program, &graph, "use");
+    let Type::Forall(_, first_type) = &program.node(initializer).unwrap().ty else {
+        panic!("use retains its quantified interface owner")
+    };
+    let first = first_type.function_view().unwrap();
+    let second_type = first.value();
+    let second = second_type.function_view().unwrap();
+    let Type::Forall(first_parameters, _) = first.domain() else {
+        panic!("the first domain retains its complete scheme")
+    };
+    let Type::Forall(second_parameters, _) = second.domain() else {
+        panic!("the second domain retains its complete scheme")
+    };
+    assert_eq!(first_parameters.len(), 1);
+    assert_eq!(second_parameters.len(), 2);
+    let (first_closure, first_binder) = owned_effect_parameter(&program, initializer, first_type);
+    let (second_closure, second_binder) =
+        owned_effect_parameter(&program, first_closure, second_type);
+    assert_ne!(first_closure, second_closure);
+    assert_ne!(first_binder, second_binder);
 }
 
 #[test]
 fn polymorphic_evidence_forwards_directly_between_matching_domains() {
-    let program = validated_interface_core(concat!(
+    let (program, graph) = validated_interface_effect_with_graph(concat!(
         "interface Forward<I> {\n",
         "forward<A> : (I, A) -> A\n",
         "}\n\n",
@@ -752,26 +1001,52 @@ fn polymorphic_evidence_forwards_directly_between_matching_domains() {
         "main () = outer(42)\n",
     ));
 
-    let direct_forwards = reachable_nodes(&program)
+    let outer = effect_source_initializer(&program, &graph, "outer");
+    let inner = effect_source_initializer(&program, &graph, "inner");
+    let Type::Forall(_, outer_type) = &program.node(outer).unwrap().ty else {
+        panic!("outer retains its full scheme")
+    };
+    let Type::Forall(_, inner_type) = &program.node(inner).unwrap().ty else {
+        panic!("inner retains its full scheme")
+    };
+    let (_, evidence) = owned_effect_parameter(&program, outer, outer_type);
+    let inner_binder = reachable_effect_nodes(&program)
         .into_iter()
-        .filter(|id| {
-            let Some(node) = program.node(*id) else { return false };
-            let PureExprKind::Computation(PureComputation::Apply(application)) = &node.kind else { return false };
-            let Some(function) = program.node(application.function()) else { return false };
-            let Some(argument) = program.node(application.argument()) else { return false };
-            matches!(function.ty, Type::Function(ref domain, _) if matches!(domain.as_ref(), Type::Forall(_, _)))
-                && matches!(argument.kind, PureExprKind::Variable(_))
+        .find_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &program.node(id)?.kind
+            else {
+                return None;
+            };
+            group
+                .members()
+                .iter()
+                .find(|member| member.initializer() == inner)
+                .map(|member| member.binder().id())
         })
-        .count();
+        .unwrap();
+    let direct_forwards = owned_effect_nodes(&program, outer).into_iter().filter(|id| {
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) = &program.node(*id).unwrap().kind else { return false };
+        let function = program.node(application.function()).unwrap();
+        let Some(callable) = function.ty.function_view() else { return false };
+        if !matches!(callable.domain(), Type::Forall(_, _)) || !matches!(program.node(application.argument()).unwrap().kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == evidence) { return false; }
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(types))) = &function.kind else { return false };
+        matches!(program.node(types.function()).unwrap().kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == inner_binder)
+    }).count();
+    assert!(matches!(
+        inner_type.function_view().unwrap().domain(),
+        Type::Forall(_, _)
+    ));
     assert_eq!(
         direct_forwards, 1,
-        "forwarding must supply the matching evidence variable directly once"
+        "forwarding supplies the exact outer evidence directly to inner once"
     );
 }
 
 #[test]
 fn exact_current_polymorphic_adapter_reuses_abstract_prerequisites() {
-    let program = validated_interface_core(concat!(
+    let (program, graph) = validated_interface_effect_with_graph(concat!(
         "type Option<A> =\nNone\n| Some(A)\n\n",
         "interface Score<A> {\n",
         "score<X> : (A, X) -> Int\n",
@@ -790,37 +1065,51 @@ fn exact_current_polymorphic_adapter_reuses_abstract_prerequisites() {
         "main () = score((Some(2), true))\n",
     ));
 
-    let abstract_prerequisite_adapters = reachable_nodes(&program)
+    let resolved = resolve_with_dependencies(&graph, graph.module(graph.entry()).unwrap());
+    let implementation = resolved
+        .implementations()
+        .iter()
+        .find(|implementation| !implementation.head_parameters.is_empty())
+        .unwrap();
+    let method = implementation.method_groups[0].binder.id;
+    let initializer = reachable_effect_nodes(&program)
         .into_iter()
-        .filter(|id| {
-            let Some(node) = program.node(*id) else {
-                return false;
-            };
-            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-                &node.kind
+        .find_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &program.node(id)?.kind
             else {
-                return false;
+                return None;
             };
-            let Some(body) = program.node(abstraction.body()) else {
-                return false;
-            };
-            let PureExprKind::Computation(PureComputation::Apply(application)) = &body.kind else {
-                return false;
-            };
-            program
-                .node(application.argument())
-                .is_some_and(|argument| matches!(argument.kind, PureExprKind::Variable(_)))
+            group
+                .members()
+                .iter()
+                .find(|member| member.binder().id() == method)
+                .map(|member| member.initializer())
         })
-        .count();
+        .unwrap();
+    let Type::Forall(_, evidence_type) = &program.node(initializer).unwrap().ty else {
+        panic!("the implementation retains its generic head and method parameters")
+    };
+    let (_, prerequisite) = owned_effect_parameter(&program, initializer, evidence_type);
+    let abstract_prerequisite_adapters = effect_adapters(&program, initializer).into_iter().filter(|adapter| {
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) = &program.node(*adapter).unwrap().kind else { unreachable!() };
+        owned_effect_nodes(&program, abstraction.body()).into_iter().any(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) = &program.node(id).unwrap().kind else { return false };
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(types))) = &program.node(application.function()).unwrap().kind else { return false };
+            matches!(program.node(types.function()).unwrap().kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == method)
+                && matches!(program.node(application.argument()).unwrap().kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == prerequisite)
+        })
+    }).count();
     assert!(
         abstract_prerequisite_adapters >= 1,
-        "the exact-current adapter must reuse its active abstract prerequisite"
+        "the exact-current adapter reuses its active abstract prerequisite"
     );
 }
 
 #[test]
 fn nested_same_implementation_selections_keep_distinct_polymorphic_adapters() {
-    let (program, graph) = validated_interface_core_with_graph(concat!(
+    let (program, graph) = validated_interface_effect_with_graph(concat!(
         "type Option<A> =\nNone\n| Some(A)\n\n",
         "interface Score<A> {\n",
         "score<X> : (A, X) -> Int\n",
@@ -839,73 +1128,86 @@ fn nested_same_implementation_selections_keep_distinct_polymorphic_adapters() {
         "main () = score((Some(Some(2)), true))\n",
     ));
 
-    let recursive_initializers = reachable_nodes(&program)
-        .into_iter()
-        .filter_map(|id| {
-            let node = program.node(id)?;
-            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
-            else {
-                return None;
-            };
-            Some(
-                group
-                    .members()
-                    .iter()
-                    .map(|member| member.initializer())
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .flatten()
-        .collect::<HashSet<_>>();
+    let resolved = resolve_with_dependencies(&graph, graph.module(graph.entry()).unwrap());
+    let implementation = resolved
+        .implementations()
+        .iter()
+        .find(|implementation| !implementation.head_parameters.is_empty())
+        .unwrap();
+    let method = implementation.method_groups[0].binder.id;
     let mut adapter_heads = Vec::new();
-    for id in reachable_nodes(&program) {
-        if recursive_initializers.contains(&id) {
-            continue;
-        }
-        let Some(node) = program.node(id) else {
-            continue;
-        };
-        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &node.kind
+    let main = effect_source_initializer(&program, &graph, "main");
+    for adapter in effect_adapters(&program, main) {
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+            abstraction,
+        ))) = &program.node(adapter).unwrap().kind
         else {
+            unreachable!()
+        };
+        let [(parameter, Kind::Type)] = abstraction.parameters() else {
             continue;
         };
-        let mut current = abstraction.body();
-        while let Some(node) = program.node(current) {
-            match &node.kind {
-                PureExprKind::Computation(PureComputation::Apply(application)) => {
-                    current = application.function();
-                }
-                PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
-                    if let Some(head) = application
-                        .arguments()
-                        .first()
-                        .filter(|head| !matches!(head, Type::Variable(_)))
-                        && let Some(function) = program.node(application.function())
-                        && let PureExprKind::Variable(variable) = &function.kind
-                    {
-                        adapter_heads.push((variable.binder(), head.clone()));
-                    }
-                    break;
-                }
-                _ => break,
-            }
+        let Type::Forall(parameters, body) = &program.node(adapter).unwrap().ty else {
+            panic!("an adapter retains its complete scheme")
+        };
+        assert_eq!(parameters.as_ref(), abstraction.parameters());
+        let pairs = owned_effect_nodes(&program, abstraction.body()).into_iter().filter_map(|id| {
+            let node = program.node(id)?;
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) = &node.kind else { return None };
+            let types_node = program.node(application.function())?;
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(types))) = &types_node.kind else { return None };
+            let [head, Type::Variable(method_parameter)] = types.arguments() else { return None };
+            if method_parameter != parameter || matches!(head, Type::Variable(_)) || &node.ty != body.as_ref()
+                || !matches!(program.node(types.function())?.kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == method) { return None; }
+            assert!(types.row_arguments().is_empty());
+            let argument = program.node(application.argument()).unwrap();
+            let Type::Forall(actual_parameters, actual_body) = &argument.ty else { panic!("the prerequisite retains its complete method scheme") };
+            let Type::Forall(expected_parameters, expected_body) = types_node.ty.function_view().unwrap().domain() else { panic!("the method requires its complete prerequisite scheme") };
+            assert_eq!(actual_parameters.len(), expected_parameters.len());
+            let [(actual_parameter, Kind::Type)] = actual_parameters.as_ref() else { panic!("the adapter prerequisite has one ordinary type binder") };
+            let [(expected_parameter, Kind::Type)] = expected_parameters.as_ref() else { panic!("the required prerequisite has one ordinary type binder") };
+            let Type::EffectfulFunction(actual_domain, actual_result) = actual_body.as_ref() else { panic!("the stored prerequisite keeps its full effectful arrow") };
+            let Type::EffectfulFunction(expected_domain, expected_result) = expected_body.as_ref() else { panic!("the required prerequisite keeps its full effectful arrow") };
+            let Type::Tuple(actual_fields) = actual_domain.as_ref() else { panic!("the prerequisite domain is the original pair") };
+            let Type::Tuple(expected_fields) = expected_domain.as_ref() else { panic!("the required domain is the original pair") };
+            let [actual_head, Type::Variable(actual_use)] = actual_fields.as_ref() else { panic!("the adapter pair uses its bound method parameter") };
+            let [expected_head, Type::Variable(expected_use)] = expected_fields.as_ref() else { panic!("the required pair uses its bound method parameter") };
+            assert_eq!(actual_use, actual_parameter);
+            assert_eq!(expected_use, expected_parameter);
+            assert_eq!(actual_head, expected_head);
+            assert_eq!(actual_result, expected_result, "complete result type and latent effects are retained");
+            Some((head.clone(), application.argument()))
+        }).collect::<Vec<_>>();
+        if pairs.is_empty() {
+            continue;
         }
+        let [(head, prerequisite)] = pairs.as_slice() else {
+            panic!("each adapter owns one exact prerequisite application")
+        };
+        adapter_heads.push((adapter, method, head.clone(), *prerequisite));
     }
     assert_eq!(
         adapter_heads.len(),
         2,
         "both selected evidence nodes need adapters"
     );
+    assert_ne!(adapter_heads[0].0, adapter_heads[1].0);
+    assert_eq!(adapter_heads[0].1, adapter_heads[1].1);
     assert!(
-        adapter_heads[0].0 == adapter_heads[1].0,
-        "both adapters must apply the same implementation method binder",
+        !same_type(&adapter_heads[0].2, &adapter_heads[1].2),
+        "the same implementation retains distinct head substitutions"
     );
-    assert!(
-        !same_type(&adapter_heads[0].1, &adapter_heads[1].1),
-        "the same implementation identity must retain distinct head substitutions",
+    assert_eq!(
+        adapter_heads
+            .iter()
+            .filter(|adapter| adapter_heads
+                .iter()
+                .any(|other| adapter.0 != other.0 && adapter.3 == other.0))
+            .count(),
+        1,
+        "the outer adapter receives exactly the inner selected adapter"
     );
-    assert_integer_evaluation(&program, "82");
-
+    assert_effect_integer_evaluation(&program, "82");
     let sources = graph
         .modules()
         .iter()
@@ -916,14 +1218,122 @@ fn nested_same_implementation_selections_keep_distinct_polymorphic_adapters() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let identity = identity_traversal(&program).expect("identity must preserve both adapters");
-    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
-        .expect("identity output must freshly validate both adapters");
-    assert_integer_evaluation(&identity, "82");
-    let folded = fold_literal_primitives(&program).expect("folding must preserve both adapters");
-    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
-        .expect("fold output must freshly validate both adapters");
-    assert_integer_evaluation(&folded, "82");
+    let identity = identity_effect_traversal(&program).expect("identity preserves both adapters");
+    let identity = ash::core::validate_effect_modules(identity, &sources, &module_sources)
+        .expect("identity freshly validates both adapters");
+    assert_effect_integer_evaluation(&identity, "82");
+    let folded = fold_effect_literal_primitives(&program).expect("folding preserves both adapters");
+    let folded = ash::core::validate_effect_modules(folded, &sources, &module_sources)
+        .expect("fold output freshly validates both adapters");
+    assert_effect_integer_evaluation(&folded, "82");
+}
+
+fn arithmetic_span(source: &SourceFile) -> Span {
+    let occurrences = source.text().match_indices("40 + 2").collect::<Vec<_>>();
+    let [(start, text)] = occurrences.as_slice() else {
+        panic!("the original source owns one arithmetic expression")
+    };
+    source
+        .span(ByteRange::new(*start as u32, (start + text.len()) as u32).unwrap())
+        .unwrap()
+}
+
+fn assert_source_arithmetic(program: &ValidatedEffectProgram, graph: &ModuleGraph, span: Span) {
+    let arithmetic = reachable_effect_nodes(program)
+        .into_iter()
+        .filter(|id| {
+            let node = program.node(*id).unwrap();
+            node.origin.primary_span() == span
+                && matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::RegionBuffer(_))
+                )
+        })
+        .collect::<Vec<_>>();
+    let [arithmetic] = arithmetic.as_slice() else {
+        panic!("the exact source arithmetic retains one allocating buffer operation")
+    };
+    let node = program.node(*arithmetic).unwrap();
+    assert_eq!(node.ty, Type::Int);
+    let region = module_named(graph, "@compiler.region");
+    let checked = check_module(resolve_with_dependencies(graph, region)).unwrap();
+    let effects = checked
+        .effects()
+        .iter()
+        .filter(|effect| effect.spelling == "DefaultAlloc")
+        .collect::<Vec<_>>();
+    let [effect] = effects.as_slice() else {
+        panic!("the defining allocation effect is unique")
+    };
+    assert_eq!(effect.id.module(), region.id());
+    assert_eq!(
+        node.effects(),
+        &ash::types::EffectRow::singleton(ash::types::EffectInstance::new(effect.id, Box::new([])))
+    );
+    let operands = (0..node.kind.child_count())
+        .filter_map(|index| node.kind.child_at(index))
+        .filter_map(|id| {
+            let child = program.node(id).unwrap();
+            let EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer))) =
+                &child.kind
+            else {
+                return None;
+            };
+            assert_eq!(child.ty, Type::Int);
+            Some(integer.value().to_string())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        operands
+            .iter()
+            .filter(|value| value.as_str() == "40")
+            .count(),
+        1
+    );
+    assert_eq!(
+        operands
+            .iter()
+            .filter(|value| value.as_str() == "2")
+            .count(),
+        1
+    );
+}
+
+fn assert_pure_arithmetic_folding(source: &SourceFile, span: Span) {
+    let origin = Origin::Source(span);
+    let mut builder = CoreBuilder::new();
+    let left = builder
+        .integer(integer("40"), Type::Int, origin.clone())
+        .unwrap();
+    let right = builder
+        .integer(integer("2"), Type::Int, origin.clone())
+        .unwrap();
+    let sum = builder
+        .primitive(Primitive::Add, left, right, Type::Int, origin)
+        .unwrap();
+    let original = validate(builder.finish(sum).unwrap(), &[source]).unwrap();
+    assert_primitive_profile(&original, 1, 0);
+    assert_integer_evaluation(&original, "42");
+    let identity = identity_traversal(&original).unwrap();
+    let identity = validate(identity, &[source]).unwrap();
+    assert_primitive_profile(&identity, 1, 0);
+    assert_integer_evaluation(&identity, "42");
+    let folded = fold_literal_primitives(&original).unwrap();
+    let folded = validate(folded, &[source]).unwrap();
+    assert_primitive_profile(&folded, 0, 1);
+    assert_eq!(
+        folded.node(folded.root()).unwrap().origin.primary_span(),
+        span
+    );
+    assert_eq!(
+        folded
+            .node(folded.root())
+            .unwrap()
+            .origin
+            .generated_reason(),
+        Some(GeneratedReason::ConstantFolding)
+    );
+    assert_integer_evaluation(&folded, "42");
 }
 
 #[test]
@@ -972,8 +1382,8 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
             .kind,
     );
 
-    let resolved_dependency = resolve_module(dependency, &[])
-        .expect("the dependency should resolve and kind-check without imports");
+    let dependency_prefix = checked_before(&graph, dependency);
+    let resolved_dependency = resolve_with_dependencies(&graph, dependency);
     let option = resolved_dependency
         .registry()
         .nominals()
@@ -1068,12 +1478,32 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
 
     let dependency_summary = checked_dependency.into_exports();
     let entry_module = module_named(&graph, "entry.ash");
-    let [entry_edge] = entry_module.dependencies() else {
-        panic!("the entry should have one direct dependency");
+    let source_edges = entry_module
+        .dependencies()
+        .iter()
+        .filter(|edge| edge.target() == dependency.id())
+        .collect::<Vec<_>>();
+    let [entry_edge] = source_edges.as_slice() else {
+        panic!("the entry should have one direct source dependency edge");
     };
-    let detached_dependency = DependencyExports::new(entry_edge, &dependency_summary)
-        .expect("the detached summary should authenticate its import edge");
-    let resolved_entry = resolve_module(entry_module, &[detached_dependency])
+    let detached_dependencies = entry_module
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            let summary = if edge.target() == entry_edge.target() {
+                &dependency_summary
+            } else {
+                dependency_prefix
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .expect("the service dependency should precede the defining source")
+                    .exports()
+            };
+            DependencyExports::new(edge, summary)
+                .expect("each actual edge should authenticate its own detached summary")
+        })
+        .collect::<Vec<_>>();
+    let resolved_entry = resolve_module(entry_module, &detached_dependencies)
         .expect("the entry should resolve and kind-check solely from the detached summary");
     let imported = resolved_entry.imported_facts();
     let imported_option = imported
@@ -1198,13 +1628,13 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     );
     drop(dependency_summary);
 
-    let rechecked_dependency = check_module(
-        resolve_module(dependency, &[])
-            .expect("the dependency should be re-resolved only to recover linkable bodies"),
-    )
-    .expect("the dependency bodies should recheck for final linking");
-    let linked = link_modules(vec![rechecked_dependency, checked_entry], graph.entry())
-        .expect("the checked higher-kinded graph should link");
+    let rechecked_dependency = check_module(resolve_with_dependencies(&graph, dependency))
+        .expect("the dependency bodies should recheck for final linking");
+    let mut linkable = dependency_prefix;
+    linkable.push(rechecked_dependency);
+    linkable.push(checked_entry);
+    let linked =
+        link_modules(linkable, graph.entry()).expect("the checked higher-kinded graph should link");
     let linked = validate_interface_evidence(linked)
         .expect("linked higher-kinded evidence should authenticate");
     let dependency_group = linked
@@ -1221,10 +1651,10 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     };
     assert_eq!(linked_implementation.id, implementation);
     assert_eq!(linked_implementation.interface(), observe);
-    let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the linked binder namespace should fit");
+    let mut elaborator = EffectElaborator::for_module_program(&linked)
+        .expect("the linked binder namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("authenticated linked kinds should lower to Core");
     assert_eq!(typed.ty, Type::Int);
     let unchecked = elaborator
@@ -1240,40 +1670,40 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let original = ash::core::validate_modules(unchecked, &sources, &module_sources)
+    let original = ash::core::validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("linked higher-kinded Core should independently validate");
+    let arithmetic_span = arithmetic_span(dependency.source());
+    assert_pure_arithmetic_folding(dependency.source(), arithmetic_span);
     let original_registry = Arc::clone(original.registry());
     assert_higher_kinded_linked_core(&original, option, relay, relay_parameter);
-    assert_primitive_profile(&original, 1, 0);
-    assert_integer_evaluation(&original, "42");
-    let identity = identity_traversal(&original).expect("the identity transform should rebuild");
-    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+    assert_source_arithmetic(&original, &graph, arithmetic_span);
+    assert_effect_integer_evaluation(&original, "42");
+    let identity =
+        identity_effect_traversal(&original).expect("the identity transform should rebuild");
+    let identity = ash::core::validate_effect_modules(identity, &sources, &module_sources)
         .expect("the identity transform should independently revalidate");
     assert!(Arc::ptr_eq(identity.registry(), &original_registry));
     assert_higher_kinded_linked_core(&identity, option, relay, relay_parameter);
-    assert_primitive_profile(&identity, 1, 0);
-    assert_integer_evaluation(&identity, "42");
-    let folded =
-        fold_literal_primitives(&original).expect("literal folding should independently rebuild");
-    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+    assert_source_arithmetic(&identity, &graph, arithmetic_span);
+    assert_effect_integer_evaluation(&identity, "42");
+    let folded = fold_effect_literal_primitives(&original)
+        .expect("literal folding should independently rebuild");
+    let folded = ash::core::validate_effect_modules(folded, &sources, &module_sources)
         .expect("literal folding should independently revalidate");
     assert!(Arc::ptr_eq(folded.registry(), &original_registry));
     assert_higher_kinded_linked_core(&folded, option, relay, relay_parameter);
-    assert_primitive_profile(&folded, 0, 1);
-    assert_integer_evaluation(&folded, "42");
+    assert_source_arithmetic(&folded, &graph, arithmetic_span);
+    assert_effect_integer_evaluation(&folded, "42");
 
     let observation = run_path(RunConfiguration {
         entry: entry.clone(),
         roots: ModuleRoots::empty(),
     })
     .expect("the static linked product should run through the public library path");
-    let Value::Integer(value) = observation.value() else {
+    let Value::SmallInteger(value) = observation.value() else {
         panic!("the public library path should observe an integer");
     };
-    assert_eq!(
-        value,
-        &Integer::parse_decimal("42").expect("42 should parse")
-    );
+    assert_eq!(value.to_string(), "42");
     assert_eq!(observation.ty(), &Type::Int);
 
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
@@ -1561,10 +1991,10 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
         link_modules(checked, graph.entry()).expect("the checked relational diamond should link");
     let linked = validate_interface_evidence(linked)
         .expect("the complete relational applications and routes should authenticate");
-    let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the relational namespace should reserve");
+    let mut elaborator = EffectElaborator::for_module_program(&linked)
+        .expect("the relational namespace should reserve");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("the authenticated relational program should lower");
     assert_eq!(typed.ty, Type::Int);
     let unchecked = elaborator
@@ -1580,23 +2010,26 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let original = ash::core::validate_modules(unchecked, &sources, &module_sources)
+    let original = ash::core::validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("relational Core should independently validate");
+    let arithmetic_span = arithmetic_span(base_module.source());
+    assert_pure_arithmetic_folding(base_module.source(), arithmetic_span);
     let implementation_method_binder =
         implementation_method_binder.expect("the implementation binder should be retained");
-    let adapter_applications = reachable_nodes(&original)
+    let adapter_applications = reachable_effect_nodes(&original)
         .into_iter()
         .filter_map(|node| {
             let payload = original.node(node)?;
-            let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
-                &payload.kind
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                application,
+            ))) = &payload.kind
             else {
                 return None;
             };
             let function = original.node(application.function())?;
             matches!(
                 function.kind,
-                PureExprKind::Variable(variable)
+                EffectExprKind::Pure(PureExprKind::Variable(variable))
                     if variable.binder() == implementation_method_binder
             )
             .then_some((node, application.arguments()))
@@ -1608,31 +2041,32 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
     let [Type::Int, Type::Variable(method_argument)] = adapter_arguments else {
         panic!("the implementation-head argument must precede the method-local argument");
     };
-    assert!(reachable_nodes(&original).into_iter().any(|node| {
+    assert!(reachable_effect_nodes(&original).into_iter().any(|node| {
         matches!(
             &original
                 .node(node)
                 .expect("the adapter abstraction should remain reachable")
                 .kind,
-            PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)))
                 if abstraction.body() == *adapter_application
                     && abstraction.parameters() == [(*method_argument, Kind::Type)]
         )
     }));
-    assert_primitive_profile(&original, 1, 0);
-    assert_integer_evaluation(&original, "42");
+    assert_source_arithmetic(&original, &graph, arithmetic_span);
+    assert_effect_integer_evaluation(&original, "42");
 
-    let identity = identity_traversal(&original)
+    let identity = identity_effect_traversal(&original)
         .expect("the identity transform should rebuild relational Core");
-    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+    let identity = ash::core::validate_effect_modules(identity, &sources, &module_sources)
         .expect("identity-transformed relational Core should independently revalidate");
-    assert_integer_evaluation(&identity, "42");
-    let folded =
-        fold_literal_primitives(&original).expect("literal folding should rebuild relational Core");
-    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+    assert_source_arithmetic(&identity, &graph, arithmetic_span);
+    assert_effect_integer_evaluation(&identity, "42");
+    let folded = fold_effect_literal_primitives(&original)
+        .expect("literal folding should rebuild relational Core");
+    let folded = ash::core::validate_effect_modules(folded, &sources, &module_sources)
         .expect("folded relational Core should independently revalidate");
-    assert_primitive_profile(&folded, 0, 1);
-    assert_integer_evaluation(&folded, "42");
+    assert_source_arithmetic(&folded, &graph, arithmetic_span);
+    assert_effect_integer_evaluation(&folded, "42");
 
     let observation = run_path(RunConfiguration {
         entry,
@@ -1642,8 +2076,8 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
     assert_eq!(observation.ty(), &Type::Int);
     assert!(matches!(
         observation.value(),
-        Value::Integer(value)
-            if value == &Integer::parse_decimal("42").expect("42 should parse")
+        Value::SmallInteger(value)
+            if value.to_string() == "42"
     ));
 }
 

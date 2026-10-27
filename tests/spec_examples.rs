@@ -6,15 +6,15 @@ use std::{
 };
 
 use ash::{
-    core::{PureComputation, PureExprKind, validate_modules},
+    core::{EffectExprKind, PureComputation, PureExprKind, validate_effect_modules},
     driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
-    elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
+    elaborate::{EffectElaborator, TypeError, TypeReason, check_module, link_modules},
     evidence_validation::validate_interface_evidence,
     interface::InterfaceReason,
     kind::{KindExpectation, KindFailure, KindReason},
     lexer::LexReason,
     module::{LoadGraphError, ModuleRoots, load_module_graph},
-    resolve::{ResolveReason, resolve_module},
+    resolve::{DependencyExports, ResolveReason, resolve_module},
     resolved::ResolvedDefinitionKind,
     types::{Kind, Type},
 };
@@ -767,6 +767,36 @@ fn assert_normative_fragment(path: &str, fragment: &str) {
     );
 }
 
+fn resolve_entry_with_prefix(
+    graph: &ash::module::ModuleGraph,
+) -> (
+    ash::resolved::ResolvedModule,
+    Vec<ash::resolved::CheckedModule>,
+) {
+    let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let target = checked
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("dependencies precede their importer");
+                DependencyExports::new(edge, target.exports())
+                    .expect("the target summary authenticates its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("the documented module resolves");
+        if module.id() == graph.entry() {
+            return (resolved, checked);
+        }
+        checked.push(check_module(resolved).expect("documented dependencies check"));
+    }
+    panic!("the graph retains its entry");
+}
+
 fn source_kind_error(name: &str, text: &str) -> Box<ash::kind::KindError> {
     let failure = run(name, text).expect_err("the documented kind rejection should fail");
     let PipelineFailure::Kind(KindFailure::Source(error)) = failure else {
@@ -1250,8 +1280,7 @@ fn resolution_binder_policies_are_executable_and_ordered() {
     let source = TempFile::write_named("binder-policy.ash", BINDER_POLICY_MODULE);
     let graph = load_module_graph(source.path(), &ModuleRoots::empty())
         .expect("the documented binder-policy module should load");
-    let resolved = resolve_module(&graph.modules()[0], &[])
-        .expect("the documented binder-policy module should resolve");
+    let (resolved, _) = resolve_entry_with_prefix(&graph);
 
     let phantom = resolved
         .registry()
@@ -1684,8 +1713,24 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
     let source = TempFile::write_named("core-kinds.ash", CORE_KIND_MODULE);
     let graph = load_module_graph(source.path(), &ModuleRoots::empty())
         .expect("the documented Core kind module should load");
-    let resolved = resolve_module(&graph.modules()[0], &[])
-        .expect("the documented Core kind module should resolve");
+    let (resolved, mut checked) = resolve_entry_with_prefix(&graph);
+    let service = checked
+        .iter()
+        .find(|checked| {
+            graph
+                .module(checked.module())
+                .unwrap()
+                .source()
+                .display_path()
+                == "@compiler.region"
+        })
+        .unwrap();
+    let [allocation] = service.effects() else {
+        panic!("the canonical service defines one allocation effect");
+    };
+    assert_eq!(allocation.spelling, "DefaultAlloc");
+    assert!(allocation.parameters.is_empty());
+    let allocation_id = allocation.id;
     let option = resolved
         .registry()
         .nominals()
@@ -1717,15 +1762,15 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
     let f = f_parameter.id;
     let a = a_parameter.id;
 
-    let checked = check_module(resolved).expect("the documented Core kind module should check");
-    let linked = link_modules(vec![checked], graph.entry())
-        .expect("the documented Core kind module should link");
+    checked.push(check_module(resolved).expect("the documented Core kind module should check"));
+    let linked =
+        link_modules(checked, graph.entry()).expect("the documented Core kind module should link");
     let linked = validate_interface_evidence(linked)
         .expect("the documented Core kind module should authenticate evidence");
-    let mut elaborator = Elaborator::for_module_program(&linked)
+    let mut elaborator = EffectElaborator::for_module_program(&linked)
         .expect("the documented Core kind module should establish its binder namespace");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("the documented Core kind module should synthesize Core");
     let unchecked = elaborator
         .finish(typed.node)
@@ -1740,7 +1785,7 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let validated = validate_modules(unchecked, &sources, &module_sources)
+    let validated = validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("the documented Core kind module should independently validate");
 
     let mut work = vec![validated.root()];
@@ -1751,7 +1796,9 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
             .node(id)
             .expect("every documented Core child should exist");
         match &node.kind {
-            PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) => {
                 for member in group.members() {
                     if member.binder().id() == keep_binder {
                         assert!(
@@ -1761,13 +1808,15 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
                     }
                 }
             }
-            PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                application,
+            ))) => {
                 let function = validated
                     .node(application.function())
                     .expect("the Core type-application function should exist");
                 if matches!(
                     function.kind,
-                    PureExprKind::Variable(variable) if variable.binder() == keep_binder
+                    EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == keep_binder
                 ) {
                     assert!(
                         simultaneous_arguments
@@ -1777,18 +1826,7 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
                     );
                 }
             }
-            PureExprKind::Value(_)
-            | PureExprKind::Variable(_)
-            | PureExprKind::Computation(
-                PureComputation::Bind(_)
-                | PureComputation::Apply(_)
-                | PureComputation::Primitive(_)
-                | PureComputation::Tuple(_)
-                | PureComputation::Match(_)
-                | PureComputation::NewtypeConversion(_)
-                | PureComputation::LocalNominalScope(_)
-                | PureComputation::TypeAbstraction(_),
-            ) => {}
+            _ => {}
         }
         work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
     }
@@ -1796,8 +1834,9 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
     let abstraction = validated
         .node(abstraction_id.expect("keep should retain its Core abstraction"))
         .expect("keep's Core abstraction should exist");
-    let PureExprKind::Computation(PureComputation::TypeAbstraction(type_abstraction)) =
-        &abstraction.kind
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+        type_abstraction,
+    ))) = &abstraction.kind
     else {
         panic!("keep's initializer should be one Core type abstraction")
     };
@@ -1810,10 +1849,20 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
     };
     assert_eq!(scheme_parameters.as_ref(), type_abstraction.parameters());
     let applied = Type::Application(Box::new(Type::Variable(f)), Box::new(Type::Variable(a)));
-    assert_eq!(
-        scheme_body.as_ref(),
-        &Type::Function(Box::new(applied.clone()), Box::new(applied)),
-    );
+    let function = scheme_body
+        .function_view()
+        .expect("the full quantified body remains callable");
+    assert_eq!(function.domain(), &applied);
+    assert_eq!(function.value(), &applied);
+    let row = function
+        .effects()
+        .expect("the Source arrow retains allocation");
+    let [allocation] = row.known() else {
+        panic!("the exact latent row is the canonical singleton");
+    };
+    assert!(row.tail().is_none());
+    assert_eq!(allocation.effect(), allocation_id);
+    assert!(allocation.arguments().is_empty());
     assert_eq!(
         simultaneous_arguments.expect("keep should be instantiated"),
         [Type::Nominal(option), Type::Int],
@@ -2001,7 +2050,7 @@ fn tool_function_result_uses_opaque_rendering() {
         .expect("the documented executable should start");
 
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"<function> : Int -> Int\n");
+    assert_eq!(output.stdout, b"<function> : Int -> Int ! {DefaultAlloc}\n");
     assert!(output.stderr.is_empty());
     assert_documented("docs/tools/ash.md", FUNCTION_RESULT_MODULE);
 }

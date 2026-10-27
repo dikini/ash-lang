@@ -10,7 +10,7 @@ pub struct FunctionNode {
 }
 
 impl FunctionNode {
-    pub(super) const fn new(parameter: TypedBinder, body: NodeId) -> Self {
+    pub(crate) const fn new(parameter: TypedBinder, body: NodeId) -> Self {
         Self { parameter, body }
     }
 

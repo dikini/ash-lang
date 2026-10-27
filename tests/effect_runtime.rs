@@ -1,8 +1,8 @@
 use ash::{
     core::{
         CoreMatchArm, CorePattern, CorePatternKind, EffectClause, EffectCoreBuilder,
-        EffectExprKind, HandlerId, Primitive, PureComputation, PureExprKind, ResumeUse,
-        ValidatedEffectProgram, validate_effect_modules,
+        EffectExprKind, EffectOperation, HandlerId, Primitive, PureComputation, PureExprKind,
+        ResumeUse, ValidatedEffectProgram, validate_effect_modules,
     },
     elaborate::{EffectElaborator, check_module, link_modules},
     eval::{EffectTraceEvent, evaluate_effect},
@@ -12,9 +12,12 @@ use ash::{
     resolve::{DependencyExports, resolve_module},
     resolved::{CheckedModule, ResumeId},
     source::{ByteRange, Origin, SourceFile},
-    types::{EffectInstance, EffectRow, Type},
+    types::{EffectId, EffectInstance, EffectRow, OperationId, Type},
 };
-use std::path::Path;
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 fn check_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
     let mut checked = Vec::new();
@@ -38,9 +41,58 @@ fn check_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
     checked
 }
 
+struct TraceOperations {
+    allocation_effect: EffectId,
+    allocation: Vec<OperationId>,
+    source: Vec<OperationId>,
+}
+
 fn effect_program(path: &Path) -> ValidatedEffectProgram {
+    effect_program_with_trace_operations(path).0
+}
+
+fn effect_program_with_trace_operations(path: &Path) -> (ValidatedEffectProgram, TraceOperations) {
     let graph = load_module_graph(path, &ModuleRoots::empty()).expect("fixture should load");
-    let linked = link_modules(check_graph(&graph), graph.entry()).expect("fixture should link");
+    let checked = check_graph(&graph);
+    let defining = checked
+        .iter()
+        .find(|module| {
+            graph
+                .module(module.module())
+                .unwrap()
+                .source()
+                .display_path()
+                == "@compiler.region"
+        })
+        .expect("the actual compiler service remains checked");
+    let effects = defining
+        .effects()
+        .iter()
+        .filter(|effect| effect.spelling == "DefaultAlloc")
+        .collect::<Vec<_>>();
+    let [allocation] = effects.as_slice() else {
+        panic!("the defining service declares one DefaultAlloc");
+    };
+    assert_eq!(allocation.id.module(), defining.module());
+    assert!(allocation.parameters.is_empty());
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .unwrap();
+    let operations = TraceOperations {
+        allocation_effect: allocation.id,
+        allocation: allocation
+            .operations
+            .iter()
+            .map(|operation| operation.id)
+            .collect(),
+        source: entry
+            .effects()
+            .iter()
+            .flat_map(|effect| effect.operations.iter().map(|operation| operation.id))
+            .collect(),
+    };
+    let linked = link_modules(checked, graph.entry()).expect("fixture should link");
     let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
     let mut elaborator =
         EffectElaborator::for_module_program(&linked).expect("builder should start");
@@ -58,7 +110,11 @@ fn effect_program(path: &Path) -> ValidatedEffectProgram {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    validate_effect_modules(unchecked, &sources, &module_sources).expect("Core should validate")
+    (
+        validate_effect_modules(unchecked, &sources, &module_sources)
+            .expect("Core should validate"),
+        operations,
+    )
 }
 
 fn run_effect_source(name: &str, source: &str) -> ash::eval::Evaluation {
@@ -74,6 +130,142 @@ fn run_effect_source(name: &str, source: &str) -> ash::eval::Evaluation {
     let evaluation = evaluate_effect(&effect_program(&path)).expect("effect Core should execute");
     let _ = std::fs::remove_file(path);
     evaluation
+}
+
+fn source_effect_trace(
+    program: &ValidatedEffectProgram,
+    operations: &TraceOperations,
+    raw: &[EffectTraceEvent],
+) -> Vec<EffectTraceEvent> {
+    assert_eq!(
+        operations.allocation.len(),
+        2,
+        "both canonical service operations are retained"
+    );
+    assert!(
+        operations
+            .allocation
+            .iter()
+            .all(|operation| !operations.source.contains(operation))
+    );
+    let mut handlers = HashMap::new();
+    let mut pending = vec![program.root()];
+    let mut visited = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let node = program.node(id).unwrap();
+        if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &node.kind {
+            let allocation = handler.effect().effect() == operations.allocation_effect;
+            if allocation {
+                assert!(handler.effect().arguments().is_empty());
+            }
+            let allowed = if allocation {
+                &operations.allocation
+            } else {
+                &operations.source
+            };
+            assert!(
+                allowed
+                    .iter()
+                    .any(|operation| operation.owner() == handler.effect().effect()),
+                "unclassified handler instance {:?}",
+                handler.effect()
+            );
+            let clauses = handler
+                .clauses()
+                .iter()
+                .map(|clause| {
+                    assert_eq!(clause.operation().owner(), handler.effect().effect());
+                    assert!(allowed.contains(&clause.operation()));
+                    clause.operation()
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                handlers
+                    .insert(
+                        handler.id(),
+                        (handler.effect().clone(), allocation, clauses)
+                    )
+                    .is_none(),
+                "handler identity must be unique"
+            );
+        }
+        pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+    }
+    let handler_domain = |id: &HandlerId| {
+        handlers
+            .get(id)
+            .unwrap_or_else(|| panic!("unclassified handler {id:?}"))
+    };
+    let operation_domain = |id: &OperationId| {
+        if operations.allocation.contains(id) {
+            true
+        } else {
+            assert!(
+                operations.source.contains(id),
+                "unclassified operation {id:?}"
+            );
+            false
+        }
+    };
+    let mut source = Vec::new();
+    let mut restoring = None;
+    for event in raw {
+        let preceding_resume = restoring.take();
+        let allocation = match event {
+            EffectTraceEvent::HandlerRestored(handler) => {
+                let caused_by_allocation = preceding_resume
+                    .expect("restoration must immediately follow Resume/restoration");
+                restoring = Some(caused_by_allocation);
+                let restored_is_allocation = handler_domain(handler).1;
+                caused_by_allocation || restored_is_allocation
+            }
+            EffectTraceEvent::Resume(handler) => {
+                let allocation = handler_domain(handler).1;
+                restoring = Some(allocation);
+                allocation
+            }
+            EffectTraceEvent::Request(operation) => operation_domain(operation),
+            EffectTraceEvent::ClauseEntered(handler, operation) => {
+                let (instance, allocation, clauses) = handler_domain(handler);
+                assert_eq!(operation.owner(), instance.effect());
+                assert!(
+                    clauses.contains(operation),
+                    "clause operation must belong to this exact handler"
+                );
+                assert_eq!(*allocation, operation_domain(operation));
+                *allocation
+            }
+            EffectTraceEvent::HandlerActivated(handler)
+            | EffectTraceEvent::HandlerSelected(handler)
+            | EffectTraceEvent::ClauseReturned(handler)
+            | EffectTraceEvent::Discard(handler) => handler_domain(handler).1,
+            event => panic!("unexpected resource event in source handler fixture: {event:?}"),
+        };
+        if !allocation {
+            source.push(*event);
+        }
+    }
+    source
+}
+
+fn run_effect_source_with_trace(
+    name: &str,
+    source: &str,
+) -> (ash::eval::Evaluation, Vec<EffectTraceEvent>) {
+    let path = std::env::temp_dir().join(format!(
+        "ash-effect-trace-{name}-{}-{}.ash",
+        std::process::id(),
+        SourceFile::new(name, "").unwrap().id().value()
+    ));
+    std::fs::write(&path, source).unwrap();
+    let (program, operations) = effect_program_with_trace_operations(&path);
+    let evaluation = evaluate_effect(&program).expect("effect Core should execute");
+    let trace = source_effect_trace(&program, &operations, evaluation.effect_trace());
+    std::fs::remove_file(path).unwrap();
+    (evaluation, trace)
 }
 
 #[test]
@@ -124,7 +316,7 @@ fn generic_factory_closure_keeps_instantiation_after_return() {
 
 #[test]
 fn generic_instances_and_returned_closures_keep_distinct_contexts() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "generic-distinct",
         concat!(
             "effect E<T> {\nask : Unit -> Int\n}\n",
@@ -135,8 +327,8 @@ fn generic_instances_and_returned_closures_keep_distinct_contexts() {
         ),
     );
     assert_eq!(evaluation.value.to_string(), "42");
-    let selected = evaluation
-        .effect_trace()
+    let selected = source_trace
+        .as_slice()
         .iter()
         .filter_map(|event| match event {
             EffectTraceEvent::HandlerSelected(handler) => Some(handler),
@@ -149,7 +341,7 @@ fn generic_instances_and_returned_closures_keep_distinct_contexts() {
 
 #[test]
 fn generic_handler_uses_its_definition_context_after_capture_and_resume() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "generic-handler",
         concat!(
             "effect E<T> {\nask : Unit -> Int\n}\n",
@@ -160,8 +352,8 @@ fn generic_handler_uses_its_definition_context_after_capture_and_resume() {
     );
     assert_eq!(evaluation.value.to_string(), "42");
     assert_eq!(
-        evaluation
-            .effect_trace()
+        source_trace
+            .as_slice()
             .iter()
             .filter(|event| matches!(event, EffectTraceEvent::HandlerRestored(_)))
             .count(),
@@ -287,7 +479,7 @@ fn generic_implementation_with_monomorphic_method_matches_its_caller() {
 
 #[test]
 fn generic_request_operand_preserves_context_and_strict_effect_order() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "generic-operand-order",
         concat!(
             "effect E<T> {\nask : Unit -> Int\n}\neffect Mark {\nmark : Unit -> Unit\n}\n",
@@ -296,7 +488,7 @@ fn generic_request_operand_preserves_context_and_strict_effect_order() {
         ),
     );
     assert_eq!(evaluation.value.to_string(), "42");
-    let trace = evaluation.effect_trace();
+    let trace = source_trace.as_slice();
     let [
         EffectTraceEvent::HandlerActivated(mark),
         EffectTraceEvent::HandlerActivated(ask),
@@ -364,7 +556,7 @@ fn generic_instantiation_and_constructors_survive_both_core_transforms() {
 
 #[test]
 fn discard_abandons_suspended_addition_and_continues_the_clause() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "discard-addition",
         concat!(
             "effect Ask {\nask : Unit -> Int\n}\n\n",
@@ -374,7 +566,7 @@ fn discard_abandons_suspended_addition_and_continues_the_clause() {
         ),
     );
     assert_eq!(evaluation.value.to_string(), "42");
-    assert!(matches!(evaluation.effect_trace(), [
+    assert!(matches!(source_trace.as_slice(), [
         EffectTraceEvent::HandlerActivated(handler),
         EffectTraceEvent::Request(operation),
         EffectTraceEvent::HandlerSelected(selected),
@@ -386,7 +578,7 @@ fn discard_abandons_suspended_addition_and_continues_the_clause() {
 
 #[test]
 fn discard_preserves_surrounding_handler_work_without_running_suspended_requests() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "discard-surrounding",
         concat!(
             "effect Ask {\nask : Unit -> Int\n}\n\n",
@@ -400,7 +592,7 @@ fn discard_preserves_surrounding_handler_work_without_running_suspended_requests
         ),
     );
     assert_eq!(evaluation.value.to_string(), "42");
-    assert!(matches!(evaluation.effect_trace(), [
+    assert!(matches!(source_trace.as_slice(), [
         EffectTraceEvent::HandlerActivated(outer),
         EffectTraceEvent::HandlerActivated(inner),
         EffectTraceEvent::Request(ask),
@@ -421,7 +613,7 @@ fn discard_preserves_surrounding_handler_work_without_running_suspended_requests
 
 #[test]
 fn inner_discard_leaves_the_outer_live_owner_available_to_resume() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "discard-inside-live-clause",
         concat!(
             "effect Ask {\nask : Unit -> Int\n}\n\n",
@@ -435,8 +627,8 @@ fn inner_discard_leaves_the_outer_live_owner_available_to_resume() {
         ),
     );
     assert_eq!(evaluation.value.to_string(), "142");
-    let completion = evaluation
-        .effect_trace()
+    let completion = source_trace
+        .as_slice()
         .iter()
         .filter(|event| {
             matches!(
@@ -453,7 +645,7 @@ fn inner_discard_leaves_the_outer_live_owner_available_to_resume() {
 
 #[test]
 fn outward_discard_can_abandon_an_already_consumed_clause_boundary() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "discard-consumed-clause",
         concat!(
             "effect Ask {\nask : Unit -> Int\n}\n\n",
@@ -466,16 +658,16 @@ fn outward_discard_can_abandon_an_already_consumed_clause_boundary() {
         ),
     );
     assert_eq!(evaluation.value.to_string(), "42");
-    let returned = evaluation
-        .effect_trace()
+    let returned = source_trace
+        .as_slice()
         .iter()
         .filter_map(|event| match event {
             EffectTraceEvent::ClauseReturned(handler) => Some(*handler),
             _ => None,
         })
         .collect::<Vec<_>>();
-    let discarded = evaluation
-        .effect_trace()
+    let discarded = source_trace
+        .as_slice()
         .iter()
         .find_map(|event| match event {
             EffectTraceEvent::Discard(handler) => Some(*handler),
@@ -496,11 +688,11 @@ fn mixed_completion_branches_resume_or_discard_the_selected_request() {
              true => {{\nlet _ = discard\n42\n}}\n\
              false => resume 1\n}}\n}}\n"
         );
-        let evaluation = run_effect_source("mixed-completion", &source);
+        let (evaluation, source_trace) = run_effect_source_with_trace("mixed-completion", &source);
         assert_eq!(evaluation.value.to_string(), expected);
         assert_eq!(
-            evaluation
-                .effect_trace()
+            source_trace
+                .as_slice()
                 .iter()
                 .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
                 .count(),
@@ -511,7 +703,7 @@ fn mixed_completion_branches_resume_or_discard_the_selected_request() {
 
 #[test]
 fn handled_request_preserves_erased_newtype_values_across_resume() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "newtype-resume",
         concat!(
             "newtype UserId = UserId(Int)\n\n",
@@ -528,7 +720,7 @@ fn handled_request_preserves_erased_newtype_values_across_resume() {
 
     assert_eq!(evaluation.value.to_string(), "42");
     assert!(matches!(
-        evaluation.effect_trace(),
+        source_trace.as_slice(),
         [
             EffectTraceEvent::HandlerActivated(_),
             EffectTraceEvent::Request(_),
@@ -617,11 +809,12 @@ fn nested_forwarding_restores_intervening_handlers_in_original_order() {
             .value()
     ));
     std::fs::write(&path, source).expect("effect runtime fixture should be writable");
-    let evaluation =
-        evaluate_effect(&effect_program(&path)).expect("validated Core should execute");
+    let (program, operations) = effect_program_with_trace_operations(&path);
+    let evaluation = evaluate_effect(&program).expect("validated Core should execute");
+    let source_trace = source_effect_trace(&program, &operations, evaluation.effect_trace());
     let _ = std::fs::remove_file(path);
     assert_eq!(evaluation.value.to_string(), "112");
-    let boundaries = evaluation.effect_trace();
+    let boundaries = source_trace.as_slice();
     let [
         EffectTraceEvent::HandlerActivated(outer),
         EffectTraceEvent::HandlerActivated(inner),
@@ -659,7 +852,7 @@ fn nested_forwarding_restores_intervening_handlers_in_original_order() {
 
 #[test]
 fn nearest_delegation_and_sequential_requests_preserve_clause_control() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "delegation",
         concat!(
             "effect Ask {\nask : Int -> Int\n}\n\n",
@@ -672,8 +865,8 @@ fn nearest_delegation_and_sequential_requests_preserve_clause_control() {
         ),
     );
     assert_eq!(evaluation.value.to_string(), "3");
-    let selected = evaluation
-        .effect_trace()
+    let selected = source_trace
+        .as_slice()
         .iter()
         .filter_map(|event| match event {
             EffectTraceEvent::HandlerSelected(handler) => Some(*handler),
@@ -688,7 +881,7 @@ fn nearest_delegation_and_sequential_requests_preserve_clause_control() {
 
 #[test]
 fn distinct_parameterized_instances_select_exact_handlers() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "parameterized",
         concat!(
             "effect Read<A> {\nread : Unit -> A\n}\n\n",
@@ -701,8 +894,8 @@ fn distinct_parameterized_instances_select_exact_handlers() {
         ),
     );
     assert_eq!(evaluation.value.to_string(), "42");
-    let selected = evaluation
-        .effect_trace()
+    let selected = source_trace
+        .as_slice()
         .iter()
         .filter(|event| matches!(event, EffectTraceEvent::HandlerSelected(_)))
         .count();
@@ -711,7 +904,7 @@ fn distinct_parameterized_instances_select_exact_handlers() {
 
 #[test]
 fn clause_request_bypasses_captured_intervening_handler() {
-    let evaluation = run_effect_source(
+    let (evaluation, source_trace) = run_effect_source_with_trace(
         "clause-bypass",
         concat!(
             "effect Ask {\nask : Int -> Int\n}\n\n",
@@ -726,8 +919,8 @@ fn clause_request_bypasses_captured_intervening_handler() {
         ),
     );
     assert_eq!(evaluation.value.to_string(), "111");
-    let selected = evaluation
-        .effect_trace()
+    let selected = source_trace
+        .as_slice()
         .iter()
         .filter_map(|event| match event {
             EffectTraceEvent::HandlerSelected(handler) => Some(*handler),
@@ -761,13 +954,29 @@ fn deep_forwarded_continuation_executes_on_a_small_host_stack() {
             std::fs::write(&path, source).expect("deep fixture should be writable");
             let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("fixture loads");
             let checked = check_graph(&graph);
-            let registry = checked[0].registry().clone();
-            let ask = &checked[0].effects()[0];
-            let mark = &checked[0].effects()[1];
+            let entry = checked
+                .iter()
+                .find(|module| module.module() == graph.entry())
+                .expect("the actual entry remains checked");
+            let registry = entry.registry().clone();
+            let ask = entry
+                .effects()
+                .iter()
+                .find(|effect| effect.spelling == "Ask")
+                .expect("the entry declares Ask");
+            let mark = entry
+                .effects()
+                .iter()
+                .find(|effect| effect.spelling == "Mark")
+                .expect("the entry declares Mark");
+            assert_eq!(ask.id.module(), graph.entry());
+            assert_eq!(mark.id.module(), graph.entry());
             let ask_instance = EffectInstance::new(ask.id, Box::new([]));
             let mark_instance = EffectInstance::new(mark.id, Box::new([]));
             let origin = Origin::Source(
-                graph.modules()[0]
+                graph
+                    .module(graph.entry())
+                    .unwrap()
                     .source()
                     .span(ByteRange::new(0, source.len() as u32).expect("ordered range"))
                     .expect("source span"),
@@ -890,9 +1099,20 @@ fn deep_forwarded_continuation_executes_on_a_small_host_stack() {
                     origin,
                 )
                 .expect("outer handler");
-            let program = ash::core::validate_effect(
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let program = validate_effect_modules(
                 builder.finish(root).expect("Core should finish"),
-                &[graph.modules()[0].source()],
+                &sources,
+                &relation,
             )
             .expect("deep Core should validate");
             let evaluation = evaluate_effect(&program).expect("deep Core should execute");

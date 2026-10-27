@@ -183,6 +183,8 @@ fn source_structural_depth_exceeds_budget(root: &ConcreteNode) -> bool {
 pub(crate) fn structural_weight(node: &ConcreteNode) -> usize {
     match node.kind {
         NodeKind::Block
+        | NodeKind::RegionExpression
+        | NodeKind::RegionSelectionExpression
         | NodeKind::RegistrationExpression
         | NodeKind::CleanupExpression
         | NodeKind::FunctionExpression
@@ -800,6 +802,23 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.node(NodeKind::EffectInstance)?;
             shape.node(NodeKind::Binder)?;
             shape.token(&TokenKind::Equal)?;
+            shape.node(NodeKind::PrimaryExpression)?;
+            shape.node(NodeKind::Block)?;
+        }
+        NodeKind::RegionExpression => {
+            shape.token(&TokenKind::Region)?;
+            shape.token(&TokenKind::Less)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            shape.token(&TokenKind::Greater)?;
+            shape.node(NodeKind::Binder)?;
+            if shape.peek_token_is(&TokenKind::Equal) {
+                shape.token(&TokenKind::Equal)?;
+                shape.node(NodeKind::PrimaryExpression)?;
+            }
+            shape.node(NodeKind::Block)?;
+        }
+        NodeKind::RegionSelectionExpression => {
+            shape.token(&TokenKind::Using)?;
             shape.node(NodeKind::PrimaryExpression)?;
             shape.node(NodeKind::Block)?;
         }
@@ -2000,6 +2019,42 @@ fn project_expression(
                         NodeKind::PrimaryExpression,
                     )?));
                 }
+                NodeKind::RegionExpression => {
+                    let identity = direct_tokens(node, tokens)
+                        .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                    let handle =
+                        project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
+                    let provider = optional_child_of_kind(node, NodeKind::PrimaryExpression)?;
+                    tasks.push(ExpressionTask::FinishRegion {
+                        identity: surface_name(identity)?,
+                        handle: handle.name,
+                        has_provider: provider.is_some(),
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::Block,
+                    )?));
+                    if let Some(provider) = provider {
+                        tasks.push(ExpressionTask::Visit(provider));
+                    }
+                }
+                NodeKind::RegionSelectionExpression => {
+                    tasks.push(ExpressionTask::FinishRegionSelection(node_span(
+                        source, node, tokens,
+                    )?));
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::Block,
+                    )?));
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::PrimaryExpression,
+                    )?));
+                }
                 NodeKind::ResourceExpression => {
                     let identity = direct_tokens(node, tokens)
                         .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
@@ -2282,6 +2337,47 @@ fn project_expression(
                     span,
                 });
             }
+            ExpressionTask::FinishRegion {
+                identity,
+                handle,
+                has_provider,
+                span,
+            } => {
+                let body = projected.pop().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                let provider = if has_provider {
+                    Some(projected.pop().ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?)
+                } else {
+                    None
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Region(Box::new(crate::surface::SurfaceRegionExpr {
+                        identity,
+                        handle,
+                        provider,
+                        body,
+                    })),
+                    span,
+                });
+            }
+            ExpressionTask::FinishRegionSelection(span) => {
+                let (region, body) = take_expression_pair(&mut projected)?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::RegionSelection(Box::new(
+                        crate::surface::SurfaceRegionSelectionExpr { region, body },
+                    )),
+                    span,
+                });
+            }
             ExpressionTask::FinishResource {
                 kind,
                 identity,
@@ -2522,6 +2618,13 @@ enum ExpressionTask<'a> {
     },
     FinishResume(Span),
     FinishCleanup(Span),
+    FinishRegion {
+        identity: SurfaceName,
+        handle: SurfaceName,
+        has_provider: bool,
+        span: Span,
+    },
+    FinishRegionSelection(Span),
 
     FinishProviderResource {
         family: SurfaceReference,
@@ -3507,6 +3610,8 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
             | NodeKind::ResumeExpression
             | NodeKind::ProviderResourceExpression
             | NodeKind::ResourceExpression
+            | NodeKind::RegionExpression
+            | NodeKind::RegionSelectionExpression
             | NodeKind::HookExpression
             | NodeKind::RegistrationExpression
             | NodeKind::CleanupExpression

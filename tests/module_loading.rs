@@ -64,6 +64,31 @@ fn display_names(graph: &ash::module::ModuleGraph) -> Vec<String> {
         .collect()
 }
 
+fn assert_compiler_service_graph(graph: &ash::module::ModuleGraph) -> ash::module::ModuleId {
+    let [foreign, region, ..] = graph.modules() else {
+        panic!("the graph should retain both canonical service modules");
+    };
+    assert_eq!(foreign.source().display_path(), "@builtin.foreign");
+    assert_eq!(region.source().display_path(), "@compiler.region");
+    assert_ne!(foreign.id(), region.id());
+    assert!(foreign.dependencies().is_empty());
+    let [host_edge] = region.dependencies() else {
+        panic!("the region service should retain one host dependency");
+    };
+    assert_eq!(host_edge.target(), foreign.id());
+    for module in &graph.modules()[2..] {
+        assert_eq!(
+            module
+                .dependencies()
+                .last()
+                .expect("each source module should retain its trailing compiler service edge")
+                .target(),
+            region.id()
+        );
+    }
+    region.id()
+}
+
 #[test]
 fn loads_relative_descendants_in_dependency_order() {
     let tree = TempTree::create();
@@ -73,9 +98,16 @@ fn loads_relative_descendants_in_dependency_order() {
 
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).expect("graph should load");
 
+    assert_compiler_service_graph(&graph);
     assert_eq!(
         display_names(&graph),
-        ["constants.ash", "math.ash", "entry.ash"]
+        [
+            "@builtin.foreign",
+            "@compiler.region",
+            "constants.ash",
+            "math.ash",
+            "entry.ash"
+        ]
     );
     assert_eq!(
         graph.modules().last().map(|module| module.id()),
@@ -105,7 +137,16 @@ fn loads_an_absolute_path_from_its_named_root() {
 
     let graph = load_module_graph(&entry, &roots).expect("named graph should load");
 
-    assert_eq!(display_names(&graph), ["list.ash", "entry.ash"]);
+    assert_compiler_service_graph(&graph);
+    assert_eq!(
+        display_names(&graph),
+        [
+            "@builtin.foreign",
+            "@compiler.region",
+            "list.ash",
+            "entry.ash"
+        ]
+    );
 }
 
 #[test]
@@ -118,7 +159,19 @@ fn a_diamond_admits_one_canonical_shared_module() {
 
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).expect("diamond should load");
 
-    assert_eq!(graph.modules().len(), 4);
+    assert_compiler_service_graph(&graph);
+    assert_eq!(graph.modules().len(), 6);
+    assert_eq!(
+        display_names(&graph),
+        [
+            "@builtin.foreign",
+            "@compiler.region",
+            "shared.ash",
+            "left.ash",
+            "right.ash",
+            "entry.ash"
+        ]
+    );
     let shared = graph
         .modules()
         .iter()
@@ -149,13 +202,16 @@ fn overlapping_roots_reuse_one_canonical_module_identity() {
 
     let graph = load_module_graph(&entry, &roots).expect("both routes should share a module");
 
-    assert_eq!(graph.modules().len(), 2);
+    let region = assert_compiler_service_graph(&graph);
+    assert_eq!(graph.modules().len(), 4);
     let entry_module = graph
         .modules()
         .iter()
         .find(|module| module.id() == graph.entry())
         .expect("the entry should remain in the graph");
-    assert_eq!(entry_module.dependencies().len(), 2);
+    assert_eq!(entry_module.dependencies().len(), 3);
+    assert_eq!(entry_module.dependencies()[2].target(), region);
+    assert_ne!(entry_module.dependencies()[0].target(), region);
     assert_eq!(
         entry_module.dependencies()[0].target(),
         entry_module.dependencies()[1].target()
@@ -212,13 +268,16 @@ fn alternate_symlink_paths_share_one_module_identity() {
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("alternate canonical paths should load once");
 
-    assert_eq!(graph.modules().len(), 2);
+    let region = assert_compiler_service_graph(&graph);
+    assert_eq!(graph.modules().len(), 4);
     let entry_module = graph
         .modules()
         .iter()
         .find(|module| module.id() == graph.entry())
         .expect("the entry should remain in the graph");
-    assert_eq!(entry_module.dependencies().len(), 2);
+    assert_eq!(entry_module.dependencies().len(), 3);
+    assert_eq!(entry_module.dependencies()[2].target(), region);
+    assert_ne!(entry_module.dependencies()[0].target(), region);
     assert_eq!(
         entry_module.dependencies()[0].target(),
         entry_module.dependencies()[1].target()
@@ -441,11 +500,24 @@ fn repeated_canonical_edges_do_not_exhaust_the_active_frame_budget() {
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("a two-frame graph should not exhaust the active frame budget");
 
-    assert_eq!(graph.modules().len(), 2);
+    let region = assert_compiler_service_graph(&graph);
+    assert_eq!(graph.modules().len(), 4);
+    let shared = graph
+        .modules()
+        .iter()
+        .find(|module| module.source().display_path().ends_with("shared.ash"))
+        .unwrap()
+        .id();
     let entry = graph
         .module(graph.entry())
         .expect("the entry identity should remain admitted");
-    assert_eq!(entry.dependencies().len(), MODULE_PENDING_LIMIT);
+    assert_eq!(entry.dependencies().len(), MODULE_PENDING_LIMIT + 1);
+    assert!(
+        entry.dependencies()[..MODULE_PENDING_LIMIT]
+            .iter()
+            .all(|edge| edge.target() == shared)
+    );
+    assert_eq!(entry.dependencies()[MODULE_PENDING_LIMIT].target(), region);
 }
 
 #[test]
@@ -490,7 +562,16 @@ fn a_deep_dependency_chain_loads_and_drops_on_a_small_stack() {
         .spawn(move || {
             let graph = load_module_graph(&entry, &ModuleRoots::empty())
                 .expect("the explicit graph worklist should admit the deep chain");
-            assert_eq!(graph.modules().len(), DEPTH + 1);
+            assert_compiler_service_graph(&graph);
+            assert_eq!(graph.modules().len(), DEPTH + 3);
+            for (module, index) in graph.modules()[2..].iter().zip((0..=DEPTH).rev()) {
+                assert!(
+                    module
+                        .source()
+                        .display_path()
+                        .ends_with(&format!("module{index}.ash"))
+                );
+            }
         })
         .expect("the small-stack loader thread should start")
         .join()
@@ -559,7 +640,27 @@ fn failed_nested_import_retains_admitted_sources_after_files_are_removed() {
         .unwrap();
     assert_eq!(source.text(), child_text);
     assert_eq!(source.location(span).unwrap().start().line(), 1);
-    assert_eq!(error.sources().count(), 2);
+    assert_eq!(error.sources().count(), 4);
+    let mut retained_names = error
+        .sources()
+        .map(|source| {
+            Path::new(source.display_path())
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    retained_names.sort();
+    assert_eq!(
+        retained_names,
+        [
+            "@builtin.foreign",
+            "@compiler.region",
+            "child.ash",
+            "entry.ash"
+        ]
+    );
     assert_eq!(error.module_reason(), Some(ModuleReason::NotFound));
     assert!(error.is_source_rejection());
 }
@@ -578,7 +679,27 @@ fn rejected_dependency_keeps_its_source_and_the_import_location() {
         .find(|source| source.id() == import.source())
         .unwrap();
     assert_eq!(importer.text(), entry_text);
-    assert_eq!(error.sources().count(), 2);
+    assert_eq!(error.sources().count(), 4);
+    let mut retained_names = error
+        .sources()
+        .map(|source| {
+            Path::new(source.display_path())
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    retained_names.sort();
+    assert_eq!(
+        retained_names,
+        [
+            "@builtin.foreign",
+            "@compiler.region",
+            "child.ash",
+            "entry.ash"
+        ]
+    );
     let LoadGraphError::Syntax(failure) = error.failure() else {
         panic!("syntax failure");
     };

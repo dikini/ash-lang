@@ -8,8 +8,8 @@ use ash::{
     elaborate::{
         EffectElaborator, ElaborationFailure, TypeContext, TypeError, TypeReason, check_module,
     },
-    module::{ModuleRoots, load_module_graph},
-    resolve::{ResolveModuleError, ResolveReason, resolve_module},
+    module::{ModuleGraph, ModuleRoots, load_module_graph},
+    resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind, ResolvedModule},
 };
 
@@ -39,12 +39,37 @@ fn resolved_source(source: &str) -> ResolvedModule {
     let fixture = TempModule::write(source);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the effect diagnostic fixture should load");
-    let module = graph
-        .modules()
-        .iter()
-        .find(|module| module.id() == graph.entry())
-        .expect("the graph should retain its entry");
-    resolve_module(module, &[]).expect("the effect diagnostic fixture should resolve")
+    resolve_entry(&graph).expect("the effect diagnostic fixture should resolve")
+}
+
+fn resolve_entry(graph: &ModuleGraph) -> Result<ResolvedModule, ResolveModuleError> {
+    let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .expect("dependencies precede their importer")
+                        .exports(),
+                )
+                .expect("the exact dependency summary authenticates its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies);
+        if module.id() == graph.entry() {
+            return resolved;
+        }
+        checked.push(
+            check_module(resolved.expect("builtin dependency should resolve"))
+                .expect("builtin dependency should check"),
+        );
+    }
+    panic!("the graph should retain its entry")
 }
 
 fn typing_error(source: &str) -> TypeError {
@@ -80,8 +105,7 @@ fn excluded_callback_reports_the_row_contract_in_both_locales_and_json() {
         .iter()
         .find(|module| module.id() == graph.entry())
         .unwrap();
-    let TypeError::Source(error) = check_module(resolve_module(loaded, &[]).unwrap()).unwrap_err()
-    else {
+    let TypeError::Source(error) = check_module(resolve_entry(&graph).unwrap()).unwrap_err() else {
         panic!("expected a source exclusion diagnostic");
     };
     assert_eq!(error.reason, TypeReason::EffectRowExclusion);
@@ -372,9 +396,7 @@ fn discard_usage_diagnostic_names_the_completion_capability() {
 fn discard_outside_a_clause_is_a_resolution_error() {
     let fixture = TempModule::write("main : Unit -> Unit\nmain () = discard\n");
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).expect("fixture should load");
-    let module = graph.module(graph.entry()).expect("entry should exist");
-    let ResolveModuleError::Resolution(error) =
-        resolve_module(module, &[]).expect_err("outside discard")
+    let ResolveModuleError::Resolution(error) = resolve_entry(&graph).expect_err("outside discard")
     else {
         panic!("expected resolution error")
     };
@@ -474,13 +496,8 @@ fn resume_outside_a_handler_clause_is_rejected_by_resolution() {
     let fixture = TempModule::write("main : Unit -> Int\nmain () = resume 1\n");
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the outside-resume fixture should load");
-    let module = graph
-        .modules()
-        .iter()
-        .find(|module| module.id() == graph.entry())
-        .expect("the graph should retain its entry");
 
-    match resolve_module(module, &[]).expect_err("resolution should reject outside resume") {
+    match resolve_entry(&graph).expect_err("resolution should reject outside resume") {
         ResolveModuleError::Resolution(error) => {
             assert_eq!(error.reason, ResolveReason::ResumeOutsideClause)
         }
@@ -498,13 +515,8 @@ fn written_duplicate_effect_row_has_exact_reason_code() {
     ));
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the duplicate-row fixture should load");
-    let module = graph
-        .modules()
-        .iter()
-        .find(|module| module.id() == graph.entry())
-        .expect("the graph should retain its entry");
     let ResolveModuleError::Resolution(error) =
-        resolve_module(module, &[]).expect_err("a written duplicate row should be rejected")
+        resolve_entry(&graph).expect_err("a written duplicate row should be rejected")
     else {
         panic!("the duplicate row should retain a resolution diagnostic")
     };

@@ -180,7 +180,13 @@ fn run(
         ordinal: fixture.one.library_ordinal,
         members,
     };
-    __run_private_effect_image(&runtime_fingerprint(), &fixture.image, expected, &[library])
+    __run_private_effect_image(
+        &runtime_fingerprint(),
+        &fixture.image,
+        expected,
+        &[library],
+        None,
+    )
 }
 #[test]
 fn native_image_restores_from_embedded_originals_and_repeats_after_source_removal() {
@@ -264,7 +270,8 @@ fn native_image_framing_runtime_and_independent_facts_refuse_before_callback() {
                 &runtime_fingerprint(),
                 &bytes,
                 fixture.expected,
-                &[library]
+                &[library],
+                None
             )
             .is_err()
         );
@@ -280,7 +287,8 @@ fn native_image_framing_runtime_and_independent_facts_refuse_before_callback() {
     };
     CALLBACKS.set(0);
     assert!(
-        __run_private_effect_image(&runtime, &fixture.image, fixture.expected, &[library]).is_err()
+        __run_private_effect_image(&runtime, &fixture.image, fixture.expected, &[library], None)
+            .is_err()
     );
     assert_eq!(CALLBACKS.get(), 0);
     let mut expected = fixture.expected.to_vec();
@@ -323,7 +331,8 @@ fn changed_original_native_declarations_refuse_the_canonical_fact_payload() {
                 &runtime_fingerprint(),
                 &bytes,
                 fixture.expected,
-                &[library]
+                &[library],
+                None
             )
             .is_err()
         );

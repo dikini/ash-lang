@@ -6,12 +6,11 @@ use std::{
 
 use ash::{
     core::{Primitive, PureComputation, PureExprKind, PureValue, validate},
-    elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason},
+    elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason, check_module},
     eval::{TraceEvent, Value, evaluate},
-    integer::Integer,
     module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
-    resolved::{ResolvedDefinitionKind, ResolvedExpr},
+    resolve::{DependencyExports, resolve_module},
+    resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExpr},
     source::{Origin, SourceFile},
     types::Type,
 };
@@ -46,7 +45,30 @@ fn resolved(text: &str) -> (SourceFile, ResolvedExpr) {
         .module(graph.entry())
         .expect("entry module should be retained");
     let source = loaded.source().clone();
-    let resolved = resolve_module(loaded, &[]).expect("module fixture should resolve");
+    let mut checked = Vec::new();
+    let mut entry = None;
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let target = checked
+                    .iter()
+                    .find(|target: &&CheckedModule| target.module() == edge.target())
+                    .expect("the exact dependency target precedes its importer");
+                DependencyExports::new(edge, target.exports())
+                    .expect("the actual dependency edge authenticates")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("module fixture should resolve");
+        if module.id() == graph.entry() {
+            entry = Some(resolved);
+            break;
+        }
+        checked.push(check_module(resolved).expect("preceding dependencies should check"));
+    }
+    let resolved = entry.expect("the unresolved entry should remain present");
     let definition = resolved
         .definitions()
         .iter()
@@ -292,13 +314,10 @@ fn machine_evaluates_v001_with_left_to_right_entry_events() {
     let program = validated_expression("1 + 2 * 3\n");
     let evaluation = evaluate(&program).expect("validated primitive Core should evaluate");
 
-    let Value::Integer(value) = evaluation.value else {
+    let Value::SmallInteger(value) = evaluation.value else {
         panic!("expected an integer value");
     };
-    assert_eq!(
-        value,
-        Integer::parse_decimal("7").expect("valid test integer")
-    );
+    assert_eq!(value.to_string(), "7");
     let entered = evaluation
         .trace
         .iter()

@@ -35,7 +35,6 @@ pub(crate) enum Unsupported {
     Type,
     Intrinsic,
     ErasedTypeOperation,
-    LargeIntegerLiteral,
     EffectOperation,
 }
 
@@ -308,6 +307,64 @@ struct RecursiveMemberRecord {
 
 #[derive(Clone, Copy, Debug)]
 enum NodeTag {
+    IntegerMagnitude {
+        negative: bool,
+        bytes: Slice,
+    },
+    RegionBuffer {
+        api: u32,
+        context: u32,
+        operand: Option<u32>,
+        right: Option<u32>,
+        source: u8,
+        module: Option<u32>,
+        operation: u8,
+        bytes: Slice,
+    },
+    RegionValueRequest {
+        api: u32,
+        fields: u32,
+    },
+    RegionTuple {
+        constructor: Option<ConstructorIdentity>,
+        api: u32,
+        context: u32,
+        storage: u32,
+        fields: Slice,
+    },
+    RegionClosure {
+        api: u32,
+        context: u32,
+        storage: u32,
+        parameter: Option<u32>,
+        body: u32,
+        captures: Slice,
+    },
+    RegionBinding {
+        module: u32,
+        operation: u8,
+        owner: Option<TypeVariableIdentity>,
+        address_module: Option<u32>,
+    },
+    Region {
+        entry: bool,
+        api: u32,
+        identity: TypeVariableIdentity,
+        access: u32,
+        preceding: u32,
+        provider: u32,
+        body: u32,
+    },
+    RegionAllocate {
+        api: u32,
+        context: u32,
+        request: u32,
+    },
+    RegionHost {
+        module: u32,
+        owner: TypeVariableIdentity,
+        release: bool,
+    },
     CellScope {
         acquisition: CellAcquisitionRecord,
         handle: u32,
@@ -762,6 +819,10 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
             SourceRecord {
                 role: if module.is_builtin_foreign() {
                     ModuleRoleRecord::BuiltinForeign
+                } else if module.is_builtin_region_facade() {
+                    ModuleRoleRecord::BuiltinRegionFacade
+                } else if module.is_builtin_region() {
+                    ModuleRoleRecord::BuiltinRegion
                 } else if module.is_builtin_generic_cell() {
                     ModuleRoleRecord::BuiltinGenericCell
                 } else if module.is_builtin_cell() {
@@ -1198,107 +1259,171 @@ impl Encoder<'_> {
 
     fn encode_node(&mut self, kind: &PureExprKind) -> Result<NodeTag, ImageFailure> {
         Ok(match kind {
-            PureExprKind::Value(value) => {
-                match value {
-                    PureValue::Integer(value) => {
-                        if let Some(value) = value.value().to_i64() {
-                            NodeTag::Integer(value)
+            PureExprKind::Value(value) => match value {
+                PureValue::Integer(value) => {
+                    if let Some(value) = value.value().to_i64() {
+                        NodeTag::Integer(value)
+                    } else {
+                        if let Some(unsigned) = value.value().to_u64() {
+                            NodeTag::UnsignedInteger(unsigned)
                         } else {
-                            NodeTag::UnsignedInteger(value.value().to_u64().ok_or(
-                                ImageFailure::Unsupported(Unsupported::LargeIntegerLiteral),
-                            )?)
-                        }
-                    }
-                    PureValue::Boolean(value) => NodeTag::Bool(value.value()),
-                    PureValue::Unit(_) => NodeTag::Unit,
-                    PureValue::String(value) => {
-                        NodeTag::String(append(&mut self.image.bytes, value.bytes(), self.work)?)
-                    }
-                    PureValue::Constructor(value) => {
-                        NodeTag::Constructor(self.constructor(value.constructor())?)
-                    }
-                    PureValue::Function(function) => NodeTag::Function {
-                        parameter: self.encode_binder(function.parameter())?,
-                        body: self.node(function.body())?,
-                    },
-                    PureValue::Intrinsic(value) => {
-                        use crate::core::packed::Intrinsic;
-
-                        let bytes = match value.operation() {
-                            Intrinsic::BytesEmpty => Some(0),
-                            Intrinsic::BytesAppendByte { appended, invalid } => {
-                                let owner = NominalTypeId::new(value.module(), 0);
-                                if appended != ConstructorId::new(owner, 0)
-                                    || invalid != ConstructorId::new(owner, 1)
-                                {
-                                    return Err(ImageFailure::InvalidRecord);
-                                }
-                                Some(1)
+                            charge(
+                                self.work,
+                                usize::try_from(value.value().magnitude_byte_length())
+                                    .map_err(|_| ImageFailure::Resource)?,
+                            )?;
+                            let (negative, bytes) = value.value().sign_magnitude();
+                            NodeTag::IntegerMagnitude {
+                                negative,
+                                bytes: append(&mut self.image.bytes, &bytes, self.work)?,
                             }
-                            Intrinsic::BytesLength => Some(2),
-                            Intrinsic::BytesEqual => Some(3),
-                            Intrinsic::BytesAt { found, invalid } => {
-                                let owner = NominalTypeId::new(value.module(), 1);
-                                if found != ConstructorId::new(owner, 0)
-                                    || invalid != ConstructorId::new(owner, 1)
-                                {
-                                    return Err(ImageFailure::InvalidRecord);
-                                }
-                                Some(4)
-                            }
-                            _ => None,
-                        };
-                        let string = match value.operation() {
-                            Intrinsic::StringByteLength => Some(0),
-                            Intrinsic::StringToUtf8 => Some(1),
-                            Intrinsic::StringEqual => Some(2),
-                            Intrinsic::StringFromUtf8 { decoded, invalid } => {
-                                let nominal = NominalTypeId::new(value.module(), 0);
-                                if decoded != ConstructorId::new(nominal, 0)
-                                    || invalid != ConstructorId::new(nominal, 1)
-                                {
-                                    return Err(ImageFailure::InvalidRecord);
-                                }
-                                Some(3)
-                            }
-                            _ => None,
-                        };
-                        let address = match value.operation() {
-                            Intrinsic::AddressNull => Some(0),
-                            Intrinsic::AddressIsNull => Some(1),
-                            Intrinsic::AddressEqual => Some(2),
-                            _ => None,
-                        };
-                        if let Some(operation) = address {
-                            if !value.module().is_builtin_foreign() {
-                                return Err(ImageFailure::InvalidRecord);
-                            }
-                            NodeTag::AddressIntrinsic {
-                                module: self.module(value.module())?,
-                                operation,
-                            }
-                        } else if let Some(operation) = bytes {
-                            if !value.module().is_builtin_bytes() {
-                                return Err(ImageFailure::InvalidRecord);
-                            }
-                            NodeTag::BytesIntrinsic {
-                                module: self.module(value.module())?,
-                                operation,
-                            }
-                        } else if let Some(operation) = string {
-                            if !value.module().is_builtin_string() {
-                                return Err(ImageFailure::InvalidRecord);
-                            }
-                            NodeTag::StringIntrinsic {
-                                module: self.module(value.module())?,
-                                operation,
-                            }
-                        } else {
-                            return Err(ImageFailure::Unsupported(Unsupported::Intrinsic));
                         }
                     }
                 }
-            }
+                PureValue::Boolean(value) => NodeTag::Bool(value.value()),
+                PureValue::Unit(_) => NodeTag::Unit,
+                PureValue::String(value) => {
+                    NodeTag::String(append(&mut self.image.bytes, value.bytes(), self.work)?)
+                }
+                PureValue::Constructor(value) => {
+                    NodeTag::Constructor(self.constructor(value.constructor())?)
+                }
+                PureValue::Function(function) => NodeTag::Function {
+                    parameter: self.encode_binder(function.parameter())?,
+                    body: self.node(function.body())?,
+                },
+                PureValue::Intrinsic(value) => {
+                    use crate::core::packed::Intrinsic;
+
+                    let bytes = match value.operation() {
+                        Intrinsic::BytesEmpty => Some(0),
+                        Intrinsic::BytesAppendByte { appended, invalid } => {
+                            let owner = NominalTypeId::new(value.module(), 0);
+                            if appended != ConstructorId::new(owner, 0)
+                                || invalid != ConstructorId::new(owner, 1)
+                            {
+                                return Err(ImageFailure::InvalidRecord);
+                            }
+                            Some(1)
+                        }
+                        Intrinsic::BytesLength => Some(2),
+                        Intrinsic::BytesEqual => Some(3),
+                        Intrinsic::BytesAt { found, invalid } => {
+                            let owner = NominalTypeId::new(value.module(), 1);
+                            if found != ConstructorId::new(owner, 0)
+                                || invalid != ConstructorId::new(owner, 1)
+                            {
+                                return Err(ImageFailure::InvalidRecord);
+                            }
+                            Some(4)
+                        }
+                        _ => None,
+                    };
+                    let string = match value.operation() {
+                        Intrinsic::StringByteLength => Some(0),
+                        Intrinsic::StringToUtf8 => Some(1),
+                        Intrinsic::StringEqual => Some(2),
+                        Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                            let nominal = NominalTypeId::new(value.module(), 0);
+                            if decoded != ConstructorId::new(nominal, 0)
+                                || invalid != ConstructorId::new(nominal, 1)
+                            {
+                                return Err(ImageFailure::InvalidRecord);
+                            }
+                            Some(3)
+                        }
+                        _ => None,
+                    };
+                    let address = match value.operation() {
+                        Intrinsic::AddressNull => Some(0),
+                        Intrinsic::AddressIsNull => Some(1),
+                        Intrinsic::AddressEqual => Some(2),
+                        _ => None,
+                    };
+                    if matches!(
+                        value.operation(),
+                        Intrinsic::RegionRequestBytes
+                            | Intrinsic::RegionRequestAlignment
+                            | Intrinsic::RegionFromBacking { .. }
+                    ) {
+                        if !value.module().is_builtin_region() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        let (operation, owner, address_module) = match value.operation() {
+                            Intrinsic::RegionRequestBytes => (0, None, None),
+                            Intrinsic::RegionRequestAlignment => (1, None, None),
+                            Intrinsic::RegionFromBacking {
+                                owner,
+                                address_module,
+                            } => {
+                                if !address_module.is_builtin_foreign() {
+                                    return Err(ImageFailure::InvalidRecord);
+                                }
+                                (
+                                    2,
+                                    Some(self.type_variable(owner)?),
+                                    Some(self.module(address_module)?),
+                                )
+                            }
+                            _ => return Err(ImageFailure::InvalidRecord),
+                        };
+                        NodeTag::RegionBinding {
+                            module: self.module(value.module())?,
+                            operation,
+                            owner,
+                            address_module,
+                        }
+                    } else if let Intrinsic::RegionHostAllocate {
+                        owner,
+                        configuration,
+                    }
+                    | Intrinsic::RegionHostRelease {
+                        owner,
+                        configuration,
+                    } = value.operation()
+                    {
+                        if !value.module().is_builtin_region()
+                            || configuration != crate::core::region::HostRegionConfiguration::System
+                        {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        NodeTag::RegionHost {
+                            module: self.module(value.module())?,
+                            owner: self.type_variable(owner)?,
+                            release: matches!(
+                                value.operation(),
+                                Intrinsic::RegionHostRelease { .. }
+                            ),
+                        }
+                    } else if let Some(operation) = address {
+                        if !value.module().is_builtin_foreign() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        NodeTag::AddressIntrinsic {
+                            module: self.module(value.module())?,
+                            operation,
+                        }
+                    } else if let Some(operation) = bytes {
+                        if !value.module().is_builtin_bytes() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        NodeTag::BytesIntrinsic {
+                            module: self.module(value.module())?,
+                            operation,
+                        }
+                    } else if let Some(operation) = string {
+                        if !value.module().is_builtin_string() {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        NodeTag::StringIntrinsic {
+                            module: self.module(value.module())?,
+                            operation,
+                        }
+                    } else {
+                        return Err(ImageFailure::Unsupported(Unsupported::Intrinsic));
+                    }
+                }
+            },
             PureExprKind::Variable(variable) => {
                 NodeTag::Variable(self.binder_id(variable.binder())?)
             }
@@ -1535,7 +1660,7 @@ struct DecodedType {
 
 // A private layout marker for the matching compiler/runtime only. Neither the
 // embedded byte sequence nor its numeric tags promise compatibility.
-const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x14";
+const PRIVATE_MAGIC: &[u8] = b"ash-private-program\x19";
 
 enum WireOutput<'a> {
     Encoded(Vec<u8>),
@@ -2025,6 +2150,116 @@ impl Wire for NodeTag {
     const MINIMUM: usize = 1;
     fn write(&self, writer: &mut WireWriter<'_>) -> Result<(), ImageFailure> {
         match self {
+            Self::IntegerMagnitude { negative, bytes } => {
+                37u8.write(writer)?;
+                negative.write(writer)?;
+                bytes.write(writer)
+            }
+            Self::RegionBuffer {
+                api,
+                context,
+                operand,
+                right,
+                source,
+                module,
+                operation,
+                bytes,
+            } => {
+                36u8.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                operand.write(writer)?;
+                right.write(writer)?;
+                source.write(writer)?;
+                module.write(writer)?;
+                operation.write(writer)?;
+                bytes.write(writer)
+            }
+            Self::RegionValueRequest { api, fields } => {
+                34u8.write(writer)?;
+                api.write(writer)?;
+                fields.write(writer)
+            }
+            Self::RegionClosure {
+                api,
+                context,
+                storage,
+                parameter,
+                body,
+                captures,
+            } => {
+                38u8.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                storage.write(writer)?;
+                parameter.write(writer)?;
+                body.write(writer)?;
+                captures.write(writer)
+            }
+            Self::RegionTuple {
+                constructor,
+                api,
+                context,
+                storage,
+                fields,
+            } => {
+                35u8.write(writer)?;
+                constructor.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                storage.write(writer)?;
+                fields.write(writer)
+            }
+            Self::RegionBinding {
+                module,
+                operation,
+                owner,
+                address_module,
+            } => {
+                33u8.write(writer)?;
+                module.write(writer)?;
+                operation.write(writer)?;
+                owner.write(writer)?;
+                address_module.write(writer)
+            }
+            Self::Region {
+                entry,
+                api,
+                identity,
+                access,
+                preceding,
+                provider,
+                body,
+            } => {
+                30u8.write(writer)?;
+                entry.write(writer)?;
+                api.write(writer)?;
+                identity.write(writer)?;
+                access.write(writer)?;
+                preceding.write(writer)?;
+                provider.write(writer)?;
+                body.write(writer)
+            }
+            Self::RegionAllocate {
+                api,
+                context,
+                request,
+            } => {
+                31u8.write(writer)?;
+                api.write(writer)?;
+                context.write(writer)?;
+                request.write(writer)
+            }
+            Self::RegionHost {
+                module,
+                owner,
+                release,
+            } => {
+                32u8.write(writer)?;
+                module.write(writer)?;
+                owner.write(writer)?;
+                release.write(writer)
+            }
             Self::AddressIntrinsic { module, operation } => {
                 29u8.write(writer)?;
                 module.write(writer)?;
@@ -2211,6 +2446,64 @@ impl Wire for NodeTag {
     }
     fn read(reader: &mut WireReader<'_>) -> Result<Self, ImageFailure> {
         Ok(match u8::read(reader)? {
+            38 => Self::RegionClosure {
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                storage: Wire::read(reader)?,
+                parameter: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+                captures: Wire::read(reader)?,
+            },
+            37 => Self::IntegerMagnitude {
+                negative: Wire::read(reader)?,
+                bytes: Wire::read(reader)?,
+            },
+            36 => Self::RegionBuffer {
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                operand: Wire::read(reader)?,
+                right: Wire::read(reader)?,
+                source: Wire::read(reader)?,
+                module: Wire::read(reader)?,
+                operation: Wire::read(reader)?,
+                bytes: Wire::read(reader)?,
+            },
+            34 => Self::RegionValueRequest {
+                api: Wire::read(reader)?,
+                fields: Wire::read(reader)?,
+            },
+            35 => Self::RegionTuple {
+                constructor: Wire::read(reader)?,
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                storage: Wire::read(reader)?,
+                fields: Wire::read(reader)?,
+            },
+            33 => Self::RegionBinding {
+                module: Wire::read(reader)?,
+                operation: Wire::read(reader)?,
+                owner: Wire::read(reader)?,
+                address_module: Wire::read(reader)?,
+            },
+            30 => Self::Region {
+                entry: Wire::read(reader)?,
+                api: Wire::read(reader)?,
+                identity: Wire::read(reader)?,
+                access: Wire::read(reader)?,
+                preceding: Wire::read(reader)?,
+                provider: Wire::read(reader)?,
+                body: Wire::read(reader)?,
+            },
+            31 => Self::RegionAllocate {
+                api: Wire::read(reader)?,
+                context: Wire::read(reader)?,
+                request: Wire::read(reader)?,
+            },
+            32 => Self::RegionHost {
+                module: Wire::read(reader)?,
+                owner: Wire::read(reader)?,
+                release: Wire::read(reader)?,
+            },
             26 => Self::StringIntrinsic {
                 module: Wire::read(reader)?,
                 operation: Wire::read(reader)?,
@@ -2612,6 +2905,8 @@ impl PureImage {
         let mut seen_common = false;
         let mut seen_string = false;
         let mut seen_bytes = false;
+        let mut seen_region = false;
+        let mut seen_region_facade = false;
         for record in &self.sources {
             charge(decoder.work, 1)?;
             let path = decoder.text(record.path)?;
@@ -2620,6 +2915,18 @@ impl PureImage {
                 .map_err(|_| ImageFailure::SourceAdmission)?;
             let role = match record.role {
                 ModuleRoleRecord::Ordinary => crate::module::ImageModuleRole::Ordinary,
+                ModuleRoleRecord::BuiltinRegionFacade => {
+                    if std::mem::replace(&mut seen_region_facade, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRegionFacade
+                }
+                ModuleRoleRecord::BuiltinRegion => {
+                    if std::mem::replace(&mut seen_region, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRegion
+                }
                 ModuleRoleRecord::BuiltinString => {
                     if std::mem::replace(&mut seen_string, true) {
                         return Err(ImageFailure::InvalidRecord);
@@ -3052,7 +3359,13 @@ impl Decoder<'_> {
         origin: OriginOwner,
     ) -> Result<NodeId, ImageFailure> {
         let node = match record {
-            NodeTag::CellScope { .. }
+            NodeTag::Region { .. }
+            | NodeTag::RegionValueRequest { .. }
+            | NodeTag::RegionTuple { .. }
+            | NodeTag::RegionClosure { .. }
+            | NodeTag::RegionBuffer { .. }
+            | NodeTag::RegionAllocate { .. }
+            | NodeTag::CellScope { .. }
             | NodeTag::Cleanup { .. }
             | NodeTag::Registration { .. }
             | NodeTag::Handler(_)
@@ -3065,6 +3378,60 @@ impl Decoder<'_> {
 
             NodeTag::TypeAbstraction { .. } | NodeTag::TypeApplication { .. } => {
                 return Err(ImageFailure::Unsupported(Unsupported::ErasedTypeOperation));
+            }
+            NodeTag::RegionBinding {
+                module,
+                operation,
+                owner,
+                address_module,
+            } => {
+                let module = *get(&self.modules, module)?;
+                if !module.is_builtin_region() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                use crate::core::packed::Intrinsic;
+                let operation = match (operation, owner, address_module) {
+                    (0, None, None) => Intrinsic::RegionRequestBytes,
+                    (1, None, None) => Intrinsic::RegionRequestAlignment,
+                    (2, Some(owner), Some(address_module)) => Intrinsic::RegionFromBacking {
+                        owner: self.type_variable(owner)?,
+                        address_module: *get(&self.modules, address_module)?,
+                    },
+                    _ => return Err(ImageFailure::InvalidRecord),
+                };
+                if matches!(operation, Intrinsic::RegionFromBacking { address_module, .. } if !address_module.is_builtin_foreign())
+                {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.intrinsic(operation, module, ty.into_inner(), origin.take())
+                })
+            }
+            NodeTag::RegionHost {
+                module,
+                owner,
+                release,
+            } => {
+                let module = *get(&self.modules, module)?;
+                if !module.is_builtin_region() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let owner = self.type_variable(owner)?;
+                let configuration = crate::core::region::HostRegionConfiguration::System;
+                let operation = if release {
+                    crate::core::packed::Intrinsic::RegionHostRelease {
+                        owner,
+                        configuration,
+                    }
+                } else {
+                    crate::core::packed::Intrinsic::RegionHostAllocate {
+                        owner,
+                        configuration,
+                    }
+                };
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.intrinsic(operation, module, ty.into_inner(), origin.take())
+                })
             }
             NodeTag::StringIntrinsic { module, operation } => {
                 let module = *get(&self.modules, module)?;
@@ -3136,6 +3503,20 @@ impl Decoder<'_> {
                 })
             }
 
+            NodeTag::IntegerMagnitude { negative, bytes } => {
+                let bytes = bytes.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
+                charge(self.work, bytes.len())?;
+                if bytes.last().is_none_or(|b| *b == 0) {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let value = Integer::from_sign_magnitude(negative, bytes);
+                if value.to_i64().is_some() || value.to_u64().is_some() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                builder.with_caller_type_work(self.work, |builder| {
+                    builder.integer(value, ty.into_inner(), origin.take())
+                })
+            }
             NodeTag::Integer(value) => builder.with_caller_type_work(self.work, |builder| {
                 builder.integer(Integer::from_i64(value), ty.into_inner(), origin.take())
             }),
@@ -3280,24 +3661,162 @@ mod provenance_tests;
 mod tests {
 
     #[test]
-    fn foreign_free_default_compilation_keeps_pure_private_image() {
+    fn integer_region_image_preserves_inline_width_digit_storage_and_arithmetic() {
+        assert_region_image(
+            "import @builtin.regions as Region\nmain : Unit -> Int\nmain () = {\nlet wide = 18446744073709551616\nlet answer = wide * wide\nmatch answer == 340282366920938463463374607431768211456 {\ntrue => 42\nfalse => 0\n}\n}\n",
+        );
+    }
+
+    #[test]
+    fn default_region_entry_image_restores_without_original_sources() {
+        assert_region_image(concat!(
+            "import @builtin.regions as Region\n",
+            "main : Unit -> Int\nmain () = region<R> r {\nusing r {\nmatch (20, 22) {\n(a, b) => match (a + b) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn nominal_region_image_preserves_constructor_identity_and_recursive_aliases() {
+        assert_region_image(concat!(
+            "import @builtin.regions as Region\n",
+            "type Stream = Next(Int, Stream)\nmain : Unit -> Int\nmain () = region<R> r {\n",
+            "let rec ones : Stream = Next(21, ones)\nmatch ones {\n",
+            "Next(first, rest) => match rest {\nNext(second, ignored) => match (first + second) == 42 {\ntrue => 42\nfalse => 0\n}\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn mixed_recursive_closure_image_preserves_captures_and_guarded_cycle() {
+        assert_region_image(concat!(
+            "import @builtin.regions as Region\n",
+            "type Stream = Next(Int, Unit -> Int, Unit -> Int)\n",
+            "main : Unit -> Int\nmain () = region<R> r {\n",
+            "let rec first : Stream = Next(42, read, again)\n",
+            "and read : Unit -> Int = fn(ignored) {\nmatch first {\nNext(value, ignored, also_ignored) => value\n}\n}\n",
+            "and again : Unit -> Int = fn(ignored) {\nread ()\n}\nlet alias = first\n",
+            "match alias {\nNext(value, head, tail) => match (head ()) == 42 {\ntrue => match (tail ()) == value {\ntrue => 42\nfalse => 0\n}\nfalse => 0\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn deferred_capture_carrier_wire_preserves_all_explicit_operands() {
         let tree = SourceTree::new();
-        tree.write("entry.ash", "main : Unit -> Int\nmain () = 42\n");
+        tree.write("entry.ash", "main : Unit -> (Unit -> Int)\nmain () = {\nlet captured = 42\nfn(ignored) {\ncaptured\n}\n}\n");
         let compiled = compile_path(tree.configuration()).unwrap();
-        assert!(compiled.effect_build_input().is_none());
-        let (program, provenance) = compiled
-            .pure_build_input()
-            .expect("no Foreign or effectful scheme selects ordinary Pure Core");
-        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
-        assert!(!image.effect_dialect);
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let mut image = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
+        let index = image.nodes.iter().position(|node| matches!(node.tag, NodeTag::RegionClosure { captures, .. } if captures.len > 0)).unwrap();
+        let NodeTag::RegionClosure {
+            api,
+            context,
+            storage,
+            body,
+            captures,
+            ..
+        } = image.nodes[index].tag
+        else {
+            unreachable!()
+        };
+        let expected_captures = captures.get(&image.node_children).unwrap().to_vec();
+        // Isolate the existing delayed-code carrier wire alternative. This is
+        // not an admitted Score program or a native method-catalog image.
+        image.nodes[index].tag = NodeTag::RegionClosure {
+            api,
+            context,
+            storage,
+            body,
+            captures,
+            parameter: None,
+        };
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
-        drop(image);
+        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
+        let NodeTag::RegionClosure {
+            api: actual_api,
+            context: actual_context,
+            storage: actual_storage,
+            body: actual_body,
+            captures: actual_captures,
+            parameter,
+        } = decoded.nodes[index].tag
+        else {
+            panic!("delayed capture carrier tag");
+        };
+        assert_eq!(
+            (
+                actual_api,
+                actual_context,
+                actual_storage,
+                actual_body,
+                parameter
+            ),
+            (api, context, storage, body, None)
+        );
+        assert_eq!(
+            actual_captures.get(&decoded.node_children).unwrap(),
+            expected_captures
+        );
+    }
+
+    #[test]
+    fn byte_storage_image_restores_literal_and_utf8_result_without_sources() {
+        assert_region_image(concat!(
+            "import @builtin.regions as Region\nimport @builtin.string as Text\nimport @builtin.bytes as B\n",
+            "main : Unit -> Int\nmain () = region<R> r {\n",
+            "match Text.from_utf8 (Text.to_utf8 \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\") {\n",
+            "Text.Decoded(text) => Text.byte_length text\nText.InvalidUtf8 => 0\n}\n}\n"
+        ));
+    }
+
+    fn assert_region_image(source: &str) {
+        let tree = SourceTree::new();
+        tree.write("entry.ash", source);
+        let compiled = compile_path(tree.configuration()).unwrap();
+        assert!(compiled.pure_build_input().is_none());
+        let (program, provenance) = compiled
+            .effect_build_input()
+            .expect("generated root/default uses explicit Effect Core");
+        let build = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        for role in [
+            ModuleRoleRecord::BuiltinRegion,
+            ModuleRoleRecord::BuiltinRegionFacade,
+        ] {
+            assert!(build.image.sources.iter().any(|source| source.role == role));
+        }
+        let bytes = build
+            .image
+            .encode_bytes(&mut TypeWorkBudget::default())
+            .unwrap();
+        let expected = build
+            .image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
+        drop(build);
         drop(compiled);
         drop(tree);
-        let decoded = PureImage::decode_bytes(&bytes, &mut TypeWorkBudget::default()).unwrap();
-        let restored = decoded.restore(&mut TypeWorkBudget::default()).unwrap();
+        let mut work = TypeWorkBudget::default();
+        let decoded = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+        decoded
+            .admit_expected_native_facts(&expected, &mut work)
+            .unwrap();
+        let restored = decoded.restore_effect(&mut work).unwrap();
         assert_eq!(
-            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
             "42"
         );
     }
@@ -3305,20 +3824,25 @@ mod tests {
 
     #[test]
     fn generic_cell_private_image_reconstructs_dependency_proof_and_executes() {
-        let (donor, sources) = crate::core::validate::generic_cell_validated_fixture_for_test();
-        let provenance = donor
-            .registry()
-            .type_variables()
-            .map(|parameter| {
-                let module = parameter.id.module().unwrap();
-                let source = sources
-                    .iter()
-                    .find(|source| source.id() == parameter.origin.primary_span().source())
-                    .unwrap();
-                (module, std::sync::Arc::new(source.clone()))
+        let (donor, sources, relation) =
+            crate::core::validate::generic_cell_source_fixture_for_test(
+                "import @builtin.generic_cell as Cell\nmain : Unit -> Int\nmain () = resource Cell.Cell<R, Int> c = 41 {\nCell.read c + 1\n}\n",
+                None,
+            );
+        let provenance = relation
+            .iter()
+            .map(|(module, identity)| {
+                (
+                    *module,
+                    Arc::new(
+                        sources
+                            .iter()
+                            .find(|source| source.id() == *identity)
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
             })
-            .collect::<std::collections::BTreeMap<_, _>>()
-            .into_iter()
             .collect::<Vec<_>>();
         let build = encode_effect_for_build(
             &donor,
@@ -3469,6 +3993,8 @@ mod tests {
 
     #[test]
     fn generic_cell_imported_flow_images_rebuild_with_exact_short_and_retry_work() {
+        let mut default_refusal_checked = false;
+        let mut case = 0;
         for (source, helper, value) in [
             (
                 include_str!("../../tests/fixtures/generic-cell/snapshot-entry.ash"),
@@ -3516,6 +4042,7 @@ mod tests {
                 "42",
             ),
         ] {
+            case += 1;
             let (program, sources, relation) =
                 crate::core::validate::generic_cell_source_fixture_for_test(source, Some(helper));
             let program = if source.contains("90 + 9") {
@@ -3565,8 +4092,51 @@ mod tests {
                 image.admit_expected_native_facts(&expected, work)?;
                 image.restore_effect(work)
             };
-            let mut measured = TypeWorkBudget::default();
-            let restored = restore(&mut measured).unwrap();
+            let mut standalone = TypeWorkBudget::default();
+            let standalone_outcome = match restore(&mut standalone) {
+                Ok(restored) => {
+                    drop(restored);
+                    "complete"
+                }
+                Err(ImageFailure::Resource) => {
+                    default_refusal_checked = true;
+                    "resource-refusal"
+                }
+                Err(ImageFailure::Validation(error))
+                    if error.reason() == crate::core::ValidationReason::Resource =>
+                {
+                    default_refusal_checked = true;
+                    "validation-resource-refusal"
+                }
+                Err(error) => panic!("standalone image refusal must be capacity: {error:?}"),
+            };
+            eprintln!(
+                "imported-flow startup case={case} standalone={standalone_outcome} used={}/{}",
+                standalone.used(),
+                standalone.limit()
+            );
+            // Use the same startup owner as the generated runner, carrying
+            // framing, expected facts and reconstruction in one cumulative meter.
+            if case == 2 {
+                assert_eq!(standalone_outcome, "validation-resource-refusal");
+            }
+            let mut measured = super::super::gas::startup(bytes.len(), expected.len()).unwrap();
+            let restored = restore(&mut measured).unwrap_or_else(|error| {
+                panic!(
+                    "startup image case={case} bytes={} facts={} used={}/{} error={error:?}",
+                    bytes.len(),
+                    expected.len(),
+                    measured.used(),
+                    measured.limit()
+                )
+            });
+            eprintln!(
+                "imported-flow startup case={case} bytes={} facts={} used={}/{} result={value}",
+                bytes.len(),
+                expected.len(),
+                measured.used(),
+                measured.limit()
+            );
             assert_eq!(
                 crate::eval::evaluate_effect(&restored.program)
                     .unwrap()
@@ -3583,6 +4153,10 @@ mod tests {
                 assert_eq!(exact.used(), measured.used());
             }
         }
+        assert!(
+            default_refusal_checked,
+            "the unchanged standalone allowance refuses at least one retained flow"
+        );
     }
 
     #[test]
@@ -3818,8 +4392,15 @@ mod tests {
         let tree = SourceTree::new();
         tree.write("entry.ash", "main : Unit -> Int\nmain () = 42\n");
         let compiled = compile_path(tree.configuration()).unwrap();
-        let (program, provenance) = compiled.pure_build_input().unwrap();
-        let image = encode(program, provenance, &mut TypeWorkBudget::default()).unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
+        let image = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap()
+        .image;
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
         let facts = image
             .encode_native_expectations(&mut TypeWorkBudget::default())
@@ -4086,18 +4667,29 @@ mod tests {
             let tree = SourceTree::new();
             tree.write("entry.ash", source);
             let compiled = compile_path(tree.configuration()).expect("recursive source compiles");
-            let (program, provenance) = compiled.pure_build_input().unwrap();
+            let (program, provenance) = compiled.effect_build_input().unwrap();
             let mut work = TypeWorkBudget::default();
-            let image = encode(program, provenance, &mut work).expect("recursive image encodes");
+            let image = encode_effect_for_build(
+                program,
+                provenance,
+                super::super::NATIVE_TARGET,
+                &mut work,
+            )
+            .expect("recursive image encodes")
+            .image;
             let bytes = image.encode_bytes(&mut work).unwrap();
+            let expected_facts = image.encode_native_expectations(&mut work).unwrap();
             drop(image);
             drop(compiled);
             drop(tree);
-            let restored = PureImage::decode_bytes(&bytes, &mut work)
-                .unwrap()
-                .restore(&mut work)
+            let image = PureImage::decode_bytes(&bytes, &mut work).unwrap();
+            image
+                .admit_expected_native_facts(&expected_facts, &mut work)
+                .unwrap();
+            let restored = image
+                .restore_effect(&mut work)
                 .expect("recursive image independently validates");
-            let evaluation = crate::eval::evaluate(&restored).unwrap();
+            let evaluation = crate::eval::evaluate_effect(&restored.program).unwrap();
             assert_eq!(evaluation.value.to_string(), expected);
         }
     }
@@ -4120,28 +4712,44 @@ mod tests {
         );
         let compiled = compile_path(tree.configuration()).expect("ordinary source Core compiles");
         let (program, provenance) = compiled
-            .pure_build_input()
-            .expect("retained Pure build input");
-        let original_module = program.registry().nominals()[0].id.module();
+            .effect_build_input()
+            .expect("retained Effect build input");
+        let original_module = program
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.spelling == "Count")
+            .expect("the defining user Count remains canonical")
+            .id
+            .module();
         let original_work = *compiled.compilation_work();
         let mut encode_work = TypeWorkBudget::default();
-        let image = encode(program, provenance, &mut encode_work).expect("flat image prepares");
+        let image = encode_effect_for_build(
+            program,
+            provenance,
+            super::super::NATIVE_TARGET,
+            &mut encode_work,
+        )
+        .expect("flat image prepares")
+        .image;
         let encoded_cost = encode_work.used();
         assert!(
-            encode(
+            encode_effect_for_build(
                 program,
                 provenance,
+                super::super::NATIVE_TARGET,
                 &mut TypeWorkBudget::with_limit(encoded_cost)
             )
             .is_ok()
         );
         assert!(matches!(
-            encode(
+            encode_effect_for_build(
                 program,
                 provenance,
+                super::super::NATIVE_TARGET,
                 &mut TypeWorkBudget::with_limit(encoded_cost - 1)
             ),
-            Err(ImageFailure::Resource),
+            Err(NativeImageFailure::Image(ImageFailure::Resource)),
         ));
         assert_eq!(compiled.compilation_work(), &original_work);
         let mut wire_work = TypeWorkBudget::default();
@@ -4252,6 +4860,9 @@ mod tests {
             PureImage::decode_bytes(&bytes[..bytes.len() - 1], &mut TypeWorkBudget::default()),
             Err(ImageFailure::InvalidEncoding)
         ));
+        image
+            .admit_expected_native_facts(&expected, &mut TypeWorkBudget::default())
+            .unwrap();
         fs::remove_dir_all(&tree.0).unwrap();
         drop(compiled);
         let mut restored_cost = None;
@@ -4259,27 +4870,38 @@ mod tests {
             let mut restore_work =
                 restored_cost.map_or_else(TypeWorkBudget::default, TypeWorkBudget::with_limit);
             let restored = image
-                .restore(&mut restore_work)
+                .restore_effect(&mut restore_work)
                 .expect("independent reconstruction validates");
             restored_cost = Some(restore_work.used());
             assert_ne!(
-                restored.registry().nominals()[0].id.module(),
+                restored
+                    .program
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .find(|nominal| nominal.spelling == "Count")
+                    .expect("the independently restored user Count remains canonical")
+                    .id
+                    .module(),
                 original_module
             );
             assert_eq!(
-                crate::eval::evaluate(&restored).unwrap().value.to_string(),
+                crate::eval::evaluate_effect(&restored.program)
+                    .unwrap()
+                    .value
+                    .to_string(),
                 "42"
             );
         }
         assert!(
             image
-                .restore(&mut TypeWorkBudget::with_limit(restored_cost.unwrap() - 1))
+                .restore_effect(&mut TypeWorkBudget::with_limit(restored_cost.unwrap() - 1))
                 .is_err()
         );
         let cost = restored_cost.unwrap();
         let mut prefixed_work = TypeWorkBudget::with_limit(cost + 37);
         prefixed_work.charge(37).unwrap();
-        image.restore(&mut prefixed_work).unwrap();
+        image.restore_effect(&mut prefixed_work).unwrap();
         assert_eq!(prefixed_work.used(), cost + 37);
         // A failed builder admission must also return its completed charges.
         // Reusing that same ledger cannot open another construction allowance.
@@ -4306,7 +4928,7 @@ mod tests {
 
         let mut work = TypeWorkBudget::with_limit(0);
         assert!(matches!(
-            image.restore(&mut work),
+            image.restore_effect(&mut work),
             Err(ImageFailure::Resource)
         ));
         // Malformed structural claims reach the same independent validator;
@@ -4317,6 +4939,13 @@ mod tests {
             .iter_mut()
             .find(|record| matches!(record.tag, NodeTag::Integer(_)))
             .unwrap();
+        assert!(
+            matches!(
+                corrupt.types[usize::try_from(literal.ty).unwrap()].tag,
+                TypeTag::Int
+            ),
+            "the current retained integer record must have its admitted Int type before corruption"
+        );
         literal.ty = push(
             &mut corrupt.types,
             TypeRecord {
@@ -4327,7 +4956,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            corrupt.restore(&mut TypeWorkBudget::default()),
+            corrupt.restore_effect(&mut TypeWorkBudget::default()),
             Err(ImageFailure::Validation(_))
         ));
     }
@@ -4591,32 +5220,49 @@ main () = {
 "#,
         );
         let compiled = compile_path(tree.configuration()).unwrap();
-        let (program, provenance) = compiled.pure_build_input().unwrap();
+        let (program, provenance) = compiled.effect_build_input().unwrap();
         let mut work = TypeWorkBudget::default();
-        let image = encode(program, provenance, &mut work).unwrap();
+        let image =
+            encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut work)
+                .unwrap()
+                .image;
         let required = work.used();
         for prefix in [0, 7] {
             let mut short = TypeWorkBudget::with_limit(prefix + required - 1);
             short.charge(prefix).unwrap();
             assert!(matches!(
-                encode(program, provenance, &mut short),
-                Err(ImageFailure::Resource)
+                encode_effect_for_build(
+                    program,
+                    provenance,
+                    super::super::NATIVE_TARGET,
+                    &mut short
+                ),
+                Err(NativeImageFailure::Image(ImageFailure::Resource))
             ));
             let mut exact = TypeWorkBudget::with_limit(prefix + required);
             exact.charge(prefix).unwrap();
-            encode(program, provenance, &mut exact).unwrap();
+            encode_effect_for_build(program, provenance, super::super::NATIVE_TARGET, &mut exact)
+                .unwrap();
             assert_eq!(exact.used(), prefix + required);
         }
         let bytes = image.encode_bytes(&mut TypeWorkBudget::default()).unwrap();
+        let expected = image
+            .encode_native_expectations(&mut TypeWorkBudget::default())
+            .unwrap();
         drop(compiled);
         drop(tree);
         let restore = |bytes: &[u8], work: &mut TypeWorkBudget| {
-            PureImage::decode_bytes(bytes, work)?.restore(work)
+            let image = PureImage::decode_bytes(bytes, work)?;
+            image.admit_expected_native_facts(&expected, work)?;
+            image.restore_effect(work)
         };
         let mut measured = TypeWorkBudget::default();
         let restored = restore(&bytes, &mut measured).unwrap();
         assert_eq!(
-            crate::eval::evaluate(&restored).unwrap().value.to_string(),
+            crate::eval::evaluate_effect(&restored.program)
+                .unwrap()
+                .value
+                .to_string(),
             "(255, true, 1, true, true)"
         );
         let required = measured.used();
@@ -4665,14 +5311,24 @@ main () = {
                         .nodes
                         .iter_mut()
                         .find(|node| {
-                            matches!(node.tag, NodeTag::BytesIntrinsic { operation: 4, .. })
+                            matches!(
+                                node.tag,
+                                NodeTag::RegionBuffer {
+                                    source: 1,
+                                    operation: 4,
+                                    ..
+                                }
+                            )
                         })
                         .unwrap();
-                    let NodeTag::BytesIntrinsic { module, operation } = &mut node.tag else {
+                    let NodeTag::RegionBuffer {
+                        module, operation, ..
+                    } = &mut node.tag
+                    else {
                         unreachable!()
                     };
                     if change == 3 {
-                        *module = ordinary;
+                        *module = Some(ordinary);
                     } else {
                         *operation = 255;
                     }
@@ -4680,7 +5336,9 @@ main () = {
                 _ => unreachable!(),
             }
             assert!(
-                changed.restore(&mut TypeWorkBudget::default()).is_err(),
+                changed
+                    .restore_effect(&mut TypeWorkBudget::default())
+                    .is_err(),
                 "forged Bytes authority {change}"
             );
         }
@@ -5213,16 +5871,52 @@ main () = {
 
     #[test]
     fn unsupported_registry_facts_are_refused_instead_of_dropped() {
-        let tree = SourceTree::new();
-        tree.write(
-            "entry.ash",
-            "type Boxed<A> = Boxed(A)\nmain : Unit -> Int\nmain () = 42\n",
+        let source = Arc::new(
+            SourceFile::new("generic-nominal.ash", "type Boxed<A> = Boxed(A)\n()\n").unwrap(),
         );
-        let compiled =
-            compile_path(tree.configuration()).expect("unused generic declaration is valid source");
-        let (program, provenance) = compiled.pure_build_input().unwrap();
+        let module = ModuleId::from(source.id());
+        let owner = NominalTypeId::new(module, 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let parameter = crate::types::TypeVariableId::resolved(module, 0);
+        let origin =
+            |start, end| Origin::Source(source.span(ByteRange::new(start, end).unwrap()).unwrap());
+        let registry = ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                id: owner,
+                declaration_kind: ResolvedNominalDeclarationKind::Data,
+                spelling: "Boxed".to_owned(),
+                constructors: Box::new([constructor]),
+                representation: None,
+                representation_provenance: None,
+                origin: origin(0, 24),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner,
+                spelling: "Boxed".to_owned(),
+                payload: Some(Type::Variable(parameter)),
+                origin: origin(16, 24),
+            }],
+        )
+        .with_type_parameters(vec![(
+            owner,
+            vec![crate::resolved::ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".to_owned(),
+                kind: crate::types::Kind::Type,
+                origin: origin(11, 12),
+            }],
+        )]);
+        let mut builder = CoreBuilder::with_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin(25, 27)).unwrap();
+        let program = crate::core::validate(builder.finish(root).unwrap(), &[source.as_ref()])
+            .expect("the honest manual Pure donor retains its unused generic nominal");
         assert!(matches!(
-            encode(program, provenance, &mut TypeWorkBudget::default()),
+            encode(
+                &program,
+                &[(module, source)],
+                &mut TypeWorkBudget::default()
+            ),
             Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata))
         ));
     }
@@ -5232,9 +5926,11 @@ main () = {
 // WireWriter, push/append/get helpers and single caller TypeWorkBudget. They are
 // insertion fragments, not a second image format or a compiled implementation.
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModuleRoleRecord {
     Ordinary,
+    BuiltinRegion,
+    BuiltinRegionFacade,
     BuiltinForeign,
     BuiltinCell,
     BuiltinGenericCell,
@@ -5480,6 +6176,8 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinString => 3,
             Self::BuiltinBytes => 4,
             Self::BuiltinGenericCell => 5,
+            Self::BuiltinRegion => 6,
+            Self::BuiltinRegionFacade => 7,
         }
         .write(writer)
     }
@@ -5491,6 +6189,8 @@ impl Wire for ModuleRoleRecord {
             3 => Ok(Self::BuiltinString),
             4 => Ok(Self::BuiltinBytes),
             5 => Ok(Self::BuiltinGenericCell),
+            6 => Ok(Self::BuiltinRegion),
+            7 => Ok(Self::BuiltinRegionFacade),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -6976,8 +7676,8 @@ impl Encoder<'_> {
                 selected.insert(parameter.id, ());
             }
         }
-        // The supported inventory admits only actual Cell scope identities
-        // beyond declaration-owned variables. Preserve their original facts.
+        // Preserve actual source Cell and region scope identities beyond
+        // declaration-owned variables. The generated root owns no registry fact.
         let mut parameters = Vec::new();
         for parameter in registry.type_variables() {
             let key = self.type_variable(parameter.id)?;
@@ -7003,7 +7703,117 @@ impl Encoder<'_> {
     ) -> Result<NodeTag, ImageFailure> {
         use crate::core::{EffectExprKind, EffectOperation};
         match kind {
+            EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) => {
+                Ok(NodeTag::RegionValueRequest {
+                    api: self.module(request.api)?,
+                    fields: index(request.fields)?,
+                })
+            }
+            EffectExprKind::Operation(EffectOperation::RegionBuffer(buffer)) => {
+                use crate::core::region::RegionBufferOperation;
+                let (source, module, operation, bytes) = match &buffer.operation {
+                    RegionBufferOperation::IntegerLiteral(integer) => {
+                        charge(
+                            self.work,
+                            usize::try_from(integer.magnitude_byte_length())
+                                .map_err(|_| ImageFailure::Resource)?,
+                        )?;
+                        let (negative, bytes) = integer.sign_magnitude();
+                        (
+                            3,
+                            None,
+                            u8::from(negative),
+                            append(&mut self.image.bytes, &bytes, self.work)?,
+                        )
+                    }
+                    RegionBufferOperation::IntegerArithmetic(primitive) => {
+                        let operation = match primitive {
+                            crate::core::Primitive::Add => 0,
+                            crate::core::Primitive::Multiply => 1,
+                            _ => return Err(ImageFailure::InvalidRecord),
+                        };
+                        (4, None, operation, Slice { start: 0, len: 0 })
+                    }
+                    RegionBufferOperation::StringLiteral(bytes) => {
+                        (0, None, 0, append(&mut self.image.bytes, bytes, self.work)?)
+                    }
+                    RegionBufferOperation::Intrinsic(intrinsic) => {
+                        let tag = self
+                            .encode_node(&PureExprKind::Value(PureValue::Intrinsic(*intrinsic)))?;
+                        let (source, module, operation) = match tag {
+                            NodeTag::BytesIntrinsic { module, operation } => (1, module, operation),
+                            NodeTag::StringIntrinsic { module, operation } => {
+                                (2, module, operation)
+                            }
+                            _ => return Err(ImageFailure::InvalidRecord),
+                        };
+                        (source, Some(module), operation, Slice { start: 0, len: 0 })
+                    }
+                };
+                Ok(NodeTag::RegionBuffer {
+                    api: self.module(buffer.api)?,
+                    context: self.node(buffer.context)?,
+                    operand: buffer.operand.map(|id| self.node(id)).transpose()?,
+                    right: buffer.right.map(|id| self.node(id)).transpose()?,
+                    source,
+                    module,
+                    operation,
+                    bytes,
+                })
+            }
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                let start = self.image.node_children.len();
+                for capture in &closure.captures {
+                    let value = self.node(*capture)?;
+                    push(&mut self.image.node_children, value, self.work)?;
+                }
+                Ok(NodeTag::RegionClosure {
+                    api: self.module(closure.api)?,
+                    context: self.node(closure.context)?,
+                    storage: self.node(closure.storage)?,
+                    parameter: closure
+                        .code
+                        .function()
+                        .map(|function| self.encode_binder(function.parameter()))
+                        .transpose()?,
+                    body: self.node(closure.code.body())?,
+                    captures: Slice::of(&self.image.node_children, start)?,
+                })
+            }
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => {
+                let start = self.image.node_children.len();
+                for field in &tuple.fields {
+                    let field = self.node(*field)?;
+                    push(&mut self.image.node_children, field, self.work)?;
+                }
+                Ok(NodeTag::RegionTuple {
+                    constructor: tuple
+                        .constructor
+                        .map(|id| self.constructor(id))
+                        .transpose()?,
+                    api: self.module(tuple.api)?,
+                    context: self.node(tuple.context)?,
+                    storage: self.node(tuple.storage)?,
+                    fields: Slice::of(&self.image.node_children, start)?,
+                })
+            }
             EffectExprKind::Pure(kind) => self.encode_node(kind),
+            EffectExprKind::Operation(EffectOperation::Region(scope)) => Ok(NodeTag::Region {
+                entry: scope.entry,
+                api: self.module(scope.api)?,
+                identity: self.type_variable(scope.identity)?,
+                access: self.encode_binder(&scope.access)?,
+                preceding: self.node(scope.preceding)?,
+                provider: self.node(scope.provider)?,
+                body: self.node(scope.body)?,
+            }),
+            EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) => {
+                Ok(NodeTag::RegionAllocate {
+                    api: self.module(allocation.api)?,
+                    context: self.node(allocation.context)?,
+                    request: self.node(allocation.request)?,
+                })
+            }
             EffectExprKind::Operation(EffectOperation::Resource(scope)) => Ok(NodeTag::CellScope {
                 acquisition: self.encode_cell_acquisition(scope.acquisition)?,
                 handle: self.encode_binder(scope.handle())?,
@@ -7673,6 +8483,14 @@ impl Decoder<'_> {
                     self.cell_acquisition(acquisition)?.identity,
                     self.work,
                 )?;
+            } else if let NodeTag::Region {
+                identity,
+                entry: false,
+                ..
+            } = node.tag
+            {
+                let identity = self.type_variable(identity)?;
+                push(&mut identities, identity, self.work)?;
             }
         }
         if !registry
@@ -7747,6 +8565,8 @@ impl PureImage {
         let mut seen_common = false;
         let mut seen_cell = false;
         let mut seen_generic_cell = false;
+        let mut seen_region = false;
+        let mut seen_region_facade = false;
         let mut seen_string = false;
         let mut seen_bytes = false;
         for record in &self.sources {
@@ -7768,6 +8588,18 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
+                }
+                ModuleRoleRecord::BuiltinRegionFacade => {
+                    if std::mem::replace(&mut seen_region_facade, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRegionFacade
+                }
+                ModuleRoleRecord::BuiltinRegion => {
+                    if std::mem::replace(&mut seen_region, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRegion
                 }
                 ModuleRoleRecord::BuiltinGenericCell => {
                     if std::mem::replace(&mut seen_generic_cell, true) {
@@ -7957,6 +8789,238 @@ impl Decoder<'_> {
         origin: OriginOwner,
     ) -> Result<NodeId, ImageFailure> {
         let node = match tag {
+            NodeTag::Region {
+                entry,
+                api,
+                identity,
+                access,
+                preceding,
+                provider,
+                body,
+            } => {
+                let api = *get(&self.modules, api)?;
+                if !api.is_builtin_region() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let identity = self.type_variable(identity)?;
+                let access = self.binder(builder, access)?;
+                let scope = crate::core::region::RegionScopeNode {
+                    entry,
+                    api,
+                    identity,
+                    access,
+                    preceding: *get(nodes, preceding)?,
+                    provider: *get(nodes, provider)?,
+                    body: *get(nodes, body)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::Region(Box::new(scope)),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionBuffer {
+                api,
+                context,
+                operand,
+                right,
+                source,
+                module,
+                operation,
+                bytes,
+            } => {
+                use crate::core::{
+                    packed::{Intrinsic, IntrinsicNode},
+                    region::{RegionBufferNode, RegionBufferOperation},
+                };
+                let operation = match (source, module, operation) {
+                    (3, None, negative @ 0..=1) => {
+                        let bytes = bytes.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
+                        charge(self.work, bytes.len())?;
+                        if bytes.last().is_none_or(|byte| *byte == 0) {
+                            return Err(ImageFailure::InvalidRecord);
+                        }
+                        RegionBufferOperation::IntegerLiteral(Arc::new(
+                            Integer::from_sign_magnitude(negative != 0, bytes),
+                        ))
+                    }
+                    (4, None, operation @ 0..=1) if bytes == (Slice { start: 0, len: 0 }) => {
+                        RegionBufferOperation::IntegerArithmetic(if operation == 0 {
+                            crate::core::Primitive::Add
+                        } else {
+                            crate::core::Primitive::Multiply
+                        })
+                    }
+                    (0, None, 0) => {
+                        let bytes = bytes.get(self.fact_table(&self.image.bytes, |p| p.bytes)?)?;
+                        charge(self.work, bytes.len())?;
+                        let mut copy = Vec::new();
+                        copy.try_reserve_exact(bytes.len())
+                            .map_err(|_| ImageFailure::Resource)?;
+                        copy.extend_from_slice(bytes);
+                        RegionBufferOperation::StringLiteral(Arc::from(copy))
+                    }
+                    (source, Some(module), operation) if bytes == (Slice { start: 0, len: 0 }) => {
+                        let module = *get(&self.modules, module)?;
+                        let owner = |local| NominalTypeId::new(module, local);
+                        let operation = match (source, operation) {
+                            (1, 0) => Intrinsic::BytesEmpty,
+                            (1, 1) => Intrinsic::BytesAppendByte {
+                                appended: ConstructorId::new(owner(0), 0),
+                                invalid: ConstructorId::new(owner(0), 1),
+                            },
+                            (1, 4) => Intrinsic::BytesAt {
+                                found: ConstructorId::new(owner(1), 0),
+                                invalid: ConstructorId::new(owner(1), 1),
+                            },
+                            (2, 1) => Intrinsic::StringToUtf8,
+                            (2, 3) => Intrinsic::StringFromUtf8 {
+                                decoded: ConstructorId::new(owner(0), 0),
+                                invalid: ConstructorId::new(owner(0), 1),
+                            },
+                            _ => return Err(ImageFailure::InvalidRecord),
+                        };
+                        RegionBufferOperation::Intrinsic(IntrinsicNode::new(operation, module))
+                    }
+                    _ => return Err(ImageFailure::InvalidRecord),
+                };
+                let buffer = RegionBufferNode {
+                    api: *get(&self.modules, api)?,
+                    context: *get(nodes, context)?,
+                    operand: operand.map(|id| get(nodes, id).copied()).transpose()?,
+                    right: right.map(|id| get(nodes, id).copied()).transpose()?,
+                    operation,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionBuffer(buffer),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionValueRequest { api, fields } => {
+                let api = *get(&self.modules, api)?;
+                let request = crate::core::region::RegionValueRequestNode {
+                    api,
+                    fields: usize::try_from(fields).map_err(|_| ImageFailure::InvalidRecord)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionValueRequest(request),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionClosure {
+                api,
+                context,
+                storage,
+                parameter,
+                body,
+                captures,
+            } => {
+                let api = *get(&self.modules, api)?;
+                let mut values = Vec::new();
+                for value in captures.get(&self.image.node_children)? {
+                    push(&mut values, *get(nodes, *value)?, self.work)?;
+                }
+                let code = match parameter {
+                    Some(parameter) => crate::core::region::RegionClosureCode::Function(
+                        crate::core::function::FunctionNode::new(
+                            self.binder(builder, parameter)?,
+                            *get(nodes, body)?,
+                        ),
+                    ),
+                    None => crate::core::region::RegionClosureCode::Adapter {
+                        body: *get(nodes, body)?,
+                    },
+                };
+                let closure = crate::core::region::RegionClosureNode {
+                    api,
+                    context: *get(nodes, context)?,
+                    storage: *get(nodes, storage)?,
+                    code,
+                    captures: values.into_boxed_slice(),
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionClosure(closure),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionTuple {
+                constructor,
+                api,
+                context,
+                storage,
+                fields,
+            } => {
+                let api = *get(&self.modules, api)?;
+                let mut elements = Vec::new();
+                for field in fields.get(&self.image.node_children)? {
+                    push(&mut elements, *get(nodes, *field)?, self.work)?;
+                }
+                let tuple = crate::core::region::RegionTupleNode {
+                    constructor: constructor.map(|id| self.constructor(id)).transpose()?,
+                    api,
+                    context: *get(nodes, context)?,
+                    storage: *get(nodes, storage)?,
+                    fields: elements.into_boxed_slice(),
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionTuple(tuple),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
+            NodeTag::RegionAllocate {
+                api,
+                context,
+                request,
+            } => {
+                let api = *get(&self.modules, api)?;
+                if !api.is_builtin_region() {
+                    return Err(ImageFailure::InvalidRecord);
+                }
+                let allocation = crate::core::region::RegionAllocateNode {
+                    api,
+                    context: *get(nodes, context)?,
+                    request: *get(nodes, request)?,
+                };
+                return builder
+                    .with_caller_type_work(self.work, |builder| {
+                        builder.region_operation(
+                            crate::core::EffectOperation::RegionAllocate(allocation),
+                            ty.into_inner(),
+                            effects,
+                            origin.take(),
+                        )
+                    })
+                    .map_err(ImageFailure::from);
+            }
             NodeTag::CellScope {
                 acquisition,
                 handle,
@@ -8183,12 +9247,18 @@ impl Decoder<'_> {
                     let row = self.structural(*row)?.row()?;
                     push(&mut rows, row, self.work)?;
                 }
+                let computation_row =
+                    crate::types::clone_effect_row_with_budget(&effects, self.work)
+                        .map_err(|_| ImageFailure::Resource)?;
                 builder.with_caller_type_work(self.work, |builder| {
-                    builder.type_application_with_row_arguments(
-                        function,
-                        restored.into_vec(),
-                        rows,
+                    builder.type_application_with_effects(
+                        crate::core::type_ops::TypeApplicationNode::new_with_row_arguments(
+                            function,
+                            restored.into_vec(),
+                            rows,
+                        ),
                         ty.into_inner(),
+                        computation_row,
                         origin.take(),
                     )
                 })?
@@ -8376,6 +9446,12 @@ fn encode_native_preparation(
                 return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata).into());
             }
             push(&mut identities, scope.acquisition.identity, work)?;
+        } else if let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Region(
+            scope,
+        )) = &node.kind
+            && !scope.entry
+        {
+            push(&mut identities, scope.identity(), work)?;
         }
     }
     if !program

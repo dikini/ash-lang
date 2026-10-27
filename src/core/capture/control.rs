@@ -242,6 +242,7 @@ pub(super) enum Control {
         value: Value,
         ty: usize,
         source: Span,
+        prefix: Option<Request>,
     },
     Request(Request),
     Handler {
@@ -277,7 +278,11 @@ pub(super) struct Clause {
 impl Control {
     pub(super) fn requests(&self) -> impl Iterator<Item = &Request> {
         let single = match self {
-            Self::Request(request)
+            Self::Call {
+                prefix: Some(request),
+                ..
+            }
+            | Self::Request(request)
             | Self::Handler {
                 effect: request, ..
             }
@@ -391,13 +396,22 @@ impl Control {
                     Self::Choice(copy)
                 }
             }
-            Self::Call { value, ty, source } => {
+            Self::Call {
+                value,
+                ty,
+                source,
+                prefix,
+            } => {
                 let mut value = value.copy(budget)?;
                 value.relocate(target_offset, budget)?;
                 Self::Call {
                     value,
                     ty: ty + type_offset,
                     source: *source,
+                    prefix: prefix
+                        .as_ref()
+                        .map(|request| request.copy(budget))
+                        .transpose()?,
                 }
             }
             Self::Request(request) => Self::Request(request.copy(budget)?),
@@ -465,6 +479,19 @@ pub(super) fn query_required(
                 | Control::Registration { .. }
                 | Control::Cleanup { .. }
         ) {
+            return Ok(true);
+        }
+        // A saved allocation context can feed a published global callable even
+        // when the initializer contains no local resource boundary.
+        if let Control::Request(request) = &graph.code[code]
+            && let Some(operation) = request.operation
+            && let Some(api) = crate::resolved::RegionApi::for_module(operation.owner().module())
+            && operation == crate::types::OperationId::new(api.default_alloc(), 1)
+            && request.opaque_row.is_none()
+            && request.effect.as_ref().is_some_and(|effect| {
+                effect.effect() == api.default_alloc() && effect.arguments().is_empty()
+            })
+        {
             return Ok(true);
         }
         graph.code[code].children(graph, &mut pending, budget)?;
@@ -1080,14 +1107,14 @@ struct Selection {
     prefix: Vec<Edge>,
 }
 
-// `select` returns (can_select, can_cross). The graph is walked iteratively;
-// backward reachability retains only prefixes leading to this boundary.
-fn selections(
+// `select` returns (can_select, can_cross). Preserve the forward boundary
+// order separately from the backward prefix reconstruction used by captures.
+fn selection_boundaries(
     state: &State,
     root: Address,
     mut select: impl FnMut(Frame) -> Result<(bool, bool), Failure>,
     budget: &mut TypeWorkBudget,
-) -> Result<(Vec<Selection>, bool), Failure> {
+) -> Result<(Vec<Edge>, Vec<Edge>, bool), Failure> {
     let mut pending = Vec::new();
     pending.try_reserve(1).map_err(|_| Failure::Resource)?;
     pending.push(root);
@@ -1120,6 +1147,16 @@ fn selections(
             }
         }
     }
+    Ok((boundaries, prefixes, escaped))
+}
+
+fn selections(
+    state: &State,
+    root: Address,
+    select: impl FnMut(Frame) -> Result<(bool, bool), Failure>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(Vec<Selection>, bool), Failure> {
+    let (boundaries, prefixes, escaped) = selection_boundaries(state, root, select, budget)?;
     let mut result = Vec::new();
     for boundary in boundaries {
         let mut reaches = HashSet::new();
@@ -1758,6 +1795,7 @@ impl<'a> Analysis<'a> {
         for (id, previous) in self.labels.iter().enumerate() {
             charge(budget, 1)?;
             if previous.ambiguous_instance == label.ambiguous_instance
+                && previous.region_service == label.region_service
                 && same_effect(previous.effect.as_deref(), label.effect.as_deref(), budget)?
                 && match (&previous.opaque_row, &label.opaque_row) {
                     (None, None) => true,
@@ -2400,7 +2438,7 @@ impl<'a> Analysis<'a> {
         let mut pending = VecDeque::new();
         let mut visited = HashSet::new();
         let mut calls: Vec<ObservedCall> = Vec::new();
-        let mut cell_requests = HashSet::new();
+        let mut value_requests = HashSet::new();
         let mut observed_calls = HashMap::new();
         let mut revision = self
             .data
@@ -2471,17 +2509,19 @@ impl<'a> Analysis<'a> {
                         self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
                     }
                     Control::Request(request) => {
-                        if request.effect.as_ref().is_some_and(|effect| {
-                            effect.effect().module().is_builtin_generic_cell()
-                        }) {
+                        if request.region_service
+                            || request.effect.as_ref().is_some_and(|effect| {
+                                effect.effect().module().is_builtin_resource()
+                            })
+                        {
                             state.charge_key(budget)?;
-                            if !cell_requests.contains(&state) {
-                                cell_requests
+                            if !value_requests.contains(&state) {
+                                value_requests
                                     .try_reserve(1)
                                     .map_err(|_| Failure::Resource)?;
                                 let saved = state.copy(budget)?;
                                 state.charge_key(budget)?;
-                                cell_requests.insert(saved);
+                                value_requests.insert(saved);
                             }
                         }
                         let label = self.label(code, state.context, budget)?;
@@ -2556,8 +2596,8 @@ impl<'a> Analysis<'a> {
                 break;
             }
             revision = data.revision();
-            // Only calls choose control successors from growing value facts.
-            // Replay them directly; ordinary enqueue would suppress visited states.
+            // Calls and explicit-owner requests choose successors from growing
+            // value facts. Replay directly; enqueue would suppress visited states.
             charge(budget, calls.len())?;
             pending
                 .try_reserve(calls.len())
@@ -2565,11 +2605,11 @@ impl<'a> Analysis<'a> {
             for call in &calls {
                 pending.push_back(call.state.copy(budget)?);
             }
-            charge(budget, cell_requests.len())?;
+            charge(budget, value_requests.len())?;
             pending
-                .try_reserve(cell_requests.len())
+                .try_reserve(value_requests.len())
                 .map_err(|_| Failure::Resource)?;
-            for request in &cell_requests {
+            for request in &value_requests {
                 pending.push_back(request.copy(budget)?);
             }
         }
@@ -2709,7 +2749,13 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let code = state.position.code;
-        let Control::Call { value, ty, source } = &self.graph.code[code] else {
+        let Control::Call {
+            value,
+            ty,
+            source,
+            prefix,
+        } = &self.graph.code[code]
+        else {
             return Err(Failure::Invalid);
         };
         let (successors, publication) = if let Some(data) = &mut self.data {
@@ -2762,6 +2808,10 @@ impl<'a> Analysis<'a> {
             unknown,
             returns,
         } = successors;
+        let prefix = prefix
+            .as_ref()
+            .map(|request| request.copy(budget))
+            .transpose()?;
         let ty = *ty;
         let source = *source;
         for (target, value_context) in targets {
@@ -2781,6 +2831,26 @@ impl<'a> Analysis<'a> {
             self.returned(state.copy(budget)?, pending, visited, budget)?;
         }
         if unknown {
+            if let Some(prefix) = prefix {
+                let label = self.intern_label(prefix, budget)?;
+                let port = self
+                    .data
+                    .as_mut()
+                    .map(|data| data.port(code, state.value_context, budget))
+                    .transpose()?;
+                self.requested(
+                    &state,
+                    Event {
+                        code,
+                        label,
+                        unknown: true,
+                        port,
+                    },
+                    pending,
+                    visited,
+                    budget,
+                )?;
+            }
             let mut ty_owner = TypeArguments(Vec::new());
             ty_owner.0.try_reserve(1).map_err(|_| Failure::Resource)?;
             ty_owner
@@ -2888,7 +2958,7 @@ impl<'a> Analysis<'a> {
                 data.close(budget)?;
                 if let Err(failure) = data.check_resources(budget) {
                     if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. }
-                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource()))
                     {
                         return Err(data.cell_escape_failure(
                             failure,
@@ -3161,7 +3231,7 @@ impl<'a> Analysis<'a> {
         let Control::Resource { body, .. } = self.graph.code[entry.position.code] else {
             return Err(Failure::Invalid);
         };
-        let fresh_cell = if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. } if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+        let fresh_cell = if matches!(&self.graph.code[entry.position.code], Control::Resource { effect, .. } if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource()))
         {
             let owner = data.resource_key(entry.position.code, context, budget)?;
             let (_, root) =
@@ -3403,12 +3473,12 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
-    fn is_generic_cell_handler(&self, frame: Frame) -> bool {
+    fn is_cell_handler(&self, frame: Frame) -> bool {
         let code = match frame {
             Frame::Handler { code, .. } | Frame::RemovedHandler { code, .. } => code,
             _ => return false,
         };
-        matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.effect.as_ref().is_some_and(|effect| effect.effect().module().is_builtin_generic_cell()))
+        matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.effect.as_ref().is_some_and(|effect| effect.effect().module().is_builtin_resource()))
     }
 
     fn boundary_match_key(&self, frame: Frame) -> (usize, usize, Option<Frame>) {
@@ -3423,7 +3493,8 @@ impl<'a> Analysis<'a> {
         (
             code,
             context,
-            (self.is_generic_cell(frame) || self.is_generic_cell_handler(frame)).then_some(frame),
+            (self.is_cell(frame) || self.is_cell_handler(frame)
+                || matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service)).then_some(frame),
         )
     }
 
@@ -3451,6 +3522,8 @@ impl<'a> Analysis<'a> {
         // shared structural work counter a second time.
         let mut matching = HashMap::new();
         let mut cell_operands = None;
+        let mut region_targets = None;
+        let explicit_region = matches!(&self.graph.code[event.code], Control::Request(request) if request.region_service);
         charge(budget, state.heap.len())?;
         for edge in &state.heap {
             if let Frame::Handler { code, context, .. }
@@ -3475,12 +3548,54 @@ impl<'a> Analysis<'a> {
                     matching.insert(self.boundary_match_key(edge.frame), (possible, outward));
                     continue;
                 }
+                let region_handler = matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service);
+                if explicit_region || region_handler {
+                    let mut relation = (false, true);
+                    if explicit_region && region_handler {
+                        if region_targets.is_none() {
+                            region_targets = Some(
+                                self.data
+                                    .as_mut()
+                                    .ok_or(Failure::Invalid)?
+                                    .region_targets(event.port.ok_or(Failure::Invalid)?, budget)?,
+                            );
+                        }
+                        let (Frame::Handler { value_context, .. }
+                        | Frame::RemovedHandler { value_context, .. }) = edge.frame
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        let owners = self
+                            .data
+                            .as_mut()
+                            .ok_or(Failure::Invalid)?
+                            .handler_cell_owners(code, value_context, budget)?;
+                        let (targets, unknown, host) =
+                            region_targets.as_ref().ok_or(Failure::Invalid)?;
+                        if let Some(owners) = owners {
+                            relation = (*unknown, *unknown || *host || targets.is_empty());
+                            for target in targets {
+                                charge(budget, owners.len() + 1)?;
+                                let matches = owners.contains(target);
+                                relation.0 |= matches;
+                                relation.1 |= !matches;
+                            }
+                        } else {
+                            // Unresolved symbolic views retain every candidate
+                            // and outward obligation; they never select nearest.
+                            relation = (true, true);
+                        }
+                    }
+                    matching.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    matching.insert(self.boundary_match_key(edge.frame), relation);
+                    continue;
+                }
                 let target = self.label(code, context, budget)?;
                 let relation = self.match_labels(event.label, target, budget)?;
-                let relation = if self.is_generic_cell(edge.frame)
+                let relation = if self.is_cell(edge.frame)
                     && let Control::Request(request) = &self.graph.code[event.code]
                     && let Some(operation) = request.operation
-                    && operation.owner().module().is_builtin_generic_cell()
+                    && operation.owner().module().is_builtin_resource()
                 {
                     let port = event.port.ok_or(Failure::Invalid)?;
                     if cell_operands.is_none() {
@@ -3522,10 +3637,10 @@ impl<'a> Analysis<'a> {
                     // builtin occurrence; every other possible target continues
                     // outward. Empty operands await the value-queue replay.
                     (relation.0 && possible, relation.1 || outward)
-                } else if self.is_generic_cell_handler(edge.frame)
+                } else if self.is_cell_handler(edge.frame)
                     && let Control::Request(request) = &self.graph.code[event.code]
                     && let Some(operation) = request.operation
-                    && operation.owner().module().is_builtin_generic_cell()
+                    && operation.owner().module().is_builtin_resource()
                 {
                     let (Frame::Handler { value_context, .. }
                     | Frame::RemovedHandler { value_context, .. }) = edge.frame
@@ -3680,14 +3795,17 @@ impl<'a> Analysis<'a> {
         if let (Some(data), Some(port)) = (&mut self.data, event.port) {
             data.external_result(port, budget)?;
         }
-        let (owners, _) = selections(
+        // Escaping payload checks consume every owner boundary, but no captured
+        // prefix. Keep the identical charged forward walk without reconstructing
+        // unused per-owner backward paths.
+        let (owners, _, _) = selection_boundaries(
             state,
             state.stack,
             |frame| Ok((matches!(frame, Frame::Resource { .. }), true)),
             budget,
         )?;
         for owner in owners {
-            self.check_payload(state, event, &[owner.boundary], budget)?;
+            self.check_payload(state, event, &[owner], budget)?;
         }
         if event.unknown {
             Self::enqueue(state.copy(budget)?, pending, visited, budget)?;
@@ -3697,10 +3815,10 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
-    fn is_generic_cell(&self, frame: Frame) -> bool {
+    fn is_cell(&self, frame: Frame) -> bool {
         matches!(frame, Frame::Resource { code, .. }
             if matches!(&self.graph.code[code], Control::Resource { effect, .. }
-                if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell())))
+                if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource())))
     }
 
     fn cell_enclosing(
@@ -3814,7 +3932,7 @@ impl<'a> Analysis<'a> {
             context: state.context,
             focused: false,
         };
-        if !self.is_generic_cell(frame) {
+        if !self.is_cell(frame) {
             return Ok(());
         }
         let Control::Resource { effect, .. } = &self.graph.code[code] else {
@@ -4015,7 +4133,7 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        if self.is_generic_cell(selected.boundary.frame) {
+        if self.is_cell(selected.boundary.frame) {
             return self.requested_cell(state, event, selected, pending, visited, budget);
         }
         if let (Some(data), Some(port)) = (&mut self.data, event.port) {
@@ -4345,6 +4463,9 @@ impl<'a> Analysis<'a> {
                         running: false,
                         closing: Some(discard),
                     },
+                    frame @ Frame::Handler { code, .. } if matches!(&self.graph.code[code], Control::Handler { effect, .. } if effect.region_service) => {
+                        frame
+                    }
                     Frame::Handler {
                         code,
                         context,
@@ -4669,7 +4790,7 @@ impl<'a> Analysis<'a> {
                 } else {
                     if self.focusing
                         && matches!(&self.graph.code[code], Control::Resource { effect, .. }
-                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_generic_cell()))
+                        if effect.effect.as_ref().is_some_and(|instance| instance.effect().module().is_builtin_resource()))
                     {
                         return Err(data.cell_escape_failure(
                             failure,
@@ -5148,6 +5269,7 @@ mod tests {
             code: vec![
                 Control::Return,
                 Control::Call {
+                    prefix: None,
                     value: Value {
                         targets: vec![0; WIDTH],
                         unknown: false,
@@ -5226,6 +5348,7 @@ mod tests {
             code: vec![
                 Control::Return,
                 Control::Call {
+                    prefix: None,
                     value: Value::default(),
                     ty: 0,
                     source: span,
@@ -6738,6 +6861,7 @@ mod tests {
             .into(),
             types: TypeArguments(vec![actual]),
             code: vec![Control::Call {
+                prefix: None,
                 value: Value {
                     targets: vec![0],
                     unknown: false,
@@ -6897,16 +7021,19 @@ mod tests {
             code: vec![
                 Control::Return,
                 Control::Call {
+                    prefix: None,
                     value: Value::default(),
                     ty: 0,
                     source: span,
                 },
                 Control::Call {
+                    prefix: None,
                     value: Value::default(),
                     ty: 1,
                     source: span,
                 },
                 Control::Call {
+                    prefix: None,
                     value: Value::default(),
                     ty: 2,
                     source: span,
@@ -7002,6 +7129,7 @@ mod tests {
                     .into(),
                     types: TypeArguments(vec![actual]),
                     code: vec![Control::Call {
+                        prefix: None,
                         value: Value::default(),
                         ty: 0,
                         source: span,
@@ -7089,6 +7217,7 @@ mod tests {
             .into(),
             types: TypeArguments(vec![Type::Function(Box::new(pure()), Box::new(Type::Int))]),
             code: vec![Control::Call {
+                prefix: None,
                 value: Value::default(),
                 ty: 0,
                 source: span,
@@ -8149,11 +8278,13 @@ mod tests {
                 ]),
                 code: vec![
                     Control::Call {
+                        prefix: None,
                         value: Value::default(),
                         ty: 0,
                         source: span,
                     },
                     Control::Call {
+                        prefix: None,
                         value: Value::default(),
                         ty: 1,
                         source: span,
@@ -8235,6 +8366,7 @@ mod tests {
             code: vec![
                 Control::Return,
                 Control::Call {
+                    prefix: None,
                     value: Value {
                         targets: vec![0],
                         unknown: false,

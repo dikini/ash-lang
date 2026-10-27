@@ -5,13 +5,13 @@ use std::{
 };
 
 use ash::{
-    core::validate_modules,
-    elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
-    eval::{Value, evaluate},
+    core::validate_effect_modules,
+    elaborate::{EffectElaborator, TypeError, TypeReason, check_module, link_modules},
+    eval::{Value, evaluate_effect},
     evidence_validation::validate_interface_evidence,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
-    resolved::{ImportedTypeAccess, ResolvedNominalDeclarationKind},
+    resolved::{CheckedModule, ImportedTypeAccess, ResolvedModule, ResolvedNominalDeclarationKind},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -56,6 +56,43 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
             Path::new(module.source().display_path()).file_name() == Some(file_name.as_ref())
         })
         .expect("fixture module should be present")
+}
+
+fn resolve_fixture(
+    graph: &ModuleGraph,
+    target: &LoadedModule,
+    retained: &[&CheckedModule],
+) -> Result<ResolvedModule, ResolveModuleError> {
+    let mut checked = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = retained
+                    .iter()
+                    .copied()
+                    .find(|checked| checked.module() == edge.target())
+                    .or_else(|| {
+                        checked
+                            .iter()
+                            .find(|checked: &&CheckedModule| checked.module() == edge.target())
+                    })
+                    .expect("each exact dependency target must precede its importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the original summary authenticates its actual target edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies);
+        if module.id() == target.id() {
+            return resolved;
+        }
+        checked.push(
+            check_module(resolved.expect("preceding fixture modules resolve"))
+                .expect("preceding fixture modules check"),
+        );
+    }
+    panic!("the actual target remains in the graph");
 }
 
 #[test]
@@ -171,7 +208,7 @@ fn module_newtype_identity_survives_facade_reexport() {
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
     let base = module_named(&graph, "base.ash");
-    let base = resolve_module(base, &[]).expect("base should resolve");
+    let base = resolve_fixture(&graph, base, &[]).expect("base should resolve");
     let [base_nominal] = base.registry().nominals() else {
         panic!("base should declare one nominal");
     };
@@ -191,21 +228,27 @@ fn module_newtype_identity_survives_facade_reexport() {
     let base = check_module(base).expect("base should check");
 
     let facade = module_named(&graph, "facade.ash");
-    let [facade_edge] = facade.dependencies() else {
-        panic!("facade should have one dependency");
-    };
-    let facade_dependency = DependencyExports::new(facade_edge, base.exports())
-        .expect("base summary should authenticate its edge");
-    let facade = resolve_module(facade, &[facade_dependency]).expect("facade should resolve");
+    assert_eq!(
+        facade
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == base.module())
+            .count(),
+        1
+    );
+    let facade = resolve_fixture(&graph, facade, &[&base]).expect("facade should resolve");
     let facade = check_module(facade).expect("facade should check");
 
     let entry = module_named(&graph, "entry.ash");
-    let [entry_edge] = entry.dependencies() else {
-        panic!("entry should have one dependency");
-    };
-    let entry_dependency = DependencyExports::new(entry_edge, facade.exports())
-        .expect("facade summary should authenticate its edge");
-    let entry = resolve_module(entry, &[entry_dependency]).expect("entry should resolve");
+    assert_eq!(
+        entry
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == facade.module())
+            .count(),
+        1
+    );
+    let entry = resolve_fixture(&graph, entry, &[&facade]).expect("entry should resolve");
 
     let imported = entry
         .imported_facts()
@@ -238,7 +281,8 @@ fn module_opaque_newtype_keeps_its_representation_only_for_facade_linkage() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let base = resolve_module(module_named(&graph, "base.ash"), &[]).expect("base should resolve");
+    let base = resolve_fixture(&graph, module_named(&graph, "base.ash"), &[])
+        .expect("base should resolve");
     let defining_id = base
         .registry()
         .nominals()
@@ -246,28 +290,12 @@ fn module_opaque_newtype_keeps_its_representation_only_for_facade_linkage() {
         .expect("base should declare Token")
         .id;
     let base = check_module(base).expect("base should check");
-    let facade_dependency = DependencyExports::new(
-        module_named(&graph, "facade.ash")
-            .dependencies()
-            .first()
-            .expect("facade should depend on base"),
-        base.exports(),
-    )
-    .expect("base summary should authenticate");
     let facade = check_module(
-        resolve_module(module_named(&graph, "facade.ash"), &[facade_dependency])
+        resolve_fixture(&graph, module_named(&graph, "facade.ash"), &[&base])
             .expect("facade should resolve"),
     )
     .expect("facade should check");
-    let entry_dependency = DependencyExports::new(
-        module_named(&graph, "entry.ash")
-            .dependencies()
-            .first()
-            .expect("entry should depend on facade"),
-        facade.exports(),
-    )
-    .expect("facade summary should authenticate");
-    let entry = resolve_module(module_named(&graph, "entry.ash"), &[entry_dependency])
+    let entry = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[&facade])
         .expect("opaque facade import should resolve");
 
     let imported = entry
@@ -299,14 +327,12 @@ fn opaque_newtype_constructor_is_inaccessible_in_expressions_and_patterns() {
         let graph = load_module_graph(&entry, &ModuleRoots::empty())
             .expect("opaque constructor module graph should load");
         let base = check_module(
-            resolve_module(module_named(&graph, "base.ash"), &[])
+            resolve_fixture(&graph, module_named(&graph, "base.ash"), &[])
                 .expect("opaque defining module should resolve"),
         )
         .expect("opaque defining module should check");
         let entry_module = module_named(&graph, "entry.ash");
-        let dependency = DependencyExports::new(&entry_module.dependencies()[0], base.exports())
-            .expect("opaque dependency summary should authenticate");
-        let ResolveModuleError::Resolution(error) = resolve_module(entry_module, &[dependency])
+        let ResolveModuleError::Resolution(error) = resolve_fixture(&graph, entry_module, &[&base])
             .expect_err("an opaque newtype constructor should be inaccessible")
         else {
             panic!("opaque constructor access should fail during resolution");
@@ -323,7 +349,7 @@ fn module_newtype_constructor_must_repeat_its_nominal_spelling() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let error = resolve_module(module_named(&graph, "entry.ash"), &[])
+    let error = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
         .expect_err("a differently named newtype constructor should fail resolution");
     let ResolveModuleError::Resolution(error) = error else {
         panic!("newtype constructor spelling should fail in resolution");
@@ -355,7 +381,7 @@ fn module_newtype_representation_cycle_is_rejected_after_kinding() {
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
     let ResolveModuleError::Representation(TypeError::Source(error)) =
-        resolve_module(module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("kind-correct representation cycles must reject before remaining kinds")
     else {
         panic!("representation recursion belongs to module checking");
@@ -371,7 +397,7 @@ fn module_newtype_cycle_primary_is_the_first_closing_representation_occurrence()
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
     let ResolveModuleError::Representation(TypeError::Source(error)) =
-        resolve_module(module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("the mutual representation cycle should be rejected")
     else {
         panic!("the representation cycle should retain a source diagnostic");
@@ -408,7 +434,7 @@ fn module_newtype_cycle_through_effect_argument_retains_the_closing_occurrence()
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
     let ResolveModuleError::Representation(TypeError::Source(error)) =
-        resolve_module(module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("a cycle through effect arguments should be rejected")
     else {
         panic!("the effect-argument cycle should retain a source diagnostic");
@@ -435,8 +461,9 @@ fn module_newtype_representation_kind_failure_precedes_cycle_checking() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let ResolveModuleError::Kind(error) = resolve_module(module_named(&graph, "entry.ash"), &[])
-        .expect_err("an ill-kinded representation must fail before module checking")
+    let ResolveModuleError::Kind(error) =
+        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
+            .expect_err("an ill-kinded representation must fail before module checking")
     else {
         panic!("representation kinding belongs to resolved admission");
     };
@@ -452,7 +479,7 @@ fn transparent_newtype_constructor_expression_wraps_its_representation() {
     );
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
         .expect("the newtype declaration and its constructor occurrence should resolve");
 
     check_module(resolved)
@@ -481,17 +508,13 @@ fn module_newtype_constructors_are_first_class_across_representation_shapes() {
         ),
         concat!(
             "newtype Box<A> = Box(A)\n",
-            "apply : (A -> B, A) -> B\n",
-            "apply (function, value) = function value\n",
             "main : Unit -> Box<Int>\n",
-            "main () = apply(Box, 42)\n",
+            "main () = {\nlet apply = fn((function, value)) {\nfunction value\n}\napply(Box, 42)\n}\n",
         ),
         concat!(
             "newtype UserId = UserId(Int)\n",
-            "make : Unit -> (Int -> UserId)\n",
-            "make () = UserId\n",
             "main : Unit -> UserId\n",
-            "main () = make()(42)\n",
+            "main () = {\nlet make = fn(()) {\nUserId\n}\nmake()(42)\n}\n",
         ),
     ];
 
@@ -500,12 +523,56 @@ fn module_newtype_constructors_are_first_class_across_representation_shapes() {
         let entry = tree.write("entry.ash", text);
         let graph = load_module_graph(&entry, &ModuleRoots::empty())
             .expect("constructor matrix module graph should load");
-        let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+        let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
             .expect("constructor matrix case should resolve");
         check_module(resolved).unwrap_or_else(|error| {
             panic!("constructor matrix case {index} should check: {error}")
         });
     }
+}
+
+#[test]
+fn annotated_callback_does_not_hide_an_erased_constructor_row() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "newtype Box<A> = Box(A)\n",
+            "apply : (A -> B, A) -> B\n",
+            "apply (function, value) = function value\n",
+            "main : Unit -> Box<Int>\n",
+            "main () = apply(Box, 42)\n",
+        ),
+    );
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[]).unwrap();
+    let error = check_module(resolved).expect_err("the annotated callback retains its full row");
+    assert!(
+        matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::Argument),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn annotated_return_does_not_hide_an_erased_constructor_row() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "newtype UserId = UserId(Int)\n",
+            "make : Unit -> (Int -> UserId)\n",
+            "make () = UserId\n",
+            "main : Unit -> UserId\n",
+            "main () = make()(42)\n",
+        ),
+    );
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[]).unwrap();
+    let error = check_module(resolved).expect_err("the annotated result retains its full row");
+    assert!(
+        matches!(error, TypeError::Source(ref diagnostic) if diagnostic.reason == TypeReason::DefinitionResult),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -525,28 +592,49 @@ fn transparent_newtype_constructor_pattern_unwraps_its_representation() {
     );
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
         .expect("the newtype declaration and its value pattern should resolve");
 
     let checked = check_module(resolved)
         .expect("an accessible newtype constructor pattern should unwrap its representation");
-    let linked = link_modules(vec![checked], graph.entry())
+    let mut component = Vec::new();
+    for module in graph
+        .modules()
+        .iter()
+        .filter(|module| module.id() != graph.entry())
+    {
+        component.push(
+            check_module(resolve_fixture(&graph, module, &[]).expect("dependency resolves"))
+                .expect("dependency checks"),
+        );
+    }
+    component.push(checked);
+    let linked = link_modules(component, graph.entry())
         .expect("the checked newtype pattern module should link");
     let linked = validate_interface_evidence(linked)
         .expect("the newtype pattern has no unauthenticated interface evidence");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the final Core namespace should fit");
+        EffectElaborator::for_module_program(&linked).expect("the final Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("the newtype pattern should lower through an explicit unwrap");
     let unchecked = elaborator
         .finish(typed.node)
         .expect("the explicit unwrap should finish as unvalidated Core");
-    let source = module_named(&graph, "entry.ash").source();
-    let program = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let relation = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let program = validate_effect_modules(unchecked, &sources, &relation)
         .expect("the canonical unwrap conversion should independently authenticate");
-    let evaluation = evaluate(&program).expect("the authenticated conversions should erase");
-    let Value::Integer(value) = evaluation.value else {
+    let evaluation = evaluate_effect(&program).expect("the authenticated conversions should erase");
+    let Value::SmallInteger(value) = evaluation.value else {
         panic!("the unwrapped representation should remain an integer");
     };
     assert_eq!(value.to_string(), "42");
@@ -570,7 +658,7 @@ fn irrefutable_newtype_function_and_binding_patterns_preserve_payload_binders() 
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("function and binding pattern module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
         .expect("function and binding newtype patterns should resolve");
 
     check_module(resolved)
@@ -597,7 +685,7 @@ fn mixed_newtype_match_fallback_binder_keeps_the_nominal_value() {
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("mixed fallback module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
         .expect("mixed fallback patterns should resolve");
 
     check_module(resolved)
@@ -633,7 +721,7 @@ fn newtype_patterns_cover_parameterized_nested_and_refutable_representations() {
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("pattern representation matrix module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
         .expect("pattern representation matrix should resolve");
 
     check_module(resolved)
@@ -671,7 +759,7 @@ fn newtype_nominal_mismatch_precedes_coverage_and_payload_coverage_is_retained()
         let entry = tree.write("entry.ash", text);
         let graph = load_module_graph(&entry, &ModuleRoots::empty())
             .expect("newtype diagnostic module graph should load");
-        let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+        let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
             .expect("newtype diagnostic case should resolve");
         let TypeError::Source(error) =
             check_module(resolved).expect_err("newtype diagnostic case should be rejected")
@@ -691,7 +779,7 @@ fn module_newtype_cycle_stops_at_an_ordinary_data_boundary() {
     );
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
-    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+    let resolved = resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
         .expect("the mixed declaration representations should kind-check");
 
     check_module(resolved)
@@ -705,7 +793,7 @@ fn module_parameterized_newtype_cycle_uses_the_applied_nominal_identity() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
     let ResolveModuleError::Representation(TypeError::Source(error)) =
-        resolve_module(module_named(&graph, "entry.ash"), &[])
+        resolve_fixture(&graph, module_named(&graph, "entry.ash"), &[])
             .expect_err("an applied self representation must remain a newtype cycle")
     else {
         panic!("the parameterized cycle must be a source typing diagnostic");
@@ -726,32 +814,36 @@ fn module_newtype_targeted_renames_merge_one_defining_fact_across_a_diamond() {
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let base = resolve_module(module_named(&graph, "base.ash"), &[]).expect("base should resolve");
+    let base = resolve_fixture(&graph, module_named(&graph, "base.ash"), &[])
+        .expect("base should resolve");
     let defining_id = base.registry().nominals()[0].id;
     let base = check_module(base).expect("base should check");
     let check_facade = |file_name: &str| {
         let module = module_named(&graph, file_name);
-        let dependency = DependencyExports::new(
-            module
-                .dependencies()
-                .first()
-                .expect("facade should depend on base"),
-            base.exports(),
-        )
-        .expect("base summary should authenticate");
-        check_module(resolve_module(module, &[dependency]).expect("facade should resolve"))
+        check_module(resolve_fixture(&graph, module, &[&base]).expect("facade should resolve"))
             .expect("facade should check")
     };
     let left = check_facade("left.ash");
     let right = check_facade("right.ash");
 
     let module = module_named(&graph, "entry.ash");
-    let dependencies = module.dependencies();
-    let left_dependency = DependencyExports::new(&dependencies[0], left.exports())
-        .expect("left summary should authenticate");
-    let right_dependency = DependencyExports::new(&dependencies[1], right.exports())
-        .expect("right summary should authenticate");
-    let entry = resolve_module(module, &[left_dependency, right_dependency])
+    assert_eq!(
+        module
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == left.module())
+            .count(),
+        1
+    );
+    assert_eq!(
+        module
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == right.module())
+            .count(),
+        1
+    );
+    let entry = resolve_fixture(&graph, module, &[&left, &right])
         .expect("diamond aliases should merge their one defining newtype fact");
     let imported = entry
         .imported_facts()
@@ -777,23 +869,18 @@ fn module_parameterized_newtype_preserves_its_canonical_parameter_through_a_faca
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
 
-    let base = resolve_module(module_named(&graph, "base.ash"), &[]).expect("base should resolve");
+    let base = resolve_fixture(&graph, module_named(&graph, "base.ash"), &[])
+        .expect("base should resolve");
     let defining_id = base.registry().nominals()[0].id;
     let defining_parameter = base.registry().nominal_parameters(defining_id).unwrap()[0].id;
     let base = check_module(base).expect("base should check");
     let facade_module = module_named(&graph, "facade.ash");
-    let facade_dependency =
-        DependencyExports::new(&facade_module.dependencies()[0], base.exports())
-            .expect("base summary should authenticate");
     let facade = check_module(
-        resolve_module(facade_module, &[facade_dependency]).expect("facade should resolve"),
+        resolve_fixture(&graph, facade_module, &[&base]).expect("facade should resolve"),
     )
     .expect("facade should check");
     let entry_module = module_named(&graph, "entry.ash");
-    let entry_dependency =
-        DependencyExports::new(&entry_module.dependencies()[0], facade.exports())
-            .expect("facade summary should authenticate");
-    let entry = resolve_module(entry_module, &[entry_dependency]).expect("entry should resolve");
+    let entry = resolve_fixture(&graph, entry_module, &[&facade]).expect("entry should resolve");
     let imported = entry.imported_facts().nominal(defining_id).unwrap();
     assert_eq!(imported.parameters.len(), 1);
     assert_eq!(imported.parameters[0].id, defining_parameter);

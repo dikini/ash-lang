@@ -28,18 +28,29 @@ Ash handlers and cleanup. [Native behavior and binding examples](../libraries/RE
 record the supported path and concrete gaps. The
 [accepted transition](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/proposals/CP-0024-checked-foreign-host-profile.md)
 and its [S1-S4 plan](https://github.com/dikini/ash-lang/blob/859741fc11f417d994f6139748cc8e263176e7cd/docs/tasks/plans/checked-ffi-regions-control.md)
-remain historical delivery records; the specification now describes this branch's
-implemented boundary. This product checkpoint does not complete the separate
-human Main integration and acceptance gate. The previous F1-F8, checked-host,
+remain historical delivery records. [PR #143](https://github.com/dikini/ash-lang/pull/143)
+completed the separately authorized Main integration at
+`0d8df03d4db2e70294487fc2e61f3629ff33b246`; the specification describes that
+implemented boundary and M1 is complete. The previous F1-F8, checked-host,
 protected-launch, isolation and full SQLite assignments remain superseded or
 deferred, not completed.
 
 Overall [program #51](https://github.com/dikini/ash-lang/issues/51) still tracks
-later [M2 #53](https://github.com/dikini/ash-lang/issues/53),
+separately authorized Main delivery of the lexical-region product and later
 [M3 #54](https://github.com/dikini/ash-lang/issues/54) and
-[M4 #55](https://github.com/dikini/ash-lang/issues/55). Their regions, retained
-control and worker scope remains unchanged and later; it is not required for the
-initial M1 FFI delivery. Each later milestone owns its scoped design gates.
+[M4 #55](https://github.com/dikini/ash-lang/issues/55).
+[M2 #53](https://github.com/dikini/ash-lang/issues/53) covers default placement,
+explicit selection, lexical ownership, bulk reclamation, stored closures and
+recursive immutable graphs. The [specification](../spec/README.md) records the
+product language rules; [R5 #70](https://github.com/dikini/ash-lang/issues/70)
+records its retained checkpoint, review, verification and acceptance. The
+[finite model evidence](design/lexical-regions/evidence.md) retains the separate
+bounded R1/R2 result and its assumptions; it is not a whole-compiler or native
+allocator proof. Usage/lifetime placement inference and the wider explorations in
+[DN-0054](design/DN-0054-base-lexical-region-memory-contracts.md) and
+[DN-0055](design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md) remain
+informative future work. Product retirement does not complete Main integration,
+M3 retained control, M4 workers or the overall program.
 
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its

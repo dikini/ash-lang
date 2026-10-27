@@ -131,7 +131,20 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
     );
 
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).expect("diamond should load");
-    assert_eq!(graph.modules().len(), 4);
+    assert_eq!(
+        graph
+            .modules()
+            .iter()
+            .filter(|module| {
+                Path::new(module.source().display_path()).parent() == Some(tree.0.as_path())
+            })
+            .map(file_name)
+            .collect::<std::collections::HashSet<_>>(),
+        ["base.ash", "left.ash", "right.ash", "entry.ash"]
+            .map(Path::new)
+            .into_iter()
+            .collect()
+    );
     let base_module = graph
         .modules()
         .iter()
@@ -231,7 +244,11 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                     assert_eq!(requirement.interface(), identities.interface);
                 }
             }
-            other => panic!("unexpected fixture module {other}"),
+            other => assert_ne!(
+                Path::new(module.source().display_path()).parent(),
+                Some(tree.0.as_path()),
+                "unexpected fixture module {other}",
+            ),
         }
 
         let module_checked = ash::elaborate::check_module(resolved)
@@ -241,7 +258,13 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
             .expect("fixture name should be UTF-8")
         {
             "base.ash" => {
-                let [nominal] = module_checked.registry().nominals() else {
+                let own_nominals = module_checked
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .filter(|nominal| nominal.id.module() == module.id())
+                    .collect::<Vec<_>>();
+                let [nominal] = own_nominals.as_slice() else {
                     panic!("base should retain one nominal identity");
                 };
                 let [interface] = module_checked.interface_facts() else {
@@ -293,7 +316,7 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
                 });
             }
             "entry.ash" => {}
-            _ => unreachable!("fixture names were checked before module checking"),
+            _ => {}
         }
         checked.push(module_checked);
     }
@@ -367,7 +390,21 @@ fn determined_implementation_reexport_diamond_deduplicates_one_stable_identity()
         checked.push(module_checked);
     }
 
-    assert_eq!(checked.len(), 4);
+    assert_eq!(
+        checked
+            .iter()
+            .filter(|checked| {
+                graph.module(checked.module()).is_some_and(|module| {
+                    Path::new(module.source().display_path()).parent() == Some(tree.0.as_path())
+                })
+            })
+            .map(|checked| file_name(graph.module(checked.module()).unwrap()))
+            .collect::<std::collections::HashSet<_>>(),
+        ["base.ash", "left.ash", "right.ash", "entry.ash"]
+            .map(Path::new)
+            .into_iter()
+            .collect()
+    );
     let linked = link_modules(checked, graph.entry())
         .expect("the determined stable-identity diamond should link");
     let validated = validate_interface_evidence(linked)

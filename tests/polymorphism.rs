@@ -9,17 +9,20 @@ mod support;
 
 use ash::{
     core::{
-        PureComputation, PureExprKind, ValidatedProgram,
-        transform::{fold_literal_primitives, identity_traversal},
-        validate_modules,
+        EffectExprKind, EffectOperation, EffectOperationFamily, PureComputation, PureExprKind,
+        ValidatedEffectProgram,
+        dialect::CoreOperationFamily,
+        transform::{fold_effect_literal_primitives, identity_effect_traversal},
+        validate_effect_modules,
     },
     driver::PipelineFailure,
-    elaborate::{Elaborator, check_module, link_modules},
-    eval::{RuntimeFailure, TraceEvent, Value, evaluate},
+    elaborate::{EffectElaborator, check_module, link_modules},
+    eval::{RuntimeFailure, TraceEvent, Value, evaluate_effect},
     evidence_validation::validate_interface_evidence,
     module::{ModuleId, ModuleRoots, load_module_graph},
-    resolve::resolve_module,
-    source::SourceFile,
+    resolve::{DependencyExports, resolve_module},
+    resolved::CheckedModule,
+    source::{SourceFile, SourceId},
     types::{ComputationType, EffectRow, EffectRowVariable, Kind, Type, TypeVariableId},
 };
 use support::run_module;
@@ -68,7 +71,15 @@ fn reason(text: &str) -> String {
     failure.reason_code()
 }
 
-fn elaborated(text: &str) -> (ValidatedProgram, SourceFile, ModuleId) {
+struct EffectCore {
+    program: ValidatedEffectProgram,
+    sources: Vec<SourceFile>,
+    module_sources: Vec<(ModuleId, SourceId)>,
+    binders: Vec<(String, ash::resolved::BinderId)>,
+    implementation_methods: Vec<ash::resolved::BinderId>,
+}
+
+fn elaborated_effect(text: &str) -> EffectCore {
     let directory = loop {
         let id = CORE_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
         let path =
@@ -83,71 +94,140 @@ fn elaborated(text: &str) -> (ValidatedProgram, SourceFile, ModuleId) {
     fs::write(&entry_path, text).expect("Core fixture should be writable");
     let graph = load_module_graph(&entry_path, &ModuleRoots::empty())
         .expect("Core fixture graph should load");
-    let resolved = resolve_module(&graph.modules()[0], &[]).expect("source should resolve");
-    let checked = check_module(resolved).expect("source should check");
-    let linked = link_modules(vec![checked], graph.entry()).expect("source should link");
+    let mut checked: Vec<CheckedModule> = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let target = checked
+                    .iter()
+                    .find(|candidate| candidate.module() == edge.target())
+                    .expect("dependency order should retain the target first");
+                DependencyExports::new(edge, target.exports())
+                    .expect("exact dependency exports should authenticate")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("source component should resolve");
+        checked.push(check_module(resolved).expect("source component should check"));
+    }
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .unwrap();
+    let binders = entry
+        .schemes()
+        .iter()
+        .map(|scheme| (scheme.spelling.to_string(), scheme.binder))
+        .collect();
+    let implementation_methods = entry
+        .implementation_facts()
+        .iter()
+        .flat_map(|implementation| implementation.methods.iter().map(|method| method.binder))
+        .collect();
+    let linked =
+        link_modules(checked, graph.entry()).expect("complete source component should link");
     let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("Core namespace should fit");
+        EffectElaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("source should elaborate");
     let unchecked = elaborator.finish(typed.node).expect("Core should finish");
-    let source = graph.modules()[0].source().clone();
-    let module = graph.entry();
-    let validated = validate_modules(unchecked, &[&source], &[(module, source.id())])
-        .expect("Core should validate");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source().clone())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let source_refs = sources.iter().collect::<Vec<_>>();
+    let program = validate_effect_modules(unchecked, &source_refs, &module_sources)
+        .expect("complete source Core should independently validate");
     let _ = fs::remove_dir_all(directory);
-    (validated, source, module)
+    EffectCore {
+        program,
+        sources,
+        module_sources,
+        binders,
+        implementation_methods,
+    }
 }
 
-fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str {
+fn runtime_class(program: &ValidatedEffectProgram, event: &TraceEvent) -> &'static str {
     let TraceEvent::Enter(id) = event;
     match &program
         .node(*id)
         .expect("an entered Core node should exist")
         .kind
     {
-        PureExprKind::Value(ash::core::PureValue::String(_)) => "string",
-        PureExprKind::Value(ash::core::PureValue::Intrinsic(_)) => "intrinsic",
-        PureExprKind::Value(ash::core::PureValue::Integer(_)) => "integer",
-        PureExprKind::Value(ash::core::PureValue::Boolean(_)) => "boolean",
-        PureExprKind::Value(ash::core::PureValue::Unit(_)) => "unit",
-        PureExprKind::Value(ash::core::PureValue::Function(_)) => "function",
-        PureExprKind::Value(ash::core::PureValue::Constructor(_)) => "constructor",
-        PureExprKind::Variable(_) => "variable-lookup",
-        PureExprKind::Computation(PureComputation::Bind(_)) => "bind",
-        PureExprKind::Computation(PureComputation::RecursiveBind(_)) => "recursive-bind",
-        PureExprKind::Computation(PureComputation::Apply(_)) => "apply",
-        PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
-        PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
-        PureExprKind::Computation(PureComputation::Match(_)) => "match",
-        PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
-            "newtype-conversion-erasure"
-        }
-        PureExprKind::Computation(PureComputation::LocalNominalScope(_)) => {
-            "local-nominal-scope-erasure"
-        }
-        PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
-            "type-abstraction-erasure"
-        }
-        PureExprKind::Computation(PureComputation::TypeApplication(_)) => {
-            "type-application-erasure"
-        }
+        EffectExprKind::Pure(kind) => match kind {
+            PureExprKind::Value(ash::core::PureValue::String(_)) => "string",
+            PureExprKind::Value(ash::core::PureValue::Intrinsic(_)) => "intrinsic",
+            PureExprKind::Value(ash::core::PureValue::Integer(_)) => "integer",
+            PureExprKind::Value(ash::core::PureValue::Boolean(_)) => "boolean",
+            PureExprKind::Value(ash::core::PureValue::Unit(_)) => "unit",
+            PureExprKind::Value(ash::core::PureValue::Function(_)) => "function",
+            PureExprKind::Value(ash::core::PureValue::Constructor(_)) => "constructor",
+            PureExprKind::Variable(_) => "variable-lookup",
+            PureExprKind::Computation(PureComputation::Bind(_)) => "bind",
+            PureExprKind::Computation(PureComputation::RecursiveBind(_)) => "recursive-bind",
+            PureExprKind::Computation(PureComputation::Apply(_)) => "apply",
+            PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
+            PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
+            PureExprKind::Computation(PureComputation::Match(_)) => "match",
+            PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
+                "newtype-conversion-erasure"
+            }
+            PureExprKind::Computation(PureComputation::LocalNominalScope(_)) => {
+                "local-nominal-scope-erasure"
+            }
+            PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
+                "type-abstraction-erasure"
+            }
+            PureExprKind::Computation(PureComputation::TypeApplication(_)) => {
+                "type-application-erasure"
+            }
+        },
+        EffectExprKind::Operation(EffectOperation::NativeInterpret(_)) => "native-interpret",
+        EffectExprKind::Operation(EffectOperation::Cleanup(_)) => "cleanup",
+        EffectExprKind::Operation(EffectOperation::Registration(_)) => "registration",
+        EffectExprKind::Operation(EffectOperation::Resource(_)) => "resource",
+        EffectExprKind::Operation(EffectOperation::Region(_)) => "region",
+        EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => "region-allocate",
+        EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => "region-value-request",
+        EffectExprKind::Operation(EffectOperation::RegionBuffer(_)) => "region-buffer",
+        EffectExprKind::Operation(EffectOperation::RegionTuple(_)) => "region-tuple",
+        EffectExprKind::Operation(EffectOperation::RegionClosure(_)) => "region-closure",
+        EffectExprKind::Operation(EffectOperation::Request(_)) => "request",
+        EffectExprKind::Operation(EffectOperation::Handler(_)) => "handler",
+        EffectExprKind::Operation(EffectOperation::Resume(_)) => "resume",
+        EffectExprKind::Operation(EffectOperation::Discard(_)) => "discard",
     }
 }
 
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
+        Value::RegionRequest(_) => "region-request",
+        Value::RegionStorage(_) => "region-storage",
+        Value::RegionBackingFunction(_) => "region-backing-function",
+        Value::RegionView(_) => "region-view",
+        Value::RegionHostFunction { .. } => "region-host-function",
+        Value::ConstructorTag(_) => "constructor-tag",
         Value::Bytes(_) => "bytes",
         Value::Address(_) => "address",
         Value::String(_) => "string",
         Value::Intrinsic(_) => "intrinsic",
-        Value::Integer(_) => "integer",
+        Value::Integer(_) | Value::SmallInteger(_) | Value::RegionInteger { .. } => "integer",
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",
-        Value::Function(_) => "function",
+        Value::Function(_) | Value::RegionFunction(_) => "function",
+        Value::ClosureCode(_) => "private-closure-code",
         Value::Polymorphic { .. } => "function",
         Value::ConstructorFunction(_) => "constructor-function",
         Value::Location(_) => "location",
@@ -177,8 +257,9 @@ const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
 }
 
 fn assert_type_operations_enter_only_their_retained_child(
-    program: &ValidatedProgram,
+    program: &ValidatedEffectProgram,
     trace: &[TraceEvent],
+    forwarded_adapter: Option<(ash::core::NodeId, ash::core::NodeId, ash::core::NodeId)>,
 ) {
     for pair in trace.windows(2) {
         let [TraceEvent::Enter(current), TraceEvent::Enter(next)] = pair else {
@@ -189,15 +270,51 @@ fn assert_type_operations_enter_only_their_retained_child(
             .expect("an entered type operation should exist")
             .kind
         {
-            PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
-                Some(operation.body())
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                operation,
+            ))) => {
+                if let Some((adapter, type_application, implementation_variable)) =
+                    forwarded_adapter
+                    && *current == adapter
+                {
+                    assert_eq!(operation.body(), type_application);
+                    let EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeApplication(application),
+                    )) = &program.node(type_application).unwrap().kind
+                    else {
+                        panic!(
+                            "the known adapter should forward its exact concrete type application"
+                        );
+                    };
+                    assert_eq!(application.function(), implementation_variable);
+                    assert_eq!(
+                        operation
+                            .parameters()
+                            .iter()
+                            .map(|(_, kind)| kind.clone())
+                            .collect::<Vec<_>>(),
+                        vec![Kind::Type, Kind::Type]
+                    );
+                    assert_eq!(
+                        application.arguments(),
+                        &operation
+                            .parameters()
+                            .iter()
+                            .map(|(id, _)| Type::Variable(*id))
+                            .collect::<Vec<_>>()
+                    );
+                    assert!(application.row_arguments().is_empty());
+                    Some(implementation_variable)
+                } else {
+                    Some(operation.body())
+                }
             }
-            PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
-                Some(operation.function())
-            }
-            PureExprKind::Computation(PureComputation::NewtypeConversion(operation)) => {
-                Some(operation.child())
-            }
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                operation,
+            ))) => Some(operation.function()),
+            EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::NewtypeConversion(operation),
+            )) => Some(operation.child()),
             _ => None,
         };
         if let Some(expected) = expected {
@@ -206,9 +323,12 @@ fn assert_type_operations_enter_only_their_retained_child(
     }
 }
 
-fn reachable_core_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
+fn owned_core_nodes(
+    program: &ValidatedEffectProgram,
+    root: ash::core::NodeId,
+) -> Vec<ash::core::NodeId> {
     let mut visited = HashSet::new();
-    let mut pending = vec![program.root()];
+    let mut pending = vec![root];
     let mut nodes = Vec::new();
     while let Some(id) = pending.pop() {
         if !visited.insert(id) {
@@ -225,21 +345,63 @@ fn reachable_core_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
 
 #[test]
 fn source_instantiation_is_explicit_in_validated_core() {
-    let (program, _, _) =
-        elaborated("id : A -> A\nid value = value\n\nmain : Unit -> Int\nmain () = id(42)\n");
+    let fixture = elaborated_effect(
+        "id : A -> A\nid value = value\n\nmain : Unit -> Int\nmain () = id(42)\n",
+    );
+    let program = &fixture.program;
+    let id_binder = fixture
+        .binders
+        .iter()
+        .find(|(name, _)| name == "id")
+        .unwrap()
+        .1;
+    let mut id_initializers = 0;
+    let mut id_instantiations = 0;
     let mut work = vec![program.root()];
     let mut abstractions = 0;
     let mut applications = 0;
     while let Some(id) = work.pop() {
         let node = program.node(id).expect("validated node");
         match &node.kind {
-            PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                operation,
+            ))) => {
                 abstractions += 1;
                 work.push(operation.body());
             }
-            PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                operation,
+            ))) => {
+                if matches!(&program.node(operation.function()).unwrap().kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == id_binder)
+                {
+                    assert_eq!(operation.arguments(), &[Type::Int]);
+                    assert!(operation.row_arguments().is_empty());
+                    id_instantiations += 1;
+                }
                 applications += 1;
                 work.push(operation.function());
+            }
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) => {
+                for member in group
+                    .members()
+                    .iter()
+                    .filter(|member| member.binder().id() == id_binder)
+                {
+                    let EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::TypeAbstraction(abstraction),
+                    )) = &program.node(member.initializer()).unwrap().kind
+                    else {
+                        panic!("the source id initializer should retain its type abstraction");
+                    };
+                    assert_eq!(abstraction.parameters().len(), 1);
+                    assert_eq!(abstraction.parameters()[0].1, Kind::Type);
+                    id_initializers += 1;
+                }
+                for index in 0..node.kind.child_count() {
+                    work.push(node.kind.child_at(index).unwrap());
+                }
             }
             kind => {
                 for index in 0..kind.child_count() {
@@ -248,22 +410,30 @@ fn source_instantiation_is_explicit_in_validated_core() {
             }
         }
     }
+    assert_eq!(id_initializers, 1);
+    assert_eq!(id_instantiations, 1);
     assert!(abstractions >= 1);
     assert!(applications >= 1);
 }
 
 #[test]
 fn explicit_type_operations_survive_both_core_transforms_and_erasure() {
-    let (before, source, module) =
-        elaborated("id : A -> A\nid value = value\n\nmain : Unit -> Int\nmain () = id(40 + 2)\n");
+    let fixture = elaborated_effect(
+        "id : A -> A\nid value = value\n\nmain : Unit -> Int\nmain () = id(40 + 2)\n",
+    );
+    let before = &fixture.program;
     for transformed in [
-        identity_traversal(&before).expect("identity traversal"),
-        fold_literal_primitives(&before).expect("literal folding"),
+        identity_effect_traversal(before).expect("identity traversal"),
+        fold_effect_literal_primitives(before).expect("literal folding"),
     ] {
-        let transformed = validate_modules(transformed, &[&source], &[(module, source.id())])
-            .expect("transformed Core validates");
+        let transformed = validate_effect_modules(
+            transformed,
+            &fixture.sources.iter().collect::<Vec<_>>(),
+            &fixture.module_sources,
+        )
+        .expect("transformed Core validates");
         assert_eq!(
-            evaluate(&transformed)
+            evaluate_effect(&transformed)
                 .expect("transformed Core evaluates")
                 .value
                 .to_string(),
@@ -274,11 +444,12 @@ fn explicit_type_operations_survive_both_core_transforms_and_erasure() {
 
 #[test]
 fn core_transforms_preserve_the_canonical_result_application_tree() {
-    let (before, source, module) = elaborated(concat!(
+    let fixture = elaborated_effect(concat!(
         "type Wrapped<A> =\nWrapped(A)\n\n",
         "main : Unit -> Wrapped<Int>\n",
         "main () = Wrapped(40 + 2)\n",
     ));
+    let before = &fixture.program;
     let before_type = before
         .node(before.root())
         .expect("the validated root should exist")
@@ -287,11 +458,15 @@ fn core_transforms_preserve_the_canonical_result_application_tree() {
     assert!(matches!(before_type, ash::types::Type::Application(_, _)));
 
     for transformed in [
-        identity_traversal(&before).expect("identity traversal"),
-        fold_literal_primitives(&before).expect("literal folding"),
+        identity_effect_traversal(before).expect("identity traversal"),
+        fold_effect_literal_primitives(before).expect("literal folding"),
     ] {
-        let transformed = validate_modules(transformed, &[&source], &[(module, source.id())])
-            .expect("transformed Core validates");
+        let transformed = validate_effect_modules(
+            transformed,
+            &fixture.sources.iter().collect::<Vec<_>>(),
+            &fixture.module_sources,
+        )
+        .expect("transformed Core validates");
         assert!(ash::types::same_type(
             &transformed
                 .node(transformed.root())
@@ -300,7 +475,7 @@ fn core_transforms_preserve_the_canonical_result_application_tree() {
             &before_type,
         ));
         assert_eq!(
-            evaluate(&transformed)
+            evaluate_effect(&transformed)
                 .expect("transformed Core evaluates")
                 .value
                 .to_string(),
@@ -338,23 +513,64 @@ fn higher_kinded_instantiation_preserves_fixed_kinds() {
         "main : Unit -> Pair<Int, Bool>\n",
         "main () = keep(Pair(42, true))\n",
     );
-    let (program, _, _) = elaborated(source);
+    let fixture = elaborated_effect(source);
+    let program = &fixture.program;
     let observation = run(source);
     assert_eq!(observation.value_display(), "Pair(42, true)");
     assert_eq!(observation.type_display(), "Pair<Int, Bool>");
 
+    let keep_binder = fixture
+        .binders
+        .iter()
+        .find(|(name, _)| name == "keep")
+        .unwrap()
+        .1;
+    let pair_ids = program
+        .registry()
+        .nominals()
+        .iter()
+        .filter(|nominal| {
+            nominal.spelling == "Pair" && nominal.id.module() == keep_binder.module().unwrap()
+        })
+        .map(|nominal| nominal.id)
+        .collect::<Vec<_>>();
+    let [pair_id] = pair_ids.as_slice() else {
+        panic!("the entry should retain its unique Pair identity");
+    };
     let mut work = vec![program.root()];
     let mut found_partial_constructor = false;
     while let Some(id) = work.pop() {
         let node = program.node(id).expect("validated node");
-        if let PureExprKind::Computation(PureComputation::TypeApplication(operation)) = &node.kind {
-            if let [
-                ash::types::Type::Application(function, argument),
-                ash::types::Type::Bool,
-            ] = operation.arguments()
-                && matches!(function.as_ref(), ash::types::Type::Nominal(_))
-                && matches!(argument.as_ref(), ash::types::Type::Int)
+        if let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+            operation,
+        ))) = &node.kind
+        {
+            if let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                &program.node(operation.function()).unwrap().kind
+                && variable.binder() == keep_binder
             {
+                assert_eq!(
+                    operation.arguments(),
+                    &[
+                        Type::Application(Box::new(Type::Nominal(*pair_id)), Box::new(Type::Int)),
+                        Type::Bool,
+                    ]
+                );
+                assert!(operation.row_arguments().is_empty());
+                let Type::Forall(parameters, _) = &program.node(operation.function()).unwrap().ty
+                else {
+                    panic!("the original keep callee should retain its quantified kinds");
+                };
+                assert_eq!(
+                    parameters
+                        .iter()
+                        .map(|(_, kind)| kind.clone())
+                        .collect::<Vec<_>>(),
+                    vec![
+                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                        Kind::Type
+                    ]
+                );
                 found_partial_constructor = true;
             }
             work.push(operation.function());
@@ -372,7 +588,7 @@ fn higher_kinded_instantiation_preserves_fixed_kinds() {
 
 #[test]
 fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
-    fn core_abstraction_count(program: &ValidatedProgram) -> usize {
+    fn core_abstraction_count(program: &ValidatedEffectProgram) -> usize {
         let mut visited = std::collections::HashSet::new();
         let mut work = vec![program.root()];
         let mut count = 0;
@@ -385,7 +601,9 @@ fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
                 .expect("a reachable Core abstraction candidate should exist");
             count += usize::from(matches!(
                 node.kind,
-                PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                    _
+                )))
             ));
             work.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
         }
@@ -399,12 +617,14 @@ fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
     let higher_kinded_source = format!(
         "{shared_declarations}keep<F : Type -> Type, A> : F<A> -> F<A>\nkeep value = value\n\nmain : Unit -> Pair<Int, Bool>\nmain () = keep(Pair(42, true))\n",
     );
-    let (monomorphic, _, _) = elaborated(&monomorphic_source);
-    let (higher_kinded, _, _) = elaborated(&higher_kinded_source);
+    let monomorphic_fixture = elaborated_effect(&monomorphic_source);
+    let monomorphic = monomorphic_fixture.program;
+    let higher_kinded_fixture = elaborated_effect(&higher_kinded_source);
+    let higher_kinded = higher_kinded_fixture.program;
     let monomorphic_evaluation =
-        evaluate(&monomorphic).expect("the monomorphic comparison Core should evaluate");
+        evaluate_effect(&monomorphic).expect("the monomorphic comparison Core should evaluate");
     let higher_kinded_evaluation =
-        evaluate(&higher_kinded).expect("the higher-kinded comparison Core should evaluate");
+        evaluate_effect(&higher_kinded).expect("the higher-kinded comparison Core should evaluate");
 
     assert_eq!(monomorphic_evaluation.value.to_string(), "Pair(42, true)");
     assert_eq!(
@@ -413,11 +633,12 @@ fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
     );
     assert_eq!(
         higher_kinded_evaluation.max_frame_depth, monomorphic_evaluation.max_frame_depth,
-        "type erasure must not push an evaluator frame",
+        "higher kinds must not increase this paired fixture’s frame high-water mark",
     );
     assert_type_operations_enter_only_their_retained_child(
         &higher_kinded,
         &higher_kinded_evaluation.trace,
+        None,
     );
 
     let monomorphic_classes = monomorphic_evaluation
@@ -454,8 +675,8 @@ fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
     );
     assert_eq!(
         higher_kinded_evaluation.trace.len(),
-        monomorphic_evaluation.trace.len() + 1,
-        "recursive initialization erases the abstraction without a transition and the application contributes its one existing erasure entry",
+        monomorphic_evaluation.trace.len() + 2,
+        "generic record creation enters its abstraction once and its call enters one type application",
     );
     assert_eq!(
         core_abstraction_count(&higher_kinded),
@@ -470,8 +691,9 @@ fn higher_kinded_type_operations_add_only_existing_erasure_entries() {
         monomorphic_classes
             .iter()
             .filter(|class| **class == "type-abstraction-erasure")
-            .count(),
-        "recursive function initialization strips outer abstractions without entering them",
+            .count()
+            + 1,
+        "the generic callable record is created once at abstraction evaluation",
     );
     assert_eq!(
         higher_kinded_classes
@@ -506,13 +728,19 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
         "main : Unit -> (Box<Bool>, Box<Int>)\n",
         "main () = map_pair((Box(42), Box(true)))\n",
     );
-    let (program, _, _) = elaborated(source);
-    let reachable = reachable_core_nodes(&program);
+    let fixture = elaborated_effect(source);
+    let program = &fixture.program;
+    let [implementation_method] = fixture.implementation_methods.as_slice() else {
+        panic!("the source should retain one concrete method binder");
+    };
+    let reachable = owned_core_nodes(program, program.root());
     let recursive_initializers = reachable
         .iter()
         .filter_map(|id| {
             let node = program.node(*id)?;
-            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &node.kind
             else {
                 return None;
             };
@@ -533,45 +761,80 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
             !recursive_initializers.contains(id)
                 && matches!(
                     program.node(*id).map(|node| &node.kind),
-                    Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                    Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
                         abstraction
-                    ))) if abstraction.parameters().len() == 2
+                    )))) if abstraction.parameters().len() == 2
                 )
         })
         .collect::<Vec<_>>();
     let [adapter] = adapters.as_slice() else {
         panic!("one selected concrete method should produce one erased adapter");
     };
-    let PureExprKind::Computation(PureComputation::TypeAbstraction(adapter_abstraction)) = &program
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+        adapter_abstraction,
+    ))) = &program
         .node(*adapter)
         .expect("the adapter should remain reachable")
         .kind
     else {
         unreachable!("the selected adapter is a type abstraction");
     };
-    let adapter_type_application = adapter_abstraction.body();
-    let PureExprKind::Computation(PureComputation::TypeApplication(adapter_application)) = &program
-        .node(adapter_type_application)
-        .expect("the adapter implementation application should remain reachable")
-        .kind
+    let adapter_applications = owned_core_nodes(program, adapter_abstraction.body()).into_iter().filter(|id| {
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(application))) = &program.node(*id).unwrap().kind else { return false; };
+        matches!(&program.node(application.function()).unwrap().kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == *implementation_method)
+    }).collect::<Vec<_>>();
+    let [adapter_type_application] = adapter_applications.as_slice() else {
+        panic!("the adapter should retain one exact concrete method instantiation");
+    };
+    let adapter_type_application = *adapter_type_application;
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+        adapter_application,
+    ))) = &program.node(adapter_type_application).unwrap().kind
     else {
-        panic!("the adapter should erase through an existing type application");
+        unreachable!();
     };
     let implementation_variable = adapter_application.function();
     assert!(matches!(
         program.node(implementation_variable).map(|node| &node.kind),
-        Some(PureExprKind::Variable(_))
+        Some(EffectExprKind::Pure(PureExprKind::Variable(variable))) if variable.binder() == *implementation_method
     ));
 
-    let evidence_binders = reachable
+    let map_pair = fixture
+        .binders
+        .iter()
+        .find(|(name, _)| name == "map_pair")
+        .unwrap()
+        .1;
+    let initializers = reachable
         .iter()
         .filter_map(|id| {
-            let node = program.node(*id)?;
-            let PureExprKind::Value(ash::core::PureValue::Function(function)) = &node.kind else {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &program.node(*id)?.kind
+            else {
                 return None;
             };
-            matches!(function.parameter().ty(), ash::types::Type::Forall(parameters, _) if parameters.len() == 2)
-                .then_some(function.parameter().id())
+            group
+                .members()
+                .iter()
+                .find(|member| member.binder().id() == map_pair)
+                .map(|member| member.initializer())
+        })
+        .collect::<Vec<_>>();
+    let [map_initializer] = initializers.as_slice() else {
+        panic!("map_pair should retain one owned initializer");
+    };
+    let evidence_binders = owned_core_nodes(program, *map_initializer)
+        .into_iter()
+        .flat_map(|id| {
+            let node = program.node(id).unwrap();
+            let mut binders = Vec::new();
+            EffectOperationFamily::visit_operation_binders(&node.kind, &mut |parameter| {
+                if matches!(parameter.ty(), Type::Forall(parameters, _) if parameters.len() == 2) {
+                    binders.push(parameter.id());
+                }
+            });
+            binders
         })
         .collect::<Vec<_>>();
     let [evidence_binder] = evidence_binders.as_slice() else {
@@ -582,14 +845,16 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
         let Some(node) = program.node(type_application) else {
             continue;
         };
-        let PureExprKind::Computation(PureComputation::TypeApplication(application)) = &node.kind
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+            application,
+        ))) = &node.kind
         else {
             continue;
         };
         let Some(function) = program.node(application.function()) else {
             continue;
         };
-        let PureExprKind::Variable(variable) = &function.kind else {
+        let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &function.kind else {
             continue;
         };
         if variable.binder() != *evidence_binder {
@@ -601,7 +866,7 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
             .find(|candidate| {
                 matches!(
                     program.node(*candidate).map(|node| &node.kind),
-                    Some(PureExprKind::Computation(PureComputation::Apply(application)))
+                    Some(EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))))
                         if application.function() == type_application
                 )
             })
@@ -628,14 +893,96 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
         [ash::types::Type::Bool, ash::types::Type::Int]
     );
 
-    let evaluation = evaluate(&program).expect("polymorphic method evidence should erase");
+    let main_binder = fixture
+        .binders
+        .iter()
+        .find(|(name, _)| name == "main")
+        .unwrap()
+        .1;
+    let main_initializers = reachable
+        .iter()
+        .filter_map(|id| {
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) = &program.node(*id)?.kind
+            else {
+                return None;
+            };
+            group
+                .members()
+                .iter()
+                .find(|member| member.binder().id() == main_binder)
+                .map(|member| member.initializer())
+        })
+        .collect::<Vec<_>>();
+    let [main_initializer] = main_initializers.as_slice() else {
+        panic!("main should retain one owned initializer");
+    };
+    let main_type = &program.node(*main_initializer).unwrap().ty;
+    let main_closures = owned_core_nodes(program, *main_initializer)
+        .into_iter()
+        .filter(|id| {
+            let node = program.node(*id).unwrap();
+            node.ty == *main_type
+                && matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+                )
+        })
+        .collect::<Vec<_>>();
+    let [main_closure] = main_closures.as_slice() else {
+        panic!("main should own one fulltyped stored closure");
+    };
+    assert!(
+        (0..program.node(*main_closure).unwrap().kind.child_count()).any(|index| program
+            .node(*main_closure)
+            .unwrap()
+            .kind
+            .child_at(index)
+            == Some(implementation_variable))
+    );
+    let Type::Forall(_, evidence_type) = &program.node(*map_initializer).unwrap().ty else {
+        panic!("map_pair should retain its outer scheme");
+    };
+    let source_type = evidence_type.function_view().unwrap().value();
+    let source_closures = owned_core_nodes(program, *map_initializer)
+        .into_iter()
+        .filter(|id| {
+            let node = program.node(*id).unwrap();
+            node.ty == *source_type
+                && matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+                )
+        })
+        .collect::<Vec<_>>();
+    let [source_closure] = source_closures.as_slice() else {
+        panic!("map_pair should own one fulltyped inner source closure");
+    };
+    assert!(
+        (0..program.node(*source_closure).unwrap().kind.child_count()).any(|index| program
+            .node(*source_closure)
+            .unwrap()
+            .kind
+            .child_at(index)
+            == Some(int_to_bool.3))
+    );
+
+    let evaluation = evaluate_effect(program).expect("polymorphic method evidence should erase");
     assert_eq!(evaluation.value.to_string(), "(Box(true), Box(42))");
     assert_eq!(runtime_value_class(&evaluation.value), "data");
-    assert_eq!(
-        evaluation.max_frame_depth, 3,
-        "method evidence should require no evaluator frame beyond existing strict applications",
+    // This Source program includes root handling, stored closures and strict captures.
+    // The complete Effect depth is 24; 25% reserve rounded to 32 is a whole-run sanity bound.
+    assert!(
+        evaluation.max_frame_depth <= 32,
+        "whole Effect evaluation should remain bounded: {}",
+        evaluation.max_frame_depth
     );
-    assert_type_operations_enter_only_their_retained_child(&program, &evaluation.trace);
+    assert_type_operations_enter_only_their_retained_child(
+        program,
+        &evaluation.trace,
+        Some((*adapter, adapter_type_application, implementation_variable)),
+    );
     let evidence_nodes = [
         *adapter,
         adapter_type_application,
@@ -655,15 +1002,39 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
             evidence_nodes.contains(node)
         })
         .collect::<Vec<_>>();
-    assert_eq!(entered_evidence.len(), evidence_nodes.len());
+    // Keep all nine identities, including the metadata-only concrete type application.
+    // Main captures its method before entry; the inner source function captures evidence
+    // before its strict calls. The adapter forwards an immutable view without Enter(its body).
     assert_eq!(
         entered_evidence
             .iter()
-            .map(|event| runtime_class(&program, event))
+            .map(|event| {
+                let TraceEvent::Enter(id) = event;
+                *id
+            })
             .collect::<Vec<_>>(),
         [
+            implementation_variable,
+            *adapter,
+            implementation_variable,
+            int_to_bool.3,
+            int_to_bool.1,
+            int_to_bool.2,
+            int_to_bool.3,
+            bool_to_int.1,
+            bool_to_int.2,
+            bool_to_int.3
+        ]
+    );
+    assert_eq!(
+        entered_evidence
+            .iter()
+            .map(|event| runtime_class(program, event))
+            .collect::<Vec<_>>(),
+        [
+            "variable-lookup",
             "type-abstraction-erasure",
-            "type-application-erasure",
+            "variable-lookup",
             "variable-lookup",
             "apply",
             "type-application-erasure",
@@ -678,7 +1049,7 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
     let classes = evaluation
         .trace
         .iter()
-        .map(|event| runtime_class(&program, event))
+        .map(|event| runtime_class(program, event))
         .collect::<Vec<_>>();
     assert!(classes.contains(&"recursive-bind"));
     let failures = [
@@ -824,24 +1195,44 @@ fn eligible_local_relay_generalizes_higher_kinded_parameters() {
         "relay(Pair(42, true))\n",
         "}\n",
     );
-    let (program, _, _) = elaborated(source);
+    let fixture = elaborated_effect(source);
+    let program = &fixture.program;
     let observation = run(source);
     assert_eq!(observation.value_display(), "Pair(42, true)");
     assert_eq!(observation.type_display(), "Pair<Int, Bool>");
 
     let mut work = vec![program.root()];
     let mut local_relay = None;
-    let mut found_partial_pair = false;
+    let keep_binder = fixture
+        .binders
+        .iter()
+        .find(|(name, _)| name == "keep")
+        .unwrap()
+        .1;
+    let pair_ids = program
+        .registry()
+        .nominals()
+        .iter()
+        .filter(|nominal| {
+            nominal.spelling == "Pair" && nominal.id.module() == keep_binder.module().unwrap()
+        })
+        .map(|nominal| nominal.id)
+        .collect::<Vec<_>>();
+    let [pair_id] = pair_ids.as_slice() else {
+        panic!("the entry should retain one Pair identity");
+    };
+    let mut partial_pair_callees = Vec::new();
     while let Some(id) = work.pop() {
         let node = program.node(id).expect("validated node");
         assert_no_scheme_below_function(&node.ty);
         match &node.kind {
-            PureExprKind::Computation(PureComputation::Bind(binding)) => {
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
                 let initializer = program
                     .node(binding.initializer())
                     .expect("the local initializer should be retained");
-                if let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-                    &initializer.kind
+                if let EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeAbstraction(abstraction),
+                )) = &initializer.kind
                     && has_expected_kinds(abstraction.parameters())
                 {
                     let ash::types::Type::Forall(initializer_parameters, initializer_body) =
@@ -857,22 +1248,26 @@ fn eligible_local_relay_generalizes_higher_kinded_parameters() {
                     assert_eq!(initializer_parameters.as_ref(), abstraction.parameters());
                     assert_eq!(binder_parameters.as_ref(), abstraction.parameters());
                     assert!(ash::types::same_type(initializer_body, binder_body));
-                    assert!(matches!(
-                        initializer_body.as_ref(),
-                        ash::types::Type::Function(_, _)
-                    ));
-                    local_relay = Some(binding.binder().id());
+                    assert!(initializer_body.function_view().is_some());
+                    assert!(
+                        local_relay.replace(binding.binder().id()).is_none(),
+                        "the source should retain exactly one generalized local relay"
+                    );
                 }
             }
-            PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
-                if let [
-                    ash::types::Type::Application(function, argument),
-                    ash::types::Type::Bool,
-                ] = application.arguments()
-                    && matches!(function.as_ref(), ash::types::Type::Nominal(_))
-                    && matches!(argument.as_ref(), ash::types::Type::Int)
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                application,
+            ))) if application.arguments()
+                == [
+                    Type::Application(Box::new(Type::Nominal(*pair_id)), Box::new(Type::Int)),
+                    Type::Bool,
+                ] =>
+            {
+                assert!(application.row_arguments().is_empty());
+                if let EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+                    &program.node(application.function()).unwrap().kind
                 {
-                    found_partial_pair = true;
+                    partial_pair_callees.push(variable.binder());
                 }
             }
             _ => {}
@@ -887,7 +1282,7 @@ fn eligible_local_relay_generalizes_higher_kinded_parameters() {
         "the eligible local relay must be generalized"
     );
     assert!(
-        found_partial_pair,
+        partial_pair_callees.contains(&local_relay.unwrap()),
         "the local scheme should instantiate F with the partial Pair<Int> constructor"
     );
 }

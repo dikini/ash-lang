@@ -148,17 +148,30 @@ fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
 }
 
 fn resolve_entry(graph: &ModuleGraph) -> ash::resolved::ResolvedModule {
-    let entry = module_named(graph, "entry.ash");
+    resolve_target(graph, module_named(graph, "entry.ash"), &[])
+}
+
+fn resolve_target(
+    graph: &ModuleGraph,
+    target: &LoadedModule,
+    summaries: &[&ash::resolved::CheckedModule],
+) -> ash::resolved::ResolvedModule {
     let mut checked = Vec::new();
     for module in graph.modules() {
         let dependencies = module
             .dependencies()
             .iter()
             .map(|edge| {
-                let dependency = checked
+                let dependency = summaries
                     .iter()
-                    .find(|dependency: &&ash::resolved::CheckedModule| {
-                        dependency.module() == edge.target()
+                    .copied()
+                    .find(|dependency| dependency.module() == edge.target())
+                    .or_else(|| {
+                        checked
+                            .iter()
+                            .find(|dependency: &&ash::resolved::CheckedModule| {
+                                dependency.module() == edge.target()
+                            })
                     })
                     .expect("dependencies should check before their importer");
                 DependencyExports::new(edge, dependency.exports())
@@ -167,12 +180,12 @@ fn resolve_entry(graph: &ModuleGraph) -> ash::resolved::ResolvedModule {
             .collect::<Vec<_>>();
         let resolved = resolve_module(module, &dependencies)
             .expect("the successful entry fixture should resolve");
-        if module.id() == entry.id() {
+        if module.id() == target.id() {
             return resolved;
         }
         checked.push(check_module(resolved).expect("a dependency fixture should check"));
     }
-    panic!("the graph should contain its entry module");
+    panic!("the graph should contain its target module");
 }
 
 fn check_graph(graph: &ModuleGraph) -> Vec<ash::resolved::CheckedModule> {
@@ -219,7 +232,18 @@ fn method_rich_capture_publication_fits_the_default_type_work_budget() {
         &[("dep.ash", &dependency)],
     );
     let checked = check_graph(&graph);
-    assert_eq!(checked.len(), 2);
+    assert_eq!(checked.len(), 4);
+    let checked_ids = checked
+        .iter()
+        .map(|module| module.module())
+        .collect::<std::collections::HashSet<_>>();
+    let graph_ids = graph
+        .modules()
+        .iter()
+        .map(|module| module.id())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(checked_ids.len(), checked.len());
+    assert_eq!(checked_ids, graph_ids);
 }
 
 #[test]
@@ -243,7 +267,18 @@ fn shared_capture_graph_exports_fit_the_default_type_work_budget() {
         &[("dep.ash", &dependency)],
     );
     let checked = check_graph(&graph);
-    assert_eq!(checked.len(), 2);
+    assert_eq!(checked.len(), 4);
+    let checked_ids = checked
+        .iter()
+        .map(|module| module.module())
+        .collect::<std::collections::HashSet<_>>();
+    let graph_ids = graph
+        .modules()
+        .iter()
+        .map(|module| module.id())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(checked_ids.len(), checked.len());
+    assert_eq!(checked_ids, graph_ids);
 }
 
 #[test]
@@ -258,7 +293,18 @@ fn unreferenced_private_constructor_families_do_not_invalidate_exports() {
         )],
     );
     let checked = check_graph(&graph);
-    assert_eq!(checked.len(), 2);
+    assert_eq!(checked.len(), graph.modules().len());
+    assert_eq!(checked.len(), 4);
+    assert!(
+        checked
+            .iter()
+            .any(|module| module.module() == module_named(&graph, "dep.ash").id())
+    );
+    assert!(
+        checked
+            .iter()
+            .any(|module| module.module() == graph.entry())
+    );
     let output = run_path(RunConfiguration {
         entry: tree.0.join("entry.ash"),
         roots: ModuleRoots::empty(),
@@ -291,10 +337,8 @@ fn name_only_import_does_not_select_implementation() {
         )],
     );
     let equality = module_named(&graph, "equality.ash");
-    let equality_checked = check_module(
-        resolve_module(equality, &[]).expect("the equality dependency should resolve"),
-    )
-    .expect("the equality dependency should check");
+    let equality_checked = check_module(resolve_target(&graph, equality, &[]))
+        .expect("the equality dependency should check");
     let [interface] = equality_checked.interface_facts() else {
         panic!("the dependency should publish one interface fact");
     };
@@ -302,13 +346,15 @@ fn name_only_import_does_not_select_implementation() {
         panic!("the dependency should publish one implementation fact");
     };
     let entry = module_named(&graph, "entry.ash");
-    let [edge] = entry.dependencies() else {
-        panic!("the entry should have one direct dependency");
-    };
-    let dependency = DependencyExports::new(edge, equality_checked.exports())
-        .expect("the entry edge should authenticate the dependency summary");
-    let resolved =
-        resolve_module(entry, &[dependency]).expect("the name-only import should resolve");
+    assert_eq!(
+        entry
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == equality.id())
+            .count(),
+        1
+    );
+    let resolved = resolve_target(&graph, entry, &[&equality_checked]);
     let retained_interface = resolved.imported_facts().interface(interface.id).is_some();
     let retained_implementation = resolved
         .imported_facts()
@@ -398,10 +444,8 @@ fn implementation_only_import_selects_evidence_without_binding_names() {
         )],
     );
     let equality = module_named(&graph, "equality.ash");
-    let equality_checked = check_module(
-        resolve_module(equality, &[]).expect("the equality dependency should resolve"),
-    )
-    .expect("the equality dependency should check");
+    let equality_checked = check_module(resolve_target(&graph, equality, &[]))
+        .expect("the equality dependency should check");
     let [defining_interface] = equality_checked.interface_facts() else {
         panic!("the dependency should publish one interface fact");
     };
@@ -412,16 +456,7 @@ fn implementation_only_import_selects_evidence_without_binding_names() {
     let expected_implementation = defining_implementation.id;
     let expected_implementation_method = defining_implementation.methods[0].id;
     let entry = module_named(&graph, "entry.ash");
-    let dependencies = entry
-        .dependencies()
-        .iter()
-        .map(|edge| {
-            DependencyExports::new(edge, equality_checked.exports())
-                .expect("the entry edges should authenticate the dependency summary")
-        })
-        .collect::<Vec<_>>();
-    let resolved = resolve_module(entry, &dependencies)
-        .expect("the implementation selector should bind no unqualified names");
+    let resolved = resolve_target(&graph, entry, &[&equality_checked]);
     let imported = resolved
         .imported_facts()
         .implementation(expected_implementation)
@@ -582,9 +617,8 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
     );
 
     let equality = module_named(&graph, "equality.ash");
-    let equality_checked =
-        check_module(resolve_module(equality, &[]).expect("the defining module should resolve"))
-            .expect("the defining module should check");
+    let equality_checked = check_module(resolve_target(&graph, equality, &[]))
+        .expect("the defining module should check");
     let [defining_interface] = equality_checked.interface_facts() else {
         panic!("the defining module should retain one interface fact");
     };
@@ -598,13 +632,15 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
     let method_binder = defining_implementation.methods[0].binder;
 
     let facade = module_named(&graph, "facade.ash");
-    let [facade_edge] = facade.dependencies() else {
-        panic!("the facade should have one dependency");
-    };
-    let facade_dependency = DependencyExports::new(facade_edge, equality_checked.exports())
-        .expect("the facade edge should authenticate the defining summary");
-    let facade_resolved =
-        resolve_module(facade, &[facade_dependency]).expect("the facade should resolve");
+    assert_eq!(
+        facade
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == equality.id())
+            .count(),
+        1
+    );
+    let facade_resolved = resolve_target(&graph, facade, &[&equality_checked]);
     let facade_imported = facade_resolved
         .imported_facts()
         .implementation(implementation)
@@ -616,13 +652,15 @@ fn public_implementation_selector_crosses_a_three_module_facade() {
     let facade_checked = check_module(facade_resolved).expect("the facade should check");
 
     let entry = module_named(&graph, "entry.ash");
-    let [entry_edge] = entry.dependencies() else {
-        panic!("the entry should have one dependency");
-    };
-    let entry_dependency = DependencyExports::new(entry_edge, facade_checked.exports())
-        .expect("the entry edge should authenticate the facade summary");
-    let entry_resolved = resolve_module(entry, &[entry_dependency])
-        .expect("the facade implementation should resolve");
+    assert_eq!(
+        entry
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == facade.id())
+            .count(),
+        1
+    );
+    let entry_resolved = resolve_target(&graph, entry, &[&facade_checked]);
     let entry_imported = entry_resolved
         .imported_facts()
         .implementation(implementation)
@@ -903,8 +941,7 @@ fn public_targeted_import_reexports_each_selected_name_namespace() {
 
     let base = module_named(&graph, "base.ash");
     let base_checked =
-        check_module(resolve_module(base, &[]).expect("the defining module should resolve"))
-            .expect("the defining module should check");
+        check_module(resolve_target(&graph, base, &[])).expect("the defining module should check");
     let expected_global = base_checked.schemes()[0].binder;
     let [choice, token] = base_checked.registry().nominals() else {
         panic!("the defining module should retain both nominal declarations");
@@ -928,13 +965,15 @@ fn public_targeted_import_reexports_each_selected_name_namespace() {
     let expected_implementation = implementation.id;
 
     let facade = module_named(&graph, "facade.ash");
-    let [facade_edge] = facade.dependencies() else {
-        panic!("the facade should have one dependency");
-    };
-    let facade_dependency = DependencyExports::new(facade_edge, base_checked.exports())
-        .expect("the facade edge should authenticate the base summary");
-    let facade_resolved =
-        resolve_module(facade, &[facade_dependency]).expect("the public import should resolve");
+    assert_eq!(
+        facade
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == base.id())
+            .count(),
+        1
+    );
+    let facade_resolved = resolve_target(&graph, facade, &[&base_checked]);
     let candidate = facade_resolved.export_candidate();
     assert_eq!(
         candidate.term("facade_answer").map(|term| term.binder),
@@ -1001,13 +1040,15 @@ fn public_targeted_import_reexports_each_selected_name_namespace() {
     assert_eq!(facade_implementation.authorization().hops().len(), 1);
 
     let entry = module_named(&graph, "entry.ash");
-    let [entry_edge] = entry.dependencies() else {
-        panic!("the entry should have one dependency");
-    };
-    let entry_dependency = DependencyExports::new(entry_edge, facade_checked.exports())
-        .expect("the entry edge should authenticate the facade summary");
-    let entry_resolved = resolve_module(entry, &[entry_dependency])
-        .expect("the facade's selected public spellings should resolve");
+    assert_eq!(
+        entry
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == facade.id())
+            .count(),
+        1
+    );
+    let entry_resolved = resolve_target(&graph, entry, &[&facade_checked]);
 
     assert_eq!(
         entry_resolved
@@ -1108,11 +1149,7 @@ fn name_reexports_preserve_privacy_opacity_and_identity() {
         ],
     );
     let base = module_named(&graph, "base.ash");
-    let token = resolve_module(base, &[])
-        .expect("the opaque base should resolve")
-        .registry()
-        .nominals()[0]
-        .id;
+    let token = resolve_target(&graph, base, &[]).registry().nominals()[0].id;
     let mut checked = Vec::new();
     let mut entry_resolved = None;
     for module in graph.modules() {
@@ -1219,31 +1256,34 @@ fn name_reexports_preserve_privacy_opacity_and_identity() {
         ],
     );
     let base = module_named(&graph, "base.ash");
-    let base_checked = check_module(resolve_module(base, &[]).expect("the base should resolve"))
-        .expect("the base should check");
+    let base_checked =
+        check_module(resolve_target(&graph, base, &[])).expect("the base should check");
     let expected_binder = base_checked.schemes()[0].binder;
     let facade = module_named(&graph, "facade.ash");
-    let [facade_edge] = facade.dependencies() else {
-        panic!("the alias facade should have one dependency");
-    };
-    let facade_dependency = DependencyExports::new(facade_edge, base_checked.exports())
-        .expect("the alias facade edge should authenticate its summary");
-    let facade_checked = check_module(
-        resolve_module(facade, &[facade_dependency]).expect("both aliases should resolve"),
-    )
-    .expect("the alias facade should check");
+    assert_eq!(
+        facade
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == base.id())
+            .count(),
+        1
+    );
+    let facade_checked = check_module(resolve_target(&graph, facade, &[&base_checked]))
+        .expect("the alias facade should check");
     assert!(
         facade_checked.schemes().is_empty(),
         "re-export aliases must not synthesize facade declarations",
     );
     let entry = module_named(&graph, "entry.ash");
-    let [entry_edge] = entry.dependencies() else {
-        panic!("the alias entry should have one dependency");
-    };
-    let entry_dependency = DependencyExports::new(entry_edge, facade_checked.exports())
-        .expect("the alias entry edge should authenticate its summary");
-    let entry_resolved =
-        resolve_module(entry, &[entry_dependency]).expect("both facade aliases should resolve");
+    assert_eq!(
+        entry
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.target() == facade.id())
+            .count(),
+        1
+    );
+    let entry_resolved = resolve_target(&graph, entry, &[&facade_checked]);
     assert_eq!(
         entry_resolved
             .imported_facts()
@@ -1629,7 +1669,7 @@ fn partial_transparent_name_reexports_retain_hidden_constructor_family() {
             ],
         );
         let base = module_named(&graph, "base.ash");
-        let base_resolved = resolve_module(base, &[]).expect("the family base should resolve");
+        let base_resolved = resolve_target(&graph, base, &[]);
         let [choice] = base_resolved.registry().nominals() else {
             panic!("the family base should retain one nominal");
         };

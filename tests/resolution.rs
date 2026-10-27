@@ -8,7 +8,7 @@ use ash::{
     interface::{InterfaceReason, RequirementOwner},
     module::{ModuleRoots, load_module_graph},
     parser::STRUCTURAL_DEPTH_LIMIT,
-    resolve::{ResolveReason, resolve_module},
+    resolve::{DependencyExports, ResolveReason, resolve_module},
     resolved::{
         Binder, BinderId, ResolvedBinding, ResolvedBlock, ResolvedDeclarationIndex,
         ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule,
@@ -19,7 +19,10 @@ use ash::{
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
-fn with_loaded<T>(text: &str, action: impl FnOnce(&ash::module::LoadedModule) -> T) -> T {
+fn with_loaded<T>(
+    text: &str,
+    action: impl FnOnce(&ash::module::LoadedModule, &[DependencyExports<'_>]) -> T,
+) -> T {
     let directory = loop {
         let id = TEMP_IDS.fetch_add(1, Ordering::Relaxed);
         let path =
@@ -34,14 +37,41 @@ fn with_loaded<T>(text: &str, action: impl FnOnce(&ash::module::LoadedModule) ->
     fs::write(&entry, text).expect("resolution fixture should be writable");
     let graph =
         load_module_graph(&entry, &ModuleRoots::empty()).expect("resolution fixture should load");
-    let result = action(&graph.modules()[0]);
+    let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+    let mut result = None;
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .expect("dependencies precede their importer")
+                        .exports(),
+                )
+                .expect("the exact dependency summary authenticates its edge")
+            })
+            .collect::<Vec<_>>();
+        if module.id() == graph.entry() {
+            result = Some(action(module, &dependencies));
+            break;
+        }
+        checked.push(
+            check_module(resolve_module(module, &dependencies).expect("dependency should resolve"))
+                .expect("dependency should check"),
+        );
+    }
+    let result = result.expect("the graph should retain its entry");
     let _ = fs::remove_dir_all(directory);
     result
 }
 
 fn resolve_valid(text: &str) -> ResolvedModule {
-    with_loaded(text, |loaded| {
-        resolve_module(loaded, &[]).expect("the fixture should resolve")
+    with_loaded(text, |loaded, dependencies| {
+        resolve_module(loaded, dependencies).expect("the fixture should resolve")
     })
 }
 
@@ -177,14 +207,31 @@ fn retains_method_local_type_candidates_for_interface_checking() {
 
     assert!(!method.has_explicit_type_parameters);
     assert_eq!(candidate.spelling, "B");
-    let Type::Function(domain, codomain) = &method.annotation.ty else {
-        panic!("expected the method's resolved function type");
-    };
-    assert_eq!(domain.as_ref(), &Type::Variable(candidate.id));
+    let function = method
+        .annotation
+        .ty
+        .function_view()
+        .expect("the complete method type remains callable");
+    assert_eq!(function.domain(), &Type::Variable(candidate.id));
     assert_eq!(
-        codomain.as_ref(),
+        function.value(),
         &Type::Variable(interface.parameters[0].id)
     );
+    let row = function
+        .effects()
+        .expect("the Source arrow retains its allocation row");
+    let [allocation] = row.known() else {
+        panic!("the exact row has one allocation instance");
+    };
+    assert!(row.tail().is_none());
+    assert!(allocation.arguments().is_empty());
+    let fact = program
+        .imported_facts()
+        .effect(allocation.effect())
+        .expect("the allocation instance is authenticated");
+    assert_eq!(fact.spelling, "DefaultAlloc");
+    assert!(fact.parameters.is_empty());
+    assert_ne!(fact.id.module(), program.module());
 }
 
 #[test]
@@ -1100,8 +1147,9 @@ fn relational_interfaces_run_method_kind_checks_before_later_declarations() {
         "bad : Carrier -> Unit\n",
         "bad value = ()\n",
     );
-    let error = with_loaded(text, |loaded| {
-        resolve_module(loaded, &[]).expect_err("the relational method argument is ill-kinded")
+    let error = with_loaded(text, |loaded, dependencies| {
+        resolve_module(loaded, dependencies)
+            .expect_err("the relational method argument is ill-kinded")
     });
     let ash::resolve::ResolveModuleError::Kind(ash::kind::KindFailure::Source(error)) = error
     else {
@@ -1437,8 +1485,9 @@ fn match_arm_pattern_scope_does_not_leak_to_later_arms() {
 }
 
 fn resolve_error(text: &str) -> ash::resolve::ResolveError {
-    with_loaded(text, |loaded| {
-        match resolve_module(loaded, &[]).expect_err("the fixture should fail resolution") {
+    with_loaded(text, |loaded, dependencies| {
+        match resolve_module(loaded, dependencies).expect_err("the fixture should fail resolution")
+        {
             ash::resolve::ResolveModuleError::Resolution(error) => error,
             ash::resolve::ResolveModuleError::Kind(error) => {
                 panic!("resolution fixture unexpectedly reached kind checking: {error:?}")

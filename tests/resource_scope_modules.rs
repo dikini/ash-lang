@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -62,6 +62,73 @@ fn check(graph: &ModuleGraph) -> Vec<CheckedModule> {
     checked
 }
 
+fn resolve_entry(
+    graph: &ModuleGraph,
+) -> Result<ash::resolved::ResolvedModule, ash::resolve::ResolveModuleError> {
+    let mut checked: Vec<CheckedModule> = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let owner = checked
+                    .iter()
+                    .find(|owner| owner.module() == edge.target())
+                    .expect("the exact dependency target should already be checked");
+                DependencyExports::new(edge, owner.exports()).expect("authentic target summary")
+            })
+            .collect::<Vec<_>>();
+        let result = resolve_module(module, &dependencies);
+        if module.id() == graph.entry() {
+            return result;
+        }
+        checked
+            .push(check_module(result.expect("dependency resolves")).expect("dependency checks"));
+    }
+    panic!("the loaded entry should be present")
+}
+
+fn assert_inventory(graph: &ModuleGraph, expected: &[&str]) {
+    let names = graph
+        .modules()
+        .iter()
+        .map(|module| {
+            Path::new(module.source().display_path())
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names, expected);
+    let checked = check(graph);
+    assert_eq!(
+        checked
+            .iter()
+            .map(CheckedModule::module)
+            .collect::<Vec<_>>(),
+        graph
+            .modules()
+            .iter()
+            .map(|module| module.id())
+            .collect::<Vec<_>>()
+    );
+}
+
+fn module_named<'a>(graph: &'a ModuleGraph, name: &str) -> &'a ash::module::LoadedModule {
+    let mut matches = graph.modules().iter().filter(|module| {
+        Path::new(module.source().display_path()).file_name() == Some(name.as_ref())
+    });
+    let module = matches
+        .next()
+        .expect("the exact fixture module should exist");
+    assert!(
+        matches.next().is_none(),
+        "fixture names should identify one owner"
+    );
+    module
+}
+
 #[test]
 fn builtin_cell_import_supports_qualified_generic_forwarding() {
     let tree = Tree::new();
@@ -76,8 +143,15 @@ fn builtin_cell_import_supports_qualified_generic_forwarding() {
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("compiler builtin loads without a configured root");
-    assert_eq!(graph.modules().len(), 2);
-    assert_eq!(check(&graph).len(), 2);
+    assert_inventory(
+        &graph,
+        &[
+            "@builtin.foreign",
+            "@compiler.region",
+            "@builtin.cell",
+            "entry.ash",
+        ],
+    );
 }
 
 #[test]
@@ -136,7 +210,16 @@ fn builtin_names_can_be_targeted_renamed_and_forwarded_through_facades() {
         ),
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-    assert_eq!(check(&graph).len(), 3);
+    assert_inventory(
+        &graph,
+        &[
+            "@builtin.foreign",
+            "@compiler.region",
+            "@builtin.cell",
+            "facade.ash",
+            "entry.ash",
+        ],
+    );
 }
 
 #[test]
@@ -151,12 +234,7 @@ fn source_cannot_introduce_the_builtin_provider() {
             &format!("import @builtin.cell as Cell\n{declaration}"),
         );
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-        let builtin = &graph.modules()[0];
-        let checked = check_module(resolve_module(builtin, &[]).unwrap()).unwrap();
-        let entry = graph.module(graph.entry()).unwrap();
-        let dependency =
-            DependencyExports::new(&entry.dependencies()[0], checked.exports()).unwrap();
-        let error = resolve_module(entry, &[dependency]).expect_err("builtin provider is sealed");
+        let error = resolve_entry(&graph).expect_err("builtin provider is sealed");
         assert!(format!("{error:?}").contains("SealedProvider"), "{error:?}");
     }
 }
@@ -169,8 +247,7 @@ fn acquisition_resolution_requires_a_direct_builtin_dependency() {
         "main : Unit -> Int\nmain () = resource cell<R> c = 41 {\n42\n}\n",
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-    let error = resolve_module(graph.module(graph.entry()).unwrap(), &[])
-        .expect_err("a direct builtin dependency is required");
+    let error = resolve_entry(&graph).expect_err("a direct builtin dependency is required");
     assert!(
         format!("{error:?}").contains("ResourceBuiltinRequired"),
         "{error:?}"
@@ -229,12 +306,7 @@ fn source_has_no_builtin_handle_constructor_or_pattern() {
             &format!("import @builtin.cell as Cell\n{declaration}"),
         );
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-        let builtin = &graph.modules()[0];
-        let checked = check_module(resolve_module(builtin, &[]).unwrap()).unwrap();
-        let entry = graph.module(graph.entry()).unwrap();
-        let dependency =
-            DependencyExports::new(&entry.dependencies()[0], checked.exports()).unwrap();
-        assert!(resolve_module(entry, &[dependency]).is_err());
+        assert!(resolve_entry(&graph).is_err());
     }
 }
 
@@ -303,14 +375,25 @@ fn direct_and_facade_paths_share_one_builtin_identity() {
     tree.write("facade.ash", "pub import @builtin.cell (Handle)\n");
     let entry = tree.write("entry.ash", "import facade as Wrapped\nimport @builtin.cell as Direct\nforward<R> : Wrapped.Handle<R> -> Direct.Handle<R>\nforward value = value\nmain : Unit -> Int\nmain () = 42\n");
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-    assert_eq!(graph.modules().len(), 3);
-    let builtin = graph.modules()[0].id();
-    assert_eq!(graph.modules()[1].dependencies()[0].target(), builtin);
+    assert_inventory(
+        &graph,
+        &[
+            "@builtin.foreign",
+            "@compiler.region",
+            "@builtin.cell",
+            "facade.ash",
+            "entry.ash",
+        ],
+    );
+    let builtin = module_named(&graph, "@builtin.cell").id();
+    assert_eq!(
+        module_named(&graph, "facade.ash").dependencies()[0].target(),
+        builtin
+    );
     assert_eq!(
         graph.module(graph.entry()).unwrap().dependencies()[1].target(),
         builtin
     );
-    check(&graph);
 }
 
 #[test]
@@ -419,9 +502,22 @@ fn generic_cell_metadata_imports_and_facades_preserve_the_separate_family() {
     tree.write("facade.ash", "pub import @builtin.generic_cell (Cell as Access, Provider as Supply, Ops as Requests, read as get, write as put)\n");
     let entry = tree.write("entry.ash", "import facade as Wrapped\nimport @builtin.generic_cell as Direct\nimport @builtin.cell as Legacy\nmain : Unit -> Int\nmain () = 42\n");
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-    assert_eq!(graph.modules().len(), 4);
-    let generic = graph.modules()[0].id();
-    assert_eq!(graph.modules()[1].dependencies()[0].target(), generic);
+    assert_inventory(
+        &graph,
+        &[
+            "@builtin.foreign",
+            "@compiler.region",
+            "@builtin.generic_cell",
+            "facade.ash",
+            "@builtin.cell",
+            "entry.ash",
+        ],
+    );
+    let generic = module_named(&graph, "@builtin.generic_cell").id();
+    assert_eq!(
+        module_named(&graph, "facade.ash").dependencies()[0].target(),
+        generic
+    );
     assert_eq!(
         graph.module(graph.entry()).unwrap().dependencies()[1].target(),
         generic
@@ -430,7 +526,6 @@ fn generic_cell_metadata_imports_and_facades_preserve_the_separate_family() {
         graph.module(graph.entry()).unwrap().dependencies()[2].target(),
         generic
     );
-    check(&graph);
 }
 
 #[test]

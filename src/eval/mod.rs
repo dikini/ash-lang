@@ -15,3 +15,6 @@ pub use machine::{
 };
 pub(crate) use value::ObservedHeap;
 pub use value::{Address, Closure, ExecutableNode, ExecutableProgram, ObservedValue, Value};
+
+#[doc(hidden)]
+pub use value::{NativeByteStorage, NativeTupleAdapter, NativeTupleStorage};

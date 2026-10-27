@@ -476,7 +476,7 @@ fn render_native_payloads(output: &mut impl fmt::Write) -> fmt::Result {
 const NATIVE_HOST_MAIN: &str = concat!(
     "];\n",
     "fn main() -> std::process::ExitCode {\n",
-    "    match ash::build::__run_private_effect_image(&RUNTIME_FINGERPRINT, IMAGE, EXPECTED_FACTS, LIBRARIES) {\n",
+    "    match ash::build::__run_private_effect_image(&RUNTIME_FINGERPRINT, IMAGE, EXPECTED_FACTS, LIBRARIES, Some(native_bridges::TUPLE_STORAGE)) {\n",
     "        Ok(value) => { println!(\"{value}\"); std::process::ExitCode::SUCCESS }\n",
     "        Err(error) => { eprintln!(\"{error}\"); std::process::ExitCode::FAILURE }\n",
     "    }\n",
@@ -546,6 +546,35 @@ fn render_native_suffix(
     wrappers: Option<&[String]>,
 ) -> fmt::Result {
     output.write_str("#[allow(unsafe_code)]\nmod native_bridges {\n")?;
+    output.write_str(
+        r#"pub const TUPLE_STORAGE: ash::eval::NativeTupleAdapter = ash::eval::NativeTupleAdapter {
+    initialize: tuple_initialize,
+    fields: tuple_fields,
+    drop_fields: tuple_drop_fields,
+    copy_bytes,
+    bytes,
+};
+fn copy_bytes(storage: &ash::eval::NativeByteStorage, bytes: &[u8]) {
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(),storage.address().cast(),bytes.len()); }
+}
+fn bytes(storage: &ash::eval::NativeByteStorage) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(storage.address().cast(),storage.len()) }
+}
+fn tuple_initialize(storage: &mut ash::eval::NativeTupleStorage, values: Vec<ash::eval::Value>) {
+    let pointer = storage.address().cast::<ash::eval::Value>();
+    for (index, value) in values.into_iter().enumerate() {
+        unsafe { pointer.add(index).write(value); }
+    }
+}
+fn tuple_fields(storage: &ash::eval::NativeTupleStorage) -> &[ash::eval::Value] {
+    unsafe { std::slice::from_raw_parts(storage.address().cast(), storage.len()) }
+}
+fn tuple_drop_fields(storage: &mut ash::eval::NativeTupleStorage) {
+    unsafe { std::ptr::drop_in_place(std::ptr::slice_from_raw_parts_mut(
+        storage.address().cast::<ash::eval::Value>(), storage.len())); }
+}
+"#,
+    )?;
     for (library_index, library) in build.libraries.iter().enumerate() {
         for &member_index in &library.members {
             let member = &build.bridges[member_index];

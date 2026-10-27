@@ -6,9 +6,10 @@ use std::{
 
 use ash::{
     driver::{PipelineFailure, RunConfiguration, run_path},
+    elaborate::check_module,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
-    resolved::{Binder, ResolvedDefinition, ResolvedDefinitionKind, ResolvedModule},
+    resolved::{Binder, CheckedModule, ResolvedDefinition, ResolvedDefinitionKind, ResolvedModule},
     types::TYPE_WORK_LIMIT,
 };
 
@@ -197,9 +198,28 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
         .expect("fixture module should be present")
 }
 
-fn resolve_leaf(module: &LoadedModule) -> ResolvedModule {
-    let dependencies: &[DependencyExports<'_>] = &[];
-    resolve_module(module, dependencies).expect("leaf module should resolve")
+fn resolve_leaf(graph: &ModuleGraph, target: &LoadedModule) -> ResolvedModule {
+    let mut checked: Vec<CheckedModule> = Vec::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|dependency| dependency.module() == edge.target())
+                    .expect("dependencies should precede their importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("exact target summary should authenticate")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies).expect("fixture should resolve");
+        if module.id() == target.id() {
+            return resolved;
+        }
+        checked.push(check_module(resolved).expect("preceding dependency should check"));
+    }
+    panic!("target should belong to the graph")
 }
 
 fn definition_binder(definition: &ResolvedDefinition) -> &Binder {
@@ -223,8 +243,8 @@ fn local_binder_numbers_are_qualified_by_their_defining_module() {
     );
     let first = module_named(&graph, "first.ash");
     let second = module_named(&graph, "second.ash");
-    let first_resolved = resolve_leaf(first);
-    let second_resolved = resolve_leaf(second);
+    let first_resolved = resolve_leaf(&graph, first);
+    let second_resolved = resolve_leaf(&graph, second);
     let first_id = definition_binder(&first_resolved.definitions()[0]).id;
     let second_id = definition_binder(&second_resolved.definitions()[0]).id;
 
@@ -286,7 +306,7 @@ fn resolved_modules_are_declarations_only() {
     let tree = TempTree::create();
     let graph = load(&tree, "main : Unit -> Int\nmain () = 42\n", &[]);
     let entry = module_named(&graph, "entry.ash");
-    let resolved = resolve_leaf(entry);
+    let resolved = resolve_leaf(&graph, entry);
 
     assert_eq!(resolved.module(), entry.id());
     assert_eq!(resolved.definitions().len(), 1);
@@ -309,7 +329,7 @@ fn export_candidates_reflect_term_and_type_visibility() {
         ),
         &[],
     );
-    let resolved = resolve_leaf(module_named(&graph, "entry.ash"));
+    let resolved = resolve_leaf(&graph, module_named(&graph, "entry.ash"));
     let candidate = resolved.export_candidate();
 
     assert!(candidate.term("private_value").is_none());
@@ -319,11 +339,16 @@ fn export_candidates_reflect_term_and_type_visibility() {
     assert!(candidate.nominal("Hidden").is_none());
     assert!(candidate.constructor("Hidden").is_none());
     assert!(candidate.is_private("Hidden"));
-    assert!(
-        candidate
-            .hidden_nominal(resolved.registry().nominals()[0].id)
-            .is_some()
-    );
+    let hidden = resolved
+        .registry()
+        .nominals()
+        .iter()
+        .filter(|nominal| nominal.id.module() == resolved.module() && nominal.spelling == "Hidden")
+        .collect::<Vec<_>>();
+    let [hidden] = hidden.as_slice() else {
+        panic!("one entry-owned Hidden nominal")
+    };
+    assert!(candidate.hidden_nominal(hidden.id).is_some());
 
     assert!(candidate.nominal("Opaque").is_some());
     assert!(candidate.constructor("Opaque").is_none());
@@ -387,7 +412,7 @@ fn export_candidates_keep_withheld_type_and_constructor_namespaces_separate() {
         concat!("type Foo = PrivateFoo\n", "pub opaque type Token = Foo\n",),
         &[],
     );
-    let resolved = resolve_leaf(module_named(&graph, "entry.ash"));
+    let resolved = resolve_leaf(&graph, module_named(&graph, "entry.ash"));
     let candidate = resolved.export_candidate();
 
     assert!(candidate.is_private("Foo"));
@@ -437,17 +462,63 @@ fn repeated_summary_imports_share_one_graph_type_work_budget() {
     entry.push_str("main : Unit -> Int\nmain () = 0\n");
     let entry = tree.write("entry.ash", &entry);
 
-    let failure = run_path(RunConfiguration {
-        entry,
+    let observation = run_path(RunConfiguration {
+        entry: entry.clone(),
         roots: ModuleRoots::empty(),
     })
-    .expect_err("repeated dependency-summary retention must share graph type work");
+    .expect("the input-sized graph allowance should admit all repeated summaries");
+    assert_eq!(observation.value_display(), "0");
+    assert_eq!(observation.type_display(), "Int");
 
-    let PipelineFailure::Resolution(error) = failure.pipeline_failure().expect("pipeline failure")
-    else {
-        panic!("graph type work should remain owned by resolution: {failure:?}");
-    };
-    assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+    #[cfg(feature = "resource-calibration")]
+    {
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let source_bytes = graph
+            .modules()
+            .iter()
+            .map(|module| module.source().text().len())
+            .sum::<usize>();
+        let allowance = TYPE_WORK_LIMIT.max(80 * source_bytes);
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_ash"))
+            .arg(&entry)
+            .env_remove("ASH_CALIBRATION_LIMIT")
+            .env("ASH_CALIBRATION_OBSERVE", "1")
+            .output()
+            .expect("observer child should execute");
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(output.stdout, b"0 : Int\n");
+        let records = String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .filter_map(|line| line.strip_prefix("ASH_CALIBRATION "))
+            .map(|json| serde_json::from_str::<serde_json::Value>(json).unwrap())
+            .filter(|record| record["phase"] == "resolution")
+            .collect::<Vec<_>>();
+        assert!(records.iter().all(|record| record["completed"] == true
+            && record["normal_limit"] == allowance
+            && record["diagnostic_limit"] == allowance));
+        let phases = records
+            .iter()
+            .filter(|record| record["event"] == "phase")
+            .collect::<Vec<_>>();
+        assert_eq!(phases.len(), graph.modules().len());
+        // Each phase observes the supplied owner directly; a reset between
+        // canonical modules would break cumulative growth or the endpoint.
+        let mut previous = 0;
+        for phase in &phases {
+            let used = phase["work_cumulative"].as_u64().unwrap();
+            assert!(used > previous);
+            previous = used;
+        }
+        let endpoints = records
+            .iter()
+            .filter(|record| record["event"] == "work")
+            .collect::<Vec<_>>();
+        let [endpoint] = endpoints.as_slice() else {
+            panic!("one completed resolution endpoint")
+        };
+        assert_eq!(endpoint["work_cumulative"], previous);
+        assert!(previous > TYPE_WORK_LIMIT as u64);
+    }
 }
 
 #[test]

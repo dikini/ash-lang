@@ -21,12 +21,12 @@ use ash::{
         validate,
         variable::VariableNode,
     },
-    elaborate::{Elaborator, check_module, link_modules},
+    elaborate::{EffectElaborator, check_module, link_modules},
     evidence_validation::validate_interface_evidence,
     integer::Integer,
     module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
-    resolved::{BinderId, ResolvedNominalDeclarationKind},
+    resolve::{DependencyExports, resolve_module},
+    resolved::{BinderId, CheckedModule, ResolvedNominalDeclarationKind},
     source::{ByteRange, Origin, SourceFile, Span},
     types::{Kind, Type},
 };
@@ -454,8 +454,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/transform.rs::$fn_rebuild_pattern::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/transform.rs::$fn_rebuild_pattern::Task.FinishTuple.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/transform.rs::$fn_rebuild_pattern::Task.FinishConstructor.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_162_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_162_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_163_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_163_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
     kind_site!("src/build/image.rs::ArgumentBuffer.0", FieldBuildTypeOwned),
     kind_site!("src/build/image.rs::DecodedRow.value", FieldBuildTypeOwned),
     kind_site!("src/build/image.rs::Decoder.decoded_rows", FieldBuildTypeOwned),
@@ -754,13 +754,13 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_core_with_ledger::Continuation.OwnerArgument.remaining", FieldOwnerKindTraversalBorrow),
     kind_site!("src/kind.rs::KindEnvironments.owner_registry", FieldOwnerKindRegistryBorrow),
     kind_site!("src/pattern.rs::$fn_charge_types::Task.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTypeTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument::Task.Application.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument::Task.EffectArguments.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument::Task.EffectInstances.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument::Task.Function.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument::Task.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
-    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.Application.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.EffectArguments.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.EffectInstances.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.Function.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_owner_argument_mode::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_with::Task.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_with::Task.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolve.rs::ResolvedOwnerOccurrenceBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
@@ -2088,6 +2088,74 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/validate.rs::$local.validation.work", TransientTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/transform.rs::$local.transform.work", TransientTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/eval/machine.rs::$local.observation", TransientTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState),
+    // Region carriers retain the existing ownership boundaries: automatic Core
+    // binder metadata, borrowed Source work, owned lowering rows, and shared
+    // runtime code/instantiation. Captured continuation segments remain Mixed.
+    kind_site!("src/core/capture/control.rs::Control.Call.prefix", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
+    kind_site!("src/core/effect.rs::$impl_CoreBuilder::$fn_replay_effect_rows_in_range::Equation.Region.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
+    kind_site!("src/core/effect.rs::EffectOperation.Region.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/effect.rs::EffectOperation.RegionClosure.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/region.rs::RegionClosureCode.Function.0", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/region.rs::RegionClosureNode.code", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/region.rs::RegionScopeNode.access", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/driver.rs::ModularEffectCoreResult.$alias", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree, Shared),
+    kind_site!("src/elaborate.rs::ElaborationTask.FinishRegion.0", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTreeAndTransientWork),
+    kind_site!("src/elaborate.rs::ElaborationTask.FinishSelection.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::ElaborationTask.RegionBody.source", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
+    kind_site!("src/elaborate.rs::ElaborationTask.SelectionBody.source", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
+    kind_site!("src/elaborate.rs::EquationsProgress.outer_arrow_effects", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/region.rs::RegionProgress.access", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/region.rs::RegionProgress.provider", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/region.rs::RegionProgress.provider_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/region.rs::RegionProgress.source", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
+    kind_site!("src/elaborate/region.rs::SelectionProgress.operand", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/region.rs::SelectionProgress.selected", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/eval/machine.rs::Frame.RegionAllocated.segment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Mixed),
+    kind_site!("src/eval/machine.rs::Frame.RegionBoundary.allocate", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionBoundary.preceding", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionBoundary.release", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionBuffer.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionCompletion.allocate", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionCompletion.preceding", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionCompletion.saved", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionContext.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionForwarding.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionPreceding.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionProvider.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionProvider.preceding", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionRequest.context", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionTuple.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Frame.RegionTuple.fields", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::Instantiation.$alias", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/machine.rs::ResourcePayload.Cell.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/region.rs::BufferProgress.environment", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/region.rs::BufferProgress.left", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/region.rs::BufferProgress.prepared", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/region.rs::PreparedBuffer.payload", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/value.rs::ClosureCode.instantiation", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/value.rs::ClosureCode.program", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/value.rs::RegionFunction.instantiation", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/value.rs::Value.ClosureCode.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/eval/value.rs::Value.RegionFunction.0", FieldTransientCarrierRetentionPreservedCarrierEvaluationEvaluationEvaluatorState, Shared),
+    kind_site!("src/evidence_validation.rs::LinkedLocalScope.Region.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/kind.rs::BodyWork.RegionBody.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
+    kind_site!("src/resolve.rs::ResolveTask.FinishRegion.identity", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::ResolveTask.FinishRegion.provider", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
+    kind_site!("src/resolve.rs::ResolveTask.RegionProvider.identity", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::ResolveTask.RegionProvider.source", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolved.rs::ResolvedExprKind.Region.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedExprKind.RegionSelection.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedRegionExpr.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedRegionExpr.identity", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedRegionExpr.provider", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedRegionSelectionExpr.body", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedRegionSelectionExpr.region", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/surface.rs::SurfaceExprKind.Region.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceExprKind.RegionSelection.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceRegionExpr.body", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceRegionExpr.provider", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceRegionSelectionExpr.body", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceRegionSelectionExpr.region", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
 ];
 
 #[rustfmt::skip]
@@ -7939,6 +8007,11 @@ fn private_core_layout_and_family_authentication_is_path_confined() {
             &["src/core/dialect.rs", "src/core/transform.rs"],
         ),
         (
+            "with_registry_method_evidence_and_arena_work",
+            &["src/core/dialect.rs"],
+        ),
+        ("canonical_evidence_creation_row", &["src/core/validate.rs"]),
+        (
             "LexicalEvidenceId",
             &[
                 "src/core/dialect.rs",
@@ -8049,6 +8122,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "with_registry_and_method_evidence"
                     | "with_registry_method_evidence_and_rewrite_work"
                     | "with_registry_method_evidence_and_type_work"
+                    | "with_registry_method_evidence_and_arena_work"
             ),
             // These names reconstruct canonical imported catalogs and authenticate
             // the unpublished Core occurrence graph. None selects evaluator dispatch.
@@ -8056,6 +8130,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                 identifier,
                 // Canonical Layout/family authentication; no runtime selection.
                 "LexicalEvidenceId"
+                    | "canonical_evidence_creation_row"
 
                 // Canonical owner-signature authentication, not selection or runtime dispatch.
                     | "MethodEvidenceResourceOwner"
@@ -8630,6 +8705,8 @@ fn assert_no_destructive_backing_field_bypass(
         tokens: &'a [&str],
         at: usize,
         owners: &BTreeSet<String>,
+        path: &str,
+        source_owner: &str,
     ) -> Option<&'a str> {
         let mut depth = 0usize;
         for cursor in (0..at).rev() {
@@ -8646,6 +8723,38 @@ fn assert_no_destructive_backing_field_bypass(
                         && tokens[cursor - 3] == ":"
                     {
                         owner = tokens[cursor - 4];
+                    }
+                    // This existing infallible factory transfers the whole
+                    // heap and root-completion owner into Arc<ObservedHeap>.
+                    if path == "src/eval/machine.rs"
+                        && source_owner == "Machine"
+                        && owners.contains("ObservedHeap")
+                        && cursor >= 4
+                        && tokens[cursor - 4..cursor]
+                            == ["ObservedHeap", ":", ":", "with_root_completion"]
+                    {
+                        let close = matching_token(tokens, cursor, "(", ")");
+                        let expected = production_rust_code_tokens(
+                            "ObservedHeap::with_root_completion(
+                                 Arc::clone(self.program.registry()),
+                                 std::mem::take(&mut self.heap),
+                                 self.root_completion.take(),
+                             )",
+                        );
+                        let in_run_loop = tokens.windows(3).enumerate().any(|(at, window)| {
+                            if window != ["fn", "run_loop", "("] {
+                                return false;
+                            }
+                            let parameters = matching_token(tokens, at + 2, "(", ")");
+                            let Some((open, "{")) = declaration_delimiter(tokens, parameters + 1)
+                            else {
+                                return false;
+                            };
+                            open < cursor && cursor < matching_token(tokens, open, "{", "}")
+                        });
+                        if in_run_loop && tokens[cursor - 4..=close] == expected {
+                            return Some("ObservedHeap");
+                        }
                     }
                     if owners.contains(owner) {
                         let close = matching_token(tokens, cursor, "(", ")");
@@ -8707,7 +8816,7 @@ fn assert_no_destructive_backing_field_bypass(
         found
     }
 
-    fn immediately_discarded_member(tokens: &[&str], at: usize) -> bool {
+    fn immediately_discarded_member(path: &str, owner: &str, tokens: &[&str], at: usize) -> bool {
         let Some(open) = at.checked_sub(3) else {
             return false;
         };
@@ -8754,6 +8863,21 @@ fn assert_no_destructive_backing_field_bypass(
         if arguments.last().is_some_and(|argument| argument.is_empty()) {
             arguments.pop();
         }
+        // Only the Core family contract may consume this opaque carrier.
+        // Exact qualification and the whole returned carrier matter here.
+        if path == "src/core/dialect.rs"
+            && owner == "CoreBuilder"
+            && helper == "discard_effects"
+            && helper_at >= 3
+            && tokens[helper_at - 3..helper_at] == ["F", ":", ":"]
+            && (helper_at == 3 || tokens[helper_at - 4] != ":")
+            && operation == "replace"
+            && arguments.len() == 2
+        {
+            let stored = arguments[1];
+            return stored.starts_with(&["F", ":", ":", "store_effects", "("])
+                && matching_token(stored, 4, "(", ")") == stored.len() - 1;
+        }
         if proven_container_discard(tokens, helper) {
             return arguments.len() == if operation == "replace" { 2 } else { 1 };
         }
@@ -8795,16 +8919,21 @@ fn assert_no_destructive_backing_field_bypass(
     fn terminal_mutated_field<'a>(root: &'a str, tail: &[&'a str]) -> &'a str {
         let mut terminal = root;
         let mut cursor = 0usize;
+        let mut depths = [0usize; 4];
         while cursor + 1 < tail.len() {
-            if matches!(tail[cursor], "=" | ";" | ",") {
+            if depths.iter().all(|depth| *depth == 0)
+                && matches!(tail[cursor], "=" | ";" | "," | ")" | "]" | "}")
+            {
                 break;
             }
-            if tail[cursor] == "."
+            if depths.iter().all(|depth| *depth == 0)
+                && tail[cursor] == "."
                 && is_rust_identifier(tail[cursor + 1])
                 && tail.get(cursor + 2) != Some(&"(")
             {
                 terminal = tail[cursor + 1];
             }
+            update_delimiter_depths(tail[cursor], &mut depths);
             cursor += 1;
         }
         terminal
@@ -9057,7 +9186,32 @@ fn assert_no_destructive_backing_field_bypass(
                 tokens[index + 2],
             );
         }
-        if has_assignment_before_statement_end(tail) {
+        // The evaluator only refills a consumed control slot. Recognize the
+        // complete existing handoff, including its release-mode precondition
+        // before frame mutation; no other Machine field or method is exempt.
+        let empty_control_handoff = path == "src/eval/machine.rs"
+            && owner == "Machine"
+            && tokens[index..index + 3] == ["self", ".", "control"]
+            && tokens.windows(3).enumerate().any(|(at, window)| {
+                if window != ["fn", "apply", "("] {
+                    return false;
+                }
+                let parameters_close = matching_token(tokens, at + 2, "(", ")");
+                let Some((open, "{")) = declaration_delimiter(tokens, parameters_close + 1) else {
+                    return false;
+                };
+                let close = matching_token(tokens, open, "{", "}");
+                let expected = production_rust_code_tokens(
+                    "assert!(self.control.is_none());
+                     if let Some(frame) = transition.frame {
+                         self.frames.push(frame);
+                         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+                     }
+                     self.control = Some(transition.control);",
+                );
+                open < index && index < close && tokens[open + 1..close] == expected
+            });
+        if has_assignment_before_statement_end(tail) && !empty_control_handoff {
             panic!(
                 "{path} must not assign through raw or nested {owner} backing storage via {}.{} near {:?}",
                 tokens[index],
@@ -9065,6 +9219,29 @@ fn assert_no_destructive_backing_field_bypass(
                 &tail[..tail.len().min(24)],
             );
         }
+        // Capturing a continuation moves every selected frame into the
+        // existing iterative owner, with no fallible step after the drain.
+        let captured_frame_transfer = path == "src/eval/machine.rs"
+            && owner == "Machine"
+            && custom_drop_owners.contains("CapturedContinuation")
+            && tokens[index..index + 3] == ["self", ".", "frames"]
+            && index >= 4
+            && tokens.windows(3).enumerate().any(|(at, window)| {
+                if window != ["fn", "capture_from", "("] {
+                    return false;
+                }
+                let parameters = matching_token(tokens, at + 2, "(", ")");
+                let Some((open, "{")) = declaration_delimiter(tokens, parameters + 1) else {
+                    return false;
+                };
+                let close = matching_token(tokens, open, "{", "}");
+                let expected = production_rust_code_tokens(
+                    "frames.extend(self.frames.drain(selected..));
+                     self.captured_cells = retained;
+                     Ok(CapturedContinuation { frames })",
+                );
+                open < index && index < close && tokens[index - 4..close] == expected
+            });
         if tail.first() == Some(&".")
             && let Some(method) = tail.get(1).copied()
             && matches!(
@@ -9080,6 +9257,7 @@ fn assert_no_destructive_backing_field_bypass(
                     | "resize_with"
             )
             && !displaced_result_is_discarded(tokens, index, method)
+            && !captured_frame_transfer
         {
             panic!(
                 "{path} must not invoke destructive mutation through raw {owner} backing storage via {}.{}.{}",
@@ -9088,13 +9266,44 @@ fn assert_no_destructive_backing_field_bypass(
                 tail[1],
             );
         }
+        // This fallible transfer retains every complete quantified pair in
+        // TypeContext. On failure the incoming Box and remaining map iterator
+        // own only Kind roots, whose existing Drop is iterative.
+        let quantified_owner_transfer = path == "src/elaborate.rs"
+            && owner == "PreparedGlobals"
+            && custom_drop_owners.contains("TypeContext")
+            && tokens[index..index + 3] == ["prepared", ".", "quantifiers"]
+            && tokens.windows(3).enumerate().any(|(at, window)| {
+                if window != ["fn", "finish_prepared_definitions", "("] {
+                    return false;
+                }
+                let parameters = matching_token(tokens, at + 2, "(", ")");
+                let Some((open, "{")) = declaration_delimiter(tokens, parameters + 1) else {
+                    return false;
+                };
+                let close = matching_token(tokens, open, "{", "}");
+                let expected = production_rust_code_tokens(
+                    "if !prepared.binders.is_empty() || prepared.globals.len() != prepared.quantifiers.len() {
+                         return Err(invalid_state());
+                     }
+                     for (binder, quantified) in std::mem::take(&mut prepared.quantifiers) {
+                         prepared.context.set_quantified(binder, quantified)?;
+                     }
+                     self.monomorphic_recursive.clear();
+                     let globals = std::mem::take(&mut prepared.globals);
+                     let context = std::mem::take(&mut prepared.context);
+                     Ok((globals, context))",
+                );
+                open < index && index < close && tokens[open + 1..close] == expected
+            });
         let prefix = &tokens[index.saturating_sub(12)..index];
-        let immediately_discarded = immediately_discarded_member(tokens, index);
+        let immediately_discarded = immediately_discarded_member(path, owner, tokens, index);
         if prefix.ends_with(&["(", "&", "mut"])
             && prefix
                 .iter()
                 .any(|token| matches!(*token, "take" | "replace" | "swap"))
             && !immediately_discarded
+            && !quantified_owner_transfer
             && !enclosing_struct_literal(tokens, index).is_some_and(|destination| {
                 let destination = if destination == "Self" {
                     enclosing_impl_owner(tokens, index).unwrap_or(destination)
@@ -9103,7 +9312,8 @@ fn assert_no_destructive_backing_field_bypass(
                 };
                 custom_drop_owners.contains(destination)
             })
-            && enclosing_single_argument_owner(tokens, index, custom_drop_owners).is_none()
+            && enclosing_single_argument_owner(tokens, index, custom_drop_owners, path, owner)
+                .is_none()
             && !is_infallible_consuming_transfer(tokens, owner, index)
         {
             panic!(
@@ -9120,7 +9330,7 @@ fn assert_automatic_iterative_owner_apis_are_narrow(sources: &[(&str, &str)], ow
     if !sources.iter().any(|(path, _)| *path == "src/types.rs") {
         fields.extend(parse_top_level_fields(
             "src/types.rs",
-            "struct Type(Box<Type>);",
+            "struct Type(Box<Type>); enum Kind { Type, EffectRow, Arrow(Box<Kind>, Box<Kind>) }",
         ));
     }
     if !sources.iter().any(|(path, _)| *path == "src/source.rs") {
@@ -9354,6 +9564,195 @@ fn narrow_owner_guard_rejects_lexical_raw_member_bypasses() {
                  discard_resolved_effects_iteratively( \
                      std::mem::replace(&mut owner.effects, effects)); }",
             &["Guard"][..],
+        ),
+        (
+            "control handoff without empty-slot assertion",
+            "src/eval/machine.rs",
+            "struct Machine { control: Option<Type> } \
+             impl Drop for Machine { fn drop(&mut self) {} } \
+             impl Machine { fn apply(&mut self, transition: Transition) { \
+                 self.control = Some(transition.control); } }",
+            &["Machine"][..],
+        ),
+        (
+            "intervening control mutation invalidates empty-slot proof",
+            "src/eval/machine.rs",
+            "struct Machine { control: Option<Type> } \
+             impl Drop for Machine { fn drop(&mut self) {} } \
+             impl Machine { fn apply(&mut self, transition: Transition) { \
+                 assert!(self.control.is_none()); \
+                 self.control = Some(Type::Unit); \
+                 self.control = Some(transition.control); } }",
+            &["Machine"][..],
+        ),
+        (
+            "another field cannot use the control-slot precondition",
+            "src/eval/machine.rs",
+            "struct Machine { control: Option<Type>, other: Type } \
+             impl Drop for Machine { fn drop(&mut self) {} } \
+             impl Machine { fn apply(&mut self, transition: Transition) { \
+                 assert!(self.control.is_none()); \
+                 self.other = transition.control; } }",
+            &["Machine"][..],
+        ),
+        (
+            "unqualified opaque-family consumer is not authenticated",
+            "src/core/dialect.rs",
+            "struct CoreBuilder { effects: Type } \
+             impl Drop for CoreBuilder { fn drop(&mut self) {} } \
+             fn bypass(owner: &mut CoreBuilder, row: Type) { \
+                 discard_effects(std::mem::replace(&mut owner.effects, F::store_effects(row))); }",
+            &["CoreBuilder"][..],
+        ),
+        (
+            "another family cannot consume the Core carrier",
+            "src/core/dialect.rs",
+            "struct CoreBuilder { effects: Type } \
+             impl Drop for CoreBuilder { fn drop(&mut self) {} } \
+             fn bypass(owner: &mut CoreBuilder, row: Type) { \
+                 Other::discard_effects(std::mem::replace(&mut owner.effects, F::store_effects(row))); }",
+            &["CoreBuilder"][..],
+        ),
+        (
+            "projected replacement is not whole-carrier disposal",
+            "src/core/dialect.rs",
+            "struct CoreBuilder { effects: Type } \
+             impl Drop for CoreBuilder { fn drop(&mut self) {} } \
+             fn bypass(owner: &mut CoreBuilder, row: Type) { \
+                 F::discard_effects(std::mem::replace(&mut owner.effects, F::store_effects(row)).field); }",
+            &["CoreBuilder"][..],
+        ),
+        (
+            "a nested family path is not the exact Core family",
+            "src/core/dialect.rs",
+            "struct CoreBuilder { effects: Type } \
+             impl Drop for CoreBuilder { fn drop(&mut self) {} } \
+             fn bypass(owner: &mut CoreBuilder, row: Type) { \
+                 Other::F::discard_effects(std::mem::replace(&mut owner.effects, F::store_effects(row))); }",
+            &["CoreBuilder"][..],
+        ),
+        (
+            "another owner cannot use the observation transfer",
+            "src/eval/machine.rs",
+            "struct OtherMachine { heap: Vec<Type> } \
+             impl Drop for OtherMachine { fn drop(&mut self) {} } \
+             struct ObservedHeap { cells: Vec<Type> } \
+             impl Drop for ObservedHeap { fn drop(&mut self) {} } \
+             impl OtherMachine { fn run_loop(&mut self) { \
+                 ObservedHeap::with_root_completion(Arc::clone(self.program.registry()), std::mem::take(&mut self.heap), self.root_completion.take(),); } }",
+            &["OtherMachine", "ObservedHeap"][..],
+        ),
+        (
+            "a different heap argument is not the observation transfer",
+            "src/eval/machine.rs",
+            "struct Machine { heap: Vec<Type> } \
+             impl Drop for Machine { fn drop(&mut self) {} } \
+             struct ObservedHeap { cells: Vec<Type> } \
+             impl Drop for ObservedHeap { fn drop(&mut self) {} } \
+             impl Machine { fn run_loop(&mut self) { \
+                 ObservedHeap::with_root_completion(Arc::clone(self.program.registry()), self.root_completion.take(), std::mem::take(&mut self.heap),); } }",
+            &["Machine", "ObservedHeap"][..],
+        ),
+        (
+            "a projected heap is not the whole observation transfer",
+            "src/eval/machine.rs",
+            "struct Machine { heap: Vec<Type> } \
+             impl Drop for Machine { fn drop(&mut self) {} } \
+             struct ObservedHeap { cells: Vec<Type> } \
+             impl Drop for ObservedHeap { fn drop(&mut self) {} } \
+             impl Machine { fn run_loop(&mut self) { \
+                 ObservedHeap::with_root_completion(Arc::clone(self.program.registry()), std::mem::take(&mut self.heap).into_iter().skip(1).collect(), self.root_completion.take(),); } }",
+            &["Machine", "ObservedHeap"][..],
+        ),
+        (
+            "partial frame drain is not a whole continuation transfer",
+            "src/eval/machine.rs",
+            "struct Machine { frames: Vec<Type> } \
+             impl Drop for Machine { fn drop(&mut self) {} } \
+             struct CapturedContinuation { frames: Vec<Type> } \
+             impl Drop for CapturedContinuation { fn drop(&mut self) {} } \
+             impl Machine { fn capture_from(&mut self, selected: usize) { \
+                 let mut frames = Vec::new(); \
+                 frames.extend(self.frames.drain(selected..).take(1)); self.captured_cells = retained; Ok(CapturedContinuation { frames }); } }",
+            &["Machine", "CapturedContinuation"][..],
+        ),
+        (
+            "another consumer cannot own the captured frames",
+            "src/eval/machine.rs",
+            "struct Machine { frames: Vec<Type> } \
+             impl Drop for Machine { fn drop(&mut self) {} } \
+             struct CapturedContinuation { frames: Vec<Type> } \
+             impl Drop for CapturedContinuation { fn drop(&mut self) {} } \
+             impl Machine { fn capture_from(&mut self, selected: usize) { \
+                 let mut frames = Vec::new(); \
+                 discard_frames(self.frames.drain(selected..)); self.captured_cells = retained; Ok(CapturedContinuation { frames }); } }",
+            &["Machine", "CapturedContinuation"][..],
+        ),
+        (
+            "post-drain error is not an infallible ownership handoff",
+            "src/eval/machine.rs",
+            "struct Machine { frames: Vec<Type> } \
+             impl Drop for Machine { fn drop(&mut self) {} } \
+             struct CapturedContinuation { frames: Vec<Type> } \
+             impl Drop for CapturedContinuation { fn drop(&mut self) {} } \
+             impl Machine { fn capture_from(&mut self, selected: usize) { \
+                 let mut frames = Vec::new(); \
+                 frames.extend(self.frames.drain(selected..)); may_fail()?; self.captured_cells = retained; Ok(CapturedContinuation { frames }); } }",
+            &["Machine", "CapturedContinuation"][..],
+        ),
+        (
+            "quantifier transfer must use the owning context recipient",
+            "src/elaborate.rs",
+            "struct PreparedGlobals { quantifiers: HashMap<u32, Box<[Kind]>> } \
+             impl Drop for PreparedGlobals { fn drop(&mut self) {} } \
+             struct TypeContext { kinds: Vec<Kind> } \
+             impl Drop for TypeContext { fn drop(&mut self) {} } \
+             impl Elaborator { fn finish_prepared_definitions(&mut self, mut prepared: PreparedGlobals) { \
+                 if !prepared.binders.is_empty() || prepared.globals.len() != prepared.quantifiers.len() { \
+                     return Err(invalid_state()); } \
+                 for (binder, quantified) in std::mem::take(&mut prepared.quantifiers) { \
+                     prepared.context.ignore_quantified(binder, quantified)?; } \
+                 self.monomorphic_recursive.clear(); \
+                 let globals = std::mem::take(&mut prepared.globals); \
+                 let context = std::mem::take(&mut prepared.context); \
+                 Ok((globals, context)) } }",
+            &["PreparedGlobals", "TypeContext"][..],
+        ),
+        (
+            "quantifier transfer must retain the entire map",
+            "src/elaborate.rs",
+            "struct PreparedGlobals { quantifiers: HashMap<u32, Box<[Kind]>> } \
+             impl Drop for PreparedGlobals { fn drop(&mut self) {} } \
+             struct TypeContext { kinds: Vec<Kind> } \
+             impl Drop for TypeContext { fn drop(&mut self) {} } \
+             impl Elaborator { fn finish_prepared_definitions(&mut self, mut prepared: PreparedGlobals) { \
+                 if !prepared.binders.is_empty() || prepared.globals.len() != prepared.quantifiers.len() { \
+                     return Err(invalid_state()); } \
+                 for (binder, quantified) in std::mem::take(&mut prepared.quantifiers).into_iter().take(1) { \
+                     prepared.context.set_quantified(binder, quantified)?; } \
+                 self.monomorphic_recursive.clear(); \
+                 let globals = std::mem::take(&mut prepared.globals); \
+                 let context = std::mem::take(&mut prepared.context); \
+                 Ok((globals, context)) } }",
+            &["PreparedGlobals", "TypeContext"][..],
+        ),
+        (
+            "quantifier transfer must retain the complete quantified value",
+            "src/elaborate.rs",
+            "struct PreparedGlobals { quantifiers: HashMap<u32, Box<[Kind]>> } \
+             impl Drop for PreparedGlobals { fn drop(&mut self) {} } \
+             struct TypeContext { kinds: Vec<Kind> } \
+             impl Drop for TypeContext { fn drop(&mut self) {} } \
+             impl Elaborator { fn finish_prepared_definitions(&mut self, mut prepared: PreparedGlobals) { \
+                 if !prepared.binders.is_empty() || prepared.globals.len() != prepared.quantifiers.len() { \
+                     return Err(invalid_state()); } \
+                 for (binder, quantified) in std::mem::take(&mut prepared.quantifiers) { \
+                     prepared.context.set_quantified(binder, quantified.field)?; } \
+                 self.monomorphic_recursive.clear(); \
+                 let globals = std::mem::take(&mut prepared.globals); \
+                 let context = std::mem::take(&mut prepared.context); \
+                 Ok((globals, context)) } }",
+            &["PreparedGlobals", "TypeContext"][..],
         ),
     ];
     let mut missed = Vec::new();
@@ -10365,21 +10764,53 @@ fn validated_newtype_shadow_program() -> ValidatedProgram {
     .expect("newtype shadow fixture should be writable");
     let graph = load_module_graph(&entry, &ModuleRoots::empty())
         .expect("newtype shadow fixture should load");
-    let module = graph
-        .module(graph.entry())
-        .expect("newtype shadow entry should remain loaded");
-    let checked =
-        check_module(resolve_module(module, &[]).expect("newtype shadow fixture should resolve"))
-            .expect("newtype shadow fixture should check");
-    let linked =
-        link_modules(vec![checked], graph.entry()).expect("newtype shadow fixture should link");
+    let mut checked = Vec::<CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|dependency| dependency.module() == edge.target())
+                    .expect("checked dependency should precede importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("exact defining summary should authenticate")
+            })
+            .collect::<Vec<_>>();
+        checked.push(
+            check_module(
+                resolve_module(module, &dependencies).expect("newtype Source should resolve"),
+            )
+            .expect("newtype Source should check"),
+        );
+    }
+    let entry_checked = checked
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .unwrap();
+    let registry = std::sync::Arc::clone(entry_checked.registry());
+    let owners = registry
+        .nominals()
+        .iter()
+        .filter(|nominal| nominal.id.module() == graph.entry() && nominal.spelling == "Wrapped")
+        .collect::<Vec<_>>();
+    let [owner] = owners.as_slice() else {
+        panic!("one defining Wrapped nominal")
+    };
+    assert_eq!(
+        owner.declaration_kind,
+        ResolvedNominalDeclarationKind::Newtype
+    );
+    let owner = owner.id;
+    let linked = link_modules(checked, graph.entry()).expect("complete Source graph should link");
     let linked = validate_interface_evidence(linked)
         .expect("newtype shadow fixture has no interface evidence");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("newtype shadow namespace should fit");
+        EffectElaborator::for_module_program(&linked).expect("newtype shadow namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
-        .expect("newtype shadow fixture should lower");
+        .synthesize_effect_module_program(&linked)
+        .expect("newtype Source should lower to Effect Core");
     let unchecked = elaborator
         .finish(typed.node)
         .expect("newtype shadow Core should finish");
@@ -10393,8 +10824,57 @@ fn validated_newtype_shadow_program() -> ValidatedProgram {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let program = ash::core::validate_modules(unchecked, &sources, &module_sources)
-        .expect("newtype shadow conversion should authenticate");
+    let source_program = ash::core::validate_effect_modules(unchecked, &sources, &module_sources)
+        .expect("complete Source should independently validate");
+    assert_eq!(
+        source_program.node(source_program.root()).unwrap().ty,
+        Type::Nominal(owner)
+    );
+    assert_eq!(
+        ash::eval::evaluate_effect(&source_program)
+            .unwrap()
+            .value
+            .to_string(),
+        "42"
+    );
+    // The closed Pure-family shadow control is an isolated erased conversion,
+    // authenticated by the original defining registry, rather than Source lowering.
+    let source = graph.module(graph.entry()).unwrap().source();
+    let start = source.text().find("Wrapped(42)").unwrap();
+    let span = source
+        .span(
+            ByteRange::new(
+                start.try_into().unwrap(),
+                (start + "Wrapped(42)".len()).try_into().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let origin = Origin::Source(span);
+    let mut builder = CoreBuilder::with_registry(registry);
+    let value = builder
+        .integer(
+            Integer::parse_decimal("42").unwrap(),
+            Type::Int,
+            origin.clone(),
+        )
+        .unwrap();
+    let root = builder
+        .newtype_conversion(
+            owner,
+            NewtypeConversionDirection::Wrap,
+            value,
+            Type::Nominal(owner),
+            origin,
+        )
+        .unwrap();
+    let program =
+        ash::core::validate_modules(builder.finish(root).unwrap(), &sources, &module_sources)
+            .expect("the original registry should authenticate the isolated Pure conversion");
+    assert_eq!(
+        ash::eval::evaluate(&program).unwrap().value.to_string(),
+        "42"
+    );
     drop(graph);
     fs::remove_dir_all(directory).expect("newtype shadow fixture should clean up");
     program

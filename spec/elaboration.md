@@ -314,24 +314,46 @@ phase.
 
 Elaboration generates an occurrence of the entry module's local `main` and
 applies it to unit. This application is the innermost body of the linked module
-groups. It has the closed result type and empty effect row established by the
-entry contract. Module linking introduces no initialization, lookup, runtime
-module value, handler registry, or provider selection.
+groups. It retains the entry's closed result type and complete row. An explicit
+host-backed region root encloses all groups before their closure construction
+starts; native interpretation covers required admitted symbol effects. The final
+outer expression has an empty row. Imports add no runtime module value, lookup
+or interface/provider selection; ordinary module definitions initialize through
+their recursive groups.
 
 ## Effect Core lowering
 
 Ash has two production Core dialects over one arena, program, validation, and
 transform substrate. Pure Core retains the uninhabited operation family and an
-empty row at every node. A linked program lowers to Effect Core when any
+empty row at every node. Ordinary Source value-function defaults and persistent
+construction select Effect Core; deliberately closed Pure contracts remain Pure.
+A linked program lowers to Effect Core when any
 retained scheme, nominal representation, constructor payload, or expression
 requires an effectful function type, an `EffectRow` binder or argument, or an
 effect operation. Importing or declaring an effect whose identity does not
 occur in any such retained fact or expression does not by itself select Effect
 Core.
 
+Region lowering retains explicit selected-context and request operands, exact
+callback rows/targets, supplied pending storage, local fields/captures,
+initialization/publication and paired completion. Its operations are `Region`,
+`RegionAllocate`, `RegionValueRequest`, `RegionTuple`, `RegionBuffer` and
+`RegionClosure`, together with ordinary request/handler/control nodes. Source
+region access lowers to dependency-bearing access; selection lowers to explicit
+action-local default forwarding. A Unit context query saves the selected view
+beside the once-evaluated cleanup action. The owner service invokes allocation
+at its structural owner position under its saved preceding selection, including
+during required close. Body-local handlers do not become callback interpreters.
+No younger field/capture is transported through the independent request.
+
+Private immediate Request descriptors encode checked usable bytes/alignment
+without recursively allocating a tuple or BigInt to formulate that request.
+Host startup/control storage supplies the first default pair before ordinary
+module records are materialized; there is no hidden Source heap fallback.
+
 Every Effect Core node retains its structural value type, exact computation
 row, and causal origin. Ordinary value and computation nodes reuse the shared
-Pure Core families. Effect Core adds only these operation-family nodes:
+Pure Core families. Effect Core also retains these effect/control operation-family nodes:
 
 - `Request(effect_instance, operation, operand)` evaluates the operand and has
   the operand row union the requested exact instance;
@@ -359,7 +381,8 @@ Pure Core families. Effect Core adds only these operation-family nodes:
 Effect and operation declarations remain authenticated registry facts. Core
 contains no provider choice or machine-global registration registry. Lowering does not
 encode continuations as Rust closures or expose evaluator frames as Core data.
-The generated entry application is retained only with an empty row.
+The final generated root/native-interpreted expression is retained only with an
+empty row; the enclosed entry application retains its complete computation row.
 
 A hook root lowers to an authenticated identity clause, `publish input =>
 resume input`. A registration first binds its transformer in the preceding
@@ -546,15 +569,23 @@ of unary expression operations.
 Parameterized constructors use the same Core instantiation form as
 polymorphic value names.
 
-Effect Core independently checks that every type-abstraction body is an inert
-function/constructor value or variable, a transparent type-operation wrapper,
+Effect Core independently checks that every type-abstraction body is an admitted
+ordinary function materialization, inert constructor value or variable, a
+transparent type-operation wrapper,
 or an authenticated generated method adapter whose checked applications only
 construct evidence functions. Each nested abstraction satisfies the same
 check. Arbitrary applications, bindings, aggregates, handlers and requests do
 not qualify merely because their immediate row is empty. This invariant
 matches source generalization and generated evidence; it permits execution to
-retain the lexical abstraction until instantiation without delaying source
-effects. Pure Core keeps its existing erasure and validation boundary.
+materialize a direct generic function or authenticated deferred capture record
+once when evaluating the abstraction, without executing adapter spines early.
+Type application creates an immutable instantiated view of that record and its
+lexical metadata, binding ordinary type and complete row arguments without
+mutating sibling views or allocating another record. Transparent variable/alias
+and constructor forwarding remains intact. Authenticated prerequisite term
+applications keep declaration order before source arguments; genuinely new
+Function results allocate at those term-creation sites. Pure Core keeps its
+existing erasure and validation boundary.
 
 A newtype constructor occurrence lowers to an ordinary unary function whose body is a wrap conversion.
 For a parameterized declaration, the function uses fresh generated type
@@ -623,8 +654,10 @@ binder kinds, ordered identities and arguments, structural types, origins, and
 every method-evidence authentication relationship. The transformed program
 passes fresh independent validation before use. The dynamic semantics erase
 Pure type operations and retain Effect instantiation in lexical execution
-context. Neither produces a source-inspectable kind or type value, changes
-strict source evaluation order, or allocates an ordinary heap cell.
+context. Neither produces a source-inspectable kind or type value or changes
+strict source evaluation order. Pure erasure and Effect type application allocate
+no callable record; Effect abstraction materializes an admitted generic record
+at its ordinary creation point as described above.
 
 ## Function presentations
 
@@ -711,7 +744,12 @@ not an ownership edge to another Core node, so mutual calls do not form cycles
 in the Core arena. The recursive binding owns each function once and exposes
 their binder identities simultaneously. This keeps the representation acyclic
 while making recursive scope explicit to validation, transforms, and
-evaluation.
+evaluation. At each Effect group entry, reserve recursive identities and
+uninitialized data slots, then materialize direct ordinary function members once
+in source member order. Run the existing source-order guarded data/alias
+initializers afterward, then enter the group body. Templates are code metadata;
+lookup returns the stored callable. Capture/resume retains completed member
+allocation and initialization progress; refusal introduces no group rollback.
 
 The recursive binding validator requires a nonempty group, distinct binders,
 equal annotations and initializer types, admitted guarded roots, valid scope
@@ -763,7 +801,12 @@ rejects every effect operation. Effect Core validation independently checks:
   clauses;
 - handler nesting, dialect membership, provenance, child handles, and
   reachability; and
-- an empty row at the linked entry application.
+- exact region/API and prospective/live activation relationships, complete paired
+  provider types/rows, selected and preceding contexts, layout, actual supplied
+  fields/captures, pending/initialized publication, bootstrap and paired release;
+- protecting owner/control and close-service correspondence, including actual
+  transitive backend requirements; and
+- an empty row at the final generated root/native-interpreted expression.
 
 A construction API does not authenticate these relations. Identity and folding
 transforms traverse the effect operation family, preserve or rebuild its

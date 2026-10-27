@@ -196,6 +196,7 @@ pub fn __run_private_effect_image(
     bytes: &[u8],
     expected_facts: &'static [u8],
     libraries: &[PrivateNativeLibrary<'_>],
+    tuple_storage: Option<crate::eval::NativeTupleAdapter>,
 ) -> Result<PrivateProgramOutput, PrivateProgramFailure> {
     use crate::foreign::source_bindings::{SourceNativeBindings, admit_source_native_program};
     use std::collections::HashSet;
@@ -232,6 +233,7 @@ pub fn __run_private_effect_image(
         .try_reserve(libraries.len())
         .map_err(|_| image_error(image::ImageFailure::Resource))?;
     let mut bindings = SourceNativeBindings::default();
+    bindings.tuple_storage = tuple_storage;
     for library in libraries {
         work.charge(2)
             .map_err(|()| image_error(image::ImageFailure::Resource))?;

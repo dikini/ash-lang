@@ -1685,7 +1685,10 @@ fn resolve_module_names_with_budget(
                 "builtin source-candidate traversal exceeded its type-work budget",
             )
         })?;
-        if !owner.is_builtin_foreign() {
+        if !owner.is_builtin_foreign()
+            && !owner.is_builtin_region()
+            && !owner.is_builtin_region_facade()
+        {
             return Ok(());
         }
         type_work
@@ -1697,11 +1700,18 @@ fn resolve_module_names_with_budget(
                     "builtin source authentication exceeded its type-work budget",
                 )
             })?;
-        if source.text() != crate::module::foreign_builtin_source_text() {
+        let canonical = if owner.is_builtin_region_facade() {
+            crate::module::region_facade_builtin_source_text()
+        } else if owner.is_builtin_region() {
+            crate::module::region_builtin_source_text()
+        } else {
+            crate::module::foreign_builtin_source_text()
+        };
+        if source.text() != canonical {
             return Err(error(
                 ResolveReason::ImportConflict,
                 surface.span,
-                "reserved Foreign identity requires the immutable builtin source",
+                "reserved builtin identity requires its immutable compiler source",
             ));
         }
         Ok(())
@@ -1714,16 +1724,36 @@ fn resolve_module_names_with_budget(
     }
     reject_duplicate_module_aliases(surface)?;
     if dependencies.len() != loaded.dependencies().len()
-        || surface.imports.len() != loaded.dependencies().len()
+        || surface.imports.len()
+            != loaded
+                .dependencies()
+                .iter()
+                .filter(|edge| !edge.is_region_service())
+                .count()
         || dependencies
             .iter()
             .zip(loaded.dependencies())
-            .zip(&surface.imports)
-            .any(|((dependency, loaded_edge), import)| {
+            .any(|(dependency, loaded_edge)| {
                 dependency.edge != loaded_edge
-                    || loaded_edge.import_span() != import.span
                     || dependency.edge.target() != dependency.summary.module()
             })
+        || loaded
+            .dependencies()
+            .iter()
+            .filter(|edge| !edge.is_region_service())
+            .zip(&surface.imports)
+            .any(|(edge, import)| edge.import_span() != import.span)
+        || loaded
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.is_region_service())
+            .any(|edge| !edge.target().is_builtin_region() || edge.import_span() != surface.span)
+        || loaded
+            .dependencies()
+            .iter()
+            .filter(|edge| edge.is_region_service())
+            .count()
+            > 1
     {
         return Err(error(
             ResolveReason::InternalState,
@@ -2337,6 +2367,7 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
 struct Resolver {
     module: ModuleId,
     builtin_cell: Option<ModuleId>,
+    builtin_region: Option<ModuleId>,
     resource_families: HashMap<NominalTypeId, crate::resolved::ResourceDefinitionId>,
     source_foreign_libraries: Vec<Arc<crate::foreign::source_contract::PreparedForeignLibrary>>,
     row_resource_families: HashSet<NominalTypeId>,
@@ -2751,6 +2782,7 @@ impl Resolver {
             resource_origins: HashMap::new(),
             next_binder: 0,
             builtin_cell: None,
+            builtin_region: None,
             next_type_variable: 0,
             next_lexical_nominal: 0,
             next_lexical_evidence: 0,
@@ -3416,8 +3448,9 @@ impl Resolver {
                         operation.span,
                         "effect operation spelling could not be retained",
                     )?;
-                    let annotation =
-                        ResolvedTypeOccurrenceOwner::new(self.resolve_type(operation.annotation)?);
+                    let annotation = ResolvedTypeOccurrenceOwner::new(
+                        self.resolve_type_mode(operation.annotation, true)?,
+                    );
                     let shape = annotation
                         .0
                         .as_ref()
@@ -3838,8 +3871,33 @@ impl Resolver {
         surface: &SurfaceModule,
         dependencies: &[DependencyExports<'_>],
     ) -> Result<(), ResolveError> {
-        for (dependency_summary_order, (import, dependency)) in
-            surface.imports.iter().zip(dependencies).enumerate()
+        if let Some(dependency) = dependencies
+            .iter()
+            .find(|dependency| dependency.edge.is_region_service())
+        {
+            let module = dependency.edge.target();
+            if crate::resolved::RegionApi::for_module(module).is_none() {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    surface.span,
+                    "private region dependency has no authenticated region identity",
+                ));
+            }
+            self.retain_dependency_interface_facts(dependency.summary, module, surface.span)?;
+            let mut visits = CaptureGraphVisits::default();
+            // Retain canonical facts without installing a source alias or names.
+            let _ = self.clone_summary_namespaces(dependency.summary, surface.span, &mut visits)?;
+            self.builtin_region = Some(module);
+        }
+        for (dependency_summary_order, (import, dependency)) in surface
+            .imports
+            .iter()
+            .zip(
+                dependencies
+                    .iter()
+                    .filter(|dependency| !dependency.edge.is_region_service()),
+            )
+            .enumerate()
         {
             let mut retained_constructor_owners = HashSet::new();
             let mut capture_graph_visits = CaptureGraphVisits::default();
@@ -4544,7 +4602,19 @@ impl Resolver {
     fn retain_imported_effect(
         &mut self,
         exported: &ResolvedEffectDeclaration,
-        _summary: &ExportSummary,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.retain_imported_effect_fact(exported, span)?;
+        for operation in &exported.operations {
+            self.retain_type_nominals(&operation.annotation.ty, summary, span)?;
+        }
+        Ok(())
+    }
+
+    fn retain_imported_effect_fact(
+        &mut self,
+        exported: &ResolvedEffectDeclaration,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         let retained =
@@ -4579,7 +4649,8 @@ impl Resolver {
                     span,
                     "imported effect storage exceeded its type-work budget",
                 )
-            })
+            })?;
+        Ok(())
     }
 
     fn retain_dependency_interface_facts(
@@ -5826,6 +5897,7 @@ impl Resolver {
             )
         })?;
         let type_cells = self.type_work.used().saturating_sub(type_work_start);
+        let mut frontier_bound = type_cells;
         let mut pending = Vec::new();
         pending.try_reserve(type_cells).map_err(|_| {
             error(
@@ -5899,6 +5971,43 @@ impl Resolver {
                                 )
                             })?;
                             seen_effects.push(identity);
+                            let declaration = summary.effect_by_id(identity).ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    span,
+                                    "an exported scheme references missing effect metadata",
+                                )
+                            })?;
+                            // Memoize the canonical fact before following operation rows.
+                            // Keep transitive signatures on this iterative type frontier.
+                            self.retain_imported_effect_fact(declaration, span)?;
+                            for operation in &declaration.operations {
+                                let start = self.type_work.used();
+                                charge_type_cells(&operation.annotation.ty, &mut self.type_work)
+                                    .map_err(|()| error(ResolveReason::TypeResourceExhausted, span,
+                                        "imported effect signature closure exceeded its work budget"))?;
+                                let cells = self.type_work.used().saturating_sub(start);
+                                frontier_bound = frontier_bound.checked_add(cells).ok_or_else(|| {
+                                    error(ResolveReason::TypeResourceExhausted, span,
+                                        "imported effect signature frontier exceeded its storage bound")
+                                })?;
+                                pending.try_reserve(frontier_bound.saturating_sub(pending.len())).map_err(|_| error(
+                                    ResolveReason::TypeResourceExhausted, span,
+                                    "imported effect signature frontier could not reserve storage"))?;
+                                seen.try_reserve(frontier_bound.saturating_sub(seen.len())).map_err(|_| error(
+                                    ResolveReason::TypeResourceExhausted, span,
+                                    "imported effect nominal ordering could not reserve storage"))?;
+                                seen_effects
+                                    .try_reserve(frontier_bound.saturating_sub(seen_effects.len()))
+                                    .map_err(|_| {
+                                        error(
+                                            ResolveReason::TypeResourceExhausted,
+                                            span,
+                                            "imported effect ordering could not reserve storage",
+                                        )
+                                    })?;
+                                pending.push(Task::Type(&operation.annotation.ty));
+                            }
                         }
                         pending.extend(instance.arguments().iter().map(Task::Argument));
                     }
@@ -6023,20 +6132,6 @@ impl Resolver {
             }
             let exported = Self::scheme_nominal_fact(summary, id, span)?;
             self.retain_scheme_nominal_fact(exported, span)?;
-        }
-        for id in seen_effects {
-            let exported = summary.effect_by_id(id).ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "an exported scheme references missing effect metadata",
-                )
-                .with_context(ResolveContext::WorkState {
-                    part: "export-scheme-effect",
-                    problem: "missing",
-                })
-            })?;
-            self.retain_imported_effect(exported, summary, span)?;
         }
         Ok(())
     }
@@ -7071,6 +7166,37 @@ impl Resolver {
             )?;
             let instance = EffectInstance::new_kinded(effect, retained.into_boxed_slice());
             resolved_instances.push((instance, written.span, roots.into_boxed_slice()));
+        }
+        if let Some(api) = self
+            .builtin_region
+            .and_then(crate::resolved::RegionApi::for_module)
+        {
+            self.type_work
+                .charge(resolved_instances.len().saturating_add(1))
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        owner,
+                        "default effect expansion exceeded its budget",
+                    )
+                })?;
+            if !resolved_instances
+                .iter()
+                .any(|(instance, _, _)| instance.effect() == api.default_alloc())
+            {
+                resolved_instances.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        owner,
+                        "default effect expansion could not be reserved",
+                    )
+                })?;
+                resolved_instances.push((
+                    EffectInstance::new(api.default_alloc(), Box::new([])),
+                    owner,
+                    Box::new([]),
+                ));
+            }
         }
         let tail = row
             .tail
@@ -8214,9 +8340,14 @@ impl Resolver {
             let kind = (|| -> Result<ResolvedDefinitionKind, ResolveError> {
                 let kind = match &definition.kind {
                     SurfaceDefinitionKind::Equational(equational) => {
-                        let annotation = ResolvedTypeOccurrenceOwner::new(
-                            self.resolve_type(&equational.interface.annotation)?,
-                        );
+                        let annotation = ResolvedTypeOccurrenceOwner::new(self.resolve_type_mode(
+                            &equational.interface.annotation,
+                            (self.module.is_builtin_bytes() || self.module.is_builtin_string())
+                                && matches!(
+                                    global.spelling.as_str(),
+                                    "length" | "equal" | "byte_length"
+                                ),
+                        )?);
                         let requirements = ResolvedRequirementBuffer(
                             self.resolve_requirements(
                                 RequirementOwner::Global(global.id),
@@ -8355,7 +8486,7 @@ impl Resolver {
                             self.resolve_type(&operational.header.result_type)?,
                         );
                         let (
-                            result_effects,
+                            mut result_effects,
                             result_effect_argument_provenance,
                             result_effect_argument_roots,
                         ) = operational
@@ -8376,6 +8507,23 @@ impl Resolver {
                                     Vec::new().into_boxed_slice(),
                                 )
                             });
+                        if operational.header.result_effects.is_none()
+                            && let Some(api) = self
+                                .builtin_region
+                                .and_then(crate::resolved::RegionApi::for_module)
+                        {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    operational.header.span,
+                                    "default effect expansion exceeded its budget",
+                                )
+                            })?;
+                            result_effects = EffectRow::singleton(EffectInstance::new(
+                                api.default_alloc(),
+                                Box::new([]),
+                            ));
+                        }
                         if !matches!(body.kind, ResolvedExprKind::Block(_)) {
                             return Err(error(
                                 ResolveReason::InternalState,
@@ -9229,7 +9377,15 @@ impl Resolver {
     }
 
     fn resolve_type(&mut self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
-        let argument = self.resolve_owner_argument(surface)?;
+        self.resolve_type_mode(surface, false)
+    }
+
+    fn resolve_type_mode(
+        &mut self,
+        surface: &SurfaceType,
+        operation_outer: bool,
+    ) -> Result<ResolvedType, ResolveError> {
+        let argument = self.resolve_owner_argument_mode(surface, operation_outer)?;
         match argument.ty {
             crate::types::KindedArgument::TypeArg(ty) => Ok(ResolvedType {
                 ty,
@@ -9252,6 +9408,14 @@ impl Resolver {
         &mut self,
         surface: &SurfaceType,
     ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
+        self.resolve_owner_argument_mode(surface, false)
+    }
+
+    fn resolve_owner_argument_mode(
+        &mut self,
+        surface: &SurfaceType,
+        operation_outer: bool,
+    ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
         enum ApplicationHead {
             Nominal(NominalTypeId),
             Variable(TypeVariableId),
@@ -9266,6 +9430,7 @@ impl Resolver {
                 crate::source::Span,
                 Option<&'a crate::surface::SurfaceEffectRow>,
                 usize,
+                bool,
             ),
             EffectInstances(std::slice::Iter<'a, crate::surface::SurfaceEffectInstance>),
             EffectArguments(std::slice::Iter<'a, SurfaceType>),
@@ -9411,6 +9576,8 @@ impl Resolver {
                                 current.span,
                                 function.effects.as_ref(),
                                 effect_argument_count,
+                                self.builtin_region.is_some()
+                                    && !(operation_outer && std::ptr::eq(current, surface)),
                             ));
                             if let Some(effects) = &function.effects {
                                 tasks.push(Task::EffectInstances(effects.effects.iter()));
@@ -9477,7 +9644,7 @@ impl Resolver {
                         provenance.len() - 1,
                     ));
                 }
-                Task::Function(span, effects, effect_argument_count) => {
+                Task::Function(span, effects, effect_argument_count, expand_default) => {
                     let mut effect_arguments = completed.split_off(
                         completed
                             .len()
@@ -9610,6 +9777,44 @@ impl Resolver {
                             ));
                         }
                         written.reverse();
+                        if expand_default {
+                            let api = self
+                                .builtin_region
+                                .and_then(crate::resolved::RegionApi::for_module)
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        span,
+                                        "default allocation API is missing",
+                                    )
+                                })?;
+                            self.type_work
+                                .charge(written.len().saturating_add(1))
+                                .map_err(|()| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        span,
+                                        "default effect expansion exceeded its budget",
+                                    )
+                                })?;
+                            if !written
+                                .iter()
+                                .any(|(instance, _, _)| instance.effect() == api.default_alloc())
+                            {
+                                written.try_reserve(1).map_err(|_| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        span,
+                                        "default effect expansion could not be reserved",
+                                    )
+                                })?;
+                                written.push((
+                                    EffectInstance::new(api.default_alloc(), Box::new([])),
+                                    span,
+                                    Box::new([]),
+                                ));
+                            }
+                        }
                         if !effect_arguments.is_empty() {
                             return Err(error(
                                 ResolveReason::InternalState,
@@ -9666,10 +9871,35 @@ impl Resolver {
                                 problem: "extra",
                             }));
                         }
+                        let row = if expand_default {
+                            let api = self
+                                .builtin_region
+                                .and_then(crate::resolved::RegionApi::for_module)
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        span,
+                                        "default allocation API is missing",
+                                    )
+                                })?;
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "default effect expansion exceeded its budget",
+                                )
+                            })?;
+                            EffectRow::singleton(EffectInstance::new(
+                                api.default_alloc(),
+                                Box::new([]),
+                            ))
+                        } else {
+                            EffectRow::empty()
+                        };
                         (
-                            Type::Function(
-                                Box::new(domain.into_inner()),
-                                Box::new(codomain.into_inner()),
+                            Type::function_computation(
+                                domain.into_inner(),
+                                ComputationType::new(codomain.into_inner(), row),
                             ),
                             Vec::<usize>::new().into_boxed_slice(),
                         )
@@ -11108,6 +11338,103 @@ impl Resolver {
                 })?;
                 expressions.push(self.finish_cleanup(span, initializer, body)?);
             }
+            ResolveTask::RegionProvider {
+                source,
+                identity,
+                handle,
+                scope_checkpoint,
+                type_scope_checkpoint,
+                span,
+            } => {
+                let provider = if source.provider.is_some() {
+                    Some(Box::new(expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "region provider is missing",
+                        )
+                    })?))
+                } else {
+                    None
+                };
+                let mut terms = HashMap::new();
+                terms.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region access scope could not be reserved",
+                    )
+                })?;
+                terms.insert(
+                    handle.spelling.clone(),
+                    ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+                );
+                self.scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region scope could not be reserved",
+                    )
+                })?;
+                self.scopes.push(terms);
+                tasks.push(ResolveTask::FinishRegion {
+                    identity,
+                    handle,
+                    provider,
+                    scope_checkpoint,
+                    type_scope_checkpoint,
+                    span,
+                });
+                tasks.push(ResolveTask::VisitBlock(&source.body));
+            }
+            ResolveTask::FinishRegion {
+                identity,
+                handle,
+                provider,
+                scope_checkpoint,
+                type_scope_checkpoint,
+                span,
+            } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(ResolveReason::InternalState, span, "region body is missing")
+                })?;
+                self.scopes.truncate(scope_checkpoint);
+                self.type_scopes.truncate(type_scope_checkpoint);
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Region(Box::new(crate::resolved::ResolvedRegionExpr {
+                        identity,
+                        handle,
+                        provider: provider.map(|expression| Box::new(expression.into_inner())),
+                        body: Box::new(body.into_inner()),
+                    })),
+                    span,
+                });
+            }
+            ResolveTask::FinishRegionSelection { span } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "selected region body is missing",
+                    )
+                })?;
+                let region = expressions.pop_owned().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "selected region operand is missing",
+                    )
+                })?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::RegionSelection(Box::new(
+                        crate::resolved::ResolvedRegionSelectionExpr {
+                            region: Box::new(region.into_inner()),
+                            body: Box::new(body.into_inner()),
+                        },
+                    )),
+                    span,
+                });
+            }
             ResolveTask::VisitBlock(block) => {
                 let scope_checkpoint = self.scopes.len();
                 let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
@@ -12073,6 +12400,92 @@ impl Resolver {
                     "resource acquisition requires a compiler-owned cell family",
                 ));
             }
+            SurfaceExprKind::Region(source) => {
+                let span = expression.span;
+                let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
+                let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+                self.type_work.charge(8).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region resolution exceeded its budget",
+                    )
+                })?;
+                self.lexical_method_parameters
+                    .0
+                    .try_reserve(1)
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "region identity retention could not be reserved",
+                        )
+                    })?;
+                let retained = self.clone_type_variable_for_retention(
+                    &identity,
+                    span,
+                    "region identity retention exceeded its budget",
+                )?;
+                self.lexical_method_parameters.push(retained);
+                let scope_checkpoint = self.scopes.len();
+                let type_scope_checkpoint = self.type_scopes.len();
+                let mut types = HashMap::new();
+                types.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region type scope could not be reserved",
+                    )
+                })?;
+                types.insert(identity.spelling.clone(), identity.id);
+                self.type_scopes.try_reserve(1).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region type scopes could not be reserved",
+                    )
+                })?;
+                self.type_scopes.push(types);
+                tasks.0.try_reserve(3).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "region tasks could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::RegionProvider {
+                    source,
+                    identity,
+                    handle,
+                    scope_checkpoint,
+                    type_scope_checkpoint,
+                    span,
+                });
+                if let Some(provider) = &source.provider {
+                    tasks.push(ResolveTask::VisitExpr(provider));
+                }
+            }
+            SurfaceExprKind::RegionSelection(selection) => {
+                self.type_work.charge(3).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "region selection exceeded its budget",
+                    )
+                })?;
+                tasks.0.try_reserve(3).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "region selection tasks could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::FinishRegionSelection {
+                    span: expression.span,
+                });
+                tasks.push(ResolveTask::VisitBlock(&selection.body));
+                tasks.push(ResolveTask::VisitExpr(&selection.region));
+            }
             SurfaceExprKind::Resource(source) if self.resource_builtin(source.kind).is_none() => {
                 let (builtin, message) = match source.kind {
                     crate::surface::SurfaceResourceKind::Cell => (
@@ -12463,6 +12876,25 @@ enum ResolveTask<'a> {
     FinishCleanup {
         span: Span,
     },
+    RegionProvider {
+        source: &'a crate::surface::SurfaceRegionExpr,
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
+    FinishRegion {
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        provider: Option<Box<ResolvedExpressionOwner>>,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
+    FinishRegionSelection {
+        span: Span,
+    },
     VisitExpr(&'a SurfaceExpr),
     FinishRegistration {
         effect: ResolvedEffectInstance,
@@ -12572,6 +13004,9 @@ impl ResolveTask<'_> {
             | Self::FinishPerform { span, .. }
             | Self::FinishResume { span, .. }
             | Self::FinishCleanup { span }
+            | Self::RegionProvider { span, .. }
+            | Self::FinishRegion { span, .. }
+            | Self::FinishRegionSelection { span }
             | Self::FinishHook { span, .. }
             | Self::FinishRegistration { span, .. }
             | Self::GenericResourceInitializer { span, .. }
@@ -14269,7 +14704,23 @@ mod tests {
             let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
                 .expect("hook syntax should load");
             let entry = graph.module(graph.entry()).unwrap();
-            let resolved = resolve_module(entry, &[]).unwrap();
+            let checked = checked_import_dependencies(&graph);
+            let dependencies = entry
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(entry, &dependencies).unwrap();
             let ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[1].kind else {
                 panic!("equational main")
             };
@@ -15908,10 +16359,18 @@ mod tests {
             .find(|checked| checked.module() == middle)
             .expect("the checked intermediary should remain available")
             .exports();
+        let base = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name() == Some("base.ash".as_ref())
+            })
+            .unwrap()
+            .id();
         let interface = summary
             .hidden_interfaces()
-            .next()
-            .expect("the intermediary should retain one hidden interface");
+            .find(|interface| interface.spelling == "Render" && interface.id.module() == base)
+            .expect("the intermediary should retain the defining Render interface");
         let import_span = entry.surface().imports[0].span;
         let mut resolver = Resolver::with_budgets(
             entry.id(),
@@ -15990,6 +16449,41 @@ mod tests {
         )
     }
 
+    fn checked_import_dependencies(
+        graph: &crate::module::ModuleGraph,
+    ) -> Vec<crate::resolved::CheckedModule> {
+        let mut checked = Vec::<crate::resolved::CheckedModule>::new();
+        for module in graph
+            .modules()
+            .iter()
+            .filter(|module| module.id() != graph.entry())
+        {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            checked.push(
+                check_module(
+                    resolve_module(module, &dependencies)
+                        .expect("fixture dependency should resolve with actual implicit services"),
+                )
+                .expect("fixture dependency should check"),
+            );
+        }
+        checked
+    }
+
     fn resolve_import_fixture_with_dependency_and_limit(
         entry: &str,
         dependency: &str,
@@ -15998,24 +16492,24 @@ mod tests {
         let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
-        let dependency = graph
-            .modules()
-            .iter()
-            .find(|module| {
-                Path::new(module.source().display_path()).file_name()
-                    == Some("dependency.ash".as_ref())
-            })
-            .expect("the import budget dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the dependency should check");
+        let checked = checked_import_dependencies(&graph);
         let entry = graph
             .module(graph.entry())
             .expect("the import budget entry should load");
         let dependencies = entry
             .dependencies()
             .iter()
-            .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::default();
         let mut constraint_work = InterfaceConstraintBudget::with_limit(limit);
@@ -16038,24 +16532,24 @@ mod tests {
         let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
-        let dependency = graph
-            .modules()
-            .iter()
-            .find(|module| {
-                Path::new(module.source().display_path()).file_name()
-                    == Some("dependency.ash".as_ref())
-            })
-            .expect("the import budget dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the dependency should check");
+        let checked = checked_import_dependencies(&graph);
         let entry = graph
             .module(graph.entry())
             .expect("the import budget entry should load");
         let dependencies = entry
             .dependencies()
             .iter()
-            .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::with_limit(limit);
         let mut constraint_work = InterfaceConstraintBudget::default();
@@ -16126,6 +16620,21 @@ mod tests {
         assert_eq!(short_used, four_used - 4);
     }
 
+    fn assert_single_default_allocation_arrow(ty: &Type) {
+        let row = ty.function_view().unwrap().effects().unwrap();
+        assert!(row.tail().is_none());
+        let [effect] = row.known() else {
+            panic!("one expanded default member")
+        };
+        assert!(effect.arguments().is_empty());
+        assert_eq!(
+            effect.effect(),
+            crate::resolved::RegionApi::for_module(effect.effect().module())
+                .unwrap()
+                .default_alloc()
+        );
+    }
+
     #[test]
     fn duplicate_global_route_compares_nominal_closure_without_recloning_it() {
         const ENTRY: &str = "import dependency (lift)\n";
@@ -16138,7 +16647,8 @@ mod tests {
         // parameter record plus its Arrow Kind = 4, and the seven-node value
         // Type pair = 14. The fused read-only closure adds 2U=2 simultaneous
         // unique-ID indexes and Token header+Origin D=2.
-        const DUPLICATE_CONSTRAINT_WORK: usize = 2 + 1 + 4 + 14 + 2 + 2;
+        // Comparing the known zero-argument DefaultAlloc row adds one cell.
+        const DUPLICATE_CONSTRAINT_WORK: usize = 2 + 1 + 4 + 14 + 1 + 2 + 2;
 
         let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -16151,9 +16661,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-global dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the higher-kinded dependency should check");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-global entry should load");
@@ -16161,6 +16673,7 @@ mod tests {
         let exported = summary
             .term("lift")
             .expect("the dependency should export the higher-kinded global");
+        assert_single_default_allocation_arrow(exported.scheme.value_type());
         let token = summary
             .nominal("Token")
             .expect("the dependency should export the nominal used by the scheme")
@@ -16196,10 +16709,18 @@ mod tests {
             .retain_imported_global(exported, summary, span, &mut CaptureGraphVisits::default())
             .expect("the first route should retain the canonical global and its closure");
         let baseline = snapshot(&resolver);
-        assert_eq!(
-            baseline.1,
-            vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
-        );
+        let mut expected_nominals = summary
+            .hidden_nominals()
+            .map(|nominal| (nominal.id, ImportedTypeAccess::Hidden, Vec::new()))
+            .collect::<Vec<_>>();
+        if !expected_nominals.iter().any(|nominal| nominal.0 == token) {
+            expected_nominals.push((token, ImportedTypeAccess::Hidden, Vec::new()));
+        }
+        expected_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        let mut actual_nominals = baseline.1.clone();
+        actual_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        assert_eq!(actual_nominals, expected_nominals);
+        assert!(baseline.1.iter().any(|nominal| nominal.0 == token));
 
         resolver.type_work = TypeWorkBudget::with_limit(capture_work - 1);
         resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
@@ -16247,11 +16768,12 @@ mod tests {
         // canonical Token definition is header+Source-Origin 2. Two one-hop
         // prepends and the effective/public hop comparisons complete the route.
         const PUBLIC_DUPLICATE_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1 + 18;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6 + 1) + 2 + 1 + 1 + 1 + 1 + 19;
+        // Publication authentication independently compares the same default row (+1).
         // A private-to-public promotion replaces the public hop comparison with
         // one public-order/rank reservation cell, so its exact total is equal.
         const PUBLIC_PROMOTION_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1 + 18;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6 + 1) + 2 + 1 + 1 + 1 + 1 + 19;
 
         let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -16264,9 +16786,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-implementation dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the nominal-head implementation should check");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-implementation entry should load");
@@ -16275,6 +16799,7 @@ mod tests {
             .implementations()
             .next()
             .expect("the dependency should export one implementation");
+        assert_single_default_allocation_arrow(exported.fact().methods[0].scheme.value_type());
         let implementation = exported.fact().id;
         let mut capture_work = TypeWorkBudget::unbounded();
         for method in &exported.fact().methods {
@@ -16355,10 +16880,18 @@ mod tests {
             )
             .expect("the first public route should retain the fact and nominal closure");
         let public_baseline = snapshot(&duplicate);
-        assert_eq!(
-            public_baseline.1,
-            vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
-        );
+        let mut expected_nominals = summary
+            .hidden_nominals()
+            .map(|nominal| (nominal.id, ImportedTypeAccess::Hidden, Vec::new()))
+            .collect::<Vec<_>>();
+        if !expected_nominals.iter().any(|nominal| nominal.0 == token) {
+            expected_nominals.push((token, ImportedTypeAccess::Hidden, Vec::new()));
+        }
+        expected_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        let mut actual_nominals = public_baseline.1.clone();
+        actual_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        assert_eq!(actual_nominals, expected_nominals);
+        assert!(public_baseline.1.iter().any(|nominal| nominal.0 == token));
         duplicate.type_work = TypeWorkBudget::with_limit(comparison_type_work - 1);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
@@ -16479,7 +17012,7 @@ mod tests {
         // seven-node Type pair 14 plus its 2U nominal indexes; and Secret D=5
         // (header, one parameter
         // record/Origin/Kind, defining Origin).
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 2) + 5;
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 1 + 2) + 5;
 
         let fixture = ImportBudgetFixture::create(ENTRY, FACADE);
         fs::write(fixture.0.join("base.ash"), BASE)
@@ -16493,8 +17026,11 @@ mod tests {
                 Path::new(module.source().display_path()).file_name() == Some("base.ash".as_ref())
             })
             .expect("the duplicate-interface base should load");
-        let base = check_module(resolve_module(base, &[]).expect("the base should resolve"))
-            .expect("the nominal method interface should check");
+        let checked = checked_import_dependencies(&graph);
+        let base = checked
+            .iter()
+            .find(|checked| checked.module() == base.id())
+            .unwrap();
         let facade = graph
             .modules()
             .iter()
@@ -16503,27 +17039,22 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-interface facade should load");
-        let facade_dependencies = facade
-            .dependencies()
+        let facade = checked
             .iter()
-            .map(|edge| DependencyExports::new(edge, base.exports()).unwrap())
-            .collect::<Vec<_>>();
-        let facade = check_module(
-            resolve_module(facade, &facade_dependencies).expect("the facade should resolve"),
-        )
-        .expect("the facade should check");
+            .find(|checked| checked.module() == facade.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-interface entry should load");
         let summary = facade.exports();
         let exported = summary
-            .interfaces()
-            .next()
+            .interface("Observe")
             .expect("the facade should re-export Observe");
+        assert_single_default_allocation_arrow(&exported.methods[0].value_type);
         let secret = summary
             .hidden_nominals()
-            .next()
-            .expect("the method should retain Secret as hidden closure")
+            .find(|nominal| nominal.spelling == "Secret" && nominal.id.module() == base.module())
+            .expect("the method should retain defining Secret as hidden closure")
             .id;
         let span = entry.surface().imports[0].span;
         let snapshot = |resolver: &Resolver| {
@@ -16558,10 +17089,18 @@ mod tests {
             )
             .expect("the first hidden route should retain the interface and closure");
         let hidden = snapshot(&resolver);
-        assert_eq!(
-            hidden.1,
-            vec![(secret, ImportedTypeAccess::Hidden, Vec::new())],
-        );
+        let mut expected_nominals = summary
+            .hidden_nominals()
+            .map(|nominal| (nominal.id, ImportedTypeAccess::Hidden, Vec::new()))
+            .collect::<Vec<_>>();
+        if !expected_nominals.iter().any(|nominal| nominal.0 == secret) {
+            expected_nominals.push((secret, ImportedTypeAccess::Hidden, Vec::new()));
+        }
+        expected_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        let mut actual_nominals = hidden.1.clone();
+        actual_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        assert_eq!(actual_nominals, expected_nominals);
+        assert!(hidden.1.iter().any(|nominal| nominal.0 == secret));
         assert!(!hidden.0.expect("the interface should be retained").3);
 
         resolver.type_work = TypeWorkBudget::with_limit(0);
@@ -16979,10 +17518,13 @@ mod tests {
         // family-ordinal, withheld-owner, physical, closure, and two reverse
         // index cells for this one-nullary-constructor fixture. Its original
         // checked constructor also compares one Source origin before probing.
-        const SUMMARY_AUTHENTICATION_WORK: usize = 9 + 1;
-        const NOMINAL_SELECTOR_WORK: usize = 4;
-        const CONSTRUCTOR_SELECTOR_WORK: usize = 5;
-        const MISSING_SELECTOR_WORK: usize = 8;
+        // Complete user/service summaries cost 140, both direct routes cost
+        // two, and private service namespace installation costs 72. Only then
+        // can the named user selector perform its processing/index probes.
+        const SUMMARY_AUTHENTICATION_WORK: usize = 140 + 2 + 72;
+        const NOMINAL_SELECTOR_WORK: usize = 3;
+        const CONSTRUCTOR_SELECTOR_WORK: usize = 4;
+        const MISSING_SELECTOR_WORK: usize = 7;
 
         let (nominal_short, nominal_short_used) = resolve_import_fixture_with_dependency_and_limit(
             "import dependency (impl Nominal)\n",
@@ -17090,9 +17632,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the wide-selector dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("distinct nominal heads should check without overlap");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the wide-selector entry should load");
@@ -17165,13 +17709,15 @@ mod tests {
 
     #[test]
     fn hidden_interface_import_route_uses_its_exact_constraint_budget() {
-        // ConstraintWork owns the route, two fact records, one polymorphic
-        // index, one declared binder, the thirteen-cell bounded type walk and
-        // complete binder record/Origin/Kind authentication. TypeWork owns
-        // five nominal-closure visits, one inherited role, one hidden-original
-        // search and the retained reference to that immutable checked fact.
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 13 + 3;
-        const EXACT_TYPE_WORK: usize = 5 + 1 + 1 + 1;
+        // ConstraintWork owns route/fact/index/binder admission, the fourteen-cell
+        // method walk (including DefaultAlloc), three service nominal merges,
+        // and complete binder record/Origin/Kind authentication.
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 14 + 3 + 3;
+        // The completed closure costs 66: method traversal 6, the complete
+        // DefaultAlloc declaration clone 41, and its signature/nominal frontier
+        // 19. Inherited-role authentication, original lookup and retention each
+        // consume one more cell. Keep those independent refusal boundaries.
+        const EXACT_TYPE_WORK: usize = 6 + 41 + 19 + 1 + 1 + 1;
 
         let constraint_short =
             retain_hidden_interface_import_with_limits(EXACT_CONSTRAINT_WORK - 1, EXACT_TYPE_WORK);
@@ -17181,7 +17727,7 @@ mod tests {
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(constraint_short.constraint_used, EXACT_CONSTRAINT_WORK - 1,);
         assert_eq!(
-            constraint_short.type_used, 5,
+            constraint_short.type_used, 66,
             "constraint failure precedes inherited-role authentication and checked-fact retention",
         );
         assert!(constraint_short.retained.is_none());
@@ -19283,10 +19829,11 @@ mod tests {
                             == Some("dependency.ash".as_ref())
                     })
                     .expect("the implementation-retention dependency should load");
-                let checked_dependency = check_module(
-                    resolve_module(dependency, &[]).expect("the dependency should resolve"),
-                )
-                .expect("the dependency interface should check");
+                let checked = checked_import_dependencies(&graph);
+                let checked_dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == dependency.id())
+                    .unwrap();
                 let entry = graph
                     .module(graph.entry())
                     .expect("the implementation-retention entry should load");
