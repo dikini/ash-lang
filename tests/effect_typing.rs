@@ -6,9 +6,9 @@ use std::{
 
 use ash::{
     elaborate::check_module,
-    module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
-    types::{EffectRow, Kind, Type},
+    module::{ModuleGraph, ModuleRoots, load_module_graph},
+    resolve::{DependencyExports, resolve_module},
+    types::{EffectId, EffectInstance, EffectRow, EffectRowVariable, Kind, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -32,22 +32,64 @@ impl Drop for TempModule {
 }
 
 fn check_source(source: &str) -> ash::resolved::CheckedModule {
-    try_check_source(source).expect("the effect typing fixture should check")
+    try_check_source(source)
+        .map(|(checked, _)| checked)
+        .expect("the effect typing fixture should check")
 }
 
 fn try_check_source(
     source: &str,
-) -> Result<ash::resolved::CheckedModule, ash::elaborate::TypeError> {
+) -> Result<(ash::resolved::CheckedModule, EffectInstance), ash::elaborate::TypeError> {
     let fixture = TempModule::write(source);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the effect typing fixture should load");
-    let module = graph
-        .modules()
-        .iter()
-        .find(|module| module.id() == graph.entry())
-        .expect("the graph should retain its entry");
-    let resolved = resolve_module(module, &[]).expect("the effect typing fixture should resolve");
-    check_module(resolved)
+    let (resolved, allocation) = resolve_entry(&graph);
+    check_module(resolved).map(|checked| (checked, allocation))
+}
+
+fn resolve_entry(graph: &ModuleGraph) -> (ash::resolved::ResolvedModule, EffectInstance) {
+    let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .expect("dependencies precede their importer")
+                        .exports(),
+                )
+                .expect("the exact dependency summary authenticates its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("the effect typing fixture should resolve");
+        if module.id() == graph.entry() {
+            let service = checked
+                .iter()
+                .find(|checked| {
+                    graph
+                        .module(checked.module())
+                        .unwrap()
+                        .source()
+                        .display_path()
+                        == "@compiler.region"
+                })
+                .expect("canonical service precedes the entry");
+            let [allocation] = service.effects() else {
+                panic!("one defining DefaultAlloc effect")
+            };
+            assert_eq!(allocation.spelling, "DefaultAlloc");
+            assert_eq!(allocation.id.module(), service.module());
+            assert!(allocation.parameters.is_empty());
+            return (resolved, EffectInstance::new(allocation.id, Box::new([])));
+        }
+        checked.push(check_module(resolved).expect("builtin dependency should check"));
+    }
+    panic!("the graph should retain its entry")
 }
 
 fn latent_effects<'a>(checked: &'a ash::resolved::CheckedModule, spelling: &str) -> &'a EffectRow {
@@ -337,7 +379,8 @@ fn discard_and_resume_branches_have_unit_completion_carriers() {
     ));
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).expect("fixture should load");
     let module = graph.module(graph.entry()).expect("entry should exist");
-    let resolved = resolve_module(module, &[]).expect("discard should resolve");
+    let (resolved, _) = resolve_entry(&graph);
+    assert_eq!(resolved.module(), module.id());
     let ash::resolved::ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[0].kind
     else {
         panic!("main should remain equational")
@@ -351,18 +394,29 @@ fn discard_and_resume_branches_have_unit_completion_carriers() {
     assert_eq!(typed.ty, Type::Unit);
     assert!(typed.effects.is_empty());
     let program = elaborator.finish(typed.node).expect("carrier Core");
-    let validated = ash::core::validate_effect(program, &[module.source()])
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let validated = ash::core::validate_effect_modules(program, &sources, &module_sources)
         .expect("independent Core inference proves both completion paths safe");
-    ash::core::validate_effect(
+    ash::core::validate_effect_modules(
         ash::core::transform::identity_effect_traversal(&validated).expect("identity transform"),
-        &[module.source()],
+        &sources,
+        &module_sources,
     )
     .expect("transformed discard revalidates");
 }
 
 #[test]
 fn closed_handler_discharges_exact_effect_and_keeps_main_pure() {
-    let checked = check_source(concat!(
+    let (checked, allocation) = try_check_source(concat!(
         "effect Cell {\n",
         "read : Unit -> Int\n",
         "write : Int -> Unit\n",
@@ -372,7 +426,8 @@ fn closed_handler_discharges_exact_effect_and_keeps_main_pure() {
         "read ignored => resume 42\n",
         "write value => resume ()\n",
         "}\n",
-    ));
+    ))
+    .expect("the effect typing fixture should check");
     let main = checked
         .schemes()
         .iter()
@@ -386,12 +441,12 @@ fn closed_handler_discharges_exact_effect_and_keeps_main_pure() {
 
     assert_eq!(function.domain(), &Type::Unit);
     assert_eq!(function.value(), &Type::Int);
-    assert!(function.effects().is_none_or(|effects| effects.is_empty()));
+    assert_eq!(function.effects(), Some(&EffectRow::singleton(allocation)));
 }
 
 #[test]
 fn strict_children_and_branches_union_rows_before_exact_discharge() {
-    let checked = check_source(concat!(
+    let (checked, allocation) = try_check_source(concat!(
         "effect Cell {\n",
         "read : Unit -> Int\n",
         "write : Int -> Unit\n",
@@ -409,7 +464,8 @@ fn strict_children_and_branches_union_rows_before_exact_discharge() {
         "read ignored => resume 41\n",
         "write value => resume ()\n",
         "}\n",
-    ));
+    ))
+    .expect("the effect typing fixture should check");
     let read_cell = checked
         .schemes()
         .iter()
@@ -424,8 +480,17 @@ fn strict_children_and_branches_union_rows_before_exact_discharge() {
         .effects()
         .expect("read_cell should retain its latent source effect row");
 
-    assert_eq!(effects.known().len(), 1);
-    assert!(effects.tail().is_none());
+    let cell = EffectInstance::new(EffectId::new(checked.module(), 0), Box::new([]));
+    assert_eq!(checked.effects()[0].spelling, "Cell");
+    assert_eq!(checked.effects()[0].id, cell.effect());
+    assert_eq!(
+        effects,
+        &EffectRow::closed(vec![cell, allocation.clone()].into_boxed_slice())
+    );
+    assert_eq!(
+        latent_effects(&checked, "main"),
+        &EffectRow::singleton(allocation)
+    );
 }
 
 #[test]
@@ -440,7 +505,7 @@ fn resume_usage_accepts_exactly_once_in_every_match_branch() {
 
 #[test]
 fn handlers_forward_other_instances_remove_exactly_and_reintroduce_direct_requests() {
-    let checked = check_source(concat!(
+    let (checked, allocation) = try_check_source(concat!(
         "effect State<S> {\n",
         "get : Unit -> S\n",
         "}\n\n",
@@ -457,28 +522,31 @@ fn handlers_forward_other_instances_remove_exactly_and_reintroduce_direct_reques
         "}\n\n",
         "weakened : Unit -> Int ! {State<Int>, State<Bool>}\n",
         "weakened () = perform State<Int>.get ()\n",
-    ));
+    ))
+    .expect("the effect typing fixture should check");
 
-    let forwarded = latent_effects(&checked, "forwarded");
-    assert_eq!(forwarded.known().len(), 1);
+    let state = EffectId::new(checked.module(), 0);
+    assert_eq!(checked.effects()[0].id, state);
+    assert_eq!(checked.effects()[0].spelling, "State");
+    let boolean = EffectInstance::new(state, Box::new([Type::Bool]));
+    let integer = EffectInstance::new(state, Box::new([Type::Int]));
     assert_eq!(
-        forwarded.known()[0].arguments(),
-        &[ash::types::KindedArgument::TypeArg(Type::Bool)]
+        latent_effects(&checked, "forwarded"),
+        &EffectRow::closed(vec![boolean.clone(), allocation.clone()].into_boxed_slice())
     );
-
-    let delegated = latent_effects(&checked, "delegated");
-    assert_eq!(delegated.known().len(), 1);
     assert_eq!(
-        delegated.known()[0].arguments(),
-        &[ash::types::KindedArgument::TypeArg(Type::Int)]
+        latent_effects(&checked, "delegated"),
+        &EffectRow::closed(vec![integer.clone(), allocation.clone()].into_boxed_slice())
     );
-
-    assert_eq!(latent_effects(&checked, "weakened").known().len(), 2);
+    assert_eq!(
+        latent_effects(&checked, "weakened"),
+        &EffectRow::closed(vec![integer, boolean, allocation].into_boxed_slice())
+    );
 }
 
 #[test]
 fn open_global_relay_and_local_higher_order_function_generalize_effect_rows() {
-    let checked = check_source(concat!(
+    let (checked, allocation) = try_check_source(concat!(
         "effect Left {\nread : Unit -> Int\n}\n\n",
         "effect Right {\nread : Unit -> Bool\n}\n\n",
         "relay<R : EffectRow, A> : (Unit -> A ! {| R}) -> A ! {| R}\n",
@@ -494,7 +562,8 @@ fn open_global_relay_and_local_higher_order_function_generalize_effect_rows() {
         "}\n",
         "(local(read_left), local(read_right), relay(read_left))\n",
         "}\n",
-    ));
+    ))
+    .expect("the effect typing fixture should check");
 
     let relay = checked
         .schemes()
@@ -508,12 +577,28 @@ fn open_global_relay_and_local_higher_order_function_generalize_effect_rows() {
             .iter()
             .any(|(_, kind)| matches!(kind, Kind::EffectRow))
     );
-    assert_eq!(latent_effects(&checked, "combined").known().len(), 2);
+    assert_eq!(
+        (
+            checked.effects()[0].spelling.as_str(),
+            checked.effects()[1].spelling.as_str()
+        ),
+        ("Left", "Right")
+    );
+    let left = EffectInstance::new(EffectId::new(checked.module(), 0), Box::new([]));
+    let right = EffectInstance::new(EffectId::new(checked.module(), 1), Box::new([]));
+    assert_eq!(
+        [checked.effects()[0].id, checked.effects()[1].id],
+        [left.effect(), right.effect()]
+    );
+    assert_eq!(
+        latent_effects(&checked, "combined"),
+        &EffectRow::closed(vec![left, right, allocation].into_boxed_slice())
+    );
 }
 
 #[test]
 fn omitted_global_binders_generalize_and_instantiate_type_and_row_kinds_in_order() {
-    let checked = check_source(concat!(
+    let (checked, allocation) = try_check_source(concat!(
         "effect Read {\nread : Unit -> Int\n}\n\n",
         "relay : (Unit -> A ! {| R}) -> A ! {| R}\n",
         "relay action = action ()\n\n",
@@ -521,7 +606,8 @@ fn omitted_global_binders_generalize_and_instantiate_type_and_row_kinds_in_order
         "read () = perform Read.read ()\n\n",
         "used : Unit -> Int ! {Read}\n",
         "used () = relay(read)\n",
-    ));
+    ))
+    .expect("the effect typing fixture should check");
 
     let relay = checked
         .schemes()
@@ -532,23 +618,47 @@ fn omitted_global_binders_generalize_and_instantiate_type_and_row_kinds_in_order
         relay.scheme.type_parameters.as_ref(),
         [(_, Kind::Type), (_, Kind::EffectRow)]
     ));
-    assert_eq!(latent_effects(&checked, "used").known().len(), 1);
+    let read = EffectInstance::new(EffectId::new(checked.module(), 0), Box::new([]));
+    assert_eq!(checked.effects()[0].id, read.effect());
+    assert_eq!(checked.effects()[0].spelling, "Read");
+    assert_eq!(
+        latent_effects(&checked, "used"),
+        &EffectRow::closed(vec![read, allocation].into_boxed_slice())
+    );
 }
 
 #[test]
 fn annotated_output_row_supplies_the_lacks_fact_for_one_requested_effect() {
-    let checked = check_source(concat!(
+    let (checked, allocation) = try_check_source(concat!(
         "effect Choice {\nchoose : Unit -> Int\n}\n\n",
         "relay<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {Choice | R}\n",
         "relay action = {\n",
         "let value = action ()\n",
         "value + perform Choice.choose ()\n",
         "}\n",
-    ));
+    ))
+    .expect("the effect typing fixture should check");
 
     let effects = latent_effects(&checked, "relay");
-    assert_eq!(effects.known().len(), 1);
-    assert!(effects.tail().is_some());
+    let choice = EffectInstance::new(EffectId::new(checked.module(), 0), Box::new([]));
+    assert_eq!(checked.effects()[0].id, choice.effect());
+    assert_eq!(checked.effects()[0].spelling, "Choice");
+    let relay = checked
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "relay")
+        .unwrap();
+    let [(row, Kind::EffectRow)] = relay.scheme.type_parameters.as_ref() else {
+        panic!("the original explicit row binder")
+    };
+    assert_eq!(
+        effects,
+        &EffectRow::with_tail(
+            vec![choice, allocation].into_boxed_slice(),
+            EffectRowVariable::rigid(*row),
+            Box::new([])
+        )
+    );
 }
 
 #[test]

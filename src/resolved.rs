@@ -1970,172 +1970,132 @@ impl ResolvedModuleProgram {
     pub(crate) fn corrupt_linked_global_parameter_rows_for_test(
         &mut self,
         mutation: LinkedGlobalParameterRowMutationForTest,
+        owners: [BinderId; 2],
+        empty_owner: BinderId,
     ) -> bool {
-        let empty_owner = self
-            .groups
-            .iter()
-            .flat_map(|group| group.schemes.iter())
-            .find(|scheme| scheme.scheme.type_parameters.is_empty())
-            .map(|scheme| scheme.binder);
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
             return false;
         };
+        let Some(first_position) = registry.global_parameter_positions.get(&owners[0]).copied()
+        else {
+            return false;
+        };
+        let Some(second_position) = registry.global_parameter_positions.get(&owners[1]).copied()
+        else {
+            return false;
+        };
+        if first_position == second_position
+            || registry
+                .global_parameter_rows
+                .get(first_position)
+                .map(|row| row.owner)
+                != Some(owners[0])
+            || registry
+                .global_parameter_rows
+                .get(second_position)
+                .map(|row| row.owner)
+                != Some(owners[1])
+            || registry
+                .global_parameter_positions
+                .contains_key(&empty_owner)
+        {
+            return false;
+        }
 
         match mutation {
             LinkedGlobalParameterRowMutationForTest::Owner => {
-                let Some(owner) = empty_owner else {
-                    return false;
-                };
-                let Some(original_owner) =
-                    registry.global_parameter_rows.first().map(|row| row.owner)
-                else {
-                    return false;
-                };
-                let Some(position) = registry
+                registry.global_parameter_positions.remove(&owners[0]);
+                registry.global_parameter_rows[first_position].owner = empty_owner;
+                registry
                     .global_parameter_positions
-                    .get(&original_owner)
-                    .copied()
-                else {
-                    return false;
-                };
-                if position != 0 || registry.global_parameter_positions.contains_key(&owner) {
-                    return false;
-                }
-                let removed = registry.global_parameter_positions.remove(&original_owner);
-                debug_assert_eq!(removed, Some(position));
-                registry.global_parameter_rows[position].owner = owner;
-                let displaced = registry.global_parameter_positions.insert(owner, position);
-                debug_assert!(displaced.is_none());
+                    .insert(empty_owner, first_position);
             }
             LinkedGlobalParameterRowMutationForTest::ParameterIdentity => {
-                let Some((row_index, replacement)) =
-                    registry.global_parameter_rows.iter().enumerate().find_map(
-                        |(row_index, row)| {
-                            let replaced = *row.parameters.first()?;
-                            let replaced_kind = &registry.type_variables.get(&replaced)?.kind;
-                            registry
-                                .global_parameter_rows
-                                .iter()
-                                .flat_map(|candidate| candidate.parameters.iter().copied())
-                                .find(|candidate| {
-                                    !row.parameters.contains(candidate)
-                                        && registry
-                                            .type_variables
-                                            .get(candidate)
-                                            .is_some_and(|variable| variable.kind == *replaced_kind)
-                                })
-                                .map(|replacement| (row_index, replacement))
-                        },
-                    )
+                let first = &registry.global_parameter_rows[first_position];
+                let Some(replaced) = first.parameters.first() else {
+                    return false;
+                };
+                let Some(kind) = registry
+                    .type_variables
+                    .get(replaced)
+                    .map(|variable| &variable.kind)
                 else {
                     return false;
                 };
-                registry.global_parameter_rows[row_index].parameters[0] = replacement;
-            }
-            LinkedGlobalParameterRowMutationForTest::ParameterOrder => {
-                let Some(row_index) = registry.global_parameter_rows.iter().position(|row| {
-                    let [first, second, ..] = row.parameters.as_ref() else {
-                        return false;
-                    };
-                    registry
-                        .type_variables
-                        .get(first)
-                        .zip(registry.type_variables.get(second))
-                        .is_some_and(|(first, second)| first.kind == second.kind)
-                }) else {
+                let Some(replacement) = registry.global_parameter_rows[second_position]
+                    .parameters
+                    .iter()
+                    .copied()
+                    .find(|candidate| {
+                        !first.parameters.contains(candidate)
+                            && registry
+                                .type_variables
+                                .get(candidate)
+                                .is_some_and(|variable| variable.kind == *kind)
+                    })
+                else {
                     return false;
                 };
-                registry.global_parameter_rows[row_index]
+                registry.global_parameter_rows[first_position].parameters[0] = replacement;
+            }
+            LinkedGlobalParameterRowMutationForTest::ParameterOrder => {
+                let [first, second, ..] = registry.global_parameter_rows[first_position]
+                    .parameters
+                    .as_ref()
+                else {
+                    return false;
+                };
+                if !registry
+                    .type_variables
+                    .get(first)
+                    .zip(registry.type_variables.get(second))
+                    .is_some_and(|(first, second)| first.kind == second.kind)
+                {
+                    return false;
+                }
+                registry.global_parameter_rows[first_position]
                     .parameters
                     .swap(0, 1);
             }
             LinkedGlobalParameterRowMutationForTest::RowOrder => {
-                let [first, second, ..] = registry.global_parameter_rows.as_ref() else {
-                    return false;
-                };
-                let (first_owner, second_owner) = (first.owner, second.owner);
-                let Some(first_position) = registry
-                    .global_parameter_positions
-                    .get(&first_owner)
-                    .copied()
-                else {
-                    return false;
-                };
-                let Some(second_position) = registry
-                    .global_parameter_positions
-                    .get(&second_owner)
-                    .copied()
-                else {
-                    return false;
-                };
-                if first_position != 0 || second_position != 1 {
-                    return false;
-                }
                 registry
                     .global_parameter_rows
                     .swap(first_position, second_position);
-                let displaced = registry
+                registry
                     .global_parameter_positions
-                    .insert(first_owner, second_position);
-                debug_assert_eq!(displaced, Some(first_position));
-                let displaced = registry
+                    .insert(owners[0], second_position);
+                registry
                     .global_parameter_positions
-                    .insert(second_owner, first_position);
-                debug_assert_eq!(displaced, Some(second_position));
+                    .insert(owners[1], first_position);
             }
             LinkedGlobalParameterRowMutationForTest::OwnerPosition => {
-                let [first, second, ..] = registry.global_parameter_rows.as_ref() else {
-                    return false;
-                };
-                let (first_owner, second_owner) = (first.owner, second.owner);
-                let Some(first_position) = registry
-                    .global_parameter_positions
-                    .get(&first_owner)
-                    .copied()
-                else {
-                    return false;
-                };
-                let Some(second_position) = registry
-                    .global_parameter_positions
-                    .get(&second_owner)
-                    .copied()
-                else {
-                    return false;
-                };
                 registry
                     .global_parameter_positions
-                    .insert(first_owner, second_position);
+                    .insert(owners[0], second_position);
                 registry
                     .global_parameter_positions
-                    .insert(second_owner, first_position);
+                    .insert(owners[1], first_position);
             }
             LinkedGlobalParameterRowMutationForTest::SurplusOwnerPosition => {
-                let Some(owner) = empty_owner else {
-                    return false;
-                };
-                if registry.global_parameter_rows.is_empty()
-                    || registry.global_parameter_positions.contains_key(&owner)
-                {
-                    return false;
-                }
-                registry.global_parameter_positions.insert(owner, 0);
+                registry
+                    .global_parameter_positions
+                    .insert(empty_owner, first_position);
             }
             LinkedGlobalParameterRowMutationForTest::MissingRow => {
                 let mut rows = std::mem::take(&mut registry.global_parameter_rows).into_vec();
-                let Some(removed) = rows.pop() else {
-                    return false;
-                };
-                registry.global_parameter_positions.remove(&removed.owner);
+                rows.remove(second_position);
+                registry.global_parameter_positions.remove(&owners[1]);
+                for position in registry.global_parameter_positions.values_mut() {
+                    if *position > second_position {
+                        *position -= 1;
+                    }
+                }
                 registry.global_parameter_rows = rows.into_boxed_slice();
             }
             LinkedGlobalParameterRowMutationForTest::ExtraRow => {
-                let Some(owner) = empty_owner else {
-                    return false;
-                };
-                let Some(parameter) = registry
-                    .global_parameter_rows
+                let Some(parameter) = registry.global_parameter_rows[first_position]
+                    .parameters
                     .first()
-                    .and_then(|row| row.parameters.first())
                     .copied()
                 else {
                     return false;
@@ -2143,40 +2103,17 @@ impl ResolvedModuleProgram {
                 let mut rows = std::mem::take(&mut registry.global_parameter_rows).into_vec();
                 let position = rows.len();
                 rows.push(ResolvedGlobalParameterRow {
-                    owner,
+                    owner: empty_owner,
                     parameters: vec![parameter].into_boxed_slice(),
                 });
-                registry.global_parameter_positions.insert(owner, position);
+                registry
+                    .global_parameter_positions
+                    .insert(empty_owner, position);
                 registry.global_parameter_rows = rows.into_boxed_slice();
             }
             LinkedGlobalParameterRowMutationForTest::DuplicateOwner => {
-                let [first, second, ..] = registry.global_parameter_rows.as_ref() else {
-                    return false;
-                };
-                let (first_owner, second_owner) = (first.owner, second.owner);
-                if first_owner == second_owner {
-                    return false;
-                }
-                let Some(first_position) = registry
-                    .global_parameter_positions
-                    .get(&first_owner)
-                    .copied()
-                else {
-                    return false;
-                };
-                let Some(second_position) = registry
-                    .global_parameter_positions
-                    .get(&second_owner)
-                    .copied()
-                else {
-                    return false;
-                };
-                if first_position != 0 || second_position != 1 {
-                    return false;
-                }
-                let removed = registry.global_parameter_positions.remove(&second_owner);
-                debug_assert_eq!(removed, Some(second_position));
-                registry.global_parameter_rows[second_position].owner = first_owner;
+                registry.global_parameter_positions.remove(&owners[1]);
+                registry.global_parameter_rows[second_position].owner = owners[0];
             }
         }
         true
@@ -2537,7 +2474,7 @@ impl ResolvedModuleProgram {
                 let Some(registry) = Arc::get_mut(&mut self.registry) else {
                     return false;
                 };
-                let Some(owner) = registry.nominals.get(ordinal).map(|nominal| nominal.id) else {
+                let Some(owner) = registry.nominals.iter().filter(|nominal| nominal.id.module() == module).nth(ordinal).map(|nominal| nominal.id) else {
                     return false;
                 };
                 let Some(parameter) = registry
@@ -2554,7 +2491,7 @@ impl ResolvedModuleProgram {
                 let Some(registry) = Arc::get_mut(&mut self.registry) else {
                     return false;
                 };
-                let Some(constructor) = registry.constructors.first_mut() else {
+                let Some(constructor) = registry.constructors.iter_mut().find(|constructor| constructor.owner.module() == module) else {
                     return false;
                 };
                 constructor.id = ConstructorId::new(constructor.owner, u32::MAX);
@@ -2567,7 +2504,7 @@ impl ResolvedModuleProgram {
                 let Some(nominal) = registry
                     .nominals
                     .iter_mut()
-                    .find(|nominal| nominal.constructors.len() >= 2)
+                    .find(|nominal| nominal.id.module() == module && nominal.constructors.len() >= 2)
                 else {
                     return false;
                 };
@@ -3846,12 +3783,10 @@ impl ResolvedModuleProgram {
     #[cfg(test)]
     pub(crate) fn replace_first_linked_nominal_parameter_kind_for_test(
         &mut self,
+        owner: NominalTypeId,
         replacement: Kind,
     ) -> bool {
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
-            return false;
-        };
-        let Some(owner) = registry.nominals.first().map(|nominal| nominal.id) else {
             return false;
         };
         let Some(parameter) = registry
@@ -3866,14 +3801,17 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
-    pub(crate) fn truncate_first_linked_constructor_family_for_test(&mut self) -> bool {
+    pub(crate) fn truncate_first_linked_constructor_family_for_test(
+        &mut self,
+        owner: NominalTypeId,
+    ) -> bool {
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
             return false;
         };
         let Some(nominal) = registry
             .nominals
             .iter_mut()
-            .find(|nominal| nominal.constructors.len() > 1)
+            .find(|nominal| nominal.id == owner && nominal.constructors.len() > 1)
         else {
             return false;
         };
@@ -3886,6 +3824,7 @@ impl ResolvedModuleProgram {
     #[cfg(test)]
     pub(crate) fn replace_first_linked_constructor_payload_for_test(
         &mut self,
+        owner: NominalTypeId,
         replacement: Type,
     ) -> bool {
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
@@ -3894,7 +3833,7 @@ impl ResolvedModuleProgram {
         let Some(constructor) = registry
             .constructors
             .iter_mut()
-            .find(|constructor| constructor.payload.is_some())
+            .find(|constructor| constructor.owner == owner && constructor.payload.is_some())
         else {
             return false;
         };
@@ -3905,11 +3844,18 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
-    pub(crate) fn detach_first_linked_constructor_from_owner_for_test(&mut self) -> bool {
+    pub(crate) fn detach_first_linked_constructor_from_owner_for_test(
+        &mut self,
+        owner: NominalTypeId,
+    ) -> bool {
         let Some(registry) = Arc::get_mut(&mut self.registry) else {
             return false;
         };
-        let Some(constructor) = registry.constructors.first_mut() else {
+        let Some(constructor) = registry
+            .constructors
+            .iter_mut()
+            .find(|constructor| constructor.owner == owner)
+        else {
             return false;
         };
         constructor.owner = NominalTypeId::new(ModuleId::new(u32::MAX - 1), 0);
@@ -14722,14 +14668,16 @@ impl ExportSummary {
                 wrap_origin(&mut parameter.origin);
             }
             SummaryDuplicateFactForTest::ImplementationHeadArgument => {
-                let Some(implementation) = self.implementations.iter_mut().find(|implementation| {
-                    matches!(
-                        implementation.fact.arguments()[0],
-                        crate::types::KindedArgument::TypeArg(Type::Application(_, _))
-                    ) && implementation.fact.methods.first().is_some_and(|method| {
-                        matches!(method.scheme.value_type, Type::Function(_, _))
+                let Some(implementation) =
+                    self.implementations.iter_mut().find(|implementation| {
+                        matches!(
+                            implementation.fact.arguments()[0],
+                            crate::types::KindedArgument::TypeArg(Type::Application(_, _))
+                        ) && implementation.fact.methods.first().is_some_and(|method| {
+                            method.scheme.value_type.function_view().is_some()
+                        })
                     })
-                }) else {
+                else {
                     return false;
                 };
                 let application = &mut implementation.fact.application;
@@ -14755,8 +14703,9 @@ impl ExportSummary {
                 let Some(method) = implementation.fact.methods.first_mut() else {
                     return false;
                 };
-                let Type::Function(domain, _) = &mut method.scheme.value_type else {
-                    return false;
+                let domain = match &mut method.scheme.value_type {
+                    Type::Function(domain, _) | Type::EffectfulFunction(domain, _) => domain,
+                    _ => return false,
                 };
                 let Type::Application(_, argument) = domain.as_mut() else {
                     return false;
@@ -15229,7 +15178,8 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::HiddenNominalKind => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .and_then(|nominal| nominal.parameters.first_mut())
                 .is_some_and(|parameter| {
@@ -15238,7 +15188,8 @@ impl ExportSummary {
                 }),
             SummaryCarrierMutationForTest::HiddenNominalParameterIdentity => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .and_then(|nominal| nominal.parameters.last_mut())
                 .is_some_and(|parameter| {
@@ -15250,7 +15201,8 @@ impl ExportSummary {
                 }),
             SummaryCarrierMutationForTest::HiddenNominalParameterOwner => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .and_then(|nominal| nominal.parameters.first_mut())
                 .is_some_and(|parameter| {
@@ -15260,7 +15212,8 @@ impl ExportSummary {
                 }),
             SummaryCarrierMutationForTest::HiddenNominalParameterOrder => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .map(|nominal| &mut nominal.parameters)
                 .filter(|parameters| parameters.len() >= 2)
@@ -15270,7 +15223,8 @@ impl ExportSummary {
                 }),
             SummaryCarrierMutationForTest::HiddenNominalAccess => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| self.hidden_nominals.get(identity).is_some_and(|nominal| nominal.spelling == "Wrap"))
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .is_some_and(|nominal| {
                     nominal.access = ImportedTypeAccess::Opaque;
@@ -15314,7 +15268,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorPayload => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(payload) = self
@@ -15328,7 +15282,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorPayloadDomainKind => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(constructor) = self.hidden_constructors.get_mut(&identity) else {
@@ -15380,7 +15334,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorSchemeKind => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(parameter) = self
@@ -15394,7 +15348,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorSchemeParameterIdentity => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(parameter) = self
@@ -15409,7 +15363,7 @@ impl ExportSummary {
                 true
             }
             SummaryCarrierMutationForTest::HiddenConstructorResultOwner => {
-                let Some(identity) = self.hidden_constructor_order.first().copied() else {
+                let Some(identity) = self.hidden_constructor_order.iter().copied().find(|identity| self.hidden_nominals.get(&identity.owner()).is_some_and(|nominal| nominal.spelling == "Wrap")) else {
                     return false;
                 };
                 let Some(constructor) = self.hidden_constructors.get_mut(&identity) else {
@@ -16504,6 +16458,7 @@ impl ExportSummary {
     #[cfg(test)]
     pub(crate) fn corrupt_hidden_diamond_fact_for_test(
         &mut self,
+        defining_module: ModuleId,
         mutation: SummaryHiddenDiamondMutationForTest,
     ) -> bool {
         let wrap_origin = |origin: &mut Origin| {
@@ -16516,7 +16471,8 @@ impl ExportSummary {
         let changed = match mutation {
             SummaryHiddenDiamondMutationForTest::NominalOrigin => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| identity.module() == defining_module)
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .is_some_and(|nominal| {
                     wrap_origin(&mut nominal.origin);
@@ -16524,7 +16480,8 @@ impl ExportSummary {
                 }),
             SummaryHiddenDiamondMutationForTest::NominalParameterOrigin => self
                 .hidden_nominal_order
-                .first()
+                .iter()
+                .find(|identity| identity.module() == defining_module)
                 .and_then(|identity| self.hidden_nominals.get_mut(identity))
                 .is_some_and(|nominal| {
                     let Some(parameter) = nominal.parameters.first_mut() else {
@@ -16535,12 +16492,13 @@ impl ExportSummary {
                     true
                 }),
             SummaryHiddenDiamondMutationForTest::ConstructorOrigin => {
-                let identity =
-                    self.hidden_constructor_order
-                        .iter()
-                        .copied()
-                        .find(|identity| {
-                            self.nominals.values().any(|nominal| {
+                let identity = self
+                    .hidden_constructor_order
+                    .iter()
+                    .copied()
+                    .find(|identity| {
+                        identity.owner().module() == defining_module
+                            && (self.nominals.values().any(|nominal| {
                                 nominal.access == ExportedTypeAccess::Transparent
                                     && nominal.constructors.contains(identity)
                             }) || self.hidden_nominals.get(&identity.owner()).is_some_and(
@@ -16548,8 +16506,8 @@ impl ExportSummary {
                                     nominal.access == ImportedTypeAccess::Transparent
                                         && nominal.constructors.contains(identity)
                                 },
-                            )
-                        });
+                            ))
+                    });
                 identity
                     .and_then(|identity| self.hidden_constructors.get_mut(&identity))
                     .is_some_and(|constructor| {
@@ -16558,28 +16516,37 @@ impl ExportSummary {
                         true
                     })
             }
-            SummaryHiddenDiamondMutationForTest::InterfaceOrigin => {
-                self.hidden_interfaces.first_mut().is_some_and(|interface| {
+            SummaryHiddenDiamondMutationForTest::InterfaceOrigin => self
+                .hidden_interfaces
+                .iter_mut()
+                .find(|interface| interface.id.module() == defining_module)
+                .is_some_and(|interface| {
                     wrap_origin(&mut interface.origin);
                     true
-                })
-            }
-            SummaryHiddenDiamondMutationForTest::InterfaceParameterOrigin => {
-                self.hidden_interfaces.first_mut().is_some_and(|interface| {
+                }),
+            SummaryHiddenDiamondMutationForTest::InterfaceParameterOrigin => self
+                .hidden_interfaces
+                .iter_mut()
+                .find(|interface| interface.id.module() == defining_module)
+                .is_some_and(|interface| {
                     wrap_origin(&mut interface.parameters.make_mut_for_test()[0].origin);
                     true
-                })
-            }
+                }),
             SummaryHiddenDiamondMutationForTest::InterfaceMethodOrigin => self
                 .hidden_interfaces
-                .first_mut()
+                .iter_mut()
+                .find(|interface| interface.id.module() == defining_module)
                 .and_then(|interface| interface.methods.first_mut())
                 .is_some_and(|method| {
                     wrap_origin(&mut method.origin);
                     true
                 }),
             SummaryHiddenDiamondMutationForTest::InterfaceMethodSpan => {
-                let Some(interface) = self.hidden_interfaces.first_mut() else {
+                let Some(interface) = self
+                    .hidden_interfaces
+                    .iter_mut()
+                    .find(|interface| interface.id.module() == defining_module)
+                else {
                     return false;
                 };
                 let replacement = interface.span;
@@ -16595,11 +16562,10 @@ impl ExportSummary {
                     .iter()
                     .map(|implementation| implementation.fact.interface())
                     .collect::<HashSet<_>>();
-                let Some(interface) = self
-                    .hidden_interfaces
-                    .iter_mut()
-                    .find(|interface| !implementation_interfaces.contains(&interface.id))
-                else {
+                let Some(interface) = self.hidden_interfaces.iter_mut().find(|interface| {
+                    interface.id.module() == defining_module
+                        && !implementation_interfaces.contains(&interface.id)
+                }) else {
                     return false;
                 };
                 let parameter = interface.parameters[0].id;
@@ -20980,13 +20946,15 @@ impl ResolvedRegistry {
             )?;
             self.abstract_nominal_names
                 .insert(resource.family, resource.spelling.clone());
-            self.abstract_nominal_kinds.insert(
+            if let Some(displaced) = self.abstract_nominal_kinds.insert(
                 resource.family,
                 NonMaterializedNominalKindFact {
                     kind,
                     origin: resource.origin.primary_span(),
                 },
-            );
+            ) {
+                discard_non_materialized_nominal_kind_fact(displaced);
+            }
         }
         Ok(self)
     }
@@ -21269,17 +21237,27 @@ impl ResolvedRegistry {
     #[cfg(test)]
     pub(crate) fn corrupt_global_parameter_rows_for_core_test(
         &mut self,
+        owners: [BinderId; 2],
         mutation: CoreGlobalParameterRowMutationForTest,
     ) -> bool {
+        let Some(first_position) = self.global_parameter_positions.get(&owners[0]).copied() else {
+            return false;
+        };
+        let Some(second_position) = self.global_parameter_positions.get(&owners[1]).copied() else {
+            return false;
+        };
+        if first_position == second_position {
+            return false;
+        }
         match mutation {
             CoreGlobalParameterRowMutationForTest::EmptyFirstRow => {
-                let Some(row) = self.global_parameter_rows.first_mut() else {
+                let Some(row) = self.global_parameter_rows.get_mut(first_position) else {
                     return false;
                 };
                 row.parameters = Box::new([]);
             }
             CoreGlobalParameterRowMutationForTest::ReplaceFirstOwner(owner) => {
-                let Some(row) = self.global_parameter_rows.first_mut() else {
+                let Some(row) = self.global_parameter_rows.get_mut(first_position) else {
                     return false;
                 };
                 let previous = row.owner;
@@ -21295,7 +21273,7 @@ impl ResolvedRegistry {
             CoreGlobalParameterRowMutationForTest::ReplaceFirstParameter(parameter) => {
                 let Some(first) = self
                     .global_parameter_rows
-                    .first_mut()
+                    .get_mut(first_position)
                     .and_then(|row| row.parameters.first_mut())
                 else {
                     return false;
@@ -21303,7 +21281,7 @@ impl ResolvedRegistry {
                 *first = parameter;
             }
             CoreGlobalParameterRowMutationForTest::DuplicateFirstParameter => {
-                let Some(row) = self.global_parameter_rows.first_mut() else {
+                let Some(row) = self.global_parameter_rows.get_mut(first_position) else {
                     return false;
                 };
                 let [first, second, ..] = row.parameters.as_mut() else {
@@ -21312,22 +21290,23 @@ impl ResolvedRegistry {
                 *second = *first;
             }
             CoreGlobalParameterRowMutationForTest::DuplicateAcrossRows => {
-                let [first, second, ..] = self.global_parameter_rows.as_mut() else {
+                let Some(parameter) = self.global_parameter_rows[first_position]
+                    .parameters
+                    .first()
+                    .copied()
+                else {
                     return false;
                 };
-                let Some(parameter) = first.parameters.first().copied() else {
-                    return false;
-                };
-                let Some(replaced) = second.parameters.first_mut() else {
+                let Some(replaced) = self.global_parameter_rows[second_position]
+                    .parameters
+                    .first_mut()
+                else {
                     return false;
                 };
                 *replaced = parameter;
             }
             CoreGlobalParameterRowMutationForTest::SwapFirstOwnerPositions => {
-                let [first, second, ..] = self.global_parameter_rows.as_ref() else {
-                    return false;
-                };
-                let (first_owner, second_owner) = (first.owner, second.owner);
+                let (first_owner, second_owner) = (owners[0], owners[1]);
                 let Some(first_position) =
                     self.global_parameter_positions.get(&first_owner).copied()
                 else {
@@ -21344,24 +21323,20 @@ impl ResolvedRegistry {
                     .insert(second_owner, first_position);
             }
             CoreGlobalParameterRowMutationForTest::DuplicateFirstOwner { filler } => {
-                let [first, second, ..] = self.global_parameter_rows.as_mut() else {
-                    return false;
-                };
                 if self.global_parameter_positions.contains_key(&filler) {
                     return false;
                 }
-                let duplicate = first.owner;
-                let replaced = second.owner;
-                self.global_parameter_positions.remove(&replaced);
-                second.owner = duplicate;
+                self.global_parameter_positions.remove(&owners[1]);
+                self.global_parameter_rows[second_position].owner = owners[0];
                 self.global_parameter_positions.insert(filler, usize::MAX);
             }
             CoreGlobalParameterRowMutationForTest::RemoveLastRow => {
                 let mut rows = std::mem::take(&mut self.global_parameter_rows).into_vec();
-                let Some(removed) = rows.pop() else {
-                    return false;
-                };
+                let removed = rows.remove(second_position);
                 self.global_parameter_positions.remove(&removed.owner);
+                for (position, row) in rows.iter().enumerate().skip(second_position) {
+                    self.global_parameter_positions.insert(row.owner, position);
+                }
                 self.global_parameter_rows = rows.into_boxed_slice();
             }
             CoreGlobalParameterRowMutationForTest::AppendRow { owner, parameter } => {

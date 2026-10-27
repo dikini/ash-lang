@@ -17,7 +17,7 @@ use ash::{
         ParseContext, ParseReason, ProjectionError, SynchronizationBoundary, parse, project_module,
     },
     render,
-    resolve::{ResolveError, ResolveModuleError, ResolveReason, resolve_module},
+    resolve::{DependencyExports, ResolveError, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{
         ResolvedBinding, ResolvedBlock, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
         ResolvedLocalDeclaration, ResolvedModule,
@@ -85,10 +85,39 @@ impl ModuleFixture {
             .expect("entry module should remain loaded")
     }
 
+    fn try_resolve(&self) -> Result<ResolvedModule, ResolveModuleError> {
+        let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+        for module in self.graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .expect("dependencies precede their importer")
+                            .exports(),
+                    )
+                    .expect("the exact dependency summary authenticates its edge")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies);
+            if module.id() == self.graph.entry() {
+                return resolved;
+            }
+            checked.push(
+                check_module(resolved.expect("dependency should resolve"))
+                    .expect("dependency should check"),
+            );
+        }
+        panic!("the graph should retain its entry")
+    }
+
     fn resolve(&self) -> ResolvedModule {
-        let loaded = self.loaded();
-        assert!(loaded.dependencies().is_empty());
-        resolve_module(loaded, &[]).expect("diagnostic fixture should resolve")
+        self.try_resolve()
+            .expect("diagnostic fixture should resolve")
     }
 }
 
@@ -185,9 +214,7 @@ fn unknown_name_presentation_distinguishes_terms_from_effect_operations() {
         ),
     ] {
         let fixture = ModuleFixture::load("unknown.ash", text);
-        let ResolveModuleError::Resolution(error) =
-            resolve_module(fixture.loaded(), &[]).unwrap_err()
-        else {
+        let ResolveModuleError::Resolution(error) = fixture.try_resolve().unwrap_err() else {
             panic!("expected resolution failure");
         };
         assert_eq!(error.found.as_deref(), Some("missing"));
@@ -245,9 +272,7 @@ fn unknown_type_presentation_retains_the_actual_parameter_scope() {
         ),
     ] {
         let fixture = ModuleFixture::load("unknown-type.ash", text);
-        let ResolveModuleError::Resolution(error) =
-            resolve_module(fixture.loaded(), &[]).unwrap_err()
-        else {
+        let ResolveModuleError::Resolution(error) = fixture.try_resolve().unwrap_err() else {
             panic!("expected resolution failure");
         };
         assert_eq!(error.reason, ResolveReason::UnknownType);
@@ -764,7 +789,7 @@ fn duplicate_effect_presentation_relates_both_exact_instances() {
     assert_eq!(json["labels"][1]["byte_start"], occurrences[0]);
     let distinct = text.replacen("Read<Int>, Read<Int>", "Read<Int>, Read<Bool>", 1);
     let distinct = ModuleFixture::load("distinct-effects.ash", &distinct);
-    assert!(resolve_module(distinct.loaded(), &[]).is_ok());
+    assert!(distinct.try_resolve().is_ok());
 }
 
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
@@ -1153,7 +1178,7 @@ fn recursive_and_cleanup_messages_retain_every_causal_label() {
         ),
     ] {
         let fixture = ModuleFixture::load("causal-message.ash", text);
-        let failure = match resolve_module(fixture.loaded(), &[]) {
+        let failure = match fixture.try_resolve() {
             Ok(resolved) => check_module(resolved).unwrap_err(),
             Err(ResolveModuleError::Representation(error)) => error,
             Err(error) => panic!("expected a source typing failure, found {error:?}"),
@@ -1198,11 +1223,11 @@ fn escape_messages_relate_outward_dependencies_to_their_scope() {
             "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {{\nlet escaped = resource cell<R> c = 41 {{\n{body}\n}}\n42\n}}\n"
         )
     };
-    for (reason, text, lead, relation) in [
-        (TypeReason::LocalNominalEscape, "main : Unit -> Int\nmain () = {\nlet escaped = {\nnewtype Hidden = Hidden(Int)\nHidden(1)\n}\n0\n}\n".to_owned(), "This type or effect row exposes a local nominal type outside its scope.", "local_nominal_scope"),
-        (TypeReason::ResourceEscape, resource("c"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
-        (TypeReason::ResourceEscape, resource("let read_later : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nread_later"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
-        (TypeReason::ResourceEscape, resource("let later : Unit -> Int = fn(ignored) {\nhandle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlater"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
+    for (reason, text, lead, relation, capture) in [
+        (TypeReason::LocalNominalEscape, "main : Unit -> Int\nmain () = {\nlet escaped = {\nnewtype Hidden = Hidden(Int)\nHidden(1)\n}\n0\n}\n".to_owned(), "This type or effect row exposes a local nominal type outside its scope.", "local_nominal_scope", false),
+        (TypeReason::ResourceEscape, resource("c"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition", false),
+        (TypeReason::ResourceEscape, resource("let read_later : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nread_later"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition", false),
+        (TypeReason::ResourceEscape, resource("let later : Unit -> Int = fn(ignored) {\nhandle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlater"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition", true),
     ] {
         let fixture = ModuleFixture::load("escape-message.ash", &text);
         let failure = run_path(RunConfiguration { entry: fixture.loaded().canonical_path().to_path_buf(), roots: ModuleRoots::empty() }).unwrap_err();
@@ -1220,11 +1245,24 @@ fn escape_messages_relate_outward_dependencies_to_their_scope() {
         let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(json["responsibility"], "source");
         assert_eq!(json["facts"], serde_json::json!([]));
-        assert_eq!(json["labels"].as_array().unwrap().len(), 2);
+        assert_eq!(json["labels"].as_array().unwrap().len(), if capture { 3 } else { 2 }, "{json}");
+        assert_eq!(json["labels"][0]["role"], "primary");
+        assert_eq!(json["labels"][1]["role"], "related");
         assert_eq!(json["labels"][0]["relationship"], "escaping_dependency");
         assert_eq!(json["labels"][1]["relationship"], relation);
         assert_eq!(json["labels"][1]["byte_start"], error.related[0].span().range().start());
         assert_eq!(json["labels"][1]["byte_end"], error.related[0].span().range().end());
+        if capture {
+            let primary = text.rfind("\nlater").unwrap() + 1;
+            assert_eq!(json["labels"][0]["byte_start"], primary);
+            assert_eq!(json["labels"][0]["byte_end"], primary + "later".len());
+            assert_eq!(json["labels"][1]["byte_start"], text.find("resource cell").unwrap());
+            assert_eq!(json["labels"][1]["byte_end"], text.rfind("\n}\n42").unwrap() + 2);
+            assert_eq!(json["labels"][2]["role"], "related");
+            assert_eq!(json["labels"][2]["relationship"], "resource_capture");
+            assert_eq!(json["labels"][2]["byte_start"], text.find("fn(ignored)").unwrap());
+            assert_eq!(json["labels"][2]["byte_end"], text.rfind("\n}\nlater").unwrap() + 2);
+        }
     }
 }
 
@@ -1266,7 +1304,10 @@ fn general_type_mismatch_renders_retained_types_and_expression_span() {
         assert_eq!(json["responsibility"], "source");
         assert_eq!(json["facts"][0]["name"], "expected");
         assert_eq!(json["facts"][1]["name"], "found");
-        assert_eq!(json["facts"][1]["value"], ty);
+        assert_eq!(
+            json["facts"][1]["value"],
+            format!("{ty} ! {{DefaultAlloc}}")
+        );
         assert_eq!(json["labels"].as_array().unwrap().len(), 1);
         assert_eq!(json["labels"][0]["relationship"], "expression");
         assert_eq!(
@@ -2569,7 +2610,9 @@ fn complete_declaration_without_a_logical_line_end_remains_diagnosed() {
 fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() {
     let fixture = ModuleFixture::load("r001.ash", R001);
     let error = expect_resolution_error(
-        resolve_module(fixture.loaded(), &[]).expect_err("R-001 should fail in resolution"),
+        fixture
+            .try_resolve()
+            .expect_err("R-001 should fail in resolution"),
     );
 
     assert_eq!(error.reason, ResolveReason::UnknownName);
@@ -2591,7 +2634,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
         "type Thing =\nFirst\n\ntype Thing =\nSecond\n\nmain : Unit -> Thing\nmain () = First\n";
     let duplicate = ModuleFixture::load("duplicate-type.ash", duplicate_text);
     let error = expect_resolution_error(
-        resolve_module(duplicate.loaded(), &[]).expect_err("duplicate type should fail"),
+        duplicate
+            .try_resolve()
+            .expect_err("duplicate type should fail"),
     );
     assert_eq!(error.reason, ResolveReason::DuplicateType);
     let first = duplicate_text.find("type Thing").expect("first type name") + "type ".len();
@@ -2608,7 +2653,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
     let binder_text = "main : Unit -> Int\nmain () = {\nlet (value, value) = (1, 2)\nvalue\n}\n";
     let binder_fixture = ModuleFixture::load("duplicate-pattern-binder.ash", binder_text);
     let error = expect_resolution_error(
-        resolve_module(binder_fixture.loaded(), &[]).expect_err("duplicate binder should fail"),
+        binder_fixture
+            .try_resolve()
+            .expect_err("duplicate binder should fail"),
     );
     assert_eq!(error.reason, ResolveReason::DuplicatePatternBinder);
     let first = binder_text.find("value").expect("first binder");
@@ -2623,7 +2670,9 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
     let unknown_text = "main : Unit -> Unit\nmain () = Missing\n";
     let unknown = ModuleFixture::load("unknown-constructor.ash", unknown_text);
     let error = expect_resolution_error(
-        resolve_module(unknown.loaded(), &[]).expect_err("unknown constructor should fail"),
+        unknown
+            .try_resolve()
+            .expect_err("unknown constructor should fail"),
     );
     assert_eq!(error.reason, ResolveReason::UnknownConstructor);
     assert_eq!(
@@ -2787,7 +2836,9 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
     let first = &surface.definitions[0];
     let second = &surface.definitions[1];
     let error = expect_resolution_error(
-        resolve_module(fixture.loaded(), &[]).expect_err("R-002 should fail in resolution"),
+        fixture
+            .try_resolve()
+            .expect_err("R-002 should fail in resolution"),
     );
 
     assert_eq!(error.reason, ResolveReason::DuplicateGlobal);
@@ -2812,7 +2863,9 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
 fn equation_name_mismatch_retains_both_names_and_a_justified_correction() {
     let fixture = ModuleFixture::load("equation-name.ash", EQUATION_NAME_MISMATCH);
     let error = expect_resolution_error(
-        resolve_module(fixture.loaded(), &[]).expect_err("the equation head should disagree"),
+        fixture
+            .try_resolve()
+            .expect_err("the equation head should disagree"),
     );
 
     assert_eq!(error.reason, ResolveReason::EquationNameMismatch);
@@ -2877,7 +2930,10 @@ fn unresolved_inference_is_anonymous_in_source_type_diagnostics() {
     };
     assert_eq!(operator.reason, TypeReason::OperatorOperand);
     assert_eq!(operator.expected.as_deref(), Some("Int"));
-    assert_eq!(operator.found.as_deref(), Some("_ -> Option<_>"));
+    assert_eq!(
+        operator.found.as_deref(),
+        Some("_ -> Option<_> ! {DefaultAlloc}")
+    );
     assert!(!operator.render_plain().contains('?'));
 
     let pattern_text = "main : Unit -> Int\nmain () = {\nlet split = fn(value) {\nlet (left, right) = value\nlet () = value\nleft\n}\nsplit\n}\n";

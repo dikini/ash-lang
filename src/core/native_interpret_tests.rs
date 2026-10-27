@@ -16,7 +16,6 @@ use crate::{
         UnvalidatedEffectProgram, ValidatedEffectProgram, transform,
     },
     foreign::checked_source::{CheckedForeignSymbol, ForeignBindingContext, bind_foreign_symbol},
-    interface::InterfaceConstraintBudget,
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{CheckedModule, ResolvedRegistry},
@@ -130,14 +129,55 @@ impl Fixture {
                 .unwrap(),
         );
         let ordinary = exports.effect("Ordinary").unwrap().id;
-        let registry = Arc::new(
-            ResolvedRegistry::combine_checked(
-                &checked,
-                &mut TypeWorkBudget::default(),
-                &mut InterfaceConstraintBudget::default(),
-            )
-            .unwrap(),
+        let defining = checked
+            .iter()
+            .find(|module| module.module() == graph.entry())
+            .unwrap();
+        let effects = defining.effects().to_vec();
+        assert_eq!(
+            effects.len(),
+            5,
+            "the standalone donor retains all original declarations"
         );
+        let parameters = effects
+            .iter()
+            .flat_map(|effect| effect.parameters.iter().cloned())
+            .collect();
+        let foreign = checked
+            .iter()
+            .find(|module| module.module().is_builtin_foreign())
+            .expect("the actual defining Foreign module remains checked");
+        let address = foreign
+            .registry()
+            .nominals()
+            .iter()
+            .find(|nominal| nominal.spelling == "Address")
+            .expect("the original Foreign.Address declaration remains canonical");
+        assert!(
+            foreign
+                .registry()
+                .nominal_parameters(address.id)
+                .unwrap()
+                .is_empty()
+        );
+        let abstracts = vec![(
+            address.id,
+            address.spelling.clone(),
+            crate::types::Kind::Type,
+            address.origin.primary_span(),
+        )];
+        let mut work = TypeWorkBudget::default();
+        let mut registry = ResolvedRegistry::default()
+            .with_effects_with_budget(effects, &mut work)
+            .unwrap()
+            .with_image_kind_facts(parameters, abstracts, &mut work)
+            .unwrap();
+        for symbol in [&make, &stop, &echo, &bytes] {
+            registry
+                .retain_native_symbol(Arc::clone(symbol), &mut work)
+                .unwrap();
+        }
+        let registry = Arc::new(registry);
         Self {
             graph,
             registry,

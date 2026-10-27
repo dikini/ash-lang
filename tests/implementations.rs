@@ -10,7 +10,7 @@ use ash::{
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, resolve_module},
     resolved::CheckedModule,
-    types::{Kind, Type},
+    types::Kind,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -85,6 +85,35 @@ fn check_error_with_dependencies(text: &str, dependencies: &[(&str, &str)]) -> T
     check_fixture_error(&fixture)
 }
 
+fn resolve_target(
+    graph: &ModuleGraph,
+    target: ash::module::ModuleId,
+) -> Result<ash::resolved::ResolvedModule, ResolveModuleError> {
+    let mut checked = Vec::<CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("dependencies precede their importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the exact target authenticates its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies);
+        if module.id() == target {
+            return resolved;
+        }
+        checked.push(
+            check_module(resolved.expect("dependencies resolve")).expect("dependencies check"),
+        );
+    }
+    panic!("the graph retains its requested target");
+}
+
 fn kind_reason(text: &str) -> String {
     let fixture = ImplementationFixture::create(text, &[]);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
@@ -92,7 +121,9 @@ fn kind_reason(text: &str) -> String {
     let loaded = graph
         .module(graph.entry())
         .expect("the implementation kind fixture should retain its entry");
-    match resolve_module(loaded, &[]).expect_err("the implementation kind fixture should fail") {
+    match resolve_target(&graph, loaded.id())
+        .expect_err("the implementation kind fixture should fail")
+    {
         ResolveModuleError::Kind(KindFailure::Source(error)) => error.reason.to_string(),
         other => panic!("expected a source kind failure, found {other:?}"),
     }
@@ -116,7 +147,8 @@ fn public_impl_failure_does_not_publish(text: &str, expected_reason: &str) {
         .iter()
         .find(|module| module.source().display_path().ends_with("broken.ash"))
         .expect("the fixture should retain the broken dependency");
-    let resolved = resolve_module(broken, &[]).expect("the broken dependency should resolve");
+    let resolved =
+        resolve_target(&graph, broken.id()).expect("the broken dependency should resolve");
 
     let published = match check_module(resolved) {
         Ok(checked) => {
@@ -1099,14 +1131,34 @@ fn checked_impl_method_owns_substituted_constrained_scheme() {
     assert_eq!(method_requirement.id, prerequisite.id);
     assert_eq!(method_requirement.interface(), prerequisite.interface());
     assert_eq!(method_requirement.arguments(), prerequisite.arguments());
-    let Type::Function(domain, codomain) = method.scheme.value_type() else {
-        panic!("the substituted method scheme should remain callable");
+    let function = method
+        .scheme
+        .value_type()
+        .function_view()
+        .expect("the complete substituted scheme remains callable");
+    let row = function
+        .effects()
+        .expect("the Source scheme retains its allocation row");
+    let [allocation] = row.known() else {
+        panic!("the exact row has one allocation instance");
     };
+    assert!(row.tail().is_none());
+    assert!(allocation.arguments().is_empty());
+    let facts = checked
+        .iter()
+        .flat_map(|module| module.effects())
+        .filter(|effect| effect.spelling == "DefaultAlloc")
+        .collect::<Vec<_>>();
+    let [fact] = facts.as_slice() else {
+        panic!("one checked service defines DefaultAlloc");
+    };
+    assert_eq!(allocation.effect(), fact.id);
+    assert!(fact.parameters.is_empty());
     let [ash::types::KindedArgument::TypeArg(head_argument)] = implementation.arguments() else {
         panic!("the unary implementation should retain one head argument");
     };
-    assert_eq!(domain.as_ref(), head_argument);
-    assert_eq!(codomain.as_ref(), head_argument);
+    assert_eq!(function.domain(), head_argument);
+    assert_eq!(function.value(), head_argument);
     assert_eq!(method.id.implementation(), implementation.id);
     assert_eq!(method.id.method(), method.method);
 }

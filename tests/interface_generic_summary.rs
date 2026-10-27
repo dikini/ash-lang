@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -7,9 +8,10 @@ use std::{
 use ash::{
     elaborate::check_module,
     interface::{ImplId, ImplMethodId, InterfaceId, MethodId, RequirementOwner},
-    module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
+    module::{LoadedModule, ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
-    types::{Kind, NominalTypeId, Type, TypeVariableId},
+    resolved::{CheckedModule, ExportSummary},
+    types::{EffectId, EffectInstance, EffectRow, Kind, NominalTypeId, Type, TypeVariableId},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -64,6 +66,28 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
         .expect("fixture module should be present")
 }
 
+fn check_dependency(graph: &ModuleGraph) -> (CheckedModule, HashMap<ModuleId, ExportSummary>) {
+    let target = module_named(graph, "dependency.ash").id();
+    let mut summaries = HashMap::<ModuleId, ExportSummary>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(edge, summaries.get(&edge.target()).unwrap())
+                    .expect("each detached summary should authenticate its actual edge")
+            })
+            .collect::<Vec<_>>();
+        let checked = check_module(resolve_module(module, &dependencies).unwrap())
+            .expect("the complete dependency prefix should check");
+        if module.id() == target {
+            return (checked, summaries);
+        }
+        summaries.insert(module.id(), checked.into_exports());
+    }
+    panic!("the named dependency should be checked");
+}
+
 fn assert_option_of_parameter(ty: &Type, option: NominalTypeId, parameter: TypeVariableId) {
     let Type::Application(function, argument) = ty else {
         panic!("expected an applied Option type, found {ty:?}");
@@ -99,16 +123,14 @@ fn detached_summary_preserves_complete_method_scheme() {
         ),
     );
     let dependency = module_named(&graph, "dependency.ash");
-    let dependency_summary =
-        check_module(resolve_module(dependency, &[]).expect("the dependency should resolve first"))
-            .expect("the polymorphic interface should check")
-            .into_exports();
+    let (dependency_checked, mut summaries) = check_dependency(&graph);
+    summaries.insert(dependency.id(), dependency_checked.into_exports());
     let entry = module_named(&graph, "entry.ash");
     let dependencies = entry
         .dependencies()
         .iter()
         .map(|edge| {
-            DependencyExports::new(edge, &dependency_summary)
+            DependencyExports::new(edge, summaries.get(&edge.target()).unwrap())
                 .expect("the detached summary should authenticate its direct edge")
         })
         .collect::<Vec<_>>();
@@ -137,10 +159,7 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         ),
     );
     let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked = check_module(
-        resolve_module(dependency, &[]).expect("the dependency should resolve before its importer"),
-    )
-    .expect("the generic implementation should check");
+    let (dependency_checked, summaries) = check_dependency(&graph);
     let [defining_interface] = dependency_checked.interface_facts() else {
         panic!("the dependency should retain one checked interface fact");
     };
@@ -152,8 +171,15 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         .dependencies()
         .iter()
         .map(|edge| {
-            DependencyExports::new(edge, dependency_checked.exports())
-                .expect("the checked summary should authenticate each direct edge")
+            DependencyExports::new(
+                edge,
+                if edge.target() == dependency.id() {
+                    dependency_checked.exports()
+                } else {
+                    summaries.get(&edge.target()).unwrap()
+                },
+            )
+            .expect("the checked summary should authenticate each direct edge")
         })
         .collect::<Vec<_>>();
     let resolved_entry = resolve_module(entry, &dependencies)
@@ -222,10 +248,30 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         ))]
     );
 
-    let Type::Function(domain, codomain) = method.scheme.value_type() else {
-        panic!("the retained implementation method should have a function type");
-    };
-    let Type::Tuple(elements) = domain.as_ref() else {
+    let function = method
+        .scheme
+        .value_type()
+        .function_view()
+        .expect("the retained implementation method should have a function type");
+    let region = module_named(&graph, "@compiler.region");
+    let default_alloc = EffectId::new(region.id(), 0);
+    assert_eq!(
+        summaries
+            .get(&region.id())
+            .unwrap()
+            .effect_by_id(default_alloc)
+            .expect("the canonical region summary should retain its private allocation effect")
+            .spelling,
+        "DefaultAlloc"
+    );
+    assert_eq!(
+        function.effects(),
+        Some(&EffectRow::singleton(EffectInstance::new(
+            default_alloc,
+            Box::new([])
+        )))
+    );
+    let Type::Tuple(elements) = function.domain() else {
         panic!("Equal.equal should retain its pair domain");
     };
     let [left, right] = elements.as_ref() else {
@@ -233,7 +279,7 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     };
     assert_option_of_parameter(left, expected_option, parameter);
     assert_option_of_parameter(right, expected_option, parameter);
-    assert_eq!(codomain.as_ref(), &Type::Bool);
+    assert_eq!(function.value(), &Type::Bool);
 }
 
 #[test]
@@ -253,20 +299,20 @@ fn determined_generic_implementation_crosses_an_honest_body_free_summary() {
         ),
     );
     let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked =
-        check_module(resolve_module(dependency, &[]).expect("the dependency should resolve first"))
-            .expect("the determined generic implementation should check");
+    let (dependency_checked, mut summaries) = check_dependency(&graph);
     assert_eq!(dependency_checked.interface_facts().len(), 1);
     let [implementation] = dependency_checked.implementation_facts() else {
         panic!("the dependency should retain one implementation fact");
     };
 
+    let implementation_id = implementation.id;
+    summaries.insert(dependency.id(), dependency_checked.into_exports());
     let entry = module_named(&graph, "entry.ash");
     let dependencies = entry
         .dependencies()
         .iter()
         .map(|edge| {
-            DependencyExports::new(edge, dependency_checked.exports())
+            DependencyExports::new(edge, summaries.get(&edge.target()).unwrap())
                 .expect("the honest determined summary should authenticate its edge")
         })
         .collect::<Vec<_>>();
@@ -274,7 +320,7 @@ fn determined_generic_implementation_crosses_an_honest_body_free_summary() {
         .expect("the selector should resolve from the body-free summary");
     let imported = resolved
         .imported_facts()
-        .implementation(implementation.id)
+        .implementation(implementation_id)
         .expect("the selected implementation should retain its stable identity");
     assert_eq!(imported.arguments().len(), 2);
     check_module(resolved).expect("the honest determined summary should remain coherent");
@@ -297,15 +343,14 @@ fn determined_key_decrease_with_dependent_growth_crosses_an_honest_summary() {
         ),
     );
     let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked =
-        check_module(resolve_module(dependency, &[]).expect("the dependency should resolve first"))
-            .expect("the determinant key strictly decreases despite dependent growth");
+    let (dependency_checked, mut summaries) = check_dependency(&graph);
+    summaries.insert(dependency.id(), dependency_checked.into_exports());
     let entry = module_named(&graph, "entry.ash");
     let dependencies = entry
         .dependencies()
         .iter()
         .map(|edge| {
-            DependencyExports::new(edge, dependency_checked.exports())
+            DependencyExports::new(edge, summaries.get(&edge.target()).unwrap())
                 .expect("the honest key-decreasing summary should authenticate")
         })
         .collect::<Vec<_>>();

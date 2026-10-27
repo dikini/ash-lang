@@ -1,14 +1,17 @@
 //! Lower lexical owners and selections to explicit provider pairs and handlers.
 
+use super::TypedNodeOwner;
 use super::*;
-use crate::module::ModuleId;
 use crate::{
     core::{
+        TypedBinder,
         packed::Intrinsic,
         region::{HostRegionConfiguration, RegionAllocateNode, RegionScopeNode},
     },
     resolved::{RegionApi, ResolvedRegionExpr, ResolvedRegionSelectionExpr},
+    types::EffectRow,
 };
+use crate::{module::ModuleId, source::Span};
 
 pub(super) struct RegionProgress<'a> {
     pub source: &'a ResolvedRegionExpr,
@@ -213,17 +216,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let Some(builder) = F::effect_builder(&mut self.builder) else {
             return Ok(());
         };
-        for &(node, request) in &self.pending_region_closures {
-            crate::core::capture::prepare_region_closure(
-                builder,
-                node,
-                request,
-                methods,
-                roots,
-                &mut self.type_work,
-            )
-            .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
-        }
+        crate::core::capture::prepare_region_closures(
+            builder,
+            &self.pending_region_closures,
+            methods,
+            roots,
+            &mut self.type_work,
+        )
+        .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
         self.pending_region_closures.clear();
         Ok(())
     }

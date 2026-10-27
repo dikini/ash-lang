@@ -20,6 +20,502 @@ User-approved design directions constrain R1/R2; they are not proof results or
 permission to skip the proposal. Start R1 and R2 together. Hold product R3 until
 the accepted R2 contract and final matching bounded R1 proof are retained.
 
+
+## Current R-core progress
+
+Focused interface and scoped-evidence migrations now pass all 44 and 53 original
+tests respectively. The module-newtype and local-newtype targets now pass 23
+and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 original
+tests. Functions passes all 19 original tests. Polymorphism and interface-module
+controls pass all 43 and 25 original tests. Module loading now passes all 24
+original tests; library imports now passes all 17. Core validation now passes
+all 67 original tests and resource modules all 16. Effect Core, typing and
+module targets pass all 6, 30 and 15 original tests. Module resolution and
+provenance now pass all 11 and 4 original tests. Semantics now passes all 13
+original tests. Architecture retains all 47 original passes. Interface resources
+now passes all six original tests; its three new restorations are disjoint from
+the prior 458, giving 461 original integration restorations at that boundary. New constructor
+negatives, the private Core census, opaque identity unit and explicit constraint
+owner unit remain additional coverage, not restored names.
+
+Fresh Library13 passes all 1,599 tests, with zero failures or ignored tests.
+It retains all Library12 names and adds only the explicit constraint-owner unit.
+All 35 Library10 unit failures remain restored separately, with no lost names or
+new failures. Repeated passes are counted once.
+
+Integration254 is the latest complete integration inventory: all 103 targets
+and all 1,782 unique tests pass, with no failures, ignored, incomplete or
+unexecuted cases. All 1,780 Integration69 names remain, plus the same two passing
+constructor negatives. All 504 original integration failures now pass; no old
+passes or prior restorations regressed. All 8,565 tracked inputs stayed equal
+through the run. Integration244's 43 failures and Integration227's 50 failures
+remain historical inventories, not current backlogs. The scoped controls retain
+exact resolver/checker reasons and labels, full dependency/source authority, defining
+factory privacy, result 42 and fresh independent validation after both Effect
+transforms. User-effect counts identify the complete instance and handler; whole
+transformed effect traces still equal the original trace.
+
+
+
+
+At checkpoint31, Fixtures246 passed all 255 original tests across twelve
+complete focused targets. The 25 restorations are disjoint from the prior 461,
+giving 486 original integration restorations. At that boundary, eighteen of
+Integration244's 43 failures remained
+unmatched by staged evidence. Integration254 now confirms their restoration.
+No test names or Source programs were added, removed or changed.
+
+Diagnostic fixtures admit the actual preceding dependency summaries and resolve
+the intended target before checking its negative. Complete canonical source
+catalogues remain retained for later rendering. Full DefaultAlloc arrow rows
+remain in exact mismatch facts and callable identities. The fourth handled
+resource escape retains the observed extra function-capture cause, with exact
+ordered primary/acquisition/capture ranges derived from its unchanged Source;
+the other three cases retain exactly two labels and their locale controls.
+Reusable compilation's retention debit is two per canonical graph module.
+Linked authorization groups retain the complete graph and original user
+implementation identities and route hops. Implementation preflight and failed
+publication retain their original diagnostic phases.
+
+The five module fixtures authenticate each actual edge target, retain detached
+body-free defining summaries and full canonical method rows, and select their
+actual user/entry owners. Diamond identities, hidden constructor visibility and
+namespace facts remain. The module-chain Source uses independently validated
+Effect Core with all source pairs, exact user group order, identity transform
+and result 42. Only test fixtures and subsequent result prose change; production,
+policy, unit, proof and native inputs stay at checkpoint30. Library13's complete
+1,599-pass result transfers unchanged. Final250 format/Clippy were bound at
+that checkpoint's executable bytes. One unused Type import was removed after the
+first Clippy pass and the
+complete 80-test implementation target passed again; repeated names add no
+coverage. Canonical full-gate/R5/Main acceptance remains open.
+
+
+The remaining eight fixture targets pass all 135 original tests in focused
+verification. Source producers retain complete dependency admission, Effect Core
+and independent validation with every source pair. Constructor-field trace order,
+lexical evidence and saved captures retain their original identities. Dependency
+continuation checks require the entry group directly after its defining group.
+Generated programs use the actual Effect image while preserving source deletion,
+repeated execution and work accounting. Callable and diagnostic identities retain
+complete DefaultAlloc rows.
+
+Intentional manual Pure controls remain separate. Their intrinsic owners use the
+actual canonical builtins. A neighboring constructor-substitution negative now
+first validates the correct Bytes donor in its closed Pure registry, then changes
+only the constructor family and requires Registry refusal at the exact root.
+All nine packed-Core cases pass after that post-Integration254 correction; the
+canonical all-target gate will cover these successor bytes. Newtype Source
+controls retain conversion counts 1/0, value and public type, repeated complete
+traces and frame depth. Their obsolete predecessor startup counts 8/7 are removed
+without a synthetic Pure scaffold. Fee manifests distinguish derived local
+charges from complete measured admission boundaries at their owning probes.
+
+These changes affect only integration tests and this result prose; Library13's
+production, configuration and unit inputs remain unchanged. The fresh canonical
+seven-stage gate is pending at this prose freeze. Its final status must be bound
+to these exact files by the delivery receipt, rather than composed from focused
+checks. R5 finite-provider refusal, normative specification, final integrated
+verification and Main acceptance remain open.
+
+
+The graph-wide constraint default is now 1,376,256 work units, retaining its
+single cumulative owner and Structural calibration route. The finite constraint-
+only diagnostic completed the unchanged 5,000-interface polymorphic graph at
+1,096,476 units; its 25% reserve target is 1,370,595, rounded to a 65,536-unit
+step (25.5163% reserve). The 2,800 and 4,500 monomorphic graphs completed at
+368,276 and 590,976; the genuine cycle reached its semantic failure at 352,321.
+Temporary source bytes were restored exactly before normal verification. A
+bounded inspection found no small optimization plausibly saving 25% of total
+work; independent canonical/source/token authentication remains required.
+
+The unchanged public 4,500/5,000-interface programs now exercise normal admission.
+One new actual-driver unit retains two finite 400,000-unit continuous-owner
+refusals in evidence validation after the 365,559-unit linked prefix; a fresh
+independent validation owner completes its 225,417 units. Two explicit original
+327,680-unit polymorphic typing refusals and fresh 1,024-interface recovery remain.
+These are whole-boundary observations, not derived local tariffs. The unrelated
+standalone resolution-Type refusal was measured separately (327,680 refused,
+423,346 completed) and its policy was not changed. Original 4,032-width reference
+and 1,310,720-unit recursive stress envelopes, exact/short/retry budgets, stacks
+and Source programs stay fixed. Type/Source/Core and all other defaults stay
+independent. Normal focused evidence passes 14 distinct checks; fresh Library13
+and Integration244 cover the stable candidate. Only TASK/plan result prose
+changes afterward; canonical format/Clippy are recorded separately.
+
+Architecture240 audits the complete carrier inventory: 65 new sites and nine
+exact coordinate renames retain existing ownership profiles and iterative
+owners. Region binders and transient values remain owned; runtime values share
+immutable facts, while captured frame segments retain mixed ownership. No new
+ownership mechanism or observed runtime disposal defect is claimed.
+The evaluator's existing transition handoff now checks its empty control slot
+before frame mutation; all 53 previously direct production refills use that handoff. Direct-step
+unit fixtures consume and check their expected pending control only at the
+simulated step, retaining original refusal-state, budget, trace and heap checks.
+Core row replacement uses the existing family disposal contract. Vacant map
+insertion avoids replacing prepared quantifiers; displaced nominal-kind facts
+use their existing disposer. Tight transfer checks cover the existing heap,
+captured-continuation and fallible quantifier handoffs, with adversarial cases.
+The scanner retains the source backing field at unmatched closing delimiters;
+its synthetic fixtures now include the canonical recursive Kind declaration.
+Existing glob/shadowing guards remain fail-closed. Two compile-time identifiers
+are permitted only at their defining Core paths. The closed Pure mock keeps one
+authenticated conversion; its unchanged Source independently uses Effect Core.
+
+The preceding Architecture240 normal evidence passes architecture 47/0, Library12 1,598/0/0, semantics
+13/0, effect runtime 27/0 and existing native storage 31/0, at identical executable
+inputs. The native target executes actual C-backed generated programs and retains
+exact values and traces. This is connected native evidence, not R5 finite-provider
+or canonical full-gate acceptance. Only subsequent TASK/plan result prose changes
+after those runs; current Library13 and Integration244 supersede those inventories.
+
+Semantics Source execution uses complete independently validated Effect Core for
+self-reference and all five original newtype representations. Exact public nominal
+types, values, conversion counts and child adjacency, and whole repeated traces
+remain. Five intentional Pure contracts now use one explicit scalar-main donor
+with the original Unit-call shape and optional local recursive group. Unchanged
+Source companions still check and execute through Effect Core. Exact Pure 7/9
+and 9-to-7 traces, strict recursive fold reduction, mathematical integer payloads,
+primitive equality, full metadata and the original-span ConstantFolding cause
+remain separate from allocation-bearing Source execution.
+The final identity fixture keeps all four original Sources. Its public check
+compares complete exposed metadata, typed binders, ordered children, bidirectional
+sharing and every raw Enter event under the exact remap. One new crate-local
+complement checks opaque region, allocation, request, buffer, tuple and stored
+closure metadata against the same Sources, including actual Add/Multiply and
+region/allocation/request/closure coverage. Fresh arena membership is independently
+validated while resolver identities, full types and origins remain equal. No
+public inspector, decoder or product change is introduced. Semantics225 passes
+all 13 original names plus the new private unit and existing row-registry caller;
+Final226 formatting and canonical Clippy use identical executed bytes. Library11
+remains the prior complete library result with the added focused unit reported
+separately. No fresh complete integration or native inventory is claimed.
+
+The resolution/provenance fixtures authenticate each actual dependency target
+before resolving the intended entry or named module. Resolved-only controls do
+not check their target; diagnostic controls retain two independent resolutions
+and fail only at entry checking. Hidden nominal selection uses its defining
+entry identity. Source provenance uses complete linked Effect Core and every
+source/module pair. Public source-binder ownership, exact function/body spans
+and the sole typed closure parameter retain RecursiveBindingLowering,
+FunctionLowering, TypeChecking and occurrence causes. Successful arithmetic
+checking records its cause on the returned context binding around RegionBuffer;
+the unchanged exact primary/related-span assertion checks that binding.
+The repeated-summary witness retains its original program, width and import
+count. Its obsolete fixed-limit refusal becomes normal-policy success plus the
+existing calibration observer's cumulative resolution owner check: one completed
+phase per canonical module, unchanged actual allowance, increasing work and one
+matching final endpoint above the old fixed limit. No product policy changes.
+Module216 passes 11 original names; Provenance215 passes four at unchanged final
+bytes. Final217 format and canonical Clippy pass without executable changes.
+Library11 remains carried complete library evidence; this is no fresh full
+integration or native gate.
+
+The latest admission repairs preserve exact defining/export identities and
+resolver-owned privacy errors across every actual dependency edge. Module-loading
+controls retain the complete compiler-service prefix, original user import order,
+1,024-depth/256 KiB chain and full pending-edge width. Core newtype and evidence
+controls use all-source Effect validation: exact nominal conversion owners,
+source-owned full-typed evidence closures, ordered complete arguments and fresh
+validation after both transforms remain. Manual Pure corruption, owner, depth,
+resource and poison controls are unchanged.
+
+The remaining seven Core evidence/linked controls retain source-owned complete
+callable schemes, exact adapter/method identities, ordered arguments and actual
+prerequisite application edges. Nested selections require two distinct adapters
+of the same implementation with different full heads, value 82 and both fresh
+transform validations. Their known Forall1 prerequisite comparison covers the
+whole effectful arrow, pair domain, each own bound variable and complete result
+computation, without a new equality API. The two linked fixtures retain their
+original sources, summary/route/kind/binder facts, registry sharing and public
+execution. Their exact source 40 + 2 operation remains an allocating RegionBuffer
+with full row and both direct operands after identity and folding. One small
+three-node Pure control, using each original arithmetic span, separately retains
+Add-before-fold, generated ConstantFolding cause and result 42. This split makes
+no claim that allocating Source arithmetic is optimized away. The extensive
+manual Pure corruption/depth/resource/ledger suffix is byte-identical.
+Resource-module fixtures retain the complete service/source inventory and exact
+checked module identities. Negative entry resolution authenticates each actual
+preceding dependency but never checks the malformed entry early; sealed-provider,
+constructor/privacy and direct-builtin acquisition obligations are unchanged.
+The final frozen targets pass 67 + 16 original names, with no added or missing
+names and no product, policy, API or program change.
+
+
+The original 128-method and 192-function public standalone publication witnesses
+first refused in the Source type-work owner. Separate temporary tracing recorded
+atomic prefixes of 323,970/327,680/request 4,125 and
+324,970/327,680/request 9,986. A finite Source-only completion probe then measured
+complete defining-module costs of 366,561 and 534,701, with independent entry
+costs of 71,000 and 201,323; all four modules completed before the unchanged
+stale census failed. Exact original meter/checker bytes were restored afterward.
+The earlier reviewed public `check_module` Source-only normal default was 720,896
+structural-work units (next 65,536-unit step above the 668,377 reserve target),
+with Structural calibration preserved. All explicit caller/driver budgets,
+other defaults and original programs/widths remain unchanged. Normal verification
+passes all 17 library-import cases and the existing cumulative-owner, policy,
+observer and reporting checks (30 distinct cases); it is separate from the
+temporary probes and restores the two original default-checking witnesses.
+
+Three focused library tests now pass after exact expectation repairs: canonical
+DefaultAlloc after Cell discharge, the complete five-group authorization graph,
+and the derived six structural cells plus one provenance handle for a resolved
+type copy. These are three unit restorations, separate from integration keys.
+An unchanged resource-typing run records 97 passes and five Source-work
+refusals over 102 original names, restoring three more Integration69 names
+(an intermediate 404 staged integration restorations). The five original
+residuals were measured without changing programs, depth 24 or the 256 KiB stack.
+Four complete entry owners used 799,093, 828,475, 852,554 and 4,220,960 units;
+the nested witness completed at 12,517,818. Temporary probes were restored
+exactly. The selected public Source-only default is now 15,663,104 work units,
+the next 65,536-unit step above the ceiling 25% reserve target of 15,647,273
+(25.1265% reserve). Structural calibration and all explicit/driver/other owner
+policies remain unchanged. Normal166 passes all 102 original resource-typing cases, all 17 library-import
+cases, the three repaired units and 13 existing owner/policy/calibration/reporting
+controls: 135 distinct names. All eight old resource failures now pass without
+program, stack or depth changes; no original resource name is missing or newly
+failing. The eighteen evidence/summary controls below complete the 35 Library10 unit
+restorations. Library11 freshly verifies the complete library at zero failures;
+these unit names add no integration credit. Diagnostics remain separate from normal
+verification, and integration-only inventory/full-gate clearance remain pending.
+The connected unchanged resource-runtime target also passes all 32 original
+names, restoring its one old Source-work failure. These fresh target observations
+remain separate from the complete Integration69 baseline.
+
+Six additional elaborate ledger controls now pass with production bytes unchanged.
+Module construction's actual paid setup stays in the owner before each local
+allowance. Tuple retention derives two effect-catalog scans, wrapper 1, real
+DefaultAlloc qualification/union 8 and tuple-copy 3 (14 for the canonical
+single-effect fixture). Match retains its original 17 arm/matrix/copy units plus
+two integer catalog scans (19); inferred-function work retains its original
+48 local units plus constructed-row lookup 1 and empty-row clone 1 (50).
+The early inference-record refusal remains atomic, with prefix 0/17 and two
+fresh exact retries. The relational declaration guard derives 15 units from
+preflight/retention and the complete First/absent-Second occurrence walks;
+its exact MethodParameter diagnostic and two fresh retries remain. Cumulative
+constraint and implementation-substitution controls measure complete successful
+check/freeze boundaries, retain one-short/exact/fresh-owner admission and
+second-module no-refill, and make no local-tariff or atomic-saturation claim.
+These six unit restorations add no integration credit, API, policy or semantic
+change; a fresh whole library/integration inventory and canonical gate remain
+pending.
+
+
+Eight Core unit controls also pass at canonical-formatted frozen inputs. Linked
+scalar and Arrow matching retain the derived local formula 2R + K + S + L,
+including canonical service parameters and the sole entry-region identity;
+the exact fixture fees are 16 and 14. Four method-authority controls measure
+complete successful authority phases for exact/one-short/fresh admission.
+Parameterized newtype checking retains its independent 4P + 1 = 9 parameter
+counter, complete three-source prelude and canonical Box parameter/representation
+premises, separately from the complete consuming-validation boundary.
+
+The linked transform retains four anchors, one embedded producer remap, exact
+coordinate candidate visits, carrier/key/replay fees, fresh validation and shared
+Arc/Weak lifecycle. Restored temporary probes completed identity and folding at
+2,025 work units each; static carrier/candidate inventories leave a fixed
+1,946-unit reconstruction/structural-copy subtotal after the explicit terms.
+Normal retries use that fixed subtotal rather than measuring their own allowance.
+Core197 passes all eight original names after formatting; Final198 format and
+canonical Clippy pass without subsequent executable edits. Production prefixes
+remain byte-identical. These eight unit restorations add no integration credit,
+policy, API or semantic change; the complete library inventory is not refreshed.
+
+
+Eighteen evidence/summary ledger controls retain local derivations separately
+from complete admission boundaries. Linked kinds retain the five canonical
+service nominals, original user kinds and independent owner records. Full
+DefaultAlloc rows add their real structure, synthesis, substitution and comparison
+work; original lookup-width deltas and local relationship/key fees remain.
+Block scheduling preserves unscoped 8-constraint/0-type atomic admission and
+checks scoped 18/10 work with exact annotation ownership and fresh retries.
+Registry rows retain local 8, prefix 45 and complete 54; combined linking derives
+83 constraint/94 type units. Its 74-type cut leaves the paid 13-unit prefix before
+the atomic 62-unit retention charge; final one-short and two fresh retries remain.
+Complete catalog/header/public/detached-summary donors measure only their own
+whole boundaries, retaining exact source identities, kinds, rows and dual errors.
+
+The deep constructor fixture now mutates only its actual Deep/Make defining
+owner and compares that same checked summary with the imported physical scheme.
+Its unchanged pure payload of depth 16,384 pays original 13D, the required export
+effect-inventory scan 2D + 1, admission 2 and fixed metadata 211: 245,974 units.
+The public deep fixture retains depth 32,768, generated-origin depth 16,384 and
+its 9D + origin + fixed 456 boundary (311,752 constraint/17 type units). Both
+256 KiB workers, exact/short/default admission and iterative disposal pass.
+The temporary complete-cost probe was restored exactly before normal controls.
+Canonical formatting preceded Final208 and Library11, which freshly covers all
+eighteen controls at committed executable bytes; no production/API/policy change
+or new unit name accompanies these repairs. Integration/native/full-gate and R5
+specification/Main acceptance remain separate and open.
+
+
+The effects fixtures use complete checked dependency summaries and the actual
+entry's defining effect/operation. Source row controls compare complete canonical
+DefaultAlloc instances with every original user instance; open rows retain the
+exact rigid binder and lacks facts. Cell discharge leaves only DefaultAlloc,
+while forwarding and delegation retain precisely their original State instances.
+Inline explicit and omitted rows retain State<Int> plus DefaultAlloc and
+DefaultAlloc alone. No row is projected or selected by spelling alone.
+The discard/resume fixture still synthesizes Unit with an empty expression row
+before capture proof, then independently validates and identity-revalidates with
+all actual source/module pairs. Manual Core mutation/reason/identity/transform
+checks and 32,768-node/64 KiB disposal remain unchanged. Effects210 freshly
+passes all 51 original names, retaining 22 prior restorations and adding thirteen;
+Final211 format and canonical Clippy pass at identical executable bytes. Library11
+is carried without a repeat; these integration-test edits change no product/API,
+Source program, policy or library-test input.
+
+Runtime trace controls retain all 13 original Source programs, exact user event
+vectors/counts/handler identities and whole raw transformed-trace equality. A
+local test classifier identifies canonical compiler-service operations and full
+validated handlers, rejects unknown events and attributes contiguous restoration
+blocks to the immediately preceding resume. Raw observations remain available.
+The manual 4,096-addition/256 KiB continuation and 24-hook/256 KiB fresh-process
+witnesses retain their original controls after actual-entry/provenance repair.
+Primitive admission now checks only preceding dependencies; its deliberate Pure
+scalar pipeline, exact trace, huge integers, poisoning and manual closure remain.
+Those runtime/primitive fixture migrations changed no Source rule, API or
+runtime limit. The public Source-default policy exception is recorded above.
+
+Function Source Core controls retain exact original binders, owned callable
+subtrees, parameter identities, source spans and causal origins, with complete
+own-graph canonical allocation rows. Returned capture checks identify the exact
+offset binder through public child edges and execute the same function body;
+public rendering/debug remains opaque. The application trace retains all twelve
+original semantic role IDs and adds two actual Source closure-creation IDs. Its
+exact fifteen-event sequence includes main's once-created increment capture
+before entry and the later ordinary lookup, preserving function/argument/body
+order. Raw trace evidence remains; no creation is treated as administration.
+The deliberate Pure diagnostics and structural arrow rendering are unchanged.
+
+Polymorphism controls retain exact source binders, canonical partial Pair identity,
+ordered type arguments and fixed kinds, complete scheme/row/lacks traversal and
+fresh independent validation after both transforms. The paired higher-kind run
+keeps the complete non-erasure event vector, lookup count and frame high-water
+mark equal; generic record creation adds one abstraction entry and its call one
+application entry. Evidence retains all nine semantic IDs, including its
+metadata-only type application, in an exact ten-event capture/view sequence.
+Only that authenticated adapter forwards its known variable rather than entering
+its type-application body. A whole Effect depth sanity bound of 32 replaces the
+obsolete Pure depth 3; this does not assert absence of temporary ordinary evaluator frames.
+Interface-specific frame inventory remains excluded.
+All other retained-child checks and exhaustive runtime inventories remain.
+Interface-module admission preserves resolver-owned privacy errors and defining
+identities while authenticating every actual dependency edge's own summary.
+
+First-class constructor positives use existing inferred local functions because
+CP-0025 default-expands explicit callable annotations while erased constructor
+invocation stays pure under exact row equality. Both original annotated programs
+remain verbatim negative controls (argument/result ownership); no coercion or
+product rule changed. The returned closure checks its exact lexical offset binder
+among public capture edges, complete callable type and usable result after scope
+return, rather than the historical whole-environment size. The original deep
+integration name retains 4,096 scopes/256 KiB and public Unit/escape checks. A
+separately added private driver test retains the exact Core scope census and
+execution under existing paid program owners. Its standalone Source type-work
+refusal was diagnosed at 327,680 cells; no default capacity was raised.
+
+The fixed generic-prerequisite program completes with 93 Enter events and 12
+frames; its whole Source sanity ceilings are 120/16, retaining exact method IDs,
+five-event application prefix and prerequisite ordering. These are test ceilings,
+not runtime budgets. Current dynamic semantics explicitly records the historical
+32/6 profile; R5 must reconcile that statement under CP-0025's accepted timing
+transition before Main or whole acceptance. The canonical gate, remaining
+regressions and R5 finite-provider/operational specification work remain open.
+
+The following measurements and staged checkpoint counts are historical evidence.
+
+R-core's unchanged 8,000-member/256 KiB driver test now passes under normal
+selected policy. Closure preparation uses one charged temporary first-variable
+index per batch; Source work fell from 519,069,391 to 7,149,428 and Final from
+350,952,800 exhausted to 2,296,950 complete. The separate program primary-builder
+allowance at that checkpoint was `max(327680, 8*S)` from the already-paid canonical source closure;
+its largest complete arena used 2,680,644 at S = 438,691. That checkpoint
+retained its then-current Source/Final/Core and rewrite coefficients,
+standalone/image capacities and original assertions; [AD-0013](../../decisions/AD-0013-generated-native-bridges-and-program-builds.md) records the measurement and ownership. This restores
+one required test, not the full gate; remaining fixture and product failures
+still require repair before integration.
+
+The unchanged 10,000-member cyclic-data witness at 320 KiB later identified a
+primary-owner refusal during cleanup row replay: 3,189,424 of 3,189,424 cells,
+requesting one. Aggregate Source was not the refusing owner. A finite primary
+16*S diagnostic completed the original render/count/drop assertions; the largest
+independent primary arena used 3,430,528 at S = 398,678. Its 25% target is
+4,288,160, so the selected rounded policy is now `max(327680, 12*S)` (4,784,136
+here). Source, Final and Core completed at 8,654,930 / 2,320,736 / 15,063,023.
+No small replay optimization justified changing its propagation/strict-removal
+and rollback obligations. All temporary diagnostics were restored; standalone,
+rewrite and other owner policies remain unchanged. Normal verification of the
+selected policy is recorded separately from the finite diagnostic: the original
+10,000-member/320 KiB witness passes uninstrumented with complete Source/Final/Core
+reports at the same costs, alongside all 25 driver, four policy, 57 builder and
+one exact/short/retry replay tests. The kind fixture now resolves only its actual
+entry after authenticating preceding dependencies, preserving original phase,
+count and span assertions; all 27 tests pass, restoring 25 baseline failures.
+Their names are disjoint from the prior 203 staged restores. Including the newly
+passing original cycle witness gives 229 staged integration restorations, not a
+refreshed full-suite result. Library9 and Integration69 remain the latest
+complete baselines; all whole-gate requirements remain pending.
+
+Current R-core repair preserves real Source Effect validation/evaluation phase
+injection and interface-owner disposal. Program resolution uses its separate
+`max(327680, 80*S)` allowance after the existing paid canonical census; the
+unchanged deep 48/4 route witness passes normally. The original nested-24 Cell
+witness completed at Source 13,215,994 and Core 33,035,808 over S = 1,791 after
+removing unused backward-prefix reconstruction from escape checks (37.49%
+Source saving, all 78 focused capture tests passing). Source `10000*S` and Core
+`25000*S` apply the existing 25% fitting rule; other owners/defaults are
+unchanged. Normal policy passes all 114 focused driver, policy, capture,
+reporting and observer checks. The latest full-library inventory is 1,560 pass /
+35 fail across 1,595 executed names: 17 existing failed names restored since the
+prior draft and no new failures. The earlier private Source capture test was
+renamed to assert its required Effect lifetime summaries, with the unchanged Pure
+exact/short/retry contract passing separately; the rename is not counted as a
+restored old name. The 35 failures are the latest full-library backlog only. The subsequent
+integration-only baseline executed all 103 workspace targets, with 1,276 passes
+and 504 failures over 1,780 qualified test keys, no ignored/aborted/unexecuted
+cases. A bounded product repair restores family-local operation views and
+contextual anonymous-function residual inference without changing fixed rows,
+lacks or general unification. The original two callback programs and four-case
+Core control pass, together with the targeted architecture guard, 78 capture
+checks and all 31 native suite cases (29 executions, two admission refusals).
+Dependency-ordered admission helpers preserve original negative endpoints and
+all builtin facts. Selected staged runs restore 135 baseline integration names
+without a new failed name in those groups; neither complete inventory was rerun.
+The subsequent two-target interface fixture refresh restores 68 further original
+names through exact dependency admission, callable rows and source-edge identity
+checks. Interfaces records 38 pass / 6 fail and interface selection 40 pass /
+0 fail; no new or missing failed names occur. The disjoint named restoration
+union is 203, not a recalculated full-suite result. Six Source-to-Pure Core
+producer failures remain in those targets; no new decoder or trace mechanism is
+part of this batch. Known ledger, row/trace/profile and separate architecture
+preflight residuals remain open. The next owner is the independent reviewer for the exact draft
+checkpoint, then root for publication/readback; the final full workspace gate
+remains pending. Core fixture repairs
+retain full provenance and actual user owners, separate the manual Pure donor's
+structural phases, and preserve original deep-stack, row and rejection-anchor
+assertions. Closure mutations follow stored code and preserve entry ownership;
+extra Return use is an incoming-authority negative, not a claim of ordinary
+profile-typed closure admission. Atomic whole-validation refusal preserves its
+paid prefix without consuming an unaffordable bulk debit. Source pattern fixtures retain complete Effect components;
+import and row mutations target actual user identities, with honest donors
+validated before corruption and all service metadata preserved. The shared
+repairs select defining user nominal/summary owners, preserve complete dependency
+provenance and caller budgets, and use actual Effect lowering for lexical final
+synthesis. The original paid effect-selection body loop is shared mechanically;
+its 96-block proof retains exact/short/retry checks on a 64 KiB stack separately
+from real Source headers' early Effect selection. Standalone native and type-only
+GenericCell donors now retain their original complete declaration authority;
+image fixtures reuse the existing Effect path with full provenance and retain
+the original Pure unsupported-registry contract. All 8,565 inputs matched
+before/after; only task/plan inventory prose changed afterward. The seven prior
+reporting/observer integration passes were not rerun for this test-only delta;
+the fresh library inventory re-executes all affected unit tests. Full
+workspace/all-target/all-feature Clippy passes.
+An unfinished draft checkpoint and independent review precede further shared
+fixture repairs and the still-required complete normal workspace gate. Whole
+criteria stay open.
+
 ## Approved directions and remaining contract
 
 | Boundary | Approved direction | R1/R2 must make concrete |
@@ -136,8 +632,9 @@ No additional environment/storage framework is authorized.
 
 All original R3–R5 criteria, remaining recursive evidence, completion/discharge,
 fixture migrations and the connected R-core gate stay pending. The separate
-whole-public-driver 256 KiB abort remains unclassified; the retained original
-staged stress results do not clear it.
+whole-public-driver 256 KiB abort was unclassified at that partial checkpoint;
+the current R-core classification below does not promise arbitrary whole-driver
+inputs at that stack size.
 
 ## Ordered deliveries
 
@@ -211,7 +708,7 @@ private representation/escape/request/backpatch negatives preserve the origin
 and actual-dependency chain. No new owner-discharge checker is added. This does
 not certify close-service/removed-backend correspondence by itself.
 
-The connected composition candidate adds the accepted explicit cleanup Unit
+The retained connected composition slice adds the accepted explicit cleanup Unit
 query/saved-view adapter for DefaultAlloc-bearing or open invocations, preserving
 the original direct form for closed invocations without DefaultAlloc. Pending
 cleanup-equation rows finalize locally after solving; retargeting preserves exact
@@ -229,13 +726,27 @@ different default, H/J normal/cleanup routing, removed allocate-only/release-onl
 backends with an outer same-instance handler, action-local admission, and distinct
 region handles/block lists sharing one refcounted backend. Shared-backend evidence
 orders A close, B old-value read, B new allocation/read, then the last backend close.
-Independent review/retention/acceptance and root-owned connected R-core verification
-remain required; all whole criteria stay open.
+PR #154 retained this slice as `0064080b41016679fca26c735b41d2fe119c3867`
+with independent review, retained tree verification and partial author acceptance.
+The root-owned connected R-core gate is active. Its first canonical run stopped
+at compilation; focused graph/provenance and consumer migrations have restored
+the inherited Machine/capture failures and identified actual resume-row and
+curried-arrow reconstruction defects. Remaining shared graph fixtures, selectors
+and ledger expectations must settle before the final fresh full gate; focused
+subset totals do not replace that gate. Existing whole-driver small-stack tests
+and staged 24/deep 1024 obligations remain required; the historical extra
+nested-Cell whole-driver diagnostic does not promise arbitrary compile_path
+inputs at 256 KiB. All whole criteria stay open.
 
 ### R5 — connected milestone and Main gate (#70)
 
 Compare default and explicit host-backed/fixed-capacity cases with ordinary heap
-construction on results, retention, refusal and completion order. Cover all six
+construction on results, retention, refusal and completion order. Actual finite
+provider refusal preservation remains unproved by the pre-allocation Pause
+injections: fill two slots with an old tuple and cleanup closure, refuse the next
+request, and check discard cleanup reads the old tuple while its region is live,
+writes through an older argument package and releases once. Reuse the existing
+native runner and ABI for this R5 case. Cover all six
 features, public/imported/opaque and transformed Core paths, negative lifetime
 and forgery cases, and actual supplied storage. Record native assumptions and
 unsupported cases honestly; unsupported required closures/graphs cannot close M2.

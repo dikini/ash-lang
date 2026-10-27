@@ -482,16 +482,29 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(_) => None,
         }
     }
-    fn region_construction(kind: &Self::Kind) -> Option<&EffectOperation> {
+    fn region_closure(kind: &Self::Kind) -> Option<&super::region::RegionClosureNode> {
         match kind {
-            EffectExprKind::Operation(
-                operation @ (EffectOperation::RegionBuffer(_)
-                | EffectOperation::RegionTuple(_)
-                | EffectOperation::RegionClosure(_)
-                | EffectOperation::RegionAllocate(_)
-                | EffectOperation::RegionValueRequest(_)
-                | EffectOperation::Request(_)),
-            ) => Some(operation),
+            EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => Some(closure),
+            _ => None,
+        }
+    }
+    fn region_tuple(kind: &Self::Kind) -> Option<&super::region::RegionTupleNode> {
+        match kind {
+            EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) => Some(tuple),
+            _ => None,
+        }
+    }
+    fn request_metadata(
+        kind: &Self::Kind,
+    ) -> Option<(
+        &crate::types::EffectInstance,
+        crate::types::OperationId,
+        super::NodeId,
+    )> {
+        match kind {
+            EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                Some((request.effect(), request.operation(), request.operand()))
+            }
             _ => None,
         }
     }
@@ -512,10 +525,10 @@ impl CoreOperationFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Region(region)) = kind {
             visit(&region.access);
         }
-        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind {
-            if let Some(function) = closure.code.function() {
-                visit(function.parameter());
-            }
+        if let EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) = kind
+            && let Some(function) = closure.code.function()
+        {
+            visit(function.parameter());
         }
         let handler = match kind {
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,

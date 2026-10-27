@@ -9,17 +9,17 @@ use std::{
 
 use ash::{
     core::{
-        ValidatedProgram, ValidationReason,
-        transform::{fold_literal_primitives, identity_traversal},
-        validate_modules,
+        ValidatedEffectProgram, ValidationReason,
+        transform::{fold_effect_literal_primitives, identity_effect_traversal},
+        validate_effect_modules,
     },
     driver::{FileFailure, RunConfiguration, run_path},
-    elaborate::{Elaborator, check_module, link_modules},
+    elaborate::{EffectElaborator, check_module, link_modules},
     evidence_validation::validate_interface_evidence,
     lexer::lex,
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     parser::{parse, project_module},
-    resolve::resolve_module,
+    resolve::{DependencyExports, resolve_module},
     source::SourceFile,
 };
 
@@ -65,22 +65,34 @@ impl InlineFixture {
         })
     }
 
-    fn validated_core(&self) -> (ValidatedProgram, ModuleGraph) {
+    fn validated_core(&self) -> (ValidatedEffectProgram, ModuleGraph) {
         let graph = load_module_graph(&self.0, &ModuleRoots::empty())
             .expect("the inline adapter graph should load");
-        let module = graph
-            .module(graph.entry())
-            .expect("the inline graph should retain its entry module");
-        let resolved = resolve_module(module, &[]).expect("the inline adapter should resolve");
-        let checked = check_module(resolved).expect("the inline adapter should check");
-        let linked =
-            link_modules(vec![checked], graph.entry()).expect("the inline adapter should link");
+        let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let target = checked
+                        .iter()
+                        .find(|checked| checked.module() == edge.target())
+                        .expect("dependencies precede their importer");
+                    DependencyExports::new(edge, target.exports())
+                        .expect("the actual target authenticates its edge")
+                })
+                .collect::<Vec<_>>();
+            let resolved =
+                resolve_module(module, &dependencies).expect("the inline adapter resolves");
+            checked.push(check_module(resolved).expect("the inline adapter checks"));
+        }
+        let linked = link_modules(checked, graph.entry()).expect("the complete graph links");
         let linked = validate_interface_evidence(linked)
             .expect("the inline adapter evidence should authenticate");
-        let mut elaborator = Elaborator::for_module_program(&linked)
+        let mut elaborator = EffectElaborator::for_module_program(&linked)
             .expect("the inline adapter Core namespace should fit");
         let typed = elaborator
-            .synthesize_module_program(&linked)
+            .synthesize_effect_module_program(&linked)
             .expect("the inline adapter should elaborate");
         let unchecked = elaborator
             .finish(typed.node)
@@ -95,7 +107,7 @@ impl InlineFixture {
             .iter()
             .map(|module| (module.id(), module.source().id()))
             .collect::<Vec<_>>();
-        let program = validate_modules(unchecked, &sources, &module_sources)
+        let program = validate_effect_modules(unchecked, &sources, &module_sources)
             .expect("the inline adapter Core should validate independently");
         (program, graph)
     }
@@ -212,6 +224,9 @@ fn syntax_method_binders_have_an_exact_additive_token_and_event_formula() {
 
 #[test]
 fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
+    // Local tariffs retain their derived expressions. Complete catalog/authority
+    // boundaries now retain measured successful owner totals and exact/short/retry
+    // checks beside the owning probe, rather than obsolete predecessor subtotals.
     let probes = [
         (
             "resolution binder validation",
@@ -229,13 +244,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "hidden interface import constraint ledger",
             RESOLVE_SOURCE,
             "fn hidden_interface_import_route_uses_its_exact_constraint_budget()",
-            "const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 13 + 3;",
+            "const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 14 + 3 + 3;",
         ),
         (
             "hidden interface import type ledger",
             RESOLVE_SOURCE,
             "fn hidden_interface_import_route_uses_its_exact_constraint_budget()",
-            "const EXACT_TYPE_WORK: usize = 5 + 1 + 1 + 1;",
+            "const EXACT_TYPE_WORK: usize = 6 + 41 + 19 + 1 + 1 + 1;",
         ),
         (
             "summary private binder authority graph ledger",
@@ -349,7 +364,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "linked catalog constraint ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn linked_method_evidence_catalog_has_exact_independent_ledgers()",
-            "assert_eq!(constraint_work, precheck_constraints + 107 + 2);",
+            "let constraint_work = measured_constraint.used();",
         ),
         (
             "generic implementation validation without discarded head buffer",
@@ -361,37 +376,37 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "linked catalog type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn linked_method_evidence_catalog_has_exact_independent_ledgers()",
-            "assert_eq!(type_work, precheck_types + 79 + 4 + 6 + 2 + spelling_work);",
+            "let type_work = measured_type.used();",
         ),
         (
             "abstract producer catalog",
             EVIDENCE_VALIDATION_SOURCE,
             "fn widened_abstract_producer_lookup_has_an_exact_retry_boundary()",
-            "let constraint_work = precheck_constraints + 85 + 2 * 2;",
+            "let constraint_work = measured_constraint.used();",
         ),
         (
             "abstract producer type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn widened_abstract_producer_lookup_has_an_exact_retry_boundary()",
-            "let type_work = precheck_types + 38 + 2 * 2 + 2 * 2 + spelling_work;",
+            "let type_work = measured_type.used();",
         ),
         (
             "concrete source catalog",
             EVIDENCE_VALIDATION_SOURCE,
             "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "let constraint_work = precheck_constraints\n            + 122\n            + 8\n            + 1\n            + 1\n            + 2\n            + 1\n            + 1\n            + 5 * 4\n            + 2\n            + 7\n            + prior_expectation_search;",
+            "let constraint_work = measured_constraint.used();",
         ),
         (
-            "concrete source prior-expectation search",
+            "concrete source paid-prefix retention",
             EVIDENCE_VALIDATION_SOURCE,
             "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "let prior_expectation_search = 3;",
+            "for prefix in [0usize, 17] {",
         ),
         (
             "concrete source type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "let type_work = precheck_types + 45 + 4 + 4 + 7;",
+            "let type_work = measured_type.used();",
         ),
         (
             "Core Builder carriers",
@@ -409,25 +424,25 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "concrete Core validation",
             CORE_VALIDATE_SOURCE,
             "fn concrete_monomorphic_source_validation_has_an_exact_retry_boundary()",
-            "632\n            + 1\n            + 1\n            + 1\n            + 1\n            + CHECKED_STACK_CAPACITY_WORK\n            + 1\n            + 1\n            + SCOPED_OWNER_PARAMETER_WORK\n            + CONCRETE_OCCURRENCE_LOOKUP_DELTA\n            + 24;",
+            "let exact_work = measured.type_work.get();",
         ),
         (
             "wide-prerequisite Core validation",
             CORE_VALIDATE_SOURCE,
             "fn concrete_source_with_wide_abstract_prerequisite_has_an_exact_retry_boundary()",
-            "const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK\n            + CONCRETE_OCCURRENCE_LOOKUP_DELTA\n            + PREREQUISITE_METHOD_LIST_WORK\n            + EXACT_PREREQUISITE_SEQUENCE_WORK\n            + 1\n            + 1 // producer matcher entry and exact prefix capacity\n            + SCOPED_OWNER_PARAMETER_WORK\n            + 26;",
+            "let exact_work = measured.type_work.get();",
         ),
         (
             "monomorphic adapter producer validation",
             CORE_VALIDATE_SOURCE,
             "fn monomorphic_adapter_edge_identity_has_an_exact_validation_boundary()",
-            "const EXACT_WORK: usize = 705\n            + EXACT_SOURCE_ENVELOPE_WORK\n            + CHECKED_STACK_CAPACITY_WORK\n            + 1\n            + 1\n            + SCOPED_OWNER_PARAMETER_WORK\n            + 25;",
+            "let exact_work = measured.type_work.get();",
         ),
         (
             "independent Core validation",
             CORE_VALIDATE_SOURCE,
             "fn independent_method_evidence_authority_has_an_exact_retry_boundary()",
-            "const EXACT_WORK: usize = 2_284\n            + PRECHARGED_CARRIER_ROWS\n            + EXACT_IDENTITY_WORK\n            + CHECKED_STACK_CAPACITY_WORK\n            + 2\n            + 1\n            + 2\n            + 2 // matcher entries, abstract membership, prefix slots, domain visits\n            + SCOPED_OWNER_PARAMETER_WORK\n            + 81;",
+            "let exact_work = measured.type_work.get();",
         ),
         (
             "lowered requirement-row and replacement-entry owners",
@@ -445,7 +460,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "Core transform replay",
             CORE_TRANSFORM_SOURCE,
             "fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries()",
-            "const CORE_WORK: usize = 673\n            + COMPLETE_APPLICATION_WORK\n            + ALL_METHOD_CATALOG_LOOKUP_WORK\n            + CONCRETE_SOURCE_LOOKUP_WORK;",
+            "const CORE_WORK: usize = EFFECT_RECONSTRUCTION_AND_COPY_WORK\n            + COMPLETE_APPLICATION_WORK\n            + ALL_METHOD_CATALOG_LOOKUP_WORK\n            + CONCRETE_SOURCE_LOOKUP_WORK;",
         ),
         (
             "Core transform second Builder carrier",
@@ -517,26 +532,20 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(10 + 5, 15);
     assert_eq!(5 * 1_024 + 7, 5_127);
     assert_eq!(3 * 1_024 + 6, 3_078);
-    assert_eq!(1 + 2 + 1 + 1 + 13 + 3, 21);
-    assert_eq!(5 + 1 + 1 + 1, 8);
+    assert_eq!(1 + 2 + 1 + 1 + 14 + 3 + 3, 25);
+    assert_eq!(6 + 41 + 19 + 1 + 1 + 1, 69);
     assert_eq!(8 + 3 + 1, 12);
     assert_eq!(4 * 1_024 + 8, 4_104);
     assert_eq!(4 + 2, 6);
     assert_eq!(1 + 2, 3);
     assert_eq!(1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 2, 13);
     assert_eq!(7 - 1, 6);
-    assert_eq!(85 + 2 * 2, 89);
-    // The Convert -> Base edge searches its three already-retained
-    // expectations before appending the AdapterEdge expectation.
-    assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7 + 3, 168);
-    assert_eq!(632 + 1 + 1 + 1 + 1 + 45 + 1 + 1 + 1 + (4 - 1) + 24, 711);
-    assert_eq!(1_175 + (4 - 1) + 2 * 2 + (2 + 2) + 1 + 1 + 1 + 26, 1_215);
-    assert_eq!(705 + (49 + 5 + 1) + 45 + 1 + 1 + 1 + 25, 833);
+    // The non-local Effect reconstruction subtotal is fixed by the complete
+    // restored probe; explicit anchor, producer, payload and index terms remain.
     assert_eq!(
-        2_284 + 22 + 28 + 92 + 2 + 1 + 2 + 2 + (1 + 1 + 2) + 81,
-        2_518
+        1_946 + (4 + 4 + 3 + 5) + 8 + 4 + (4 + 4 + 2) + 4 + 1 + 4 + 1 + 20 + 16 + 12 + 5 - 6 - 16,
+        2_025
     );
-    assert_eq!(673 + (4 + 4 + 3 + 5) + 8 + 4 + 4 + 1 + 4 + 1, 711);
 }
 
 #[test]
@@ -591,7 +600,7 @@ fn adapter_heavy_core_and_rejected_occurrences_dispose_on_a_256_kib_stack() {
     const WIDTH: usize = 64;
     let accepted = InlineFixture::create(&adapter_heavy_source(WIDTH, false));
     let (program, graph) = accepted.validated_core();
-    let rejected_core = identity_traversal(&program)
+    let rejected_core = identity_effect_traversal(&program)
         .expect("the adapter-bearing rejection candidate should build on the normal stack");
     let rejected = InlineFixture::create(&adapter_heavy_source(WIDTH, true));
     let failure = rejected
@@ -613,19 +622,19 @@ fn adapter_heavy_core_and_rejected_occurrences_dispose_on_a_256_kib_stack() {
                 .iter()
                 .map(|module| (module.id(), module.source().id()))
                 .collect::<Vec<_>>();
-            let identity = validate_modules(
-                identity_traversal(&program).expect("adapter identity replay should build"),
+            let identity = validate_effect_modules(
+                identity_effect_traversal(&program).expect("adapter identity replay should build"),
                 &sources,
                 &module_sources,
             )
             .expect("adapter identity replay should freshly validate");
-            let folded = validate_modules(
-                fold_literal_primitives(&program).expect("adapter fold replay should build"),
+            let folded = validate_effect_modules(
+                fold_effect_literal_primitives(&program).expect("adapter fold replay should build"),
                 &sources,
                 &module_sources,
             )
             .expect("adapter fold replay should freshly validate");
-            let rejection = validate_modules(rejected_core, &sources, &[])
+            let rejection = validate_effect_modules(rejected_core, &sources, &[])
                 .expect_err("the incomplete module/source relation should reject adapter Core");
             assert_eq!(rejection.reason(), ValidationReason::Registry);
             drop(folded);

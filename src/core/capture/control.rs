@@ -1107,14 +1107,14 @@ struct Selection {
     prefix: Vec<Edge>,
 }
 
-// `select` returns (can_select, can_cross). The graph is walked iteratively;
-// backward reachability retains only prefixes leading to this boundary.
-fn selections(
+// `select` returns (can_select, can_cross). Preserve the forward boundary
+// order separately from the backward prefix reconstruction used by captures.
+fn selection_boundaries(
     state: &State,
     root: Address,
     mut select: impl FnMut(Frame) -> Result<(bool, bool), Failure>,
     budget: &mut TypeWorkBudget,
-) -> Result<(Vec<Selection>, bool), Failure> {
+) -> Result<(Vec<Edge>, Vec<Edge>, bool), Failure> {
     let mut pending = Vec::new();
     pending.try_reserve(1).map_err(|_| Failure::Resource)?;
     pending.push(root);
@@ -1147,6 +1147,16 @@ fn selections(
             }
         }
     }
+    Ok((boundaries, prefixes, escaped))
+}
+
+fn selections(
+    state: &State,
+    root: Address,
+    select: impl FnMut(Frame) -> Result<(bool, bool), Failure>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(Vec<Selection>, bool), Failure> {
+    let (boundaries, prefixes, escaped) = selection_boundaries(state, root, select, budget)?;
     let mut result = Vec::new();
     for boundary in boundaries {
         let mut reaches = HashSet::new();
@@ -3785,14 +3795,17 @@ impl<'a> Analysis<'a> {
         if let (Some(data), Some(port)) = (&mut self.data, event.port) {
             data.external_result(port, budget)?;
         }
-        let (owners, _) = selections(
+        // Escaping payload checks consume every owner boundary, but no captured
+        // prefix. Keep the identical charged forward walk without reconstructing
+        // unused per-owner backward paths.
+        let (owners, _, _) = selection_boundaries(
             state,
             state.stack,
             |frame| Ok((matches!(frame, Frame::Resource { .. }), true)),
             budget,
         )?;
         for owner in owners {
-            self.check_payload(state, event, &[owner.boundary], budget)?;
+            self.check_payload(state, event, &[owner], budget)?;
         }
         if event.unknown {
             Self::enqueue(state.copy(budget)?, pending, visited, budget)?;

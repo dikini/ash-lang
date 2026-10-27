@@ -2,7 +2,7 @@ use ash::{
     elaborate::{TypeError, check_module},
     module::{ModuleRoots, load_module_graph},
     presentation::{compile_type_diagnostic, write_json},
-    resolve::resolve_module,
+    resolve::{DependencyExports, resolve_module},
 };
 
 #[test]
@@ -15,8 +15,7 @@ fn json_keeps_named_type_facts_and_semantic_label_relationships() {
         .iter()
         .find(|m| m.id() == graph.entry())
         .unwrap();
-    let TypeError::Source(error) = check_module(resolve_module(loaded, &[]).unwrap()).unwrap_err()
-    else {
+    let TypeError::Source(error) = check_module(resolve_entry(&graph)).unwrap_err() else {
         panic!("expected a structured type diagnostic");
     };
     let view = compile_type_diagnostic(&error, &[loaded.source()]).unwrap();
@@ -44,4 +43,29 @@ fn json_keeps_named_type_facts_and_semantic_label_relationships() {
             ]
         })
     );
+}
+
+fn resolve_entry(graph: &ash::module::ModuleGraph) -> ash::resolved::ResolvedModule {
+    let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("dependencies precede their importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the actual target authenticates its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("the diagnostic fixture resolves");
+        if module.id() == graph.entry() {
+            return resolved;
+        }
+        checked.push(check_module(resolved).expect("diagnostic dependencies check"));
+    }
+    panic!("the graph retains its entry");
 }

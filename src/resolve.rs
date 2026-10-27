@@ -14704,7 +14704,23 @@ mod tests {
             let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
                 .expect("hook syntax should load");
             let entry = graph.module(graph.entry()).unwrap();
-            let resolved = resolve_module(entry, &[]).unwrap();
+            let checked = checked_import_dependencies(&graph);
+            let dependencies = entry
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(entry, &dependencies).unwrap();
             let ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[1].kind else {
                 panic!("equational main")
             };
@@ -16343,10 +16359,18 @@ mod tests {
             .find(|checked| checked.module() == middle)
             .expect("the checked intermediary should remain available")
             .exports();
+        let base = graph
+            .modules()
+            .iter()
+            .find(|module| {
+                Path::new(module.source().display_path()).file_name() == Some("base.ash".as_ref())
+            })
+            .unwrap()
+            .id();
         let interface = summary
             .hidden_interfaces()
-            .next()
-            .expect("the intermediary should retain one hidden interface");
+            .find(|interface| interface.spelling == "Render" && interface.id.module() == base)
+            .expect("the intermediary should retain the defining Render interface");
         let import_span = entry.surface().imports[0].span;
         let mut resolver = Resolver::with_budgets(
             entry.id(),
@@ -16425,6 +16449,41 @@ mod tests {
         )
     }
 
+    fn checked_import_dependencies(
+        graph: &crate::module::ModuleGraph,
+    ) -> Vec<crate::resolved::CheckedModule> {
+        let mut checked = Vec::<crate::resolved::CheckedModule>::new();
+        for module in graph
+            .modules()
+            .iter()
+            .filter(|module| module.id() != graph.entry())
+        {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|dependency| dependency.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            checked.push(
+                check_module(
+                    resolve_module(module, &dependencies)
+                        .expect("fixture dependency should resolve with actual implicit services"),
+                )
+                .expect("fixture dependency should check"),
+            );
+        }
+        checked
+    }
+
     fn resolve_import_fixture_with_dependency_and_limit(
         entry: &str,
         dependency: &str,
@@ -16433,24 +16492,24 @@ mod tests {
         let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
-        let dependency = graph
-            .modules()
-            .iter()
-            .find(|module| {
-                Path::new(module.source().display_path()).file_name()
-                    == Some("dependency.ash".as_ref())
-            })
-            .expect("the import budget dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the dependency should check");
+        let checked = checked_import_dependencies(&graph);
         let entry = graph
             .module(graph.entry())
             .expect("the import budget entry should load");
         let dependencies = entry
             .dependencies()
             .iter()
-            .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::default();
         let mut constraint_work = InterfaceConstraintBudget::with_limit(limit);
@@ -16473,24 +16532,24 @@ mod tests {
         let fixture = ImportBudgetFixture::create(entry, dependency);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
             .expect("the import budget graph should load");
-        let dependency = graph
-            .modules()
-            .iter()
-            .find(|module| {
-                Path::new(module.source().display_path()).file_name()
-                    == Some("dependency.ash".as_ref())
-            })
-            .expect("the import budget dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the dependency should check");
+        let checked = checked_import_dependencies(&graph);
         let entry = graph
             .module(graph.entry())
             .expect("the import budget entry should load");
         let dependencies = entry
             .dependencies()
             .iter()
-            .map(|edge| DependencyExports::new(edge, dependency.exports()).unwrap())
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|dependency| dependency.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
             .collect::<Vec<_>>();
         let mut type_work = TypeWorkBudget::with_limit(limit);
         let mut constraint_work = InterfaceConstraintBudget::default();
@@ -16561,6 +16620,21 @@ mod tests {
         assert_eq!(short_used, four_used - 4);
     }
 
+    fn assert_single_default_allocation_arrow(ty: &Type) {
+        let row = ty.function_view().unwrap().effects().unwrap();
+        assert!(row.tail().is_none());
+        let [effect] = row.known() else {
+            panic!("one expanded default member")
+        };
+        assert!(effect.arguments().is_empty());
+        assert_eq!(
+            effect.effect(),
+            crate::resolved::RegionApi::for_module(effect.effect().module())
+                .unwrap()
+                .default_alloc()
+        );
+    }
+
     #[test]
     fn duplicate_global_route_compares_nominal_closure_without_recloning_it() {
         const ENTRY: &str = "import dependency (lift)\n";
@@ -16573,7 +16647,8 @@ mod tests {
         // parameter record plus its Arrow Kind = 4, and the seven-node value
         // Type pair = 14. The fused read-only closure adds 2U=2 simultaneous
         // unique-ID indexes and Token header+Origin D=2.
-        const DUPLICATE_CONSTRAINT_WORK: usize = 2 + 1 + 4 + 14 + 2 + 2;
+        // Comparing the known zero-argument DefaultAlloc row adds one cell.
+        const DUPLICATE_CONSTRAINT_WORK: usize = 2 + 1 + 4 + 14 + 1 + 2 + 2;
 
         let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -16586,9 +16661,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-global dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the higher-kinded dependency should check");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-global entry should load");
@@ -16596,6 +16673,7 @@ mod tests {
         let exported = summary
             .term("lift")
             .expect("the dependency should export the higher-kinded global");
+        assert_single_default_allocation_arrow(exported.scheme.value_type());
         let token = summary
             .nominal("Token")
             .expect("the dependency should export the nominal used by the scheme")
@@ -16631,10 +16709,18 @@ mod tests {
             .retain_imported_global(exported, summary, span, &mut CaptureGraphVisits::default())
             .expect("the first route should retain the canonical global and its closure");
         let baseline = snapshot(&resolver);
-        assert_eq!(
-            baseline.1,
-            vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
-        );
+        let mut expected_nominals = summary
+            .hidden_nominals()
+            .map(|nominal| (nominal.id, ImportedTypeAccess::Hidden, Vec::new()))
+            .collect::<Vec<_>>();
+        if !expected_nominals.iter().any(|nominal| nominal.0 == token) {
+            expected_nominals.push((token, ImportedTypeAccess::Hidden, Vec::new()));
+        }
+        expected_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        let mut actual_nominals = baseline.1.clone();
+        actual_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        assert_eq!(actual_nominals, expected_nominals);
+        assert!(baseline.1.iter().any(|nominal| nominal.0 == token));
 
         resolver.type_work = TypeWorkBudget::with_limit(capture_work - 1);
         resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
@@ -16682,11 +16768,12 @@ mod tests {
         // canonical Token definition is header+Source-Origin 2. Two one-hop
         // prepends and the effective/public hop comparisons complete the route.
         const PUBLIC_DUPLICATE_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1 + 18;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6 + 1) + 2 + 1 + 1 + 1 + 1 + 19;
+        // Publication authentication independently compares the same default row (+1).
         // A private-to-public promotion replaces the public hop comparison with
         // one public-order/rank reservation cell, so its exact total is equal.
         const PUBLIC_PROMOTION_CONSTRAINT_WORK: usize =
-            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6) + 2 + 1 + 1 + 1 + 1 + 18;
+            1 + 1 + (2 + 2 + 2 + 1 + 7 + 6 + 1) + 2 + 1 + 1 + 1 + 1 + 19;
 
         let fixture = ImportBudgetFixture::create(ENTRY, DEPENDENCY);
         let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
@@ -16699,9 +16786,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-implementation dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("the nominal-head implementation should check");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-implementation entry should load");
@@ -16710,6 +16799,7 @@ mod tests {
             .implementations()
             .next()
             .expect("the dependency should export one implementation");
+        assert_single_default_allocation_arrow(exported.fact().methods[0].scheme.value_type());
         let implementation = exported.fact().id;
         let mut capture_work = TypeWorkBudget::unbounded();
         for method in &exported.fact().methods {
@@ -16790,10 +16880,18 @@ mod tests {
             )
             .expect("the first public route should retain the fact and nominal closure");
         let public_baseline = snapshot(&duplicate);
-        assert_eq!(
-            public_baseline.1,
-            vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
-        );
+        let mut expected_nominals = summary
+            .hidden_nominals()
+            .map(|nominal| (nominal.id, ImportedTypeAccess::Hidden, Vec::new()))
+            .collect::<Vec<_>>();
+        if !expected_nominals.iter().any(|nominal| nominal.0 == token) {
+            expected_nominals.push((token, ImportedTypeAccess::Hidden, Vec::new()));
+        }
+        expected_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        let mut actual_nominals = public_baseline.1.clone();
+        actual_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        assert_eq!(actual_nominals, expected_nominals);
+        assert!(public_baseline.1.iter().any(|nominal| nominal.0 == token));
         duplicate.type_work = TypeWorkBudget::with_limit(comparison_type_work - 1);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
@@ -16914,7 +17012,7 @@ mod tests {
         // seven-node Type pair 14 plus its 2U nominal indexes; and Secret D=5
         // (header, one parameter
         // record/Origin/Kind, defining Origin).
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 2) + 5;
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 3 + 1 + 1 + (14 + 1 + 2) + 5;
 
         let fixture = ImportBudgetFixture::create(ENTRY, FACADE);
         fs::write(fixture.0.join("base.ash"), BASE)
@@ -16928,8 +17026,11 @@ mod tests {
                 Path::new(module.source().display_path()).file_name() == Some("base.ash".as_ref())
             })
             .expect("the duplicate-interface base should load");
-        let base = check_module(resolve_module(base, &[]).expect("the base should resolve"))
-            .expect("the nominal method interface should check");
+        let checked = checked_import_dependencies(&graph);
+        let base = checked
+            .iter()
+            .find(|checked| checked.module() == base.id())
+            .unwrap();
         let facade = graph
             .modules()
             .iter()
@@ -16938,27 +17039,22 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the duplicate-interface facade should load");
-        let facade_dependencies = facade
-            .dependencies()
+        let facade = checked
             .iter()
-            .map(|edge| DependencyExports::new(edge, base.exports()).unwrap())
-            .collect::<Vec<_>>();
-        let facade = check_module(
-            resolve_module(facade, &facade_dependencies).expect("the facade should resolve"),
-        )
-        .expect("the facade should check");
+            .find(|checked| checked.module() == facade.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the duplicate-interface entry should load");
         let summary = facade.exports();
         let exported = summary
-            .interfaces()
-            .next()
+            .interface("Observe")
             .expect("the facade should re-export Observe");
+        assert_single_default_allocation_arrow(&exported.methods[0].value_type);
         let secret = summary
             .hidden_nominals()
-            .next()
-            .expect("the method should retain Secret as hidden closure")
+            .find(|nominal| nominal.spelling == "Secret" && nominal.id.module() == base.module())
+            .expect("the method should retain defining Secret as hidden closure")
             .id;
         let span = entry.surface().imports[0].span;
         let snapshot = |resolver: &Resolver| {
@@ -16993,10 +17089,18 @@ mod tests {
             )
             .expect("the first hidden route should retain the interface and closure");
         let hidden = snapshot(&resolver);
-        assert_eq!(
-            hidden.1,
-            vec![(secret, ImportedTypeAccess::Hidden, Vec::new())],
-        );
+        let mut expected_nominals = summary
+            .hidden_nominals()
+            .map(|nominal| (nominal.id, ImportedTypeAccess::Hidden, Vec::new()))
+            .collect::<Vec<_>>();
+        if !expected_nominals.iter().any(|nominal| nominal.0 == secret) {
+            expected_nominals.push((secret, ImportedTypeAccess::Hidden, Vec::new()));
+        }
+        expected_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        let mut actual_nominals = hidden.1.clone();
+        actual_nominals.sort_unstable_by_key(|nominal| nominal.0);
+        assert_eq!(actual_nominals, expected_nominals);
+        assert!(hidden.1.iter().any(|nominal| nominal.0 == secret));
         assert!(!hidden.0.expect("the interface should be retained").3);
 
         resolver.type_work = TypeWorkBudget::with_limit(0);
@@ -17414,10 +17518,13 @@ mod tests {
         // family-ordinal, withheld-owner, physical, closure, and two reverse
         // index cells for this one-nullary-constructor fixture. Its original
         // checked constructor also compares one Source origin before probing.
-        const SUMMARY_AUTHENTICATION_WORK: usize = 9 + 1;
-        const NOMINAL_SELECTOR_WORK: usize = 4;
-        const CONSTRUCTOR_SELECTOR_WORK: usize = 5;
-        const MISSING_SELECTOR_WORK: usize = 8;
+        // Complete user/service summaries cost 140, both direct routes cost
+        // two, and private service namespace installation costs 72. Only then
+        // can the named user selector perform its processing/index probes.
+        const SUMMARY_AUTHENTICATION_WORK: usize = 140 + 2 + 72;
+        const NOMINAL_SELECTOR_WORK: usize = 3;
+        const CONSTRUCTOR_SELECTOR_WORK: usize = 4;
+        const MISSING_SELECTOR_WORK: usize = 7;
 
         let (nominal_short, nominal_short_used) = resolve_import_fixture_with_dependency_and_limit(
             "import dependency (impl Nominal)\n",
@@ -17525,9 +17632,11 @@ mod tests {
                     == Some("dependency.ash".as_ref())
             })
             .expect("the wide-selector dependency should load");
-        let dependency =
-            check_module(resolve_module(dependency, &[]).expect("the dependency should resolve"))
-                .expect("distinct nominal heads should check without overlap");
+        let checked = checked_import_dependencies(&graph);
+        let dependency = checked
+            .iter()
+            .find(|checked| checked.module() == dependency.id())
+            .unwrap();
         let entry = graph
             .module(graph.entry())
             .expect("the wide-selector entry should load");
@@ -17600,13 +17709,15 @@ mod tests {
 
     #[test]
     fn hidden_interface_import_route_uses_its_exact_constraint_budget() {
-        // ConstraintWork owns the route, two fact records, one polymorphic
-        // index, one declared binder, the thirteen-cell bounded type walk and
-        // complete binder record/Origin/Kind authentication. TypeWork owns
-        // five nominal-closure visits, one inherited role, one hidden-original
-        // search and the retained reference to that immutable checked fact.
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 13 + 3;
-        const EXACT_TYPE_WORK: usize = 5 + 1 + 1 + 1;
+        // ConstraintWork owns route/fact/index/binder admission, the fourteen-cell
+        // method walk (including DefaultAlloc), three service nominal merges,
+        // and complete binder record/Origin/Kind authentication.
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 14 + 3 + 3;
+        // The completed closure costs 66: method traversal 6, the complete
+        // DefaultAlloc declaration clone 41, and its signature/nominal frontier
+        // 19. Inherited-role authentication, original lookup and retention each
+        // consume one more cell. Keep those independent refusal boundaries.
+        const EXACT_TYPE_WORK: usize = 6 + 41 + 19 + 1 + 1 + 1;
 
         let constraint_short =
             retain_hidden_interface_import_with_limits(EXACT_CONSTRAINT_WORK - 1, EXACT_TYPE_WORK);
@@ -17616,7 +17727,7 @@ mod tests {
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(constraint_short.constraint_used, EXACT_CONSTRAINT_WORK - 1,);
         assert_eq!(
-            constraint_short.type_used, 5,
+            constraint_short.type_used, 66,
             "constraint failure precedes inherited-role authentication and checked-fact retention",
         );
         assert!(constraint_short.retained.is_none());
@@ -19718,10 +19829,11 @@ mod tests {
                             == Some("dependency.ash".as_ref())
                     })
                     .expect("the implementation-retention dependency should load");
-                let checked_dependency = check_module(
-                    resolve_module(dependency, &[]).expect("the dependency should resolve"),
-                )
-                .expect("the dependency interface should check");
+                let checked = checked_import_dependencies(&graph);
+                let checked_dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == dependency.id())
+                    .unwrap();
                 let entry = graph
                     .module(graph.entry())
                     .expect("the implementation-retention entry should load");

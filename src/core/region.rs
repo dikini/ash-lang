@@ -201,33 +201,25 @@ pub(crate) fn closure_initializer<'a, F: super::dialect::CoreOperationFamily>(
 where
     F::Kind: 'a,
 {
-    use super::{PureComputation, PureExprKind, PureValue, effect::EffectOperation};
-    if let Some(EffectOperation::RegionClosure(closure)) = F::region_construction(kind(root)?) {
+    use super::{PureComputation, PureExprKind, PureValue};
+    if let Some(closure) = F::region_closure(kind(root)?) {
         return Some((root, closure));
     }
     let PureExprKind::Computation(PureComputation::Bind(binding)) = F::pure(kind(root)?)? else {
         return None;
     };
-    let Some(EffectOperation::RegionClosure(closure)) =
-        F::region_construction(kind(binding.body())?)
-    else {
-        return None;
-    };
+    let closure = F::region_closure(kind(binding.body())?)?;
     let api = crate::resolved::RegionApi::for_module(closure.api)?;
     let PureExprKind::Variable(context) = F::pure(kind(closure.context)?)? else {
         return None;
     };
-    let Some(EffectOperation::Request(query)) =
-        F::region_construction(kind(binding.initializer())?)
-    else {
-        return None;
-    };
+    let (effect, operation, operand) = F::request_metadata(kind(binding.initializer())?)?;
     if context.binder() != binding.binder().id()
-        || query.effect().effect() != api.default_alloc()
-        || !query.effect().arguments().is_empty()
-        || query.operation() != crate::types::OperationId::new(api.default_alloc(), 1)
+        || effect.effect() != api.default_alloc()
+        || !effect.arguments().is_empty()
+        || operation != crate::types::OperationId::new(api.default_alloc(), 1)
         || !matches!(
-            F::pure(kind(query.operand())?),
+            F::pure(kind(operand)?),
             Some(PureExprKind::Value(PureValue::Unit(_)))
         )
     {

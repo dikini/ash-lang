@@ -1591,8 +1591,22 @@ pub trait CoreOperationFamily: Clone + Copy + fmt::Debug + Eq + PartialEq + 'sta
     fn from_operation(operation: Self::Operation) -> Self::Kind;
     /// Borrows an ordinary Core feature when present.
     fn pure(kind: &Self::Kind) -> Option<&PureExprKind>;
-    /// Borrows explicit region construction metadata for guarded-data checking.
-    fn region_construction(_kind: &Self::Kind) -> Option<&super::effect::EffectOperation> {
+    /// Borrows stored closure metadata without exposing a dialect's operation sum.
+    fn region_closure(_kind: &Self::Kind) -> Option<&super::region::RegionClosureNode> {
+        None
+    }
+    /// Borrows record construction metadata for guarded recursive data.
+    fn region_tuple(_kind: &Self::Kind) -> Option<&super::region::RegionTupleNode> {
+        None
+    }
+    /// Borrows the exact request fields; consumers still authenticate its shape.
+    fn request_metadata(
+        _kind: &Self::Kind,
+    ) -> Option<(
+        &crate::types::EffectInstance,
+        crate::types::OperationId,
+        NodeId,
+    )> {
         None
     }
     /// Mutably borrows an ordinary Core feature when present.
@@ -2226,12 +2240,20 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         registry: Arc<ResolvedRegistry>,
         rewrite_type_work: TypeWorkBudget,
     ) -> Self {
+        Self::with_registry_and_arena_work(registry, TypeWorkBudget::default(), rewrite_type_work)
+    }
+
+    pub(crate) fn with_registry_and_arena_work(
+        registry: Arc<ResolvedRegistry>,
+        type_work: TypeWorkBudget,
+        rewrite_type_work: TypeWorkBudget,
+    ) -> Self {
         Self::from_catalogs(
             registry,
             Arc::clone(empty_method_evidence()),
             Vec::new(),
             Vec::new(),
-            TypeWorkBudget::default(),
+            type_work,
             rewrite_type_work,
         )
     }
@@ -2299,12 +2321,21 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         method_evidence: Arc<MethodEvidenceCatalog>,
         rewrite_type_work: TypeWorkBudget,
     ) -> Result<Self, BuildError> {
-        Self::with_catalogs_and_type_work(
+        Self::with_registry_method_evidence_and_arena_work(
             registry,
             method_evidence,
             TypeWorkBudget::default(),
             rewrite_type_work,
         )
+    }
+
+    pub(crate) fn with_registry_method_evidence_and_arena_work(
+        registry: Arc<ResolvedRegistry>,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+        type_work: TypeWorkBudget,
+        rewrite_type_work: TypeWorkBudget,
+    ) -> Result<Self, BuildError> {
+        Self::with_catalogs_and_type_work(registry, method_evidence, type_work, rewrite_type_work)
     }
 
     fn with_catalogs_and_type_work(
@@ -2623,7 +2654,10 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         });
         self.consumed_method_evidence[expectation] = true;
         if let Some(row) = computation_row {
-            self.nodes[row_node].effects = F::store_effects(row);
+            F::discard_effects(std::mem::replace(
+                &mut self.nodes[row_node].effects,
+                F::store_effects(row),
+            ));
         }
         Ok(())
     }

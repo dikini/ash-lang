@@ -1141,12 +1141,49 @@ pub(in crate::core) fn closure_capture_binders<F: CoreOperationFamily>(
     Ok(binders)
 }
 
-pub(crate) fn prepare_region_closure(
+pub(crate) fn prepare_region_closures(
+    builder: &mut CoreBuilder<super::effect::EffectOperationFamily>,
+    pending: &[(NodeId, NodeId)],
+    methods: &[MethodUse],
+    roots: &[(BinderId, NodeId)],
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let mut variables = HashMap::new();
+    for (ordinal, candidate) in builder.nodes.iter().enumerate() {
+        charge(budget, 1)?;
+        if let super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable)) =
+            &candidate.kind
+            && !variables.contains_key(&variable.binder())
+        {
+            charge(budget, 1)?;
+            variables.try_reserve(1).map_err(|_| Failure::Resource)?;
+            variables.insert(variable.binder(), ordinal);
+        }
+    }
+    for &(node, request) in pending {
+        prepare_region_closure(
+            builder,
+            node,
+            request,
+            methods,
+            roots,
+            &mut variables,
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
+fn prepare_region_closure(
     builder: &mut CoreBuilder<super::effect::EffectOperationFamily>,
     node: NodeId,
     request: NodeId,
     methods: &[MethodUse],
     roots: &[(BinderId, NodeId)],
+    variables: &mut HashMap<BinderId, usize>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
     let super::effect::EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) =
@@ -1166,19 +1203,15 @@ pub(crate) fn prepare_region_closure(
         .try_reserve_exact(binders.len())
         .map_err(|_| Failure::Resource)?;
     for binder in binders {
-        let mut found = None;
-        for (ordinal, candidate) in builder.nodes.iter().enumerate() {
-            charge(budget, 1)?;
-            if matches!(&candidate.kind, super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == binder)
-            {
-                found = Some(
-                    builder
-                        .node_at_ordinal(node, ordinal)
-                        .map_err(|_| Failure::Invalid)?,
-                );
-                break;
-            }
-        }
+        charge(budget, 1)?;
+        let mut found = variables
+            .get(&binder)
+            .map(|&ordinal| {
+                builder
+                    .node_at_ordinal(node, ordinal)
+                    .map_err(|_| Failure::Invalid)
+            })
+            .transpose()?;
         if found.is_none() {
             // Source method selection can name an authenticated completed
             // callable without a literal Variable occurrence in its body.
@@ -1209,15 +1242,19 @@ pub(crate) fn prepare_region_closure(
                 }
             }
             if let Some((ty, origin)) = declaration {
+                charge(budget, 1)?;
+                variables.try_reserve(1).map_err(|_| Failure::Resource)?;
                 let ty = crate::types::clone_type_with_budget(ty, budget)
                     .map_err(|()| Failure::Resource)?;
                 let origin = origin.cloned().ok_or(Failure::Invalid)?;
+                let ordinal = builder.nodes.len();
                 found = Some(builder.variable(binder, ty, origin).map_err(
                     |error| match error {
                         super::BuildError::TypeWorkExceeded => Failure::Resource,
                         _ => Failure::Invalid,
                     },
                 )?);
+                variables.insert(binder, ordinal);
             }
         }
         captures.push(found.ok_or(Failure::Invalid)?);
@@ -2551,6 +2588,10 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
 }
 
 #[inline(never)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The source/data graphs, optional callable domain and cumulative work owner are separate compiler inputs."
+)]
 fn compile_with_boundary<F: CoreOperationFamily>(
     nodes: &[StoredNode<F>],
     values: &[Value],
@@ -4456,9 +4497,58 @@ mod tests {
         }
     }
 
+    fn resolved_entry_with_checked_dependencies(
+        graph: &crate::module::ModuleGraph,
+    ) -> (
+        crate::resolved::ResolvedModule,
+        Vec<crate::resolved::CheckedModule>,
+    ) {
+        use crate::resolve::{DependencyExports, resolve_module};
+        let mut checked = Vec::<crate::resolved::CheckedModule>::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(module, &dependencies).unwrap();
+            if module.id() == graph.entry() {
+                return (resolved, checked);
+            }
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
+        panic!("entry module is present");
+    }
+
+    fn validate_checked_core(
+        core: super::super::effect::UnvalidatedEffectProgram,
+        provenance: &[(crate::module::ModuleId, SourceFile)],
+    ) -> Result<super::super::effect::ValidatedEffectProgram, super::super::validate::ValidationError>
+    {
+        let sources = provenance
+            .iter()
+            .map(|(_, source)| source)
+            .collect::<Vec<_>>();
+        let modules = provenance
+            .iter()
+            .map(|(module, source)| (*module, source.id()))
+            .collect::<Vec<_>>();
+        super::super::validate_effect_modules(core, &sources, &modules)
+    }
+
     fn checked_core() -> (
         super::super::UnvalidatedEffectProgram,
-        SourceFile,
+        Vec<(crate::module::ModuleId, SourceFile)>,
         BinderId,
         BinderId,
     ) {
@@ -4475,7 +4565,7 @@ mod tests {
         text: &str,
     ) -> (
         super::super::UnvalidatedEffectProgram,
-        SourceFile,
+        Vec<(crate::module::ModuleId, SourceFile)>,
         BinderId,
         BinderId,
     ) {
@@ -4483,7 +4573,6 @@ mod tests {
             elaborate::{EffectElaborator, check_module, link_modules},
             evidence_validation::validate_interface_evidence,
             module::{ModuleRoots, load_module_graph},
-            resolve::resolve_module,
         };
         let source_identity = SourceFile::new("capture-test-id", "").unwrap().id().value();
         let path = std::env::temp_dir().join(format!(
@@ -4494,8 +4583,8 @@ mod tests {
         let loaded = load_module_graph(&path, &ModuleRoots::empty());
         std::fs::remove_file(path).unwrap();
         let graph = loaded.unwrap();
-        let module = graph.module(graph.entry()).unwrap();
-        let checked = check_module(resolve_module(module, &[]).unwrap()).unwrap();
+        let (resolved, mut dependencies) = resolved_entry_with_checked_dependencies(&graph);
+        let checked = check_module(resolved).unwrap();
         let good = checked
             .schemes()
             .iter()
@@ -4508,8 +4597,9 @@ mod tests {
             .find(|scheme| scheme.spelling == "bad")
             .unwrap()
             .binder;
+        dependencies.push(checked);
         let linked =
-            validate_interface_evidence(link_modules(vec![checked], graph.entry()).unwrap())
+            validate_interface_evidence(link_modules(dependencies, graph.entry()).unwrap())
                 .unwrap();
         let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
         let root = elaborator
@@ -4518,7 +4608,11 @@ mod tests {
             .node;
         (
             elaborator.finish(root).unwrap(),
-            module.source().clone(),
+            graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().clone()))
+                .collect(),
             good,
             bad,
         )
@@ -4526,7 +4620,7 @@ mod tests {
 
     #[test]
     fn request_identity_is_independent_of_shared_core_origins() {
-        use super::super::{EffectExprKind, validate_effect};
+        use super::super::EffectExprKind;
         let (mut core, source, _, _) = checked_core_text(concat!(
             "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\neffect C {\nask : Unit -> Unit\n}\n",
             "good : Unit -> Unit ! {B}\ngood () = perform B.ask ()\nbad : Unit -> Unit ! {B}\nbad () = perform B.ask ()\n",
@@ -4557,7 +4651,7 @@ mod tests {
             }
         }
         assert!(sites >= 5);
-        validate_effect(core, &[&source])
+        validate_checked_core(core, &source)
             .expect("shared diagnostic provenance cannot merge suspension sites");
     }
 
@@ -4655,9 +4749,9 @@ mod tests {
 
     #[test]
     fn final_core_recomputes_owned_capture_after_same_typed_call_target_change() {
-        use super::super::{EffectExprKind, validate_effect, variable::VariableNode};
+        use super::super::{EffectExprKind, variable::VariableNode};
         let (core, source, _, _) = checked_core();
-        validate_effect(core, &[&source]).expect("honest checked helper is safe");
+        validate_checked_core(core, &source).expect("honest checked helper is safe");
         let (mut core, source, good, bad) = checked_core();
         let mut replacements = 0;
         for node in &mut core.nodes {
@@ -4668,7 +4762,7 @@ mod tests {
             }
         }
         assert_eq!(replacements, 1);
-        let validated = validate_effect(core, &[&source])
+        let validated = validate_checked_core(core, &source)
             .expect("the changed target's captured clause is structurally owned");
         assert!(matches!(
             crate::eval::evaluate_effect(&validated).unwrap().value,
@@ -4678,16 +4772,19 @@ mod tests {
 
     #[test]
     fn final_core_recomputes_registration_callback_completion_from_actual_target() {
-        use super::super::{EffectExprKind, validate_effect, variable::VariableNode};
+        use super::super::{EffectExprKind, variable::VariableNode};
         let source = "effect Adjust {\npublish : Int -> Int\n}\neffect Stop {\nstop : Int -> Int\n}\ngood : Int -> Int ! {Stop}\ngood value = value\nbad : Int -> Int ! {Stop}\nbad value = perform Stop.stop value\nmain : Unit -> Int\nmain () = handle (hook Adjust {\nregister Adjust good {\nperform Adjust.publish 42\n}\n}) with Stop {\nstop value => {\nlet done = discard\nvalue\n}\n}\n";
-        let (core, file, good, _) = checked_core_text(source);
+        let (core, file, _, _) = checked_core_text(source);
         super::super::validate::registration_proof_check(
             &core,
-            &[&file],
-            &[(good.module().unwrap(), file.id())],
+            &file.iter().map(|(_, source)| source).collect::<Vec<_>>(),
+            &file
+                .iter()
+                .map(|(module, source)| (*module, source.id()))
+                .collect::<Vec<_>>(),
         )
         .unwrap();
-        let validated = validate_effect(core, &[&file]).unwrap();
+        let validated = validate_checked_core(core, &file).unwrap();
         assert_eq!(
             crate::eval::evaluate_effect(&validated)
                 .unwrap()
@@ -4717,11 +4814,13 @@ mod tests {
             };
             assert_eq!(binding_type(good), binding_type(bad));
             if pass > 0 {
-                let module = good.module().unwrap();
                 let program = super::super::validate::registration_proof_program(
                     core,
-                    &[&file],
-                    &[(module, file.id())],
+                    &file.iter().map(|(_, source)| source).collect::<Vec<_>>(),
+                    &file
+                        .iter()
+                        .map(|(module, source)| (*module, source.id()))
+                        .collect::<Vec<_>>(),
                 );
                 core = if pass == 1 {
                     super::super::transform::identity_effect_traversal(&program)
@@ -4742,11 +4841,14 @@ mod tests {
             assert_eq!(replacements, 1);
             super::super::validate::registration_proof_check(
                 &core,
-                &[&file],
-                &[(good.module().unwrap(), file.id())],
+                &file.iter().map(|(_, source)| source).collect::<Vec<_>>(),
+                &file
+                    .iter()
+                    .map(|(module, source)| (*module, source.id()))
+                    .collect::<Vec<_>>(),
             )
             .expect("the callback's publication and registration are owned by this capture");
-            let validated = validate_effect(core, &[&file]).unwrap();
+            let validated = validate_checked_core(core, &file).unwrap();
             assert_eq!(
                 crate::eval::evaluate_effect(&validated)
                     .unwrap()
@@ -4760,10 +4862,9 @@ mod tests {
     #[test]
     fn raw_core_rejects_skipped_completion_and_restored_live_owners() {
         use crate::{
-            core::{ValidationReason, validate_effect},
+            core::{ValidationReason, validate_effect_modules},
             elaborate::{EffectElaborator, TypeContext},
             module::{ModuleRoots, load_module_graph},
-            resolve::resolve_module,
             resolved::ResolvedDefinitionKind,
         };
         for (case, body) in [
@@ -4782,8 +4883,7 @@ mod tests {
             let loaded = load_module_graph(&path, &ModuleRoots::empty());
             std::fs::remove_file(path).unwrap();
             let graph = loaded.unwrap();
-            let module = graph.module(graph.entry()).unwrap();
-            let resolved = resolve_module(module, &[]).unwrap();
+            let (resolved, _checked) = resolved_entry_with_checked_dependencies(&graph);
             let ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[0].kind else {
                 panic!("equational main")
             };
@@ -4794,7 +4894,9 @@ mod tests {
                 .synthesize(expression, &TypeContext::new())
                 .expect("ordinary typing precedes capture proof");
             let core = elaborator.finish(typed.node).unwrap();
-            let result = validate_effect(core, &[module.source()]);
+            let sources = graph.modules().iter().map(|module| module.source()).collect::<Vec<_>>();
+            let modules = graph.modules().iter().map(|module| (module.id(), module.source().id())).collect::<Vec<_>>();
+            let result = validate_effect_modules(core, &sources, &modules);
             if case == 0 {
                 assert_eq!(result.expect_err("outside live clause remains protected").reason(), ValidationReason::DiscardUnsafe);
             } else {
@@ -4807,8 +4909,7 @@ mod tests {
     #[test]
     fn raw_core_preserves_the_selected_capture_prefix() {
         use super::super::{
-            EffectExprKind, binding::BindingNode, effect::DiscardNode, validate_effect,
-            variable::TypedBinder,
+            EffectExprKind, binding::BindingNode, effect::DiscardNode, variable::TypedBinder,
         };
         const ORIGINAL_CLAUSE: &str = concat!(
             "        ask ignored => handle ({\n",
@@ -4847,7 +4948,7 @@ mod tests {
                 fixture.replace("discard", "resume ()")
             );
             let (honest, honest_source, _, _) = checked_core_text(&text);
-            validate_effect(honest, &[&honest_source])
+            validate_checked_core(honest, &honest_source)
                 .expect("resume-only fixture has independently valid Core");
             let (mut core, source, _, _) = checked_core_text(&text);
             let id = core
@@ -4878,6 +4979,9 @@ mod tests {
             });
             // Keep the old operand reachable and strict without changing the
             // completion choice or relying on an unreachable-node exemption.
+            // Resume carries its owner's continuation row; this replacement
+            // executes only the strict Unit operand and the pure discard.
+            core.nodes[id].effects = EffectRow::empty();
             core.nodes[id].kind = EffectExprKind::Pure(PureExprKind::Computation(
                 PureComputation::Bind(BindingNode::new(
                     TypedBinder::new(core.arena, BinderId::new(u32::MAX), Type::Unit, origin),
@@ -4885,7 +4989,7 @@ mod tests {
                     tail,
                 )),
             ));
-            let validated = validate_effect(core, &[&source]).expect(
+            let validated = validate_checked_core(core, &source).expect(
                 "prefix clauses are either consumed outside or owned inside the selected capture",
             );
             assert!(matches!(
@@ -4898,8 +5002,7 @@ mod tests {
     #[test]
     fn linked_core_reselects_handlers_when_type_instances_coincide() {
         use super::super::{
-            EffectExprKind, binding::BindingNode, effect::DiscardNode, validate_effect_modules,
-            variable::TypedBinder,
+            EffectExprKind, binding::BindingNode, effect::DiscardNode, variable::TypedBinder,
         };
         for argument in ["(1, true)", "(1, 1)"] {
             let text = format!(
@@ -4912,8 +5015,7 @@ mod tests {
             let start = text.find("DISCARD_SITE").unwrap();
             let text = text.replace("DISCARD_SITE", "resume ()");
             let (honest, source, _, _) = checked_core_text(&text);
-            let module = honest.registry.effects().first().unwrap().id.module();
-            validate_effect_modules(honest, &[&source], &[(module, source.id())])
+            validate_checked_core(honest, &source)
                 .expect("resume-only specialization is valid linked Core");
             let (mut core, source, _, _) = checked_core_text(&text);
             let id = core
@@ -4942,6 +5044,9 @@ mod tests {
                 origin: Some(origin.clone()),
                 kind: EffectExprKind::Operation(EffectOperation::Discard(discard)),
             });
+            // Resume carries its owner's continuation row; this replacement
+            // executes only the strict Unit operand and the pure discard.
+            core.nodes[id].effects = EffectRow::empty();
             core.nodes[id].kind = EffectExprKind::Pure(PureExprKind::Computation(
                 PureComputation::Bind(BindingNode::new(
                     TypedBinder::new(core.arena, BinderId::new(u32::MAX), Type::Unit, origin),
@@ -4949,8 +5054,7 @@ mod tests {
                     tail,
                 )),
             ));
-            let module = core.registry.effects().first().unwrap().id.module();
-            let validated = validate_effect_modules(core, &[&source], &[(module, source.id())])
+            let validated = validate_checked_core(core, &source)
                 .expect("coincident specialized handlers add only structurally owned clauses");
             assert!(matches!(
                 crate::eval::evaluate_effect(&validated).unwrap().value,

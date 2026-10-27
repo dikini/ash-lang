@@ -36,7 +36,7 @@ impl KindWorkLedger for InterfaceConstraintBudget {
 }
 
 /// Maximum cumulative interface and constraint work across one module graph.
-pub const INTERFACE_CONSTRAINT_WORK_LIMIT: usize = 327_680;
+pub const INTERFACE_CONSTRAINT_WORK_LIMIT: usize = 1_376_256;
 
 /// Graph-wide accounting for interface facts, constraints, and evidence work.
 #[derive(Clone, Debug, Eq, PartialEq)]

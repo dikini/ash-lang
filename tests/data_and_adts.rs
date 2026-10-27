@@ -8,19 +8,21 @@ mod support;
 
 use ash::{
     core::{
-        NodeId, PureComputation, PureExprKind, ValidatedProgram,
-        transform::{fold_literal_primitives, identity_traversal},
-        validate, validate_modules,
+        EffectExprKind, EffectOperation, NodeId, PureComputation, PureExprKind, PureValue,
+        ValidatedEffectProgram,
+        transform::{fold_effect_literal_primitives, identity_effect_traversal},
+        validate, validate_effect_modules,
     },
     driver::{Observation, PipelineFailure},
-    elaborate::{ElaborationFailure, Elaborator, TypeError, check_module, link_modules},
-    eval::{TraceEvent, evaluate},
+    elaborate::{EffectElaborator, ElaborationFailure, TypeError, check_module, link_modules},
+    eval::{TraceEvent, evaluate, evaluate_effect},
     evidence_validation::validate_interface_evidence,
     module::{ModuleId, ModuleRoots, load_module_graph},
     parser::{ResourceFailure, SYNTAX_WORK_LIMIT},
     render,
-    resolve::resolve_module,
-    source::SourceFile,
+    resolve::{DependencyExports, resolve_module},
+    resolved::CheckedModule,
+    source::{SourceFile, SourceId},
     types::Type,
 };
 use support::run_module;
@@ -28,9 +30,10 @@ use support::run_module;
 static CORE_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 struct StructuralProgram {
-    program: ValidatedProgram,
+    program: ValidatedEffectProgram,
     source: SourceFile,
-    module: ModuleId,
+    sources: Vec<SourceFile>,
+    module_sources: Vec<(ModuleId, SourceId)>,
     ty: Type,
 }
 
@@ -56,35 +59,59 @@ fn elaborated_module(text: &str) -> StructuralProgram {
         .iter()
         .find(|module| module.id() == graph.entry())
         .expect("entry module should remain loaded");
-    assert!(loaded.dependencies().is_empty());
-    let resolved = resolve_module(loaded, &[]).expect("Core fixture should resolve");
-    let checked = check_module(resolved).expect("Core fixture should check");
-    let linked =
-        link_modules(vec![checked], graph.entry()).expect("checked Core fixture should link");
+    let mut checked = Vec::<CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let target = checked
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("each actual dependency should check first");
+                DependencyExports::new(edge, target.exports())
+                    .expect("the summary should match its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies).expect("Core fixture should resolve");
+        checked.push(check_module(resolved).expect("Core fixture should check"));
+    }
+    let linked = link_modules(checked, graph.entry()).expect("checked Core fixture should link");
     let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("Core namespace should fit");
+        EffectElaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("Core fixture should elaborate");
     let ty = typed.ty;
     let unchecked = elaborator.finish(typed.node).expect("Core should finish");
     let source = loaded.source().clone();
-    let module = graph.entry();
-    let program = validate_modules(unchecked, &[&source], &[(module, source.id())])
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source().clone())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let refs = sources.iter().collect::<Vec<_>>();
+    let program = validate_effect_modules(unchecked, &refs, &module_sources)
         .expect("Core fixture should validate");
     fs::remove_dir_all(directory).expect("Core fixture directory should be removable");
     StructuralProgram {
         program,
         source,
-        module,
+        sources,
+        module_sources,
         ty,
     }
 }
 
 fn find_core_node(
-    program: &ValidatedProgram,
-    mut predicate: impl FnMut(&PureExprKind) -> bool,
+    program: &ValidatedEffectProgram,
+    mut predicate: impl FnMut(&EffectExprKind) -> bool,
 ) -> Option<NodeId> {
     let mut pending = vec![program.root()];
     while let Some(id) = pending.pop() {
@@ -103,9 +130,10 @@ fn find_core_node(
 fn shared_pipeline_elaborates_and_validates_finite_data_core() {
     let StructuralProgram {
         program,
-        source,
-        module,
+        sources,
+        module_sources,
         ty,
+        ..
     } = elaborated_module(
         "type Wrapped =\nWrap(Int)\n\nmain : Unit -> Int\nmain () = match Wrap(40 + 2) {\nWrap(value) => value\n}\n",
     );
@@ -114,32 +142,37 @@ fn shared_pipeline_elaborates_and_validates_finite_data_core() {
     assert!(
         find_core_node(&program, |kind| matches!(
             kind,
-            PureExprKind::Computation(PureComputation::Match(_))
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(_)))
         ))
         .is_some()
     );
     assert_eq!(
-        evaluate(&program)
+        evaluate_effect(&program)
             .expect("retained machine")
             .value
             .to_string(),
         "42"
     );
-    let transformed = identity_traversal(&program).expect("identity transform");
-    let transformed = validate_modules(transformed, &[&source], &[(module, source.id())])
-        .expect("transformed validation");
+    let transformed = identity_effect_traversal(&program).expect("identity transform");
+    let transformed = validate_effect_modules(
+        transformed,
+        &sources.iter().collect::<Vec<_>>(),
+        &module_sources,
+    )
+    .expect("transformed validation");
     assert_eq!(
-        evaluate(&transformed)
+        evaluate_effect(&transformed)
             .expect("transformed retained machine")
             .value
             .to_string(),
         "42"
     );
-    let folded = fold_literal_primitives(&program).expect("literal transform");
+    let folded = fold_effect_literal_primitives(&program).expect("literal transform");
     let folded =
-        validate_modules(folded, &[&source], &[(module, source.id())]).expect("folded validation");
+        validate_effect_modules(folded, &sources.iter().collect::<Vec<_>>(), &module_sources)
+            .expect("folded validation");
     assert_eq!(
-        evaluate(&folded)
+        evaluate_effect(&folded)
             .expect("folded retained machine")
             .value
             .to_string(),
@@ -149,63 +182,91 @@ fn shared_pipeline_elaborates_and_validates_finite_data_core() {
 
 #[test]
 fn constructor_tuple_payloads_enter_elements_strictly_left_to_right() {
-    let StructuralProgram { program, .. } = elaborated_module(
+    let StructuralProgram {
+        program, source, ..
+    } = elaborated_module(
         "type Pair =\nPair(Int, Int)\n\nmain : Unit -> Pair\nmain () = Pair(20, 22)\n",
     );
+    let pair_type = Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice());
     let application_id = find_core_node(&program, |kind| match kind {
-        PureExprKind::Computation(PureComputation::Apply(application)) => program
-            .node(application.argument())
-            .is_some_and(|argument| {
-                matches!(
-                    argument.kind,
-                    PureExprKind::Computation(PureComputation::Tuple(_))
-                )
-            }),
+        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) => {
+            program
+                .node(application.argument())
+                .is_some_and(|argument| {
+                    argument.ty == pair_type
+                        && argument.origin.primary_span().source() == source.id()
+                })
+        }
         _ => false,
     })
-    .expect("constructor application");
-    let application = match &program
-        .node(application_id)
-        .expect("constructor application")
-        .kind
-    {
-        PureExprKind::Computation(PureComputation::Apply(application)) => application,
-        _ => unreachable!("the selected node is an application"),
+    .expect("the original source constructor application");
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
+        &program.node(application_id).unwrap().kind
+    else {
+        unreachable!()
     };
     let argument = program
         .node(application.argument())
-        .expect("tuple argument");
-    let PureExprKind::Computation(PureComputation::Tuple(tuple)) = &argument.kind else {
-        panic!("expected tuple payload")
+        .expect("the source tuple argument");
+    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+        &argument.kind
+    else {
+        panic!("the tuple argument should retain its allocation context binding")
     };
-    let evaluation = evaluate(&program).expect("constructor application should evaluate");
-    let entered = evaluation
+    let tuple = program
+        .node(binding.body())
+        .expect("the actual tuple initializer");
+    assert!(matches!(
+        tuple.kind,
+        EffectExprKind::Operation(EffectOperation::RegionTuple(_))
+    ));
+    assert_eq!(tuple.ty, pair_type);
+    assert_eq!(tuple.origin.primary_span(), argument.origin.primary_span());
+    let elements = (0..tuple.kind.child_count())
+        .filter_map(|index| tuple.kind.child_at(index))
+        .filter(|id| program.node(*id).is_some_and(|node| node.ty == Type::Int))
+        .collect::<Vec<_>>();
+    let [left, right] = elements.as_slice() else {
+        panic!("the tuple retains exactly two original Int operands")
+    };
+    for (id, text) in [(*left, "20"), (*right, "22")] {
+        let operand = program.node(id).unwrap();
+        let EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer))) = &operand.kind
+        else {
+            panic!("the original operand remains an integer literal")
+        };
+        assert_eq!(integer.value().to_string(), text);
+        let span = operand.origin.primary_span();
+        let start = source.text().find(text).unwrap() as u32;
+        assert_eq!(span.source(), source.id());
+        assert_eq!(span.range().start(), start);
+        assert_eq!(span.range().end(), start + 2);
+    }
+    for id in [
+        application_id,
+        application.function(),
+        application.argument(),
+    ] {
+        assert_eq!(
+            program.node(id).unwrap().origin.primary_span().source(),
+            source.id()
+        );
+    }
+    let evaluation = evaluate_effect(&program).expect("constructor application should evaluate");
+    let expected = vec![
+        application_id,
+        application.function(),
+        application.argument(),
+        *left,
+        *right,
+    ];
+    let relevant = evaluation
         .trace
         .iter()
-        .map(|event| match event {
-            TraceEvent::Enter(node) => *node,
-        })
+        .map(|TraceEvent::Enter(node)| *node)
+        .filter(|id| expected.contains(id))
         .collect::<Vec<_>>();
-    let relevant = entered
-        .into_iter()
-        .filter(|node| {
-            *node == application_id
-                || *node == application.function()
-                || *node == application.argument()
-                || tuple.elements().contains(node)
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        relevant,
-        vec![
-            application_id,
-            application.function(),
-            application.argument(),
-            tuple.elements()[0],
-            tuple.elements()[1],
-        ]
-    );
+    assert_eq!(relevant, expected);
 }
 
 #[test]
@@ -227,7 +288,7 @@ fn shared_pipeline_validates_equations_tuple_domains_and_local_patterns() {
         let StructuralProgram { program, ty, .. } = elaborated_module(text);
         assert_eq!(ty, Type::Int);
         assert_eq!(
-            evaluate(&program)
+            evaluate_effect(&program)
                 .expect("retained machine")
                 .value
                 .to_string(),
@@ -829,7 +890,32 @@ fn ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack() {
             }
             source.push_str("value0\n}\n");
 
-            let observation = run(&source);
+            let directory = loop {
+                let id = CORE_TEMP_IDS.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "ash-data-cycle-{}-{id}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&path) {
+                    Ok(()) => break path,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("cycle fixture directory should be creatable: {error}"),
+                }
+            };
+            let entry = directory.join("data-and-adts.ash");
+            fs::write(&entry, &source).expect("cycle fixture should be writable");
+            let result = ash::driver::run_path(ash::driver::RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty(),
+            });
+            let _ = fs::remove_dir_all(directory);
+            let observation = result.unwrap_or_else(|failure| {
+                panic!(
+                    "cycle fixture should run; compilation work: {:?}; full failure: {failure:?}",
+                    failure.compilation_work(),
+                )
+            });
+            eprintln!("cycle compilation work: {:?}", observation.compilation_work());
             assert_eq!(observation.type_display(), "Chain");
             let rendered = observation.value_display();
             assert!(rendered.starts_with("Link(Link(Link("));

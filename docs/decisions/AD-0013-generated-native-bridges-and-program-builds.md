@@ -64,22 +64,24 @@ owners and for native preparation and startup. The accepted policy is:
 
 ```text
 preparation gas = 850 * (admitted source UTF8 bytes + validated main Core nodes)
-source gas      = 3900 * (canonical loaded source UTF8 bytes, including builtins)
+resolution gas  = max(327680, 80 * (canonical loaded source UTF8 bytes, including builtins))
+source gas      = 10000 * (canonical loaded source UTF8 bytes, including builtins)
 final gas       = 800 * (the same canonical source UTF8 closure)
+builder gas     = max(327680, 8 * (the same canonical source UTF8 closure)), per program arena
 rewrite gas     = 16 * (the same canonical source UTF8 closure), per compiler arena
-Core gas        = 6200 * (the same canonical source UTF8 closure)
+Core gas        = 25000 * (the same canonical source UTF8 closure)
 startup gas     = 118 * (canonical image bytes + canonical expected-fact bytes)
 ```
 
 Source checking sizes the complete canonical loaded source closure before
 checking. Count each loaded module once, including builtin sources, rather than
 import edges or aliases. Pay one unit per source and one for the census in a
-finite source-count-derived bootstrap, then carry that work inside `3900*S`
+finite source-count-derived bootstrap, then carry that work inside `10000*S`
 through every module, source copy, closed entry and retained provenance. This is
 the total allowance; the historical ten-percent deficit does not apply.
 Final elaboration and independent compiler Core each pay their own identical
 resident-length census before work begins and carry it inside their respective
-`800*S` and `6200*S` totals. Apply this at both Pure and Effect modular driver
+`800*S` and `25000*S` totals. Apply this at both Pure and Effect modular driver
 entries. Their existing remaining-credit loans debit the same cumulative meter.
 These totals have no historical extra ten percent.
 
@@ -90,6 +92,132 @@ inherits only the allowance, never spent work or unused Source/Final credit.
 Reject multiplication overflow. There is no floor, intercept, refill or extra
 margin. Generic builder, standalone and private-image defaults remain unchanged;
 resolution, constraints and other construction budgets remain separate.
+
+Program arenas also receive a separate primary payload-construction allowance
+`max(327680, 12*S)` from that paid census. Install it before catalog precharges;
+each arena starts with fresh independent primary and rewrite meters. Primary
+construction remains excluded from the Source/Final reports. Standalone,
+default and private-image primary limits retain their existing capacities.
+
+Public standalone Source checking has a separate current exception. The public
+`check_module` entry uses one cumulative 15,663,104 structural-work-unit allowance
+per module, with the existing Structural diagnostic calibration override. It
+carries that same owner through body checking and export collection/freeze.
+Explicit `check_module_with_budget` callers and driver Source phase policies
+retain their supplied limits; this is not graph-wide credit or a refill.
+
+The graph-wide interface-and-constraint default is 1,376,256 work units. One
+owner persists through dependency admission, checking, linking and independent
+evidence validation, with the existing Structural calibration override. A finite
+constraint-only completion probe on unchanged interface graphs measured 368,276
+units at 2,800 monomorphic interfaces, 590,976 at 4,500, and 1,096,476 at 5,000
+polymorphic interfaces. The genuine 4,500-interface cycle reached its semantic
+failure at 352,321 units. The largest completed owner gives a 25% reserve target
+of 1,370,595; rounding to a 65,536-work-unit step gives 1,376,256, a 25.5163%
+reserve. These are work units, not memory sizes. Explicit caller budgets and all
+Type, primary, rewrite, private-image and coverage defaults remain unchanged.
+The earlier 327,680-unit refusal remains an explicit driver control, and a
+400,000-unit owner preserves the wide graph's no-refill validation boundary.
+No standalone resolution-Type allowance changes to rescue a test setup.
+
+The original 128-method and 192-function publication witnesses completed with a
+finite diagnostic Source-only allowance of 1,310,720 units. Their defining
+module owners used 366,561 and 534,701; entry owners used 71,000 and 201,323,
+while independent foreign/region owners used 442 and 3,575 each. Do not sum those
+independent owners to fit a module limit. The largest completed owner, 534,701,
+has an integer 25% reserve target of 668,377. Rounding to the next 65,536-work-unit
+step selected the earlier 720,896 allowance, giving 34.82% reserve over that
+completed cost. This is a work allowance, not a memory size. The diagnostic probes still reached the
+original stale two-versus-four module census; normal verification corrects only
+that census to exact graph identities and retains the original programs and
+public default-checking route. Earlier unchanged-standalone Source statements
+describe the policies before this narrow exception, not a current global claim.
+
+The unchanged recursive resource fixtures then exposed the larger completed
+Source cost of capture/control publication. Four independent entry owners
+completed at 799,093, 828,475, 852,554 and 4,220,960 units; their intended
+`ResourceEscape` negative companions retained their source diagnostics. The
+original 24-scope/256 KiB fresh-process witness completed at 12,517,818 units
+under a finite Source-only diagnostic allowance. Its earlier 11,534,334-unit
+refusal is a truncated prefix, not a completed cost. All temporary probes were
+restored exactly. The largest complete owner has a ceiling 25% reserve target
+of 15,647,273; the next 65,536-work-unit step is 15,663,104, giving 25.1265%
+reserve. This replaces the earlier fixed 720,896 fit, without a new scaling
+rule, changed capture semantics or work sharing between independent owners.
+
+
+On 2026-10-26 the unchanged 8,000-member recursive-group/call-chain test exposed
+the fixed primary builder cap and repeated whole-arena variable searches during
+closure preparation. One temporary, charged first-variable index per existing
+batch preserves first-match and fallback behavior. With S = 438,691, Source work
+fell from 519,069,391 to 7,149,428; Final previously exhausted 350,952,800 and then
+completed at 2,296,950. Core completed at 10,731,616. The largest complete primary
+arena used 2,680,644; a 25% fitting reserve requires 3,350,805, covered by
+`8*S = 3,509,528`. Completion diagnostics used a finite `16*S` primary ceiling;
+the normal selected `8*S` policy then passed the original test, including its
+256 KiB worker, evaluation and evidence-envelope assertions. Phase coefficients,
+rewrite ownership and runtime limits are unchanged.
+
+The later unchanged 10,000-member cyclic-data witness at 320 KiB exposed the
+primary `8*S` ceiling during cleanup-row replay, not aggregate Source
+exhaustion. With S = 398,678 it refused a one-cell charge at 3,189,424. A finite
+`16*S` primary diagnostic completed all original render/count/drop assertions;
+its four independent primary arenas used `23`, `117`, `3,430,201` and
+`3,430,528` cells.
+Rewrite work remained separate. The largest complete owner requires 4,288,160
+with the existing 25% reserve. The selected rounded primary coefficient is now
+12: 4,784,136 here, 39.46% above observed use (28.29% of the allowance unused).
+Source, Final and Core completed at 8,654,930, 2,320,736 and 15,063,023 cells.
+No qualifying small replay optimization was established: provisional propagation,
+strict removal and atomic rollback retain distinct obligations. All temporary
+tracing and the diagnostic coefficient were restored before selecting the policy.
+Standalone/default/private-image primary capacities, paid prefixes, independent
+rewrite ownership and every other phase coefficient remain unchanged. Normal
+uninstrumented verification is separate from this completion measurement. The
+selected policy passes the original cycle witness with all three reported phases
+complete at the same measured costs, all 25 driver tests, four policy tests,
+57 builder tests and the exact/short/retry cleanup-row replay test.
+
+Program resolution receives a fresh independent graph-wide allowance
+`max(327680, 80*S)` after the existing paid canonical source census. Check the
+multiplication before applying the floor. Standalone resolvers and explicit
+caller budgets keep their existing limits; Source/Final/Core reports do not
+absorb resolution work. The existing Structural diagnostic override and
+resolution calibration report use this owner's selected allowance.
+
+The unchanged depth-48, width-4 public-route test completed resolution at
+643,634 cells with S = 11,791 under a temporary finite 655,360-cell diagnostic.
+Its normal Source/Final/Core budgets and 320 KiB worker remained unchanged,
+including exact/one-short constraint checks. The 25% fitting target is 804,543;
+the rounded coefficient 80 supplies 943,280. Clone-before-lookup still checks
+complete alternate effect declarations: avoiding the allocation without dropping
+its charged authentication traversal did not offer a material work reduction.
+The fixed standalone capacity and other phase coefficients are unchanged.
+
+The connected R-core check restored the unchanged 24-owner Cell witness.
+Escape payload checks now reuse the existing charged forward boundary walk and
+omit only per-boundary captured prefixes they never consume. Every selected
+owner and payload check remains, in the same order; ordinary capture prefix
+reconstruction is unchanged. At S = 1,791, complete Source work fell from
+21,142,054 to 13,215,994 (37.49%). Final completed at 29,736 and independent
+Core at 33,035,808. Earlier normal and 2× Core refusals were truncated, not
+fitting numerators. The final finite completion used 8× the former Source and
+Core allowances and retained the original result 42, 24 distinct acquisitions
+and exact reverse release assertions.
+
+The 25% fitting targets are Source 16,519,993 and Core 41,294,760. Rounded
+coefficients 10,000 and 25,000 supply 17,910,000 and 44,775,000 respectively
+(about 35.5% reserve). This increases admitted work after the bounded saving;
+it does not claim unchanged cost or a universal complexity guarantee. Canonical
+source counting, paid census, cumulative phase owners, overflow and refusal
+prefixes are unchanged. At that fitting checkpoint, Final 800*S, resolution 80*S
+with its default floor, primary 8*S with its default floor, rewrite 16*S,
+standalone, private-image,
+constraint, depth and production stack limits remain unchanged. Normal-policy
+verification is separate from these finite completion measurements. The
+selected normal policy subsequently passed all 25 original driver tests, four
+policy tests, 78 capture tests, five reporting tests and two observer tests.
+This is focused evidence, not a complete workspace gate.
 
 Preparation reads resident admitted source lengths and main arena length before
 image construction. Pay one unit per source and one for the node count using a

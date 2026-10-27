@@ -90,6 +90,31 @@ fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
     Ok(checked)
 }
 
+fn checked_before(graph: &ModuleGraph, target: &LoadedModule) -> Vec<CheckedModule> {
+    let mut checked: Vec<CheckedModule> = Vec::new();
+    for module in graph.modules() {
+        if module.id() == target.id() {
+            return checked;
+        }
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("dependency order should retain the exact target first");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("checked summary should authenticate its actual edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("preceding module should resolve");
+        checked.push(check_module(resolved).expect("preceding module should check"));
+    }
+    panic!("the graph should contain the target module")
+}
+
 #[test]
 fn determined_interface_methods_cross_a_body_free_dependency_summary() {
     let tree = ModuleTree::create();
@@ -239,16 +264,22 @@ fn hidden_and_opaque_dependents_cross_summaries_without_access_widening() {
         "import base (Hidden)\n",
         &[("base.ash", base_source.as_str())],
     );
-    let base_module = module_named(&hidden_graph, "base.ash");
-    let base_checked = check_module(
-        resolve_module(base_module, &[]).expect("the shared base should resolve independently"),
-    )
-    .expect("the shared base should check independently");
+    let checked = checked_before(&hidden_graph, module_named(&hidden_graph, "entry.ash"));
     let hidden_entry = module_named(&hidden_graph, "entry.ash");
     let hidden_dependencies = hidden_entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, base_checked.exports()).unwrap())
+        .map(|edge| {
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .unwrap()
+        })
         .collect::<Vec<_>>();
     let error = expect_resolution_error(
         resolve_module(hidden_entry, &hidden_dependencies)
@@ -270,16 +301,22 @@ fn hidden_and_opaque_dependents_cross_summaries_without_access_widening() {
     ] {
         let tree = ModuleTree::create();
         let opaque_graph = load(&tree, denied, &[("base.ash", base_source.as_str())]);
-        let base_module = module_named(&opaque_graph, "base.ash");
-        let base_checked = check_module(
-            resolve_module(base_module, &[]).expect("the shared base should resolve independently"),
-        )
-        .expect("the shared base should check independently");
+        let checked = checked_before(&opaque_graph, module_named(&opaque_graph, "entry.ash"));
         let opaque_entry = module_named(&opaque_graph, "entry.ash");
         let opaque_dependencies = opaque_entry
             .dependencies()
             .iter()
-            .map(|edge| DependencyExports::new(edge, base_checked.exports()).unwrap())
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
             .collect::<Vec<_>>();
         let error = expect_resolution_error(
             resolve_module(opaque_entry, &opaque_dependencies)
@@ -421,18 +458,25 @@ fn qualified_public_interface_and_method_keep_their_defining_identities() {
         )],
     );
 
-    let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked = check_module(
-        resolve_module(dependency, &[]).expect("dependency should resolve before the entry"),
-    )
-    .expect("dependency should check before the entry");
+    let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
+    let dependency_checked = checked
+        .iter()
+        .find(|module| module.module() == module_named(&graph, "dependency.ash").id())
+        .expect("the original defining module should remain checked");
     let entry = module_named(&graph, "entry.ash");
     let dependencies = entry
         .dependencies()
         .iter()
         .map(|edge| {
-            DependencyExports::new(edge, dependency_checked.exports())
-                .expect("entry edge should authenticate the dependency summary")
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .expect("entry edge should authenticate the dependency summary")
         })
         .collect::<Vec<_>>();
     let resolved = resolve_module(entry, &dependencies)
@@ -475,18 +519,25 @@ fn targeted_method_import_resolves_without_importing_its_interface_spelling() {
             "pub interface Equal<A> {\nequal : A -> A\n}\n",
         )],
     );
-    let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked = check_module(
-        resolve_module(dependency, &[]).expect("dependency should resolve before the entry"),
-    )
-    .expect("dependency should check before the entry");
+    let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
+    let dependency_checked = checked
+        .iter()
+        .find(|module| module.module() == module_named(&graph, "dependency.ash").id())
+        .expect("the original defining module should remain checked");
     let entry = module_named(&graph, "entry.ash");
     let dependencies = entry
         .dependencies()
         .iter()
         .map(|edge| {
-            DependencyExports::new(edge, dependency_checked.exports())
-                .expect("entry edge should authenticate the dependency summary")
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .expect("entry edge should authenticate the dependency summary")
         })
         .collect::<Vec<_>>();
     let resolved = resolve_module(entry, &dependencies).expect("targeted method should resolve");
@@ -576,15 +627,22 @@ fn private_interface_and_method_are_not_qualified_import_bindings() {
             "interface Equal<A> {\nequal : A -> A\n}\n",
         )],
     );
-    let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked =
-        check_module(resolve_module(dependency, &[]).expect("private dependency should resolve"))
-            .expect("private dependency should check");
+    let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
     let entry = module_named(&graph, "entry.ash");
     let dependencies = entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
+        .map(|edge| {
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .unwrap()
+        })
         .collect::<Vec<_>>();
     let error = expect_resolution_error(
         resolve_module(entry, &dependencies)
@@ -605,15 +663,22 @@ fn private_method_is_not_a_qualified_import_binding() {
             "interface Equal<A> {\nequal : A -> A\n}\n",
         )],
     );
-    let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked =
-        check_module(resolve_module(dependency, &[]).expect("private dependency should resolve"))
-            .expect("private dependency should check");
+    let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
     let entry = module_named(&graph, "entry.ash");
     let dependencies = entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
+        .map(|edge| {
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .unwrap()
+        })
         .collect::<Vec<_>>();
     let error = expect_resolution_error(
         resolve_module(entry, &dependencies)
@@ -703,11 +768,11 @@ fn public_impl_fact_is_available_on_an_explicit_selector_edge() {
             ),
         )],
     );
-    let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked = check_module(
-        resolve_module(dependency, &[]).expect("dependency should resolve before the entry"),
-    )
-    .expect("dependency should check before the entry");
+    let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
+    let dependency_checked = checked
+        .iter()
+        .find(|module| module.module() == module_named(&graph, "dependency.ash").id())
+        .expect("the original defining module should remain checked");
     let [implementation] = dependency_checked.implementation_facts() else {
         panic!("dependency should retain its checked public implementation");
     };
@@ -715,7 +780,17 @@ fn public_impl_fact_is_available_on_an_explicit_selector_edge() {
     let dependencies = entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
+        .map(|edge| {
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .unwrap()
+        })
         .collect::<Vec<_>>();
     let resolved = resolve_module(entry, &dependencies)
         .expect("the explicit selector should retain matching public implementation facts");
@@ -741,11 +816,11 @@ fn private_impl_fact_remains_local_to_its_defining_module() {
             ),
         )],
     );
-    let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked = check_module(
-        resolve_module(dependency, &[]).expect("dependency should resolve before the entry"),
-    )
-    .expect("dependency should check before the entry");
+    let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
+    let dependency_checked = checked
+        .iter()
+        .find(|module| module.module() == module_named(&graph, "dependency.ash").id())
+        .expect("the original defining module should remain checked");
     let [implementation] = dependency_checked.implementation_facts() else {
         panic!("the dependency should retain its private implementation locally");
     };
@@ -753,7 +828,17 @@ fn private_impl_fact_remains_local_to_its_defining_module() {
     let dependencies = entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
+        .map(|edge| {
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .unwrap()
+        })
         .collect::<Vec<_>>();
     let resolved = resolve_module(entry, &dependencies)
         .expect("private implementation metadata should not affect name resolution");
@@ -781,11 +866,11 @@ fn public_impl_retains_its_private_head_identity_as_hidden_metadata() {
             ),
         )],
     );
-    let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked = check_module(
-        resolve_module(dependency, &[]).expect("dependency should resolve before the entry"),
-    )
-    .expect("dependency should check before the entry");
+    let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
+    let dependency_checked = checked
+        .iter()
+        .find(|module| module.module() == module_named(&graph, "dependency.ash").id())
+        .expect("the original defining module should remain checked");
     let [implementation] = dependency_checked.implementation_facts() else {
         panic!("the dependency should retain its public implementation");
     };
@@ -798,7 +883,17 @@ fn public_impl_retains_its_private_head_identity_as_hidden_metadata() {
     let dependencies = entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
+        .map(|edge| {
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .unwrap()
+        })
         .collect::<Vec<_>>();
     let resolved = resolve_module(entry, &dependencies)
         .expect("the private head identity should cross as hidden metadata");
@@ -821,16 +916,22 @@ fn private_impl_head_spelling_and_constructor_remain_unavailable() {
             ),
         )],
     );
-    let dependency = module_named(&graph, "dependency.ash");
-    let dependency_checked = check_module(
-        resolve_module(dependency, &[]).expect("dependency should resolve before the entry"),
-    )
-    .expect("dependency should check before the entry");
+    let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
     let entry = module_named(&graph, "entry.ash");
     let dependencies = entry
         .dependencies()
         .iter()
-        .map(|edge| DependencyExports::new(edge, dependency_checked.exports()).unwrap())
+        .map(|edge| {
+            DependencyExports::new(
+                edge,
+                checked
+                    .iter()
+                    .find(|module| module.module() == edge.target())
+                    .unwrap()
+                    .exports(),
+            )
+            .unwrap()
+        })
         .collect::<Vec<_>>();
 
     let error = expect_resolution_error(
@@ -1062,16 +1163,22 @@ fn rejects_external_opaque_constructor_and_pattern_in_impl_body() {
             entry,
             &[("token.ash", "pub opaque type Token = Seal(Int)\n")],
         );
-        let token = module_named(&graph, "token.ash");
-        let token_checked = check_module(
-            resolve_module(token, &[]).expect("the opaque carrier module should resolve"),
-        )
-        .expect("the opaque carrier module should check");
+        let checked = checked_before(&graph, module_named(&graph, "entry.ash"));
         let entry = module_named(&graph, "entry.ash");
         let dependencies = entry
             .dependencies()
             .iter()
-            .map(|edge| DependencyExports::new(edge, token_checked.exports()).unwrap())
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
             .collect::<Vec<_>>();
 
         let error = expect_resolution_error(

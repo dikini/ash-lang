@@ -165,6 +165,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<(), TypeError> {
         self.prepare_region_closures(methods, roots)?;
         if self.cleanup_rows.is_empty() {
+            self.zonk_builder_types().map_err(TypeError::Internal)?;
+            F::finish_cleanup_effect_rows(&mut self.builder)?;
             return Ok(());
         }
         self.zonk_builder_types_since(None, false)

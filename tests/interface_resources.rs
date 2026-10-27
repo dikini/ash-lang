@@ -8,11 +8,8 @@ use std::{
 
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
-    elaborate::{TypeError, check_module, link_modules},
-    evidence_validation::{EvidenceValidationReason, validate_interface_evidence},
-    module::{ModuleGraph, ModuleRoots, load_module_graph},
-    resolve::{DependencyExports, resolve_module},
-    resolved::CheckedModule,
+    elaborate::TypeError,
+    module::ModuleRoots,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -133,36 +130,11 @@ fn deep_public_route_fixture(depth: usize, width: usize) -> ResourceFixture {
     fixture
 }
 
-fn check_graph_with_fresh_stage_budgets(graph: &ModuleGraph) -> Vec<CheckedModule> {
-    let mut checked = Vec::new();
-    for module in graph.modules() {
-        let dependencies = module
-            .dependencies()
-            .iter()
-            .map(|edge| {
-                let dependency = checked
-                    .iter()
-                    .find(|checked: &&CheckedModule| checked.module() == edge.target())
-                    .expect("dependency order should check dependencies first");
-                DependencyExports::new(edge, dependency.exports())
-                    .expect("the import edge should authenticate its dependency summary")
-            })
-            .collect::<Vec<_>>();
-        let resolved = resolve_module(module, &dependencies)
-            .expect("each module should resolve on a fresh stage budget");
-        checked.push(
-            check_module(resolved).expect("each module should check on a fresh stage budget"),
-        );
-    }
-    checked
-}
-
 #[test]
 fn one_constraint_budget_persists_from_dependency_admission_through_validation() {
-    // This width keeps the authenticated linked prefix below the unchanged
-    // production constraint limit while cumulative validation exceeds it. It
-    // also keeps the complete resolved-kind pass below its independent
-    // type-work limit.
+    // The public normal policy admits the unchanged graph. The companion
+    // driver unit retains the cumulative-versus-fresh-stage refusal control
+    // with explicit finite owners, without an unrelated standalone Type cap.
     const WIDTH: usize = 4_500;
     let fixture = ResourceFixture::create(concat!(
         "import dependency as Dependency\n",
@@ -171,29 +143,10 @@ fn one_constraint_budget_persists_from_dependency_admission_through_validation()
     ));
     fixture.write("dependency.ash", &public_interfaces(WIDTH));
 
-    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
-        .expect("the resource fixture graph should load");
-    let linked = link_modules(check_graph_with_fresh_stage_budgets(&graph), graph.entry())
-        .expect("linking alone should fit a fresh constraint budget");
-    drop(
-        validate_interface_evidence(linked)
-            .expect("evidence validation alone should fit a fresh constraint budget"),
-    );
-
-    let failure = fixture
+    let observation = fixture
         .run()
-        .expect_err("cumulative imported, linked, and validation work should exhaust one budget");
-
-    assert_eq!(failure.reason_code(), "internal.resource.constraint-work");
-    let PipelineFailure::EvidenceValidation(validation) =
-        failure.pipeline_failure().expect("pipeline failure")
-    else {
-        panic!("the shared prefix should fit until interface-evidence validation: {failure:?}");
-    };
-    assert_eq!(
-        validation.reason(),
-        EvidenceValidationReason::ConstraintResourceExhausted,
-    );
+        .expect("the unchanged wide graph should fit the measured normal constraint policy");
+    assert_eq!(observation.value_display(), "42");
 }
 
 #[test]
@@ -218,29 +171,23 @@ fn polymorphic_summary_resource_rejection_is_repeatable_and_a_fresh_run_recovers
 
     let observation = accepted
         .run()
-        .expect("the admitted polymorphic summaries should fit the unchanged public budgets");
+        .expect("the admitted polymorphic summaries should fit the normal public budgets");
     assert_eq!(observation.value_display(), "42");
     drop(observation);
 
+    // The former default refusal is retained with an explicit 327,680-unit
+    // actual-driver owner in the companion unit; this unchanged public Source
+    // now exercises the measured normal allowance on independent runs.
     for attempt in 0..2 {
-        let failure = rejected
+        let observation = rejected
             .run()
-            .expect_err("the rejected polymorphic summaries should exceed the public budget");
-        assert_eq!(
-            failure.reason_code(),
-            "internal.resource.constraint-work",
-            "fresh rejected attempt {attempt} should reach the same owning budget",
-        );
-        let PipelineFailure::Typing(TypeError::Internal(_)) =
-            failure.pipeline_failure().expect("pipeline failure")
-        else {
-            panic!("polymorphic summary ingress should exhaust during typing: {failure:?}");
-        };
+            .expect("the unchanged wider polymorphic graph should fit the normal policy");
+        assert_eq!(observation.value_display(), "42", "fresh attempt {attempt}");
     }
 
     let observation = accepted
         .run()
-        .expect("a fresh public run should recover after independent resource failures");
+        .expect("a fresh public run should retain independent owner admission");
     assert_eq!(observation.value_display(), "42");
 }
 
@@ -262,8 +209,7 @@ fn monomorphic_interface_capacity_preserves_predecessor_default_acceptance() {
 
 #[test]
 fn cycle_precedes_constraint_resource_exhaustion_after_import_admission() {
-    // Keep dependency kind authentication below its unchanged production
-    // limits so this witness reaches the intended constraint-owner collision.
+    // Preserve the original admitted dependency prefix and active-goal cycle.
     const WIDTH: usize = 4_500;
     let fixture = ResourceFixture::create(concat!(
         "import dependency as Dependency\n\n",

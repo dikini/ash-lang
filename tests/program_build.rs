@@ -69,7 +69,7 @@ fn generated_executable_runs_imported_core_after_the_original_source_graph_disap
     assert!(
         prepared
             .generated_rust()
-            .contains("__run_private_pure_image")
+            .contains("__run_private_effect_image")
     );
     assert!(!prepared.generated_rust().contains("compile_path"));
     let prepared_work = prepared.preparation_work();
@@ -130,7 +130,7 @@ main () = match Text.decode (Text.encode "é") {
     assert!(
         prepared
             .generated_rust()
-            .contains("__run_private_pure_image")
+            .contains("__run_private_effect_image")
     );
     assert!(!prepared.generated_rust().contains("compile_path"));
     assert!(!prepared.generated_rust().contains("#[link_name"));
@@ -176,14 +176,18 @@ fn build_preparation_rejects_unsupported_targets_and_metadata_without_native_too
             .to_string()
             .contains("matching host")
     );
-    assert!(
-        prepare_program(&checked, BuildConfiguration::new(fixture.0.join("program")))
-            .unwrap_err()
-            .to_string()
-            .contains("RegistryMetadata")
-    );
     assert!(!fixture.0.join(".ash-build").exists());
     assert!(!fixture.0.join("program").exists());
+    // The Source program now uses Effect Core, whose image admits this metadata.
+    // The deliberate Pure RegistryMetadata refusal remains in the existing
+    // build::image::tests::unsupported_registry_facts_are_refused_instead_of_dropped.
+    let prepared = prepare_program(&checked, BuildConfiguration::new(fixture.0.join("program")))
+        .expect("the unchanged Source metadata is supported by its Effect image");
+    assert!(
+        prepared
+            .generated_rust()
+            .contains("__run_private_effect_image")
+    );
 }
 
 #[test]
