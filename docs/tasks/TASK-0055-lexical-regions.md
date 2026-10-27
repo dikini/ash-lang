@@ -27,9 +27,11 @@ Focused interface and scoped-evidence migrations now pass all 44 and 53 original
 tests respectively. The module-newtype and local-newtype targets now pass 23
 and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 original
 tests. Functions passes all 19 original tests. Polymorphism and interface-module
-controls now pass all 43 and 25 original tests; their 17 restored names are
-disjoint from the prior 362, giving 379 staged restorations. Repeated passes are
-counted once. Two constructor
+controls pass all 43 and 25 original tests. Module loading now passes all 24
+original tests; library imports has 15 passes and two unchanged budget failures,
+and Core validation has 60 passes and seven remaining Source/Pure producer
+failures. Their 20 restored names (9 + 7 + 4) are disjoint from the prior 379,
+giving 399 staged restorations. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
 These selected observations do not refresh Library9 (1,560/35) or Integration69
 (1,276/504). The scoped controls retain exact
@@ -37,6 +39,23 @@ resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
 transformed effect traces still equal the original trace.
+
+The latest admission repairs preserve exact defining/export identities and
+resolver-owned privacy errors across every actual dependency edge. Module-loading
+controls retain the complete compiler-service prefix, original user import order,
+1,024-depth/256 KiB chain and full pending-edge width. Core newtype and evidence
+controls use all-source Effect validation: exact nominal conversion owners,
+source-owned full-typed evidence closures, ordered complete arguments and fresh
+validation after both transforms remain. Manual Pure corruption, owner, depth,
+resource and poison controls are unchanged.
+
+The unchanged 128-method and 192-function standalone publication witnesses still
+refuse in the source-checking type-work owner. Separate temporary refusal-only
+tracing observed 323,970/327,680 with a 4,125-unit capture-summary type charge,
+and 324,970/327,680 with a 9,986-unit capture-graph charge. These are atomic refusal
+prefixes, not complete costs or a basis for a policy fit. Original type-meter
+source bytes were restored; no limit, source width or program changed. Complete
+owner costs must be measured before choosing optimization or policy work.
 
 Runtime trace controls retain all 13 original Source programs, exact user event
 vectors/counts/handler identities and whole raw transformed-trace equality. A
