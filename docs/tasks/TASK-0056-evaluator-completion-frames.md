@@ -3,7 +3,8 @@
 - ID: `TASK-0056`
 - Status: active
 - Related: [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md),
-  [execution plan](plans/evaluator-completion-frames.md)
+  [execution plan](plans/evaluator-completion-frames.md),
+  [delivery PR #158](https://github.com/dikini/ash-lang/pull/158)
 
 > This task organizes work. It does not define Ash semantics.
 
@@ -24,9 +25,9 @@ implementation within the existing evaluator machine.
 
 The candidate groups adjacent consumed completions with the same handler and
 resume identity. Focused checks and measurements passed on the candidate. The
-first independent source review found no actionable issues; final review of the
-measurement receipts and committed source remains pending. The fresh workspace
-checkpoint and Main integration remain separate gates.
+first independent review approved the committed source and measured evidence
+without actionable findings. The fresh workspace checkpoint and Main
+integration remain separate gates.
 
 ## Verification
 
