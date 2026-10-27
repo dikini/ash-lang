@@ -30,7 +30,7 @@ tests. Functions passes all 19 original tests. Polymorphism and interface-module
 controls pass all 43 and 25 original tests. Module loading now passes all 24
 original tests; library imports now passes all 17. Core validation now passes
 all 67 original tests and resource modules all 16. Their fourteen restorations
-are disjoint from the published 410, giving 424 staged integration restorations. Three focused unit
+are disjoint from the published 410, giving 424 staged integration restorations. Nine focused unit
 repairs are counted separately. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
 The latest complete Library10 inventory at checkpoint20 policy inputs records 1,562 passes and
@@ -106,12 +106,32 @@ policies remain unchanged. Normal166 passes all 102 original resource-typing cas
 cases, the three repaired units and 13 existing owner/policy/calibration/reporting
 controls: 135 distinct names. All eight old resource failures now pass without
 program, stack or depth changes; no original resource name is missing or newly
-failing. The three unit repairs leave 32 names in the selected Library10 backlog,
+failing. Together with the six ledger controls below, nine selected old unit
+failures now pass, leaving 26 names in the selected Library10 backlog. This is
 not a refreshed complete library count. Diagnostics remain separate from normal
 verification, and integration-only inventory/full-gate clearance remain pending.
 The connected unchanged resource-runtime target also passes all 32 original
 names, restoring its one old Source-work failure. These fresh target observations
 remain separate from the complete Integration69 baseline.
+
+Six additional elaborate ledger controls now pass with production bytes unchanged.
+Module construction's actual paid setup stays in the owner before each local
+allowance. Tuple retention derives two effect-catalog scans, wrapper 1, real
+DefaultAlloc qualification/union 8 and tuple-copy 3 (14 for the canonical
+single-effect fixture). Match retains its original 17 arm/matrix/copy units plus
+two integer catalog scans (19); inferred-function work retains its original
+48 local units plus constructed-row lookup 1 and empty-row clone 1 (50).
+The early inference-record refusal remains atomic, with prefix 0/17 and two
+fresh exact retries. The relational declaration guard derives 15 units from
+preflight/retention and the complete First/absent-Second occurrence walks;
+its exact MethodParameter diagnostic and two fresh retries remain. Cumulative
+constraint and implementation-substitution controls measure complete successful
+check/freeze boundaries, retain one-short/exact/fresh-owner admission and
+second-module no-refill, and make no local-tariff or atomic-saturation claim.
+These six unit restorations add no integration credit, API, policy or semantic
+change; a fresh whole library/integration inventory and canonical gate remain
+pending.
+
 
 
 Runtime trace controls retain all 13 original Source programs, exact user event

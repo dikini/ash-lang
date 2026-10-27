@@ -31882,15 +31882,21 @@ mod tests {
         let second = resolved_module_fixture("second-constraint.ash", interface, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        // A monomorphic private interface retains no method-binder authority.
-        // Unconditional arity preflight adds one interface-map cell plus the
-        // interface and global declaration visits.
-        // Producer authentication visits three withheld names, charging one
-        // map cell and two ordered-index cells for each name.
-        // Shared clone preflights remove three pending-worklist cells from
-        // both checked-fact construction and selector admission.
-        const EXACT_WORK: usize = 39 + 1 + 2 + 3 * 3 - 2 * 3 - 2;
-        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        // This control owns complete checking and export freeze, including
+        // authenticated imported services. Measure that whole boundary once;
+        // local charge formulas are tested separately.
+        let donor = resolved_module_fixture("donor-constraint.ash", interface, "Unit", "()");
+        let mut measured = InterfaceConstraintBudget::with_limit(usize::MAX);
+        check_module_with_budget(
+            donor,
+            &mut TypeWorkBudget::default(),
+            &mut UsefulnessBudget::default(),
+            &mut measured,
+        )
+        .unwrap();
+        let exact_work = measured.used();
+        assert!(exact_work > 0);
+        let mut short = InterfaceConstraintBudget::with_limit(exact_work - 1);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -31899,11 +31905,14 @@ mod tests {
             failure,
             TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
         );
-        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert!(
+            short.used() < exact_work,
+            "a refused bulk charge leaves its prefix atomically spent"
+        );
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut constraint_work = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        let mut constraint_work = InterfaceConstraintBudget::with_limit(exact_work);
 
         check_module_with_budget(
             first,
@@ -31912,7 +31921,7 @@ mod tests {
             &mut constraint_work,
         )
         .expect("one interface should fit the exact constraint budget");
-        assert_eq!(constraint_work.used(), EXACT_WORK);
+        assert_eq!(constraint_work.used(), exact_work);
         assert_eq!(constraint_work.charge(1), Err(()));
         let failure = check_module_with_budget(
             second,
@@ -31930,11 +31939,12 @@ mod tests {
 
     #[test]
     fn relational_interface_shape_has_an_exact_declaration_guard_boundary() {
-        // Application arity preflight owns one interface-map cell and visits
-        // the interface and global declarations once. One interface-vector
-        // cell, one declaration cell, and one method cell then precede complete
-        // occurrence walks for First (five cells) and absent Second (six).
-        const EXACT_WORK: usize = (1 + 2) + 1 + 1 + 1 + 5 + 1;
+        // Preflight: one local interface-map cell plus two declarations.
+        // Retain one interface vector, declaration and method cell. The
+        // EffectfulFunction walk schedules root+domain+value+row (4) before
+        // finding First; missing Second also schedules DefaultAlloc's
+        // zero-argument instance (5). This visitor charges no computation box.
+        const EXACT_WORK: usize = (1 + 2) + 1 + 1 + 1 + 4 + 5;
         let declarations =
             "interface Relational<First, Second> {\nrelational : First -> First\n}\n";
 
@@ -31943,6 +31953,33 @@ mod tests {
             declarations,
             "Unit",
             "()",
+        );
+        assert_eq!(short_module.interfaces().len(), 1);
+        assert_eq!(short_module.imported_facts().interface_imports().count(), 0);
+        assert_eq!(short_module.declaration_order().len(), 2);
+        let interface = &short_module.interfaces()[0];
+        let [first, second] = interface.parameters.as_ref() else {
+            panic!("the guard retains both declared parameters")
+        };
+        assert_eq!(first.spelling, "First");
+        assert_eq!(second.spelling, "Second");
+        let [method] = interface.methods.as_ref() else {
+            panic!("one method owns the occurrence walk")
+        };
+        assert!(method.type_parameters.is_empty());
+        let api = short_module
+            .imported_facts()
+            .effects()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .unwrap();
+        let allocation =
+            EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+        assert_eq!(
+            method.annotation.ty,
+            Type::EffectfulFunction(
+                Box::new(Type::Variable(first.id)),
+                Box::new(ComputationType::new(Type::Variable(first.id), allocation))
+            )
         );
         let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
         assert_eq!(
@@ -32692,20 +32729,40 @@ mod tests {
 
     #[test]
     fn impl_method_substitution_uses_the_exact_constraint_budget() {
-        // The interface and implementation method relation form one complete
-        // check-and-freeze boundary. Complete-application staging and matching
-        // add eight aligned root cells to the predecessor boundary. Global
-        // arity preflight adds one interface-map cell, visits the interface,
-        // implementation, and global declarations, and checks the head.
-        // Producer authentication also visits the three withheld names,
-        // charging one map cell and two ordered-index cells for each name.
-        // Checked-fact and selector clones each avoid three cells from the
-        // former separate type-counting worklist.
-        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1 + 3 * 3 - 2 * 3;
+        // The interface, rigid method substitution and summary freeze form
+        // one complete boundary; preserve its exact/short admission instead
+        // of treating a historical whole-module total as a local tariff.
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",
         );
+        let donor = resolved_module_fixture(
+            "donor-impl-method-constraint.ash",
+            declarations,
+            "Unit",
+            "()",
+        );
+        let mut measured = InterfaceConstraintBudget::with_limit(usize::MAX);
+        let checked = check_module_with_budget(
+            donor,
+            &mut TypeWorkBudget::default(),
+            &mut UsefulnessBudget::default(),
+            &mut measured,
+        )
+        .unwrap();
+        let [implementation] = checked.implementation_facts() else {
+            panic!("one substituted implementation is retained")
+        };
+        let [method] = implementation.methods.as_ref() else {
+            panic!("one substituted method is retained")
+        };
+        assert!(method.scheme.type_parameters.is_empty());
+        assert!(method.scheme.requirements.is_empty());
+        let function = method.scheme.value_type.function_view().unwrap();
+        assert_eq!(function.domain(), &Type::Int);
+        assert_eq!(function.value(), &Type::Int);
+        let exact_work = measured.used();
+        assert!(exact_work > 0);
         let short_module = resolved_module_fixture(
             "short-impl-method-constraint.ash",
             declarations,
@@ -32716,7 +32773,7 @@ mod tests {
             resolved_module_fixture("impl-method-constraint.ash", declarations, "Unit", "()");
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        let mut short = InterfaceConstraintBudget::with_limit(exact_work - 1);
 
         let failure =
             check_module_with_budget(short_module, &mut type_work, &mut coverage_work, &mut short)
@@ -32728,11 +32785,11 @@ mod tests {
 
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
-        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        let mut exact = InterfaceConstraintBudget::with_limit(exact_work);
         check_module_with_budget(exact_module, &mut type_work, &mut coverage_work, &mut exact)
             .expect("the exact budget should admit one implementation method");
 
-        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.used(), exact_work);
         assert_eq!(exact.charge(1), Err(()));
     }
 
@@ -33589,10 +33646,28 @@ mod tests {
             resolved_module_fixture("ordinary-tuple-budget.ash", "", "(Int, Int)", "(1, 2)");
 
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        let effect_count = short.registry.effects().len();
+        assert_eq!(
+            effect_count, 1,
+            "the admitted fixture retains exactly DefaultAlloc"
+        );
+        let api = short
+            .registry
+            .effects()
+            .iter()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .unwrap();
+        let allocation =
+            EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+        // Each integer scans E effect declarations. Tuple retention then pays
+        // wrapper1, qualify(empty)2 + qualify(singleton)4 + union2, and the
+        // complete Tuple(Int,Int) copy (root1 + leaves2).
+        let local_work = 2 * effect_count + 1 + (2 + 4 + 2) + (1 + 2);
+        let short_setup = short.type_work.used();
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 3)
-            .expect("the fixture leaves only the complete Core type copy");
+            .charge(crate::types::TYPE_WORK_LIMIT - short_setup - (local_work - 1))
+            .expect("the fixture leaves one fewer unit than complete local tuple retention");
         assert_eq!(
             short.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -33607,10 +33682,14 @@ mod tests {
         );
 
         let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        assert_eq!(exact.registry.effects().len(), effect_count);
+        let exact_setup = exact.type_work.used();
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 4)
-            .expect("the fixture leaves the tuple wrapper and complete Core type copy");
+            .charge(crate::types::TYPE_WORK_LIMIT - exact_setup - local_work)
+            .expect(
+                "the fixture leaves the complete tuple wrapper, allocation union and Core copy",
+            );
         let typed = exact
             .elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -33624,20 +33703,19 @@ mod tests {
             typed.ty,
             Type::Tuple(vec![Type::Int, Type::Int].into_boxed_slice())
         );
+        assert_eq!(typed.effects, allocation);
         assert_eq!(exact.type_work.charge(1), Err(()));
     }
 
     #[test]
     fn inferred_anonymous_function_type_precharges_fixed_inference_records() {
-        // Predecessor module/expression work (28), fixed Omega Kind retention
-        // added to two fresh variables (4), and fused authenticated
-        // transactional alias solving plus zonking (14), with three units
-        // for module setup. The ordinary Type root comparison runs once.
-        const PREVIOUS_WORK: usize = 28 + 4 + 14 + 3;
-        // The single body check now validates post-zonk provenance: one
-        // traversal slot and one visit to its aligned inference leaf.
-        const POST_ZONK_LEAF_ALIGNMENT: usize = 1 + 1;
-        const EXACT_WORK: usize = PREVIOUS_WORK + POST_ZONK_LEAF_ALIGNMENT;
+        // Local predecessor expression work (28), fixed Omega Kind records
+        // for two fresh variables (4), transactional alias solving/zonking
+        // (14), and post-zonk alignment (one slot plus one leaf). Module
+        // admission is paid separately and remains in this same owner.
+        // FinishFunction also retrieves the actual constructed node row:
+        // one authenticated node lookup and one closed empty-row clone.
+        const LOCAL_WORK: usize = 28 + 4 + 14 + (1 + 1) + (1 + 1);
         let resolved = resolved_module_fixture(
             "inferred-anonymous-function-budget.ash",
             "",
@@ -33645,6 +33723,8 @@ mod tests {
             "fn(value) {\nvalue\n}",
         );
 
+        let setup_work = Elaborator::for_module(&resolved).unwrap().type_work.used();
+        let exact_work = setup_work + LOCAL_WORK;
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         let short_setup_work = short.type_work.used();
         short
@@ -33672,6 +33752,7 @@ mod tests {
             let mut elaborator =
                 Elaborator::for_module_with_work(&resolved, work, UsefulnessBudget::default())
                     .expect("the binder namespace should fit");
+            assert_eq!(elaborator.type_work.used(), prefix + setup_work);
             elaborator.purpose = ElaborationPurpose::Standalone;
             let result = elaborator.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -33685,21 +33766,21 @@ mod tests {
         let (measured, work) = run(0, usize::MAX);
         let typed = measured.expect("the complete inferred function synthesis should succeed");
         assert!(matches!(typed.ty, Type::Function(_, _)));
-        assert_eq!(work.used(), EXACT_WORK);
+        assert_eq!(work.used(), exact_work);
         for prefix in [0usize, 17] {
-            let (short, work) = run(prefix, prefix + EXACT_WORK - 1);
+            let (short, work) = run(prefix, prefix + exact_work - 1);
             assert_eq!(
                 short,
                 Err(TypeError::Internal(
                     ElaborationFailure::TypeResourceExhausted
                 ))
             );
-            assert!(work.used() < prefix + EXACT_WORK);
+            assert!(work.used() < prefix + exact_work);
             for _ in 0..2 {
-                let (exact, mut work) = run(prefix, prefix + EXACT_WORK);
+                let (exact, mut work) = run(prefix, prefix + exact_work);
                 let typed = exact.expect("the exact inferred function type cost should fit");
                 assert!(matches!(typed.ty, Type::Function(_, _)));
-                assert_eq!(work.used(), prefix + EXACT_WORK);
+                assert_eq!(work.used(), prefix + exact_work);
                 assert_eq!(work.charge(1), Err(()));
             }
         }
@@ -33714,9 +33795,15 @@ mod tests {
             "match true {\ntrue => 1\nfalse => 0\n}",
         );
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        // Retained arm/matrix/type storage remains17; each of the two
+        // integer arms additionally scans the admitted effect catalog.
+        let effect_count = short.registry.effects().len();
+        assert_eq!(effect_count, 1);
+        let local_work = 17 + 2 * effect_count;
+        let short_setup = short.type_work.used();
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 16)
+            .charge(crate::types::TYPE_WORK_LIMIT - short_setup - (local_work - 1))
             .expect("the fixture leaves one fewer unit than complete match storage requires");
 
         assert_eq!(
@@ -33733,9 +33820,10 @@ mod tests {
         );
 
         let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
+        let exact_setup = exact.type_work.used();
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 17)
+            .charge(crate::types::TYPE_WORK_LIMIT - exact_setup - local_work)
             .expect("the fixture leaves type copies plus both progress and Core arm storage");
         let typed = exact
             .elaborate_expression_with_context(
