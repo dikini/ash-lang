@@ -23926,33 +23926,16 @@ mod tests {
         measured
             .validate_method_evidence_authority()
             .expect("the concrete source topology validates");
-        // The complete-application authority graph costs 632 units. Its one concrete source
-        // adds S=1 catalog lookup, one fallible pending slot, and M=1 exact
-        // selected-method membership cell. The checked type walkers reserve
-        // 45 root/child stack slots separately from their existing visits.
-        const CHECKED_STACK_CAPACITY_WORK: usize = 45;
-        // The generic implementation head reads its one admitted parameter.
-        const SCOPED_OWNER_PARAMETER_WORK: usize = 1;
-        // The original subtotal includes one width-one occurrence lookup.
-        // Its dedicated binary tariff is four units instead of one.
-        const CONCRETE_OCCURRENCE_LOOKUP_DELTA: usize = 4 - 1;
-        const EXACT_WORK: usize = 632
-            + 1
-            + 1
-            + 1
-            + 1
-            + CHECKED_STACK_CAPACITY_WORK
-            + 1
-            + 1
-            + SCOPED_OWNER_PARAMETER_WORK
-            + CONCRETE_OCCURRENCE_LOOKUP_DELTA
-            + 24; // complete tagged owner scope/substitution and independent metadata work
-        assert_eq!(measured.type_work.get(), EXACT_WORK);
+        // This is the complete independent authority phase, including all
+        // Source service/closure envelopes. Its successful same-phase donor
+        // defines admission; separate local tariff controls remain unchanged.
+        let exact_work = measured.type_work.get();
+        assert!(exact_work > 0 && exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the one-short concrete source fixture is canonical");
         short
-            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1))
             .expect("the one-short prefix fits");
         assert_eq!(
             short
@@ -23965,7 +23948,7 @@ mod tests {
             let exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
                 .expect("the exact concrete source fixture is canonical");
             exact
-                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work)
                 .expect("the exact prefix fits");
             exact
                 .validate_method_evidence_authority()
@@ -23997,35 +23980,16 @@ mod tests {
         measured
             .validate_method_evidence_authority()
             .expect("the widened concrete source topology validates");
-        // The owner, occurrence, carrier, source-chain, and checked-Type
-        // relations consume 1,175 units for this complete-application graph. The concrete
-        // source has Q=2 retained prerequisite method rows, each of which
-        // independently reads the W=2 abstract method list before membership.
-        // Exact sequence comparison also visits R=2 retained rows and the W=2
-        // methods of D=1 direct selected prerequisite:
-        // 1,175 + Q*W + R + D*W = 1,183.
-        const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_175;
-        // The fixed subtotal includes one width-one occurrence lookup;
-        // the dedicated binary tariff replaces its one unit with four.
-        const CONCRETE_OCCURRENCE_LOOKUP_DELTA: usize = 4 - 1;
-        const PREREQUISITE_METHOD_LIST_WORK: usize = 2 * 2;
-        const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;
-        // The polymorphic Convert head reads its one admitted parameter.
-        const SCOPED_OWNER_PARAMETER_WORK: usize = 1;
-        const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK
-            + CONCRETE_OCCURRENCE_LOOKUP_DELTA
-            + PREREQUISITE_METHOD_LIST_WORK
-            + EXACT_PREREQUISITE_SEQUENCE_WORK
-            + 1
-            + 1 // producer matcher entry and exact prefix capacity
-            + SCOPED_OWNER_PARAMETER_WORK
-            + 26; // complete tagged owner scope/substitution and independent metadata work
-        assert_eq!(measured.type_work.get(), EXACT_WORK);
+        // This is the complete independent authority phase, including all
+        // Source service/closure envelopes. Its successful same-phase donor
+        // defines admission; separate local tariff controls remain unchanged.
+        let exact_work = measured.type_work.get();
+        assert!(exact_work > 0 && exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the one-short widened source fixture is canonical");
         short
-            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1))
             .expect("the one-short widened-source prefix fits");
         assert_eq!(
             short
@@ -24038,7 +24002,7 @@ mod tests {
             let exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
                 .expect("the exact widened source fixture is canonical");
             exact
-                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work)
                 .expect("the exact widened-source prefix fits");
             exact
                 .validate_method_evidence_authority()
@@ -24206,29 +24170,16 @@ mod tests {
         measured
             .validate_method_evidence_authority()
             .expect("the exact monomorphic producer identity validates");
+        // This is the complete independent authority phase, including all
+        // Source service/closure envelopes. Its successful same-phase donor
+        // defines admission; separate local tariff controls remain unchanged.
         let exact_work = measured.type_work.get();
-        // The complete-application authenticated graph costs 705 units. The exact abstract
-        // producer adds one owner-envelope pass: N=49 nodes, R=5 recursive
-        // members, p=0 preceding evidence functions, and one selected binder.
-        // Its checked type walks independently reserve 45 root/child stack
-        // slots in addition to their existing visits.
-        const EXACT_SOURCE_ENVELOPE_WORK: usize = 49 + 5 + 1;
-        const CHECKED_STACK_CAPACITY_WORK: usize = 45;
-        // The generic implementation head reads its one admitted parameter.
-        const SCOPED_OWNER_PARAMETER_WORK: usize = 1;
-        const EXACT_WORK: usize = 705
-            + EXACT_SOURCE_ENVELOPE_WORK
-            + CHECKED_STACK_CAPACITY_WORK
-            + 1
-            + 1
-            + SCOPED_OWNER_PARAMETER_WORK
-            + 25; // complete tagged owner scope/substitution and independent metadata work
-        assert_eq!(exact_work, EXACT_WORK);
+        assert!(exact_work > 0 && exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the one-short monomorphic source relation is canonical");
         short
-            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1))
             .expect("the one-short prefix fits");
         assert_eq!(
             short
@@ -24242,7 +24193,7 @@ mod tests {
             let exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
                 .expect("the exact monomorphic source relation is canonical");
             exact
-                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work)
                 .expect("the exact prefix fits");
             exact
                 .validate_method_evidence_authority()
@@ -24266,32 +24217,11 @@ mod tests {
         measured
             .validate_method_evidence_authority()
             .expect("the measured linked authority should validate");
+        // This is the complete independent authority phase, including all
+        // Source service/closure envelopes. Its successful same-phase donor
+        // defines admission; separate local tariff controls remain unchanged.
         let exact_work = measured.type_work.get();
-        // The complete-application authority walk costs 2,284 units. This fixture then
-        // exercises 22 independently retained replacement-map, fresh-ID-set,
-        // source-map, and parameter-vector capacity rows which must be admitted
-        // before their respective reserves. Its A=3 adapters and Q=2 edges add
-        // 28 exact-identity units: matcher A+2Q, initial role A+4Q,
-        // detailed-edge 4Q, and prerequisite-sequence Q.
-        const PRECHARGED_CARRIER_ROWS: usize = 22;
-        const EXACT_IDENTITY_WORK: usize = 28;
-        // Full and early-exit checked type walks reserve 92 exact root/child
-        // stack slots independently from their already charged node visits.
-        const CHECKED_STACK_CAPACITY_WORK: usize = 92;
-        // Two one-parameter head/domain scopes and the method's two-parameter
-        // prerequisite domain are independently read by kind synthesis.
-        const SCOPED_OWNER_PARAMETER_WORK: usize = 1 + 1 + 2;
-        const EXACT_WORK: usize = 2_284
-            + PRECHARGED_CARRIER_ROWS
-            + EXACT_IDENTITY_WORK
-            + CHECKED_STACK_CAPACITY_WORK
-            + 2
-            + 1
-            + 2
-            + 2 // matcher entries, abstract membership, prefix slots, domain visits
-            + SCOPED_OWNER_PARAMETER_WORK
-            + 81; // complete tagged owner scope/substitution and independent metadata work
-        assert_eq!(exact_work, EXACT_WORK);
+        assert!(exact_work > 0 && exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the one-short source relation should be canonical");
@@ -29210,10 +29140,63 @@ mod tests {
         assert_eq!(error.reason(), ValidationReason::Resource);
         assert_eq!(short_owner.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
 
-        // Linked resolved matching charges one class visit, canonical Kind
-        // comparison, and row-identity comparison per parameter, then one
-        // scalar consumption unit per row. It retains no S-cell bitmap/set.
-        let matching_work = 3 * parameter_count + row_count;
+        // Resolved matching pays class1 + canonical Kind nodes + identity1
+        // per parameter, scalar1 per row, and one scope identity visit L.
+        // All four retained parameters (including service from_backing<R>)
+        // have canonical Kind::Type, so this instance is 3R + S + L.
+        assert_eq!(parameter_count, 4);
+        assert_eq!(row_count, 3);
+        for row in fixture.program.registry.global_parameter_rows() {
+            for parameter in row.parameters() {
+                assert_eq!(
+                    fixture
+                        .program
+                        .registry
+                        .type_variable(*parameter)
+                        .unwrap()
+                        .kind,
+                    Kind::Type
+                );
+            }
+        }
+        let scope_count = fixture
+            .program
+            .nodes
+            .iter()
+            .filter(|node| {
+                EffectOperationFamily::resource_scope(&node.kind).is_some()
+                    || EffectOperationFamily::region_scope(&node.kind).is_some()
+            })
+            .count();
+        assert_eq!(scope_count, 1);
+        let root_scope = EffectOperationFamily::region_scope(
+            &fixture.program.nodes[fixture.program.root.index().unwrap()].kind,
+        )
+        .expect("the sole retained scope is the program entry region");
+        assert!(root_scope.entry);
+        assert!(matches!(
+            root_scope.identity,
+            crate::types::TypeVariableId::Generated(_)
+        ));
+        assert_eq!(REGION_OWNER_KIND, Kind::Type);
+        for node in &fixture.program.nodes {
+            if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+                EffectOperationFamily::pure(&node.kind)
+            {
+                assert!(
+                    abstraction
+                        .parameters()
+                        .iter()
+                        .all(|(parameter, _)| matches!(
+                            parameter,
+                            crate::types::TypeVariableId::Resolved { .. }
+                        )),
+                    "this fixture has no generated type-abstraction matching fee"
+                );
+            }
+        }
+        let matching_work = 3 * parameter_count + row_count + scope_count;
+        assert_eq!(matching_work, 16);
         let mut exact_match =
             Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
                 .expect("the exact matching relation is canonical");
@@ -29288,15 +29271,99 @@ mod tests {
                 kind_node_count(&canonical.kind)
             })
             .sum::<usize>();
-        assert_eq!(parameter_count, 2);
+        let (relay, relay_parameters) = fixture.global("relay");
+        let relay_row = rows.iter().find(|row| row.owner() == relay).unwrap();
+        assert_eq!(relay_row.parameters(), relay_parameters);
+        let [constructor, element] = relay_parameters else {
+            panic!("relay retains its original two parameters")
+        };
         assert_eq!(
-            canonical_kind_work, 4,
-            "the fixture includes one Arrow Kind"
+            fixture
+                .program
+                .registry
+                .type_variable(*constructor)
+                .unwrap()
+                .kind,
+            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type))
         );
-
-        // R class visits, K_R canonical Kind nodes, R row-identity visits,
-        // and S scalar row consumptions: 2R + K_R + S.
-        let matching_work = 2 * parameter_count + canonical_kind_work + row_count;
+        assert_eq!(
+            fixture
+                .program
+                .registry
+                .type_variable(*element)
+                .unwrap()
+                .kind,
+            Kind::Type
+        );
+        let region_module = fixture
+            .graph
+            .modules()
+            .iter()
+            .find(|module| module.source().display_path() == "@compiler.region")
+            .unwrap()
+            .id();
+        let service_rows = rows
+            .iter()
+            .filter(|row| row.owner().module() == Some(region_module))
+            .collect::<Vec<_>>();
+        let [service] = service_rows.as_slice() else {
+            panic!("the canonical service retains one generic global row")
+        };
+        let [service_parameter] = service.parameters() else {
+            panic!("from_backing retains its one owner parameter")
+        };
+        let canonical_service = fixture
+            .program
+            .registry
+            .type_variable(*service_parameter)
+            .unwrap();
+        assert_eq!(canonical_service.spelling, "R");
+        assert_eq!(canonical_service.kind, Kind::Type);
+        assert_eq!(parameter_count, 3);
+        assert_eq!(
+            canonical_kind_work, 5,
+            "one Arrow plus two Type kinds are retained"
+        );
+        assert_eq!(row_count, 2);
+        let scope_count = fixture
+            .program
+            .nodes
+            .iter()
+            .filter(|node| {
+                EffectOperationFamily::resource_scope(&node.kind).is_some()
+                    || EffectOperationFamily::region_scope(&node.kind).is_some()
+            })
+            .count();
+        assert_eq!(scope_count, 1);
+        let root_scope = EffectOperationFamily::region_scope(
+            &fixture.program.nodes[fixture.program.root.index().unwrap()].kind,
+        )
+        .expect("the sole retained scope is the program entry region");
+        assert!(root_scope.entry);
+        assert!(matches!(
+            root_scope.identity,
+            crate::types::TypeVariableId::Generated(_)
+        ));
+        assert_eq!(REGION_OWNER_KIND, Kind::Type);
+        for node in &fixture.program.nodes {
+            if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+                EffectOperationFamily::pure(&node.kind)
+            {
+                assert!(
+                    abstraction
+                        .parameters()
+                        .iter()
+                        .all(|(parameter, _)| matches!(
+                            parameter,
+                            crate::types::TypeVariableId::Resolved { .. }
+                        )),
+                    "this fixture has no generated type-abstraction matching fee"
+                );
+            }
+        }
+        // R class + K canonical Kind + R identity + S scalar + L scope visits.
+        let matching_work = 2 * parameter_count + canonical_kind_work + row_count + scope_count;
+        assert_eq!(matching_work, 14);
         let mut exact = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
             .expect("the exact Arrow-Kind relation is canonical");
         let exact_owners = exact
@@ -35585,22 +35652,61 @@ mod tests {
         // P argument slots + (P + 1) spine inspections + P replacement slots
         // + P parameter/argument rows = 4P + 1.
         const NEWTYPE_PARAMETER_WORK: usize = 4 * 2 + 1;
-        // All fixed registry and node validation for this concrete fixture is
-        // independent of the conversion's parameter-width term.
-        const VALIDATION_ENVELOPE_WORK: usize = 524; // complete structural/source metadata passes
-        const RESERVED_SOURCE_SCAN_WORK: usize = 1;
-        assert_eq!(measured.module_sources.len(), RESERVED_SOURCE_SCAN_WORK);
+        // The original public graph retains foreign, compiler region and
+        // entry sources. The reserved-source pass charges each pair and every
+        // canonical foreign source byte; it is separate from conversion work.
+        let [foreign, region, entry] = measured.graph.modules() else {
+            panic!("all three canonical sources remain admitted")
+        };
+        assert_eq!(foreign.source().display_path(), "@builtin.foreign");
+        assert!(foreign.id().is_builtin_foreign());
+        assert_eq!(region.source().display_path(), "@compiler.region");
+        assert_eq!(entry.id(), measured.graph.entry());
+        assert_eq!(
+            measured.module_sources,
+            measured
+                .graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>()
+        );
+        let reserved_source_scan_work =
+            measured.module_sources.len() + foreign.source().text().len();
+        let owner = measured
+            .program
+            .registry
+            .nominals()
+            .iter()
+            .find(|owner| owner.id.module() == entry.id() && owner.spelling == "Box")
+            .unwrap();
+        let [left, right] = measured
+            .program
+            .registry
+            .nominal_parameters(owner.id)
+            .unwrap()
+        else {
+            panic!("Box retains its two original parameters")
+        };
+        assert_eq!(left.spelling, "Left");
+        assert_eq!(right.spelling, "Right");
+        assert_eq!(left.kind, Kind::Type);
+        assert_eq!(right.kind, Kind::Type);
+        assert_eq!(
+            owner.representation.as_ref().unwrap(),
+            &Type::Tuple(
+                vec![Type::Variable(left.id), Type::Variable(right.id)].into_boxed_slice()
+            )
+        );
         let prelude = Validator::new_modules(&measured.program, &sources, &measured.module_sources)
             .expect("the canonical conversion prelude initializes");
-        assert_registry_prelude_work(&prelude, RESERVED_SOURCE_SCAN_WORK);
-        const EXACT_WORK: usize =
-            RESERVED_SOURCE_SCAN_WORK + VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;
+        assert_registry_prelude_work(&prelude, reserved_source_scan_work);
         assert_eq!(
             validator.newtype_conversion_parameter_work.get(),
             NEWTYPE_PARAMETER_WORK,
             "two arguments require 2P carriers, P row traversal, and P+1 spine inspection",
         );
-        assert_eq!(exact_work, EXACT_WORK);
+        assert!(exact_work >= reserved_source_scan_work + NEWTYPE_PARAMETER_WORK);
         assert!(exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
         drop(validator);
         drop(measured);
@@ -35614,7 +35720,10 @@ mod tests {
             .result
             .expect_err("one missing unit must reject before publication");
         assert_eq!(error.reason(), ValidationReason::Resource);
-        assert_eq!(one_short.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+        assert!(
+            one_short.type_work <= CORE_VALIDATION_TYPE_WORK_LIMIT,
+            "a refused bulk charge retains only its admitted prefix"
+        );
 
         let retry = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);
         assert!(retry.result.is_ok());

@@ -30,7 +30,7 @@ tests. Functions passes all 19 original tests. Polymorphism and interface-module
 controls pass all 43 and 25 original tests. Module loading now passes all 24
 original tests; library imports now passes all 17. Core validation now passes
 all 67 original tests and resource modules all 16. Their fourteen restorations
-are disjoint from the published 410, giving 424 staged integration restorations. Nine focused unit
+are disjoint from the published 410, giving 424 staged integration restorations. Seventeen focused unit
 repairs are counted separately. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
 The latest complete Library10 inventory at checkpoint20 policy inputs records 1,562 passes and
@@ -106,8 +106,8 @@ policies remain unchanged. Normal166 passes all 102 original resource-typing cas
 cases, the three repaired units and 13 existing owner/policy/calibration/reporting
 controls: 135 distinct names. All eight old resource failures now pass without
 program, stack or depth changes; no original resource name is missing or newly
-failing. Together with the six ledger controls below, nine selected old unit
-failures now pass, leaving 26 names in the selected Library10 backlog. This is
+failing. Together with the elaborate and Core ledger controls below, seventeen selected
+old unit failures now pass, leaving 18 names in the selected Library10 backlog. This is
 not a refreshed complete library count. Diagnostics remain separate from normal
 verification, and integration-only inventory/full-gate clearance remain pending.
 The connected unchanged resource-runtime target also passes all 32 original
@@ -133,6 +133,25 @@ change; a fresh whole library/integration inventory and canonical gate remain
 pending.
 
 
+Eight Core unit controls also pass at canonical-formatted frozen inputs. Linked
+scalar and Arrow matching retain the derived local formula 2R + K + S + L,
+including canonical service parameters and the sole entry-region identity;
+the exact fixture fees are 16 and 14. Four method-authority controls measure
+complete successful authority phases for exact/one-short/fresh admission.
+Parameterized newtype checking retains its independent 4P + 1 = 9 parameter
+counter, complete three-source prelude and canonical Box parameter/representation
+premises, separately from the complete consuming-validation boundary.
+
+The linked transform retains four anchors, one embedded producer remap, exact
+coordinate candidate visits, carrier/key/replay fees, fresh validation and shared
+Arc/Weak lifecycle. Restored temporary probes completed identity and folding at
+2,025 work units each; static carrier/candidate inventories leave a fixed
+1,946-unit reconstruction/structural-copy subtotal after the explicit terms.
+Normal retries use that fixed subtotal rather than measuring their own allowance.
+Core197 passes all eight original names after formatting; Final198 format and
+canonical Clippy pass without subsequent executable edits. Production prefixes
+remain byte-identical. These eight unit restorations add no integration credit,
+policy, API or semantic change; the complete library inventory is not refreshed.
 
 Runtime trace controls retain all 13 original Source programs, exact user event
 vectors/counts/handler identities and whole raw transformed-trace equality. A

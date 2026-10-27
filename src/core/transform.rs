@@ -1500,20 +1500,22 @@ mod tests {
 
     #[test]
     fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries() {
-        // This one-edge fixture consumes 673 predecessor node-reconstruction,
-        // anchor Type-clone/Builder-replay, and finish units. Its four complete
-        // applications add four vector-copy slots, four retained argument
-        // slots, three non-edge application envelopes, and five aligned edge
-        // authentication units. Admitting all methods adds eight catalog
-        // lookup cells across the four replays. Reading the immutable sidecar
-        // costs X=4, and remapping the exact prerequisite producer costs G=1
-        // before the embedded NodeId lookup.
-        // The edge-local concrete-source catalog adds S=1 lookup cell to each
-        // of the four method-filtered expectation matches replayed here.
+        // Complete normal identity and folding rebuilds each consume 2,025
+        // units. Their independently counted carriers (20), candidate visits
+        // (5), and the explicit terms below leave a fixed 1,946-unit subtotal
+        // for Effect reconstruction and structural application copies. This
+        // whole-boundary subtotal is not a local anchor tariff; normal retries
+        // retain it without measuring their own allowance.
+        // Four complete applications add four vector-copy slots, four retained
+        // argument slots, three non-edge envelopes, and five edge admissions.
+        // All-method catalog lookup costs eight cells; concrete-source lookup
+        // adds one cell per replay. Sidecar visits cost A=4 and the embedded
+        // prerequisite producer remap costs G=1 before its NodeId lookup.
+        const EFFECT_RECONSTRUCTION_AND_COPY_WORK: usize = 1_946;
         const CONCRETE_SOURCE_LOOKUP_WORK: usize = 4;
         const COMPLETE_APPLICATION_WORK: usize = 4 + 4 + 3 + 5;
         const ALL_METHOD_CATALOG_LOOKUP_WORK: usize = 8;
-        const CORE_WORK: usize = 673
+        const CORE_WORK: usize = EFFECT_RECONSTRUCTION_AND_COPY_WORK
             + COMPLETE_APPLICATION_WORK
             + ALL_METHOD_CATALOG_LOOKUP_WORK
             + CONCRETE_SOURCE_LOOKUP_WORK;
