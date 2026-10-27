@@ -2309,7 +2309,8 @@ mod tests {
                 // calls, each with its own constraint ledger. Preserve that
                 // aggregate stress envelope without changing driver admission
                 // or resetting its continuous ledger between phases.
-                const AGGREGATE: usize = 4 * crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT;
+                const ORIGINAL_PHASE_ALLOWANCE: usize = 327_680;
+                const AGGREGATE: usize = 4 * ORIGINAL_PHASE_ALLOWANCE;
                 let mut constraints = InterfaceConstraintBudget::with_limit(AGGREGATE);
                 let evidence_entry = Cell::new(0);
                 let evidence_exit = Cell::new(0);
@@ -2330,8 +2331,8 @@ mod tests {
                     evidence_entry.get(), evidence_exit.get(), constraints.used());
                 let compiled = compiled.unwrap_or_else(|failure| panic!(
                     "recursive stress compilation failed: {:?}", failure.pipeline_failure()));
-                assert!(evidence_entry.get() <= 3 * crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
-                assert!(evidence_exit.get() - evidence_entry.get() <= crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+                assert!(evidence_entry.get() <= 3 * ORIGINAL_PHASE_ALLOWANCE);
+                assert!(evidence_exit.get() - evidence_entry.get() <= ORIGINAL_PHASE_ALLOWANCE);
                 let (program, _) = compiled
                     .effect_build_input()
                     .expect("explicit default root uses Effect Core");
@@ -3113,6 +3114,105 @@ mod tests {
     }
 
     #[test]
+    fn explicit_constraint_owners_retain_wide_graph_refusal_and_fresh_recovery() {
+        const SHARED_LIMIT: usize = 400_000;
+        const ORIGINAL_LIMIT: usize = 327_680;
+        let source = TestSource::write(concat!(
+            "import dependency as Dependency\n",
+            "main : Unit -> Int\n",
+            "main () = 42\n",
+        ));
+        source.write_sibling("dependency.ash", &public_interface_declarations(4_500));
+        for _ in 0..2 {
+            let prefix = Cell::new(0);
+            let mut shared = InterfaceConstraintBudget::with_limit(SHARED_LIMIT);
+            let failure = run_path_with_consumers_and_constraint_budget(
+                source.configuration(),
+                &mut shared,
+                |linked, budget, types| {
+                    prefix.set(budget.used());
+                    validate_interface_evidence_with_budget(linked, budget, types)
+                },
+                validate_effect_modules,
+                evaluate_compiled_core,
+            )
+            .expect_err("the continuous owner must retain admission work during validation");
+            assert_eq!(prefix.get(), 365_559);
+            assert_eq!(failure.reason_code(), "internal.resource.constraint-work");
+            let PipelineFailure::EvidenceValidation(error) = failure.pipeline_failure().unwrap()
+            else {
+                panic!("the finite cumulative owner should reach evidence validation");
+            };
+            assert_eq!(
+                error.reason(),
+                crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted
+            );
+            assert!(shared.used() <= SHARED_LIMIT);
+        }
+        // A fresh evidence-stage owner fits; the real continuous owner above must
+        // not receive this refill after the same completed admission prefix.
+        let mut admission = InterfaceConstraintBudget::with_limit(SHARED_LIMIT);
+        let observation = run_path_with_consumers_and_constraint_budget(
+            source.configuration(),
+            &mut admission,
+            |linked, budget, types| {
+                assert_eq!(budget.used(), 365_559);
+                let mut fresh = InterfaceConstraintBudget::with_limit(SHARED_LIMIT);
+                let result = validate_interface_evidence_with_budget(linked, &mut fresh, types);
+                assert_eq!(fresh.used(), 225_417);
+                result
+            },
+            validate_effect_modules,
+            evaluate_compiled_core,
+        )
+        .expect("the independent evidence stage should fit its own finite owner");
+        assert_eq!(observation.value_display(), "42");
+        drop(observation);
+
+        let mut declarations = String::new();
+        for index in 0..5_000 {
+            declarations.push_str(&format!(
+                "pub interface Marker{index}<A> {{\nmark{index}<T> : (A, T) -> A\n}}\n\n"
+            ));
+        }
+        source.write_sibling("dependency.ash", &declarations);
+        for _ in 0..2 {
+            let mut original = InterfaceConstraintBudget::with_limit(ORIGINAL_LIMIT);
+            let failure = run_path_with_consumers_and_constraint_budget(
+                source.configuration(),
+                &mut original,
+                validate_interface_evidence_with_budget,
+                validate_effect_modules,
+                evaluate_compiled_core,
+            )
+            .expect_err("the original finite owner should still reject polymorphic ingress");
+            assert_eq!(failure.reason_code(), "internal.resource.constraint-work");
+            assert!(matches!(
+                failure.pipeline_failure(),
+                Some(PipelineFailure::Typing(TypeError::Internal(_)))
+            ));
+            assert!(original.used() <= ORIGINAL_LIMIT);
+        }
+        declarations.clear();
+        for index in 0..1_024 {
+            declarations.push_str(&format!(
+                "pub interface Marker{index}<A> {{\nmark{index}<T> : (A, T) -> A\n}}\n\n"
+            ));
+        }
+        source.write_sibling("dependency.ash", &declarations);
+        let mut fresh = InterfaceConstraintBudget::with_limit(ORIGINAL_LIMIT);
+        let observation = run_path_with_consumers_and_constraint_budget(
+            source.configuration(),
+            &mut fresh,
+            validate_interface_evidence_with_budget,
+            validate_effect_modules,
+            evaluate_compiled_core,
+        )
+        .expect("the unchanged smaller polymorphic graph should recover with a fresh owner");
+        assert_eq!(observation.value_display(), "42");
+    }
+
+    #[test]
     fn exact_constraint_budget_persists_through_evidence_validation() {
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
@@ -3376,10 +3476,14 @@ mod tests {
 
     #[test]
     fn wide_interface_graph_records_the_exact_validation_prefix() {
-        // Keep linking just below the unchanged graph limit; the complete
+        // Keep the original 327,680-unit reference boundary; the complete
         // implicit Foreign/Region prefix is 444 and dependency resolution adds
         // 203. Interface arrows now retain their DefaultAlloc row/closure.
-        const WIDTH: usize = (crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT - 1_060) / 81;
+        const ORIGINAL_ALLOWANCE: usize = 327_680;
+        const WIDTH: usize = (ORIGINAL_ALLOWANCE - 1_060) / 81;
+        const {
+            assert!(WIDTH == 4_032);
+        }
         // Dependency checking adds 44W+55 after that 647-cell prefix.
         const DEPENDENCY_CHECKED: usize = 44 * WIDTH + 702;
         // Entry resolution adds 23W+217: full summary authentication and
@@ -3498,9 +3602,9 @@ mod tests {
             ],
         );
         const {
-            assert!(LINKED < crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
-            assert!(LINKED + 81 >= crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
-            assert!(VALIDATED > crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+            assert!(LINKED < ORIGINAL_ALLOWANCE);
+            assert!(LINKED + 81 >= ORIGINAL_ALLOWANCE);
+            assert!(VALIDATED > ORIGINAL_ALLOWANCE);
         }
     }
 

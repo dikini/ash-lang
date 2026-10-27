@@ -32,24 +32,25 @@ original tests; library imports now passes all 17. Core validation now passes
 all 67 original tests and resource modules all 16. Effect Core, typing and
 module targets pass all 6, 30 and 15 original tests. Module resolution and
 provenance now pass all 11 and 4 original tests. Semantics now passes all 13
-original tests. Architecture now passes all 47 original tests; its four new
-restorations are disjoint from the prior 454, giving 458 staged integration
-restorations. New constructor negatives, the private Core census and the opaque
-identity unit remain additional coverage, not restored names.
+original tests. Architecture retains all 47 original passes. Interface resources
+now passes all six original tests; its three new restorations are disjoint from
+the prior 458, giving 461 original integration restorations. New constructor
+negatives, the private Core census, opaque identity unit and explicit constraint
+owner unit remain additional coverage, not restored names.
 
-Fresh Library12 passes all 1,598 tests, with zero failures or ignored tests.
-Its names equal Library11's 1,597 plus the previously focused opaque identity
-unit; no names are missing or newly failing. All 35 Library10 unit failures
-remain restored separately. Repeated passes are counted once.
+Fresh Library13 passes all 1,599 tests, with zero failures or ignored tests.
+It retains all Library12 names and adds only the explicit constraint-owner unit.
+All 35 Library10 unit failures remain restored separately, with no lost names or
+new failures. Repeated passes are counted once.
 
-Integration227 is the latest complete integration inventory: all 103 targets
-ran, with 81 passing and 22 failing. Its 1,782 unique names record 1,732 passes
-and 50 failures, with no ignored, incomplete or unexecuted cases. All 1,780
-Integration69 names remain, plus two previously disclosed passing constructor
-negatives. The 454 original restorations had no regressions or newly failing
-old passes. All 8,565 tracked inputs stayed equal in each complete inventory.
-Architecture240 subsequently restores four of those 50 failures. The resulting
-46 unmatched keys are staged subtraction, not a fresh complete failure count. The scoped controls retain exact
+Integration244 is the latest complete integration inventory: all 103 targets
+ran, with 83 passing and 20 failing. Its 1,782 unique names record 1,739 passes
+and 43 failures, with no ignored, incomplete or unexecuted cases. All 1,780
+Integration69 names remain, plus the same two passing constructor negatives.
+The 43 failures are exactly the original 504 minus 461 restorations; no old
+passes or prior restorations regressed. All 8,565 tracked inputs stayed equal
+in each complete inventory. Integration227 remains historical evidence at the
+preceding policy, not the latest result. The scoped controls retain exact
 resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
@@ -57,6 +58,30 @@ transformed effect traces still equal the original trace.
 
 
 
+
+The graph-wide constraint default is now 1,376,256 work units, retaining its
+single cumulative owner and Structural calibration route. The finite constraint-
+only diagnostic completed the unchanged 5,000-interface polymorphic graph at
+1,096,476 units; its 25% reserve target is 1,370,595, rounded to a 65,536-unit
+step (25.5163% reserve). The 2,800 and 4,500 monomorphic graphs completed at
+368,276 and 590,976; the genuine cycle reached its semantic failure at 352,321.
+Temporary source bytes were restored exactly before normal verification. A
+bounded inspection found no small optimization plausibly saving 25% of total
+work; independent canonical/source/token authentication remains required.
+
+The unchanged public 4,500/5,000-interface programs now exercise normal admission.
+One new actual-driver unit retains two finite 400,000-unit continuous-owner
+refusals in evidence validation after the 365,559-unit linked prefix; a fresh
+independent validation owner completes its 225,417 units. Two explicit original
+327,680-unit polymorphic typing refusals and fresh 1,024-interface recovery remain.
+These are whole-boundary observations, not derived local tariffs. The unrelated
+standalone resolution-Type refusal was measured separately (327,680 refused,
+423,346 completed) and its policy was not changed. Original 4,032-width reference
+and 1,310,720-unit recursive stress envelopes, exact/short/retry budgets, stacks
+and Source programs stay fixed. Type/Source/Core and all other defaults stay
+independent. Normal focused evidence passes 14 distinct checks; fresh Library13
+and Integration244 cover the stable candidate. Only TASK/plan result prose
+changes afterward; canonical format/Clippy are recorded separately.
 
 Architecture240 audits the complete carrier inventory: 65 new sites and nine
 exact coordinate renames retain existing ownership profiles and iterative
@@ -77,12 +102,12 @@ Existing glob/shadowing guards remain fail-closed. Two compile-time identifiers
 are permitted only at their defining Core paths. The closed Pure mock keeps one
 authenticated conversion; its unchanged Source independently uses Effect Core.
 
-Final normal evidence passes architecture 47/0, Library12 1,598/0/0, semantics
+The preceding Architecture240 normal evidence passes architecture 47/0, Library12 1,598/0/0, semantics
 13/0, effect runtime 27/0 and existing native storage 31/0, at identical executable
 inputs. The native target executes actual C-backed generated programs and retains
 exact values and traces. This is connected native evidence, not R5 finite-provider
 or canonical full-gate acceptance. Only subsequent TASK/plan result prose changes
-after these runs; the latest complete integration result remains Integration227.
+after those runs; current Library13 and Integration244 supersede those inventories.
 
 Semantics Source execution uses complete independently validated Effect Core for
 self-reference and all five original newtype representations. Exact public nominal

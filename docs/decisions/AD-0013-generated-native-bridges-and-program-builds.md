@@ -103,9 +103,22 @@ Public standalone Source checking has a separate current exception. The public
 `check_module` entry uses one cumulative 15,663,104 structural-work-unit allowance
 per module, with the existing Structural diagnostic calibration override. It
 carries that same owner through body checking and export collection/freeze.
-Explicit `check_module_with_budget` callers, driver phase policies and all other
-structural, primary, rewrite, private-image, coverage and constraint defaults
-retain their existing limits; this is not graph-wide credit or a refill.
+Explicit `check_module_with_budget` callers and driver Source phase policies
+retain their supplied limits; this is not graph-wide credit or a refill.
+
+The graph-wide interface-and-constraint default is 1,376,256 work units. One
+owner persists through dependency admission, checking, linking and independent
+evidence validation, with the existing Structural calibration override. A finite
+constraint-only completion probe on unchanged interface graphs measured 368,276
+units at 2,800 monomorphic interfaces, 590,976 at 4,500, and 1,096,476 at 5,000
+polymorphic interfaces. The genuine 4,500-interface cycle reached its semantic
+failure at 352,321 units. The largest completed owner gives a 25% reserve target
+of 1,370,595; rounding to a 65,536-work-unit step gives 1,376,256, a 25.5163%
+reserve. These are work units, not memory sizes. Explicit caller budgets and all
+Type, primary, rewrite, private-image and coverage defaults remain unchanged.
+The earlier 327,680-unit refusal remains an explicit driver control, and a
+400,000-unit owner preserves the wide graph's no-refill validation boundary.
+No standalone resolution-Type allowance changes to rescue a test setup.
 
 The original 128-method and 192-function publication witnesses completed with a
 finite diagnostic Source-only allowance of 1,310,720 units. Their defining
