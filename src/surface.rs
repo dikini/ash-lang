@@ -420,6 +420,8 @@ pub enum SurfaceExprKind {
     Cleanup(Box<SurfaceCleanupExpr>),
     /// Nullary consumption of the nearest clause's captured continuation.
     Discard,
+    /// Nullary transfer of the nearest private checkpoint clause's capture.
+    Retain,
 }
 
 /// The closed set of builtin acquisition designators.
@@ -520,6 +522,8 @@ pub struct SurfaceProviderResourceExpr {
 pub struct SurfaceHandleExpr {
     pub body: Box<SurfaceExpr>,
     pub effect: SurfaceEffectInstance,
+    /// Optional actual store used to establish a private retained-control root.
+    pub store: Option<Box<SurfaceExpr>>,
     pub clauses: Vec<SurfaceHandlerClause>,
 }
 

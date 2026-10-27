@@ -84,6 +84,10 @@ pub enum TypeReason {
     NotApplicable,
     /// A retained-control store needs a Unit-domain function descriptor.
     StoreDescriptor,
+    /// Retain requires a checkpoint operation whose reply is Unit.
+    RetainReply,
+    /// The private root's outstanding completion cannot be discarded.
+    RetainedRootDiscard,
     /// An application argument did not match the function domain.
     Argument,
     /// An annotated binding initializer did not match its annotation.
@@ -395,6 +399,10 @@ impl TypeReason {
                 "continuation_capture",
                 None,
             ),
+            Self::RetainReply => (Message::retain_reply(), "continuation_use", None),
+            Self::RetainedRootDiscard => {
+                (Message::retained_root_discard(), "continuation_use", None)
+            }
             Self::PatternMismatch => (
                 Message::pattern_type_mismatch(expected?),
                 "pattern",
@@ -560,6 +568,8 @@ impl fmt::Display for TypeReason {
             Self::FunctionNeedsContext => formatter.write_str("type.function-needs-context"),
             Self::NotApplicable => formatter.write_str("type.not-applicable"),
             Self::StoreDescriptor => formatter.write_str("type.store-descriptor"),
+            Self::RetainReply => formatter.write_str("effect.retain-reply"),
+            Self::RetainedRootDiscard => formatter.write_str("effect.retained-root-discard"),
             Self::Argument => formatter.write_str("type.argument"),
             Self::BindingInitializer => formatter.write_str("type.binding-initializer"),
             Self::DefinitionResult => formatter.write_str("type.definition-result"),
@@ -3048,6 +3058,8 @@ impl CoreLoweringFamily for EffectOperationFamily {
             EffectOperation::Continue(continuation) => {
                 builder.continue_control(continuation, ty, effects, origin)
             }
+            EffectOperation::RetainedRoot(root) => builder.retained_root(root, ty, effects, origin),
+            EffectOperation::Retain(retain) => builder.retain_control(retain, ty, effects, origin),
             EffectOperation::Request(request) => {
                 let (effect, operation, operand) = request.into_parts();
                 builder.request(effect, operation, operand, ty, effects, origin)
@@ -3110,12 +3122,16 @@ struct ActiveResume {
     handler: HandlerId,
     input: Type,
     result: Type,
+    retained: Option<(crate::resolved::StoreApi, Type)>,
 }
 
 impl Drop for ActiveResume {
     fn drop(&mut self) {
         discard_type_iteratively(std::mem::replace(&mut self.input, Type::Unit));
         discard_type_iteratively(std::mem::replace(&mut self.result, Type::Unit));
+        if let Some((_, owner)) = self.retained.take() {
+            discard_type_iteratively(owner);
+        }
     }
 }
 
@@ -11458,6 +11474,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     "this nested scope cannot capture the clause completion capability",
                 )
             })?;
+        if active.retained.is_some() {
+            return Err(inference_failure(
+                TypeReason::RetainedRootDiscard,
+                span,
+                "a private checkpoint root must be resumed or retained",
+            ));
+        }
         let operation = EffectOperation::Discard(crate::core::DiscardNode::new(
             active.handler,
             owner,
@@ -11471,6 +11494,59 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty: Type::Unit,
+            effects,
+            provenance,
+        })
+    }
+
+    fn synthesize_retain(
+        &mut self,
+        retain: &crate::resolved::ResolvedRetainExpr,
+        span: Span,
+    ) -> Result<TypedNode, TypeError> {
+        // The nearest clause is a barrier, including when it is an ordinary
+        // nested handler. Never search for an older private root.
+        let active = self.active_resumes.last().ok_or_else(invalid_state)?;
+        if active.owner != retain.owner {
+            return Err(invalid_state());
+        }
+        let (api, owner) = active.retained.as_ref().ok_or_else(invalid_state)?;
+        if !matches!(active.input, Type::Unit) {
+            return Err(inference_failure(
+                TypeReason::RetainReply,
+                span,
+                "retain requires a checkpoint whose resume reply is Unit",
+            ));
+        }
+        let api = *api;
+        let handler = active.handler;
+        let identity = IterativeTypeOwner::new(
+            clone_type_with_budget(owner, &mut self.type_work).map_err(|()| type_resource())?,
+        );
+        self.type_work.charge(3).map_err(|()| type_resource())?;
+        let ty = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.key())),
+            Box::new(self.clone_type(&identity)?),
+        ));
+        let effects = EffectRow::singleton(EffectInstance::new(
+            api.drive(),
+            Box::new([identity.into_inner()]),
+        ));
+        let core_ty = self.pure_core_type(&ty)?;
+        let core_effects = self.core_effect_row(&effects)?;
+        let node = self.push_effect_core(
+            core_ty,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Retain(crate::core::effect::RetainNode {
+                handler,
+                owner: retain.owner,
+            }),
+        )?;
+        let provenance = self.at_span_provenance(&ty, span)?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
             effects,
             provenance,
         })
@@ -11885,9 +11961,65 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         context: &mut TypeContext,
         body: TypedNode,
+        store: Option<TypedNode>,
         rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
     ) -> Result<TypedNode, TypeError> {
         let body = TypedNodeOwner::new(body);
+        let store = store.map(TypedNodeOwner::new);
+        let retained = if let Some(store) = store.as_ref() {
+            if handler.hook_root.is_some() || handler.hook_registration.is_some() {
+                return Err(invalid_state());
+            }
+            let (api, owner, ports) =
+                crate::core::effect::store_ports(&store.ty).ok_or_else(|| {
+                    inference_failure(
+                        TypeReason::StoreDescriptor,
+                        span,
+                        "a private root requires a retained-control Store operand",
+                    )
+                })?;
+            // Source checking sees the authenticated opaque import, not its
+            // hidden constructor declarations. Linked Core rechecks the full
+            // builtin registry before any retained-control carrier is admitted.
+            let owner = IterativeTypeOwner::new(self.clone_type(owner)?);
+            let answer = IterativeTypeOwner::new(self.clone_type(ports.value())?);
+            match self.unify(&body.ty, &answer) {
+                Ok(()) => {}
+                Err(UnificationFailure::Mismatch) => {
+                    let expected = IterativeTypeOwner::new(self.zonk(&answer)?);
+                    let actual = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+                    return Err(check_mismatch(
+                        CheckKind::General,
+                        handler.body.span,
+                        expected.into_inner(),
+                        actual.into_inner(),
+                        Some(span),
+                        &self.registry,
+                    ));
+                }
+                Err(UnificationFailure::RowExclusion) => {
+                    return Err(row_exclusion_error(span, None));
+                }
+                Err(UnificationFailure::Infinite) => {
+                    return Err(inference_failure(
+                        TypeReason::InfiniteType,
+                        span,
+                        "this root would require an infinite type",
+                    ));
+                }
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
+                }
+                Err(UnificationFailure::Resource) => return Err(type_resource()),
+                Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+            }
+            Some((api, owner))
+        } else {
+            None
+        };
         if let Some(root) = &handler.hook_root {
             self.type_work
                 .charge(6)
@@ -11992,6 +12124,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             context,
             &result_type,
             output,
+            retained.as_ref().map(|(api, owner)| (*api, &**owner)),
         )?;
         output = clause_output;
 
@@ -12030,7 +12163,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let core_handler_effect =
             clone_effect_instance_with_budget(&handler.effect.instance, &mut self.type_work)
                 .map_err(|error| TypeError::Internal(error.into()))?;
-        let node = self.push_effect_core(
+        let handler_node = self.push_effect_core(
             core_ty,
             core_effects,
             Origin::Source(span),
@@ -12041,11 +12174,28 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 clauses,
             )),
         )?;
+        let (node, effects) = if let Some(store) = store.as_ref() {
+            let effects = self.union_effects(&store.effects, &output, span)?;
+            let core_ty = self.pure_core_type(&ty)?;
+            let core_effects = self.core_effect_row(&effects)?;
+            let root = self.push_effect_core(
+                core_ty,
+                core_effects,
+                Origin::Source(span),
+                EffectOperation::RetainedRoot(crate::core::effect::RetainedRootNode {
+                    store: store.node,
+                    handler: handler_node,
+                }),
+            )?;
+            (root, effects)
+        } else {
+            (handler_node, output)
+        };
         let provenance = self.at_span_provenance(&ty, span)?;
         Ok(TypedNode {
             node,
             ty,
-            effects: output,
+            effects,
             provenance,
         })
     }
@@ -12060,6 +12210,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         context: &mut TypeContext,
         result_type: &Type,
         initial_effects: EffectRow,
+        retained: Option<(crate::resolved::StoreApi, &Type)>,
     ) -> Result<(HandlerId, EffectRow, Vec<CheckedEffectClause>), TypeError> {
         let declaration = self
             .registry
@@ -12135,11 +12286,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 self.active_resumes
                     .try_reserve(1)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let retained = retained
+                    .map(|(api, owner)| self.clone_type(owner).map(|owner| (api, owner)))
+                    .transpose()?;
                 self.active_resumes.push(ActiveResume {
                     owner: clause.resume,
                     handler: handler_id,
                     input: resume_result.into_inner(),
                     result: active_result.into_inner(),
+                    retained,
                 });
                 active = true;
                 let clause_start = self.builder.node_checkpoint();
@@ -14070,17 +14225,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     span,
                     rewrite_checkpoint,
                 } => {
-                    let body = values.pop().ok_or_else(invalid_state)?.into_inner();
+                    let body = values.pop().ok_or_else(invalid_state)?;
+                    let store = if handler.store.is_some() {
+                        Some(values.pop().ok_or_else(invalid_state)?)
+                    } else {
+                        None
+                    };
                     values.push(if handler.hook_registration.is_some() {
+                        if store.is_some() {
+                            return Err(invalid_state());
+                        }
                         self.finish_registration_handler(
                             handler,
                             span,
                             context,
-                            body,
+                            body.into_inner(),
                             rewrite_checkpoint,
                         )?
                     } else {
-                        self.finish_handler(handler, span, context, body, rewrite_checkpoint)?
+                        self.finish_handler(
+                            handler,
+                            span,
+                            context,
+                            body.into_inner(),
+                            store.map(|store| store.into_inner()),
+                            rewrite_checkpoint,
+                        )?
                     });
                 }
                 ElaborationTask::FinishBlock {
@@ -14953,12 +15123,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 self.schedule_perform(request, current.span, tasks)?;
             }
             ResolvedExprKind::Handle(handler) => {
+                let count = 2 + usize::from(handler.store.is_some());
                 self.type_work
-                    .charge(2)
+                    .charge(count)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 tasks
                     .0
-                    .try_reserve(2)
+                    .try_reserve(count)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 tasks.push(ElaborationTask::FinishHookBody {
                     handler,
@@ -14969,10 +15140,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     expression: &handler.body,
                     cause: None,
                 });
+                if let Some(store) = handler.store.as_deref() {
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression: store,
+                        cause: None,
+                    });
+                }
             }
             ResolvedExprKind::Resume(resume) => {
                 let typed = self.synthesize_resume(resume, current.span, context)?;
                 values.push(typed);
+            }
+            ResolvedExprKind::Retain(retain) => {
+                values.push(self.synthesize_retain(retain, current.span)?);
             }
             ResolvedExprKind::Discard(_) => return Err(invalid_state()),
             ResolvedExprKind::Function(function) => {
@@ -24852,10 +25032,13 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Perform(request) => work.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 work.push(&handler.body);
+                if let Some(store) = &handler.store {
+                    work.push(store);
+                }
                 work.extend(handler.clauses.iter().map(|clause| &clause.body));
             }
             ResolvedExprKind::Resume(resume) => work.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
             ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
@@ -27354,6 +27537,9 @@ fn resume_usage_with_budget(
                         Task::CheckHandlerClauses(&handler.clauses, expression.span),
                         budget,
                     )?;
+                    if let Some(store) = &handler.store {
+                        push(&mut tasks, Task::Visit(store), budget)?;
+                    }
                 }
                 ResolvedExprKind::Resume(resume) => {
                     push(
@@ -27367,6 +27553,13 @@ fn resume_usage_with_budget(
                     push(
                         &mut tasks,
                         Task::Consume(discard.owner, expression.span),
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Retain(retain) => {
+                    push(
+                        &mut tasks,
+                        Task::Consume(Some(retain.owner), expression.span),
                         budget,
                     )?;
                 }
@@ -27541,6 +27734,11 @@ fn contains_resume_owner_with_budget(
                     return Ok(true);
                 }
             }
+            ResolvedExprKind::Retain(retain) => {
+                if retain.owner == owner {
+                    return Ok(true);
+                }
+            }
 
             ResolvedExprKind::Region(region) => {
                 schedule(&mut pending, &region.body, budget)?;
@@ -27640,6 +27838,9 @@ fn contains_resume_owner_with_budget(
             }
             ResolvedExprKind::Handle(handler) => {
                 schedule(&mut pending, &handler.body, budget)?;
+                if let Some(store) = &handler.store {
+                    schedule(&mut pending, store, budget)?;
+                }
                 for clause in &handler.clauses {
                     schedule(&mut pending, &clause.body, budget)?;
                 }
@@ -27853,7 +28054,8 @@ fn effect_expression_work_contains_syntax(
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
             | ResolvedExprKind::Resume(_)
-            | ResolvedExprKind::Discard(_) => return Ok(true),
+            | ResolvedExprKind::Discard(_)
+            | ResolvedExprKind::Retain(_) => return Ok(true),
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
                     schedule_effect_expression(&mut work, element, budget)?;
@@ -28130,13 +28332,16 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
+                if let Some(store) = &handler.store {
+                    expressions.push(store);
+                }
                 for clause in &handler.clauses {
                     collect_pattern_binders(&clause.pattern, binders);
                     expressions.push(&clause.body);
                 }
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
             ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)

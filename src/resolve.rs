@@ -803,6 +803,8 @@ pub enum ResolveReason {
     DuplicateEffect,
     /// A resume form occurs outside an operation clause.
     ResumeOutsideClause,
+    /// Retain does not name the nearest selected private-root clause.
+    RetainOutsideRoot,
     /// An uppercase term or pattern names no constructor.
     UnknownConstructor,
     /// One pattern vector binds the same spelling more than once.
@@ -847,6 +849,7 @@ impl fmt::Display for ResolveReason {
             Self::EffectKind => "effect.kind",
             Self::DuplicateEffect => "effect.duplicate",
             Self::ResumeOutsideClause => "effect.resume-outside-clause",
+            Self::RetainOutsideRoot => "effect.retain-outside-root",
             Self::UnknownConstructor => "resolve.unknown-constructor",
             Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
@@ -1108,6 +1111,9 @@ impl ResolveError {
             ResolveReason::ResumeOutsideClause => {
                 return Some((self.message()?, "continuation_use"));
             }
+            ResolveReason::RetainOutsideRoot => {
+                return Some((self.message()?, "continuation_use"));
+            }
             ResolveReason::TypeKind | ResolveReason::InterfaceKind | ResolveReason::EffectKind => {
                 return Some((
                     crate::message::Message::incompatible_name_role(),
@@ -1252,6 +1258,7 @@ impl ResolveError {
             ResolveReason::ResumeOutsideClause => {
                 Some(("operation", "keyword", self.found.as_deref()?))
             }
+            ResolveReason::RetainOutsideRoot => None,
             ResolveReason::EffectOperationShape
             | ResolveReason::SealedProvider
             | ResolveReason::SealedDrive
@@ -1347,6 +1354,9 @@ impl ResolveError {
                 return Some(crate::message::Message::resolve_continuation_outside(
                     self.found.as_deref()?,
                 ));
+            }
+            ResolveReason::RetainOutsideRoot => {
+                return Some(crate::message::Message::resolve_retain_outside_root());
             }
             _ => {}
         }
@@ -2418,6 +2428,7 @@ struct Resolver {
     type_scopes: Vec<HashMap<String, TypeVariableId>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
     active_resumes: Vec<ResumeId>,
+    retained_clause: Option<ResumeId>,
     next_resume: u32,
     type_work: TypeWorkBudget,
     constraint_work: InterfaceConstraintBudget,
@@ -2826,6 +2837,7 @@ impl Resolver {
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
             active_resumes: Vec::new(),
+            retained_clause: None,
             next_resume: 0,
             type_work,
             constraint_work,
@@ -10274,6 +10286,7 @@ impl Resolver {
             kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                 hook_registration: None,
                 hook_root: Some(contract),
+                store: None,
                 body: Box::new(body.into_inner()),
                 effect,
                 clauses,
@@ -10484,6 +10497,7 @@ impl Resolver {
                     kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                         hook_registration: Some(Box::new(contract)),
                         hook_root: None,
+                        store: None,
                         body: Box::new(body.into_inner()),
                         effect,
                         clauses,
@@ -12395,6 +12409,20 @@ impl Resolver {
                 "the store drive cannot be handled directly",
             ));
         }
+        let store = handler
+            .store
+            .as_deref()
+            .map(|store| self.resolve_expr(store).map(ResolvedExpressionOwner::new))
+            .transpose()?;
+        if store.is_some() {
+            self.type_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "private-root store storage exceeded its type-work budget",
+                )
+            })?;
+        }
         let body = ResolvedExpressionOwner::new(self.resolve_expr(&handler.body)?);
         self.type_work.charge(handler.clauses.len()).map_err(|()| {
             error(
@@ -12462,9 +12490,14 @@ impl Resolver {
                 )
             })?;
             self.active_resumes.push(resume);
+            let prior_retained_clause = std::mem::replace(
+                &mut self.retained_clause,
+                handler.store.as_ref().map(|_| resume),
+            );
             let resolved_body = self
                 .resolve_expr(&clause.body)
                 .map(ResolvedExpressionOwner::new);
+            self.retained_clause = prior_retained_clause;
             self.active_resumes.truncate(resume_checkpoint);
             self.scopes.truncate(scope_checkpoint);
             clauses.push(ResolvedHandlerClause {
@@ -12480,6 +12513,7 @@ impl Resolver {
             kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
                 hook_registration: None,
                 hook_root: None,
+                store: store.map(|store| Box::new(store.into_inner())),
                 body: Box::new(body.into_inner()),
                 effect,
                 clauses,
@@ -13040,6 +13074,24 @@ impl Resolver {
                     kind: ResolvedExprKind::Discard(crate::resolved::ResolvedDiscardExpr {
                         owner: Some(owner),
                     }),
+                    span: expression.span,
+                });
+            }
+            SurfaceExprKind::Retain => {
+                let owner = self
+                    .active_resumes
+                    .last()
+                    .copied()
+                    .filter(|owner| Some(*owner) == self.retained_clause)
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::RetainOutsideRoot,
+                            expression.span,
+                            "retain requires the nearest clause of a private checkpoint root",
+                        )
+                    })?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Retain(crate::resolved::ResolvedRetainExpr { owner }),
                     span: expression.span,
                 });
             }

@@ -94,19 +94,26 @@ contract does not require assigning a new runtime identity to that frame.
 
 ### Transfer and restoration
 
-The authenticated retain carrier is a clause-scoped structural completion
-operation, like `resume` or `discard`, available only for the selected
-checkpoint clause's live hidden owner. Its source spelling and lowering are not
-selected here. It is not an ordinary overridable effect request: an arbitrary
-source handler cannot return a same-typed value while claiming to consume the
-owner. It checks the store contract and capture
-admission, prepares a slot and all fallible transfer resources, then commits a
+The source realization associates a handler with a store using
+`handle body with Checkpoint using store { ... }`. The store expression is
+evaluated once before the handled body. Its selected checkpoint clause uses the
+nullary `retain` form as a clause-scoped structural completion operation, like
+`resume` or `discard`. It consumes only the nearest selected clause's live
+hidden owner when that clause belongs to this private root; an intervening
+ordinary clause cannot reach an older private owner. `retain` is not an
+ordinary overridable effect request: an arbitrary source handler cannot return
+a same-typed value while claiming to consume the owner. It checks the store
+contract and capture admission, prepares a slot and all fallible transfer
+resources, then commits a
 single move from the clause owner to that slot. Its immediate effects are those
 of the store operation; it does not execute the captured computation. Only the
 selected owner is consumed; nested owners keep their actual live or consumed
 state. On preparation failure, no slot or locator is published and the original
 owner and its completion remain intact. The carrier must authenticate the
 actual `N` activation and provider; a matching declaration is insufficient.
+
+`retain` becomes a reserved source keyword. Existing source bindings with that
+spelling must be renamed, as with the existing `resume` and `discard` forms.
 
 The resulting opaque `Key<N>` is an ordinary non-owning locator for this
 activation and slot generation. It can be copied but cannot extend `N`'s

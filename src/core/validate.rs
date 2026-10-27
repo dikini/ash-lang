@@ -3414,7 +3414,11 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
     fn has_unproved_store(kind: &Self::Kind) -> bool {
         matches!(
             kind,
-            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Store(_))
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::Store(_)
+                    | super::effect::EffectOperation::RetainedRoot(_)
+                    | super::effect::EffectOperation::Retain(_)
+            )
         )
     }
     fn has_raw_store_drive(kind: &Self::Kind) -> bool {
@@ -3465,6 +3469,9 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
             }
             EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
                 Some((discard.handler(), discard.owner()))
+            }
+            EffectExprKind::Operation(EffectOperation::Retain(retain)) => {
+                Some((retain.handler, retain.owner))
             }
             _ => None,
         }
@@ -14570,7 +14577,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 self.validate_resource_node(id, node, resource)?;
             }
-            EffectExprKind::Operation(EffectOperation::Store(_)) => {
+            EffectExprKind::Operation(
+                EffectOperation::Store(_)
+                | EffectOperation::RetainedRoot(_)
+                | EffectOperation::Retain(_),
+            ) => {
                 return Err(ValidationError::new(
                     ValidationReason::RetainedRelease,
                     Some(id),
@@ -15454,6 +15465,15 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 child_row(continuation.key)?,
                                 type_binders,
                             )?,
+                        EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => self
+                            .union_effect_rows_charged(
+                                child_row(root.store)?,
+                                child_row(root.handler)?,
+                                id,
+                            )?,
+                        EffectExprKind::Operation(EffectOperation::Retain(_)) => {
+                            self.union_effect_rows_charged(&EffectRow::empty(), &node.effects, id)?
+                        }
                         EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => self
                             .union_effect_rows_charged(
                                 child_row(scope.body)?,
@@ -23653,6 +23673,68 @@ mod tests {
             drop(directory);
             result
         }
+    }
+
+    #[test]
+    fn private_root_core_keeps_actual_store_and_selected_owner_but_is_unadmitted() {
+        use super::super::effect::{EffectExprKind, EffectOperation, EffectOperationFamily};
+        let dependency = concat!(
+            "import @builtin.retained_control as Control\n",
+            "effect Checkpoint<N> {\ncheckpoint : Unit -> Unit\n}\n",
+            "pub branch<N> : (Control.Store<N,(Unit -> Int ! {Control.Drive<N>})>, Unit) -> Int ! {Control.Drive<N>}\n",
+            "branch (store, ignored) = handle {\n",
+            "let _ = perform Checkpoint<N>.checkpoint ()\n7\n",
+            "} with Checkpoint<N> using store {\n",
+            "checkpoint ignored => {\nlet key = retain\n42\n}\n}\n",
+        );
+        let entry = "import dependency (branch)\nmain : Unit -> Int\nmain () = 42\n";
+        let fixture = LinkedCoreValidationFixture::compile(dependency, entry, &[]);
+        let root = fixture
+            .program
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => {
+                    Some((node, root))
+                }
+                _ => None,
+            })
+            .expect("the source root has a structural Core carrier");
+        assert_eq!(root.0.kind.child_at(0), Some(root.1.store));
+        assert_eq!(root.0.kind.child_at(1), Some(root.1.handler));
+        assert!(
+            super::super::effect::store_ports(
+                &fixture.program.nodes[root.1.store.index().unwrap()].ty,
+            )
+            .is_some()
+        );
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+            &fixture.program.nodes[root.1.handler.index().unwrap()].kind
+        else {
+            panic!("the root points at the actual handler");
+        };
+        let retain = fixture
+            .program
+            .nodes
+            .iter()
+            .find_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Retain(retain)) => Some((node, retain)),
+                _ => None,
+            })
+            .expect("the selected clause contains structural Retain");
+        assert_eq!(retain.1.handler, handler.id());
+        assert!(
+            handler
+                .clauses()
+                .iter()
+                .any(|clause| clause.resume() == retain.1.owner)
+        );
+        assert!(EffectOperationFamily::has_unproved_store(&root.0.kind));
+        assert!(EffectOperationFamily::has_unproved_store(&retain.0.kind));
+        assert_eq!(
+            fixture.validate().unwrap_err().reason(),
+            ValidationReason::RetainedRelease
+        );
     }
 
     fn method_evidence_validation_fixture() -> LinkedCoreValidationFixture {

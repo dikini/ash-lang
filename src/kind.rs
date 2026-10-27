@@ -7901,6 +7901,9 @@ fn check_expression_work<'a>(
                         handler.body.span,
                         budget,
                     )?;
+                    if let Some(store) = &handler.store {
+                        push_body_work(&mut work, BodyWork::Expression(store), store.span, budget)?;
+                    }
                 }
                 ResolvedExprKind::Resume(resume) => push_body_work(
                     &mut work,
@@ -7914,7 +7917,8 @@ fn check_expression_work<'a>(
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Occurrence(_)
                 | ResolvedExprKind::Constructor(_)
-                | ResolvedExprKind::Discard(_) => {}
+                | ResolvedExprKind::Discard(_)
+                | ResolvedExprKind::Retain(_) => {}
             },
         }
     }

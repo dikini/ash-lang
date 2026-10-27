@@ -2528,6 +2528,13 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             &[index(continuation.store) + 1, index(continuation.key) + 1],
             budget,
         )?),
+        // Both carriers are rejected by the linked envelope until their
+        // retained ownership and completion control are reconstructed here.
+        Some(EffectOperation::RetainedRoot(root)) => Control::Sequence(copy_slice(
+            &[index(root.store) + 1, index(root.handler) + 1],
+            budget,
+        )?),
+        Some(EffectOperation::Retain(_)) => Control::Return,
         Some(EffectOperation::Request(request)) => {
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let perform = graph.code.len();

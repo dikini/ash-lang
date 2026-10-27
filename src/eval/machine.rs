@@ -3238,7 +3238,10 @@ fn dispatch_entry(
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
-                    EffectOperation::Store(_) | EffectOperation::Continue(_) => {
+                    EffectOperation::Store(_)
+                    | EffectOperation::Continue(_)
+                    | EffectOperation::RetainedRoot(_)
+                    | EffectOperation::Retain(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
                     EffectOperation::Cleanup(_) => return Err(RuntimeFailure::InvalidControlState),

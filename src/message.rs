@@ -1328,6 +1328,10 @@ messages! {
     continuation_already_consumed => "continuation-already-consumed" {},
     /// A nested scope captures an enclosing clause's completion capability.
     continuation_capture => "continuation-capture" {},
+    /// A retained checkpoint must accept Unit as its resume reply.
+    retain_reply => "retain-reply" {},
+    /// A retained root's completion must be resumed or stored.
+    retained_root_discard => "retained-root-discard" {},
     /// A pattern disagrees with the type of the value being matched.
     pattern_type_mismatch => "pattern-type-mismatch" { expected: &'a str = "Bool" },
     /// A constructor occurrence has the wrong payload shape.
@@ -1361,6 +1365,8 @@ messages! {
     resolve_builtin_required => "resolve-builtin-required" { builtin: &'a str = "@builtin.cell" },
     /// Resume or discard occurs outside an operation clause.
     resolve_continuation_outside => "resolve-continuation-outside" { operation: &'a str = "resume" },
+    /// Retain cannot reach through an intervening clause to an older root.
+    resolve_retain_outside_root => "resolve-retain-outside-root" {},
     /// An interface occupies a value-type position.
     resolve_type_kind => "resolve-type-kind" { name: &'a str = "Marker" },
     /// An interface position contains a known non-interface name.

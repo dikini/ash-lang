@@ -456,6 +456,20 @@ pub struct ContinueNode {
     pub(crate) key: NodeId,
 }
 
+/// A root carrier evaluates the actual store before entering its handler.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetainedRootNode {
+    pub(crate) store: NodeId,
+    pub(crate) handler: NodeId,
+}
+
+/// Move the currently selected private clause owner into its associated store.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetainNode {
+    pub(crate) handler: HandlerId,
+    pub(crate) owner: ResumeId,
+}
+
 /// Read fixed ports from the actual typed store operand, not copied metadata.
 pub(crate) fn store_ports(
     ty: &Type,
@@ -489,6 +503,8 @@ pub enum EffectOperation {
     Resource(Box<ResourceScopeNode>),
     Store(Box<StoreScopeNode>),
     Continue(ContinueNode),
+    RetainedRoot(RetainedRootNode),
+    Retain(RetainNode),
     Region(Box<super::region::RegionScopeNode>),
     RegionAllocate(super::region::RegionAllocateNode),
     RegionValueRequest(super::region::RegionValueRequestNode),
@@ -649,6 +665,8 @@ impl CoreOperationFamily for EffectOperationFamily {
             }
             EffectOperation::RegionAllocate(_)
             | EffectOperation::Continue(_)
+            | EffectOperation::RetainedRoot(_)
+            | EffectOperation::Retain(_)
             | EffectOperation::RegionValueRequest(_)
             | EffectOperation::RegionTuple(_)
             | EffectOperation::RegionBuffer(_) => None,
@@ -763,6 +781,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Store(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Continue(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Region(_)) => 3,
             EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => 2,
             EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => 0,
@@ -781,7 +800,9 @@ impl CoreOperationFamily for EffectOperationFamily {
                 | EffectOperation::Request(_)
                 | EffectOperation::Resume(_),
             ) => 1,
-            EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
+            EffectExprKind::Operation(EffectOperation::Discard(_) | EffectOperation::Retain(_)) => {
+                0
+            }
 
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len() + 1,
         }
@@ -817,6 +838,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Continue(continuation)) => match index {
                 0 => Some(continuation.store),
                 1 => Some(continuation.key),
+                _ => None,
+            },
+            EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => match index {
+                0 => Some(root.store),
+                1 => Some(root.handler),
                 _ => None,
             },
             EffectExprKind::Operation(EffectOperation::Region(region)) => match index {
@@ -855,7 +881,9 @@ impl CoreOperationFamily for EffectOperationFamily {
                 _ if index == tuple.fields.len() + 1 => Some(tuple.storage),
                 _ => tuple.fields.get(index - 1).copied(),
             },
-            EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
+            EffectExprKind::Operation(EffectOperation::Discard(_) | EffectOperation::Retain(_)) => {
+                None
+            }
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
                 (index == 0).then_some(boundary.body)
             }
@@ -886,7 +914,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::Store(store)) => drop(store),
-            EffectExprKind::Operation(EffectOperation::Continue(_)) => {}
+            EffectExprKind::Operation(
+                EffectOperation::Continue(_)
+                | EffectOperation::RetainedRoot(_)
+                | EffectOperation::Retain(_),
+            ) => {}
             EffectExprKind::Operation(EffectOperation::Region(region)) => drop(region),
             EffectExprKind::Operation(
                 EffectOperation::RegionAllocate(_)
@@ -963,6 +995,24 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<NodeId, super::BuildError> {
         self.push_operation(ty, effects, origin, EffectOperation::Continue(continuation))
     }
+    pub(crate) fn retained_root(
+        &mut self,
+        root: RetainedRootNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, EffectOperation::RetainedRoot(root))
+    }
+    pub(crate) fn retain_control(
+        &mut self,
+        retain: RetainNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, EffectOperation::Retain(retain))
+    }
     pub fn with_effect_registry(registry: Arc<ResolvedRegistry>) -> Self {
         Self::with_registry_for_family(registry)
     }
@@ -1003,6 +1053,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Resource(EffectInstance, NodeId, NodeId),
             Store(EffectInstance, NodeId, NodeId),
             Continue(NodeId, NodeId),
+            RetainedRoot(NodeId, NodeId),
 
             Keep,
         }
@@ -1091,6 +1142,9 @@ impl CoreBuilder<EffectOperationFamily> {
                     EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
                         Equation::Continue(continuation.store, continuation.key)
                     }
+                    EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => {
+                        Equation::RetainedRoot(root.store, root.handler)
+                    }
 
                     EffectExprKind::Pure(_) => Equation::Pure,
                     EffectExprKind::Operation(EffectOperation::Resume(resume))
@@ -1099,7 +1153,9 @@ impl CoreBuilder<EffectOperationFamily> {
                         Equation::Replace
                     }
                     EffectExprKind::Operation(
-                        EffectOperation::Resume(_) | EffectOperation::Discard(_),
+                        EffectOperation::Resume(_)
+                        | EffectOperation::Discard(_)
+                        | EffectOperation::Retain(_),
                     ) => Equation::Keep,
                     EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
                         Equation::NativeInterpret(
@@ -1319,6 +1375,22 @@ impl CoreBuilder<EffectOperationFamily> {
                         };
                         initializer
                             .union_with_budget(&outward, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::RetainedRoot(store, handler) => {
+                        let store = &self
+                            .nodes
+                            .get(store.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        let handler = &self
+                            .nodes
+                            .get(handler.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        store
+                            .union_with_budget(handler, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }

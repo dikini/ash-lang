@@ -5368,7 +5368,10 @@ fn collect_method_evidence_expression_occurrences<'a>(
             }
             ResolvedExprKind::Perform(request) => pending.push((&request.operand, row_head)),
             ResolvedExprKind::Handle(handler) => {
-                let child_count = handler.clauses.len().saturating_add(1);
+                let child_count = handler
+                    .clauses
+                    .len()
+                    .saturating_add(1 + usize::from(handler.store.is_some()));
                 charge(constraint_work, child_count, expression.span)?;
                 pending
                     .try_reserve(child_count)
@@ -5381,9 +5384,12 @@ fn collect_method_evidence_expression_occurrences<'a>(
                         .map(|clause| (&clause.body, row_head)),
                 );
                 pending.push((&handler.body, row_head));
+                if let Some(store) = &handler.store {
+                    pending.push((store, row_head));
+                }
             }
             ResolvedExprKind::Resume(resume) => pending.push((&resume.value, row_head)),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
     }
     Ok(())
@@ -6570,13 +6576,19 @@ fn validate_pending_expressions<'a, 'body>(
             }
             ResolvedExprKind::Perform(request) => pending.push(request.operand.as_ref()),
             ResolvedExprKind::Handle(handler) => {
-                let additional = handler.clauses.len().saturating_add(1);
+                let additional = handler
+                    .clauses
+                    .len()
+                    .saturating_add(1 + usize::from(handler.store.is_some()));
                 reserve_expressions(pending, additional, budget, expression.span)?;
                 pending.extend(handler.clauses.iter().rev().map(|clause| &clause.body));
                 pending.push(handler.body.as_ref());
+                if let Some(store) = &handler.store {
+                    pending.push(store);
+                }
             }
             ResolvedExprKind::Resume(resume) => pending.push(resume.value.as_ref()),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
         if !sources.is_empty() || !method_scopes.is_empty() {
             resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;

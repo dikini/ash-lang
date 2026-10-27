@@ -325,7 +325,8 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                     | SurfaceExprKind::Boolean(_)
                     | SurfaceExprKind::Unit
                     | SurfaceExprKind::Name(_)
-                    | SurfaceExprKind::Discard => {}
+                    | SurfaceExprKind::Discard
+                    | SurfaceExprKind::Retain => {}
                     SurfaceExprKind::Tuple(elements) => {
                         pending.extend(elements.iter().map(|value| Visit::Expr(value, scope)));
                     }
@@ -362,6 +363,9 @@ fn walk<'a>(features: &mut Features, pending: &mut Vec<Visit<'a>>) {
                     SurfaceExprKind::Handle(handler) => {
                         features.handlers += 1;
                         pending.push(Visit::Expr(&handler.body, scope));
+                        if let Some(store) = &handler.store {
+                            pending.push(Visit::Expr(store, scope));
+                        }
                         pending.push(Visit::Effect(&handler.effect, 1));
                         pending.extend(
                             handler

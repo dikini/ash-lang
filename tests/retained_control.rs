@@ -147,6 +147,151 @@ fn generic_helper_can_forward_the_structural_continue() {
 }
 
 #[test]
+fn private_checkpoint_clause_can_retain_or_resume_before_its_suffix() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "effect Checkpoint<N> {\ncheckpoint : Unit -> Unit\n}\n",
+        "main : Unit -> Int\n",
+        "main () = resource Control.Store<N,(Unit -> Int ! {Control.Drive<N>})> store = () {\n",
+        "let answer = handle {\nlet _ = perform Checkpoint<N>.checkpoint ()\n7\n}",
+        " with Checkpoint<N> using store {\n",
+        "checkpoint ignored => match true {\n",
+        "true => {\nlet key = retain\n42\n}\n",
+        "false => resume ()\n}\n}\n42\n}\n",
+    );
+    let failure = support::run_module("private-root.ash", source)
+        .expect_err("C3 has not yet established this public close");
+    assert_eq!(
+        failure.reason_code(),
+        "core.validation.retained-release",
+        "{failure:?}"
+    );
+}
+
+fn private_root_fixture(reply: &str, branch: &str, clause: &str, store: &str) -> String {
+    format!(
+        "import @builtin.retained_control as Control\n\
+         effect Checkpoint<N> {{\ncheckpoint : Unit -> {reply}\n}}\n\
+         main : Unit -> Int\n\
+         main () = resource Control.Store<N,(Unit -> Int ! {{Control.Drive<N>}})> store = () {{\n\
+         let answer = handle {{\nlet _ = perform Checkpoint<N>.checkpoint ()\n{branch}\n}} \
+         with Checkpoint<N> using {store} {{\ncheckpoint ignored => {clause}\n}}\n42\n}}\n"
+    )
+}
+
+#[test]
+fn private_root_checks_store_answer_and_checkpoint_reply() {
+    for (reply, branch, clause, store, expected) in [
+        (
+            "Unit",
+            "7",
+            "{\nlet key = retain\n42\n}",
+            "3",
+            "type.store-descriptor",
+        ),
+        (
+            "Unit",
+            "()",
+            "{\nlet key = retain\n42\n}",
+            "store",
+            "type.mismatch",
+        ),
+        (
+            "Int",
+            "7",
+            "{\nlet key = retain\n42\n}",
+            "store",
+            "effect.retain-reply",
+        ),
+    ] {
+        let source = private_root_fixture(reply, branch, clause, store);
+        let failure = support::run_module("private-root-ports.ash", &source)
+            .expect_err("the root's actual store and reply ports must agree");
+        assert_eq!(failure.reason_code(), expected, "{failure:?}");
+    }
+}
+
+#[test]
+fn private_root_consumes_its_selected_owner_once_without_discard() {
+    for (clause, expected) in [
+        ("{\nlet _ = discard\n42\n}", "effect.retained-root-discard"),
+        (
+            "{\nlet key = retain\nlet again = retain\n42\n}",
+            "effect.resume-already-consumed",
+        ),
+        ("42", "effect.resume-not-consumed"),
+        (
+            "{\nlet later : Unit -> Int ! {Control.Drive<N>} = fn(ignored) {\nlet key = retain\n42\n}\nresume ()\n}",
+            "effect.resume-capture",
+        ),
+    ] {
+        let source = private_root_fixture("Unit", "7", clause, "store");
+        let failure = support::run_module("private-root-usage.ash", &source)
+            .expect_err("the selected owner cannot be lost, discarded, duplicated or captured");
+        assert_eq!(failure.reason_code(), expected, "{failure:?}");
+    }
+}
+
+#[test]
+fn private_root_retain_never_searches_past_an_inner_clause() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "effect Checkpoint<N> {\ncheckpoint : Unit -> Unit\n}\n",
+        "effect Inner<N> {\ninner : Unit -> Unit\n}\n",
+        "main : Unit -> Int\n",
+        "main () = resource Control.Store<N,(Unit -> Int ! {Control.Drive<N>})> store = () {\n",
+        "handle {\nlet _ = perform Checkpoint<N>.checkpoint ()\n7\n}",
+        " with Checkpoint<N> using store {\ncheckpoint ignored => ",
+        "handle {\nlet _ = perform Inner<N>.inner ()\n42\n}",
+        " with Inner<N> {\ninner ignored => {\nlet key = retain\nresume ()\n}\n}\n}\n}\n",
+    );
+    let failure = support::run_module("private-root-nearest.ash", source)
+        .expect_err("an inner ordinary clause is the nearest selected owner");
+    assert_eq!(
+        failure.reason_code(),
+        "effect.retain-outside-root",
+        "{failure:?}"
+    );
+
+    let outside = "main : Unit -> Int\nmain () = {\nlet key = retain\n42\n}\n";
+    let failure = support::run_module("retain-outside-root.ash", outside)
+        .expect_err("retain is unavailable outside a private root");
+    assert_eq!(
+        failure.reason_code(),
+        "effect.retain-outside-root",
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn retain_is_a_reserved_source_keyword() {
+    let source = "main : Unit -> Int\nmain () = {\nlet retain : Int = 42\nretain\n}\n";
+    let failure = support::run_module("retain-keyword.ash", source)
+        .expect_err("retain is no longer an identifier");
+    assert!(matches!(failure, ash::driver::PipelineFailure::Syntax(_)));
+}
+
+#[test]
+fn private_root_allows_other_operations_to_resume_non_unit_replies() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "effect Checkpoint<N> {\npause : Unit -> Unit\nask : Unit -> Int\n}\n",
+        "main : Unit -> Int\n",
+        "main () = resource Control.Store<N,(Unit -> Int ! {Control.Drive<N>})> store = () {\n",
+        "handle {\nlet _ = perform Checkpoint<N>.pause ()\n",
+        "perform Checkpoint<N>.ask ()\n} with Checkpoint<N> using store {\n",
+        "pause ignored => {\nlet key = retain\n42\n}\nask ignored => resume 7\n}\n}\n",
+    );
+    let failure = support::run_module("private-root-multiple-operations.ash", source)
+        .expect_err("C3 has not yet established this public close");
+    assert_eq!(
+        failure.reason_code(),
+        "core.validation.retained-release",
+        "{failure:?}"
+    );
+}
+
+#[test]
 fn store_drive_is_row_nameable_but_not_an_ordinary_operation() {
     for body in [
         "perform Control.Drive<N>.internal ()",

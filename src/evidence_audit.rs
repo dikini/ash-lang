@@ -153,9 +153,12 @@ where
                     budget,
                 )?;
                 reserve_and_extend(&mut pending, std::iter::once(handler.body.as_ref()), budget)?;
+                if let Some(store) = &handler.store {
+                    reserve_and_extend(&mut pending, std::iter::once(store.as_ref()), budget)?;
+                }
             }
             ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
     }
     Ok(())

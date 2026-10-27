@@ -37,8 +37,10 @@ source review and the frozen integration build; the
 inputs and limits. C1 was retained and independently verified at
 `6d530614d426db3f31fd0e9fe1f01d12399f78c9` by
 [PR #160](https://github.com/dikini/ash-lang/pull/160); [C1 #71](https://github.com/dikini/ash-lang/issues/71)
-is closed. C2 store work is active. C2–C5 and the connected full-workspace
-and Main gates remain open.
+is closed. C2 store work is active. The source private-root and structural
+Retain carriers are being connected to execution and ownership admission;
+linked Core currently rejects their release. C2–C5 and the connected
+full-workspace and Main gates remain open.
 
 ## Verification
 
@@ -62,6 +64,14 @@ drain argument is paper evidence, not a checked analysis or implementation.
 
 ## Deviations
 
-None. Return any semantic or proof gap to CP-0026 and DN-0056 before product
+The reserved `retain` keyword requires renaming the existing recursion
+examples in [syntax](../../spec/syntax.md),
+[name resolution](../../spec/name-resolution.md),
+[dynamic semantics](../../spec/dynamic-semantics.md), and the
+[tool guide](../tools/ash.md) when C5 updates current documentation. The
+executable recursion fixtures and their embedded mirrors are renamed with the
+parser change.
+
+Return any semantic or proof gap to CP-0026 and DN-0056 before product
 delivery; keep original issue criteria open until their full scopes are retained
 and verified.

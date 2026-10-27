@@ -68,7 +68,7 @@ impl RegionApi {
 }
 
 /// Fixed source identities belonging to the compiler-owned store module.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct StoreApi {
     module: ModuleId,
 }
@@ -23011,16 +23011,25 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
             ResolvedExprKind::Handle(handler) => {
                 budget.charge(handler.clauses.len())?;
                 pending
-                    .try_reserve(handler.clauses.len().saturating_add(1))
+                    .try_reserve(
+                        handler
+                            .clauses
+                            .len()
+                            .saturating_add(1 + usize::from(handler.store.is_some())),
+                    )
                     .map_err(|_| ())?;
                 pending.push(&handler.body);
+                if let Some(store) = &handler.store {
+                    budget.charge(1)?;
+                    pending.push(store);
+                }
                 for clause in &handler.clauses {
                     pattern_ids(&clause.pattern, &mut bound, budget)?;
                     pending.push(&clause.body);
                 }
             }
             ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
             ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
@@ -23120,6 +23129,8 @@ pub enum ResolvedExprKind {
     Resume(ResolvedResumeExpr),
     /// Nullary consumption of the enclosing clause capability.
     Discard(ResolvedDiscardExpr),
+    /// Transfer of the selected private checkpoint clause capability.
+    Retain(ResolvedRetainExpr),
     /// A scoped resource acquisition with a rigid, nongeneralized identity.
     Resource(Box<ResolvedResourceExpr>),
     /// A local retained-control store with a fresh scoped identity.
@@ -23414,6 +23425,13 @@ pub struct ResolvedDiscardExpr {
     pub owner: Option<ResumeId>,
 }
 
+/// One nullary retained-control transfer owned by a private clause.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedRetainExpr {
+    /// Enclosing private clause owner.
+    pub owner: ResumeId,
+}
+
 /// Stable identity for one lexical handler clause's resume capability.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ResumeId(u32);
@@ -23465,6 +23483,8 @@ pub struct ResolvedHandleExpr {
     pub hook_registration: Option<Box<HookRegistrationContract>>,
     /// Compiler-owned identity clause and source relation of an empty hook root.
     pub hook_root: Option<HookRootContract>,
+    /// Actual store expression establishing a private retained-control root.
+    pub store: Option<Box<ResolvedExpr>>,
     /// Handled computation.
     pub body: Box<ResolvedExpr>,
     /// Exact handled instance.
@@ -23856,6 +23876,9 @@ fn discard_resolved_body_work(
             }
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(*handler.body);
+                if let Some(store) = handler.store {
+                    expressions.push(*store);
+                }
                 discard_origin_iteratively(handler.effect.origin);
                 for clause in handler.clauses {
                     patterns.push(clause.pattern);
@@ -23893,7 +23916,7 @@ fn discard_resolved_body_work(
                 expressions.push(*cleanup.action);
             }
             ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
-            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Discard(_) | ResolvedExprKind::Retain(_) => {}
         }
     }
     while let Some(pattern) = patterns.pop() {

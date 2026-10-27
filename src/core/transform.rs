@@ -316,6 +316,25 @@ impl TransformFamily for EffectOperationFamily {
                 effects,
                 origin,
             ),
+            EffectOperation::RetainedRoot(root) => builder.retained_root(
+                super::effect::RetainedRootNode {
+                    store: remap(remapped, root.store)?,
+                    handler: remap(remapped, root.handler)?,
+                },
+                ty.into_inner(),
+                effects,
+                origin,
+            ),
+            EffectOperation::Retain(retain) => {
+                let handler = copy_handler_id(builder, retain.handler)?;
+                let owner = copy_resume_id(builder, retain.owner)?;
+                builder.retain_control(
+                    super::effect::RetainNode { handler, owner },
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
 
             EffectOperation::NativeInterpret(boundary) => {
                 let copied = (|| -> Result<_, TransformError> {
