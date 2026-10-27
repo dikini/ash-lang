@@ -5,9 +5,8 @@
 - Related: [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md),
   [CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md)
 
-> This task organizes work. It does not define Ash semantics. The active scope
-> is contract preparation and the bounded design proof; product implementation
-> requires acceptance of the proposal and its proof gate.
+> This task organizes work. It does not define Ash semantics. The accepted
+> proposal authorizes C2 after C1 retained-result verification.
 
 ## Dependencies
 
@@ -32,12 +31,11 @@ narrowing the original issue criteria.
 
 ## Progress
 
-The C1 proposal is under consideration. Its bounded model and correspondence
-passed independent source review and the frozen integration build; the
+CP-0026 is accepted. Its bounded model and correspondence passed independent
+source review and the frozen integration build; the
 [record](evidence/local-retained-control/c1-model/README.md) identifies the
-inputs and limits. Retained-result verification and proposal acceptance remain
-pending. No C1–C5 acceptance criterion is complete and no product
-implementation is authorized by the proposed contract.
+inputs and limits. C1 retained-result verification is pending before C2
+product work starts. No C1–C5 issue criterion is complete yet.
 
 ## Verification
 

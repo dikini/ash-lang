@@ -2199,7 +2199,7 @@ and during abandonment as well as on the ordinary return path.
 store transitions can preserve one owner and its completion obligations. This
 assignment authorizes a finite Lean model, not an evaluator implementation.
 [CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md) is the
-proposed contract to compare with that model; its acceptance is separate. The
+accepted prospective contract compared with that model. The
 [active task](../tasks/TASK-0057-local-retained-control.md) records the proof
 and the remaining product gates.
 
@@ -2242,11 +2242,14 @@ prototype; revise the proposed contract if the comparison exposes a semantic
 gap. Neither outcome establishes compiler or runtime correctness, external
 provider laws, termination, or the wider network claims in this note.
 
-This note contains a paper derivation against the linked current specification.
-It includes the partial-correctness argument above under explicit premises,
-but supplies no executable retention implementation, machine-checked proof,
-benchmark, or new current-language example. Existing one-shot, cleanup, and
-resource evidence transfers only to the sequential invariants it actually tests.
+The [C1 model](retained-control/README.md) checks its selected ownership
+transitions under explicit premises; it does not prove the compiler or
+evaluator correspondence. This
+note's recursive drain argument remains a paper derivation against the linked
+current specification, with no checked drain proof, executable retention
+implementation, benchmark, or new current-language example. Existing one-shot,
+cleanup, and resource evidence transfers only to the sequential invariants it
+actually tests.
 
 The bidirectional accounting comparison draws on Dijkstra and Scholten's
 [termination detection for diffusing computations](https://www.cs.utexas.edu/~EWD/transcriptions/EWD06xx/EWD687a.html).

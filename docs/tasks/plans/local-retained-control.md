@@ -8,8 +8,8 @@ Remove it when the task closes.
    against the current specification and the [bounded proof assignment](../../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md#c1-bounded-ownership-and-completion-proof-assignment).
    Model finite owner locations, structural completions and explicit transitions;
    check refusal and negative examples as well as successful traces. Record the
-   correspondence and limits. Run the frozen AD-0012 integration gate and obtain
-   independent review before accepting the proposal or starting C2.
+   correspondence and limits. The accepted contract and model passed source
+   review and the frozen AD-0012 gate; verify their retained result before C2.
 2. **C2 store.** After authorization, reuse the existing captured-continuation,
    frame, cleanup and iterative-disposal machinery. Add only the authenticated
    fixed-port store operations and their checked ownership moves. Exercise
@@ -43,10 +43,13 @@ scope, bind fresh `N`, then check the inside-scope answer `A<N>` and body. A
 store-specific builtin family can provide the opaque key and exact provider
 and operation identities; ordinary user declarations with the same types must
 not authenticate them. Existing nominal parameters cannot directly carry an
-effect row. Before implementing the API, check whether a function-type
-descriptor can express the fixed `rho`, or whether checked store metadata is
-needed. Preserve the same fixed ports across source, imports and linked Core;
-return any unexpressible contract to CP-0026 instead of silently weakening it.
+effect row. Prefer a function-type descriptor for the fixed `rho`, with
+authenticated extraction in store metadata and linked validation. The current
+type representation exposes a function's domain, answer and latent row, but
+an arbitrary open tail does not automatically combine with the store effect:
+check existing row-union and lacks premises at every use. Preserve the same
+fixed ports across source, imports and linked Core; return any unexpressible
+contract to CP-0026 instead of silently weakening it.
 
 For the private checkpoint root, first try the existing handler form and a
 clause-scoped retain carrier alongside `resume` and `discard`, with an explicit

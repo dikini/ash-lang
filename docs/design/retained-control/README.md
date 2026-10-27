@@ -13,6 +13,5 @@ states the premises, proved claims and unproved product obligations.
 The candidate passed independent source review and a frozen scoped
 [AD-0012](../../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
 integration build. The [gate record](../../tasks/evidence/local-retained-control/c1-model/README.md)
-pins its sources, compiler, review and reports. Retained-result verification
-and proposal acceptance remain separate; no product implementation follows
-from this candidate alone.
+pins its sources, compiler, review and reports. CP-0026 is accepted;
+retained-result verification remains separate before C2 product work starts.

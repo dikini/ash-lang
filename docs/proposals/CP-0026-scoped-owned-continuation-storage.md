@@ -1,12 +1,12 @@
 # CP-0026: Scoped owned continuation storage
 
 - ID: `CP-0026`
-- Status: proposed
+- Status: accepted
 - Related: [DN-0056](../design/DN-0056-scoped-continuation-retention-and-library-scheduling.md),
   [TASK-0057](../tasks/TASK-0057-local-retained-control.md)
 
-> This proposal is not current Ash. It does not authorize product implementation
-> until its semantics and required evidence are accepted.
+> This accepted proposal describes a prospective transition, not current Ash.
+> C2 product work starts after the C1 proof result is retained and verified.
 
 ## Current behavior
 

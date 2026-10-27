@@ -1,9 +1,9 @@
 # C1 model correspondence and limits
 
 This map is part of the candidate [DN-0056 proof assignment](../DN-0056-scoped-continuation-retention-and-library-scheduling.md#c1-bounded-ownership-and-completion-proof-assignment).
-[CP-0026](../../proposals/CP-0026-scoped-owned-continuation-storage.md) remains
-proposed. The model is evidence for its selected transitions, not language
-authority or a proof of the compiler or evaluator.
+[CP-0026](../../proposals/CP-0026-scoped-owned-continuation-storage.md) is
+accepted as a prospective contract. The model is evidence for its selected
+transitions, not current language truth or a proof of the compiler or evaluator.
 
 ## Representation and assumptions
 
@@ -107,7 +107,7 @@ library drain returns empty; that is C3's separate analysis and proof.
   recursive control, conservative unknowns and exhaustion. Model emptiness at
   a closing predecessor does not establish that analysis.
 - Test the real source/Core/runtime transitions, transformed validation,
-  region support and libraries against the full C1–C5 criteria. Complete the
-  frozen proof integration, independent review, checkpoint gates and retained
-  verification separately. No termination, fairness, native-provider,
-  migration, multithreaded safety or whole-compiler claim follows here.
+  region support and libraries against the full C1–C5 criteria. Verify the
+  retained proof and its review, and complete the later checkpoint gates.
+  No termination, fairness, native-provider, migration, multithreaded safety
+  or whole-compiler claim follows here.

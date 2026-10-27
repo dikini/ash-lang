@@ -9,8 +9,10 @@ An independent reviewer passed the six-file candidate in [review.md](review.md)
 and [review.json](review.json), pinned by [reviewed-manifest.json](reviewed-manifest.json)
 at parent `33af1ed1e9adfaa2efa73443a6c0709131b00ff6`. The model modules in
 the [proof root](../../../../design/retained-control/README.md) match that
-manifest. The root README was subsequently updated only to point to this gate
-record; its reviewed prior hash remains in the manifest.
+manifest. The reviewed versions of the proposal, design note and correspondence
+are in checkpoint `2ee000102be88ec77a6a6942102c915d37c5b019`; the reviewed
+[model README](reviewed-model-readme.txt) is copied here. Later status and
+evidence wording records acceptance and this gate without changing the model.
 
 The frozen integration used the reviewed candidate, [config.json](config.json),
 and the empty-registration [parent-seed.json](parent-seed.json). The complete

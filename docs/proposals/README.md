@@ -19,12 +19,15 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0026: Scoped owned continuation storage](CP-0026-scoped-owned-continuation-storage.md)
-  proposes a local ownership-transfer and checked-release contract.
+No proposed transitions are listed.
 
 ## Accepted changes
 
-No accepted transitions are listed. The [region specification](../../spec/README.md)
+- [CP-0026: Scoped owned continuation storage](CP-0026-scoped-owned-continuation-storage.md)
+  accepts a local ownership-transfer and checked-release contract. Its C2 work
+  starts after C1 retained-result verification.
+
+The [region specification](../../spec/README.md)
 records the lexical-region language rules; the bounded
 [model evidence](../design/lexical-regions/evidence.md) retains its separate proof
 scope. Proposal retirement prepares the product branch and does not replace
