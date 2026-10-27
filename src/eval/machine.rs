@@ -366,6 +366,18 @@ pub struct Evaluation {
     runtime_work: usize,
     #[cfg(test)]
     work_trace: Option<Vec<(NodeId, usize)>>,
+    #[cfg(test)]
+    allocation_frames: AllocationFrameObservations,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+struct AllocationFrameObservations {
+    calls: usize,
+    suffix_total: usize,
+    suffix_max: usize,
+    clause_max: usize,
+    logical_completions_max: usize,
 }
 
 impl Evaluation {
@@ -701,6 +713,10 @@ enum Frame {
         owner: ResumeId,
         continuation: Option<CapturedContinuation>,
         registration: Option<RegistrationKey>,
+        // A count above one represents adjacent consumed, unregistered
+        // boundaries with this exact handler and resume identity. Live or
+        // registered boundaries always have count one.
+        completion_count: usize,
     },
 }
 
@@ -828,6 +844,8 @@ pub struct Machine<'runtime> {
     next_registration: u32,
     #[cfg(test)]
     work_trace: Option<WorkTrace>,
+    #[cfg(test)]
+    allocation_frames: AllocationFrameObservations,
 }
 
 impl Drop for Machine<'_> {
@@ -864,6 +882,8 @@ impl<'runtime> Machine<'runtime> {
             next_registration: 0,
             #[cfg(test)]
             work_trace: None,
+            #[cfg(test)]
+            allocation_frames: AllocationFrameObservations::default(),
         }
     }
 
@@ -899,6 +919,8 @@ impl<'runtime> Machine<'runtime> {
             next_registration: 0,
             #[cfg(test)]
             work_trace: None,
+            #[cfg(test)]
+            allocation_frames: AllocationFrameObservations::default(),
         }
     }
 
@@ -1030,6 +1052,8 @@ impl<'runtime> Machine<'runtime> {
                                 .work_trace
                                 .take()
                                 .map(|trace| trace.lock().unwrap().clone()),
+                            #[cfg(test)]
+                            allocation_frames: self.allocation_frames,
                         });
                     };
                     self.return_from(frame, value)?;
@@ -1359,10 +1383,17 @@ impl<'runtime> Machine<'runtime> {
                 handler,
                 continuation,
                 registration,
+                completion_count,
                 ..
             } => {
-                if continuation.is_some() {
+                if continuation.is_some()
+                    || completion_count == 0
+                    || registration.is_some() && completion_count != 1
+                {
                     return Err(RuntimeFailure::InvalidControlState);
+                }
+                if let Some(trace) = &mut self.effect_trace {
+                    reserve_control(trace, completion_count, RuntimeResource::EffectTrace, false)?;
                 }
                 if let Some(key) = registration {
                     let index = self.registration_owner_for_handler(key, handler, true)?;
@@ -1381,7 +1412,9 @@ impl<'runtime> Machine<'runtime> {
                         .checked_sub(1)
                         .ok_or(RuntimeFailure::InvalidControlState)?;
                 }
-                self.trace_effect(EffectTraceEvent::ClauseReturned(handler));
+                for _ in 0..completion_count {
+                    self.trace_effect(EffectTraceEvent::ClauseReturned(handler));
+                }
                 self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::ApplyArgument {
@@ -2078,6 +2111,7 @@ impl<'runtime> Machine<'runtime> {
             *pending_invocations = pending;
         }
         self.frames.push(Frame::ClauseBoundary {
+            completion_count: 1,
             handler: handler_id,
             owner: clause_owner,
             continuation: Some(continuation),
@@ -2403,9 +2437,17 @@ impl<'runtime> Machine<'runtime> {
         } else {
             None
         };
-        let Frame::ClauseBoundary { continuation, .. } = &self.frames[boundary_index] else {
+        let Frame::ClauseBoundary {
+            continuation,
+            completion_count,
+            ..
+        } = &self.frames[boundary_index]
+        else {
             return Err(RuntimeFailure::InvalidControlState);
         };
+        if *completion_count != 1 {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         let captured = continuation
             .as_ref()
             .ok_or(RuntimeFailure::InvalidControlState)?;
@@ -2458,6 +2500,42 @@ impl<'runtime> Machine<'runtime> {
                 }
             }
         }
+        // Only the immediately preceding consumed boundary can be replaced.
+        // Expanding the count gives the same adjacent identity cuts and
+        // deferred ClauseReturned events as the original frames.
+        let merged_count = if boundary_index + 1 == self.frames.len() && registration.is_none() {
+            match boundary_index
+                .checked_sub(1)
+                .and_then(|index| self.frames.get(index))
+            {
+                Some(Frame::ClauseBoundary {
+                    handler: previous_handler,
+                    owner: previous_owner,
+                    continuation,
+                    registration: previous_registration,
+                    completion_count,
+                }) => {
+                    if *completion_count == 0
+                        || (continuation.is_some() || previous_registration.is_some())
+                            && *completion_count != 1
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    if continuation.is_none()
+                        && previous_registration.is_none()
+                        && *previous_handler == handler
+                        && *previous_owner == owner
+                    {
+                        completion_count.checked_add(1)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         if let Some(trace) = &mut self.effect_trace {
             reserve_control(
                 trace,
@@ -2490,6 +2568,23 @@ impl<'runtime> Machine<'runtime> {
             }
         }
         self.captured_cells = retained;
+        if let Some(merged_count) = merged_count {
+            let removed = self.frames.pop();
+            debug_assert!(matches!(
+                removed,
+                Some(Frame::ClauseBoundary {
+                    continuation: None,
+                    ..
+                })
+            ));
+            let Frame::ClauseBoundary {
+                completion_count, ..
+            } = &mut self.frames[boundary_index - 1]
+            else {
+                unreachable!("the checked preceding completion remains in place");
+            };
+            *completion_count = merged_count;
+        }
         self.frames.append(&mut continuation.frames);
         if let Some(index) = registration_owner
             && let Frame::RegistrationBoundary { handler_active, .. } = &mut self.frames[index]
@@ -2527,6 +2622,7 @@ impl<'runtime> Machine<'runtime> {
         }
         let Frame::ClauseBoundary {
             continuation: Some(captured),
+            completion_count: 1,
             ..
         } = &self.frames[boundary_index]
         else {
@@ -2580,8 +2676,15 @@ impl<'runtime> Machine<'runtime> {
                         handler: nested_handler,
                         continuation,
                         registration,
+                        completion_count,
                         ..
                     } => {
+                        if *completion_count == 0
+                            || (continuation.is_some() || registration.is_some())
+                                && *completion_count != 1
+                        {
+                            return Err(RuntimeFailure::InvalidControlState);
+                        }
                         if let Some(nested) = continuation {
                             selected_handler_for_discard(
                                 &self.program,
@@ -4243,6 +4346,521 @@ mod tests {
     }
 
     #[test]
+    fn sequential_region_allocations_keep_bounded_completion_frames() {
+        for count in [8, 32, 128] {
+            let mut source = String::from("main : Unit -> Int\nmain () = {\n");
+            for index in 0..count {
+                source.push_str(&format!("let item{index} = (1, 2)\n"));
+            }
+            source.push_str("42\n}\n");
+            let program = effect_program(&source);
+            let default = program
+                .registry()
+                .effects()
+                .iter()
+                .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+                .unwrap()
+                .default_alloc();
+            let evaluation = Machine::new_effect(&program).run().unwrap();
+            assert_eq!(evaluation.value.to_string(), "42");
+            assert_eq!(
+                evaluation.effect_trace().iter().filter(|event| matches!(
+                    event,
+                    EffectTraceEvent::Request(operation) if *operation == OperationId::new(default, 1)
+                )).count(),
+                count + 1,
+                "one context request per allocated tuple and main closure"
+            );
+            assert_eq!(
+                evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::ClauseReturned(_)))
+                    .count(),
+                count + 1,
+                "every consumed clause still returns"
+            );
+            assert_eq!(evaluation.allocation_frames.calls, count + 1);
+            assert_eq!(evaluation.allocation_frames.clause_max, 1);
+            assert_eq!(
+                evaluation.allocation_frames.logical_completions_max,
+                count + 1
+            );
+            assert_eq!(evaluation.allocation_frames.suffix_max, 4);
+            assert_eq!(evaluation.allocation_frames.suffix_total, 4 * (count + 1));
+            assert!(
+                evaluation.max_frame_depth <= 24,
+                "{count} allocations retained {} frames",
+                evaluation.max_frame_depth
+            );
+        }
+    }
+
+    #[test]
+    fn tail_list_allocations_keep_bounded_completion_frames() {
+        for count in [16, 64, 256] {
+            let source = format!(
+                "type List =\nNil\n| Cons(Int, List)\n\n\
+                 build : (Int, List) -> List\n\
+                 build (n, acc) = match n == {count} {{\n\
+                 true => acc\nfalse => build(n + 1, Cons(n, acc))\n}}\n\n\
+                 sum : (List, Int) -> Int\n\
+                 sum (xs, acc) = match xs {{\n\
+                 Nil => acc\nCons(x, rest) => sum(rest, acc + x)\n}}\n\n\
+                 main : Unit -> Int\nmain () = sum(build(0, Nil), 0)\n"
+            );
+            let program = effect_program(&source);
+            let default = program
+                .registry()
+                .effects()
+                .iter()
+                .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+                .unwrap()
+                .default_alloc();
+            let evaluation = Machine::new_effect(&program).run().unwrap();
+            assert_eq!(
+                evaluation.value.to_string(),
+                (count * (count - 1) / 2).to_string()
+            );
+            assert_eq!(evaluation.allocation_frames.calls, 5 * count + 6);
+            assert_eq!(
+                evaluation.effect_trace().iter().filter(|event| matches!(
+                    event,
+                    EffectTraceEvent::Request(operation) if *operation == OperationId::new(default, 1)
+                )).count(),
+                7 * count + 6
+            );
+            assert_eq!(
+                evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::ClauseReturned(_)))
+                    .count(),
+                7 * count + 6
+            );
+            assert_eq!(evaluation.allocation_frames.clause_max, 1);
+            assert_eq!(
+                evaluation.allocation_frames.logical_completions_max,
+                7 * count + 6
+            );
+            assert_eq!(evaluation.allocation_frames.suffix_max, 8);
+            assert!(evaluation.allocation_frames.suffix_total <= 8 * (5 * count + 6));
+            assert!(evaluation.max_frame_depth <= 24);
+        }
+    }
+
+    fn completion_resume_fixture() -> (ValidatedEffectProgram, NodeId, HandlerId, ResumeId) {
+        let program = sequential_effect_program();
+        let mut pending = vec![program.root()];
+        while let Some(node) = pending.pop() {
+            let kind = &program.node(node).unwrap().kind;
+            if let EffectExprKind::Operation(EffectOperation::Resume(resume)) = kind {
+                let handler = resume.handler();
+                let owner = resume.owner();
+                return (program, node, handler, owner);
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        }
+        panic!("fixture has a resume")
+    }
+
+    fn consumed_completion(handler: HandlerId, owner: ResumeId, count: usize) -> Frame {
+        Frame::ClauseBoundary {
+            handler,
+            owner,
+            continuation: None,
+            registration: None,
+            completion_count: count,
+        }
+    }
+
+    fn live_completion(handler: HandlerId, owner: ResumeId, frames: Vec<Frame>) -> Frame {
+        Frame::ClauseBoundary {
+            handler,
+            owner,
+            continuation: Some(CapturedContinuation { frames }),
+            registration: None,
+            completion_count: 1,
+        }
+    }
+
+    #[test]
+    fn same_pair_tail_completion_preserves_deferred_trace_and_capture_accounting() {
+        let (program, node, handler, owner) = completion_resume_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine.control.take();
+        machine.frames.push(consumed_completion(handler, owner, 2));
+        machine.frames.push(live_completion(
+            handler,
+            owner,
+            vec![Frame::Request {
+                node,
+                instantiation: Instantiation::default(),
+            }],
+        ));
+        machine.captured_cells = 1;
+        machine.return_resume(node, integer("42")).unwrap();
+        assert_eq!(machine.frames.len(), 2);
+        assert_eq!(machine.captured_cells, 0);
+        assert!(matches!(
+            machine.frames[0],
+            Frame::ClauseBoundary {
+                continuation: None,
+                completion_count: 3,
+                ..
+            }
+        ));
+        assert!(matches!(machine.frames[1], Frame::Request { .. }));
+        assert_eq!(
+            machine.effect_trace.as_deref(),
+            Some([EffectTraceEvent::Resume(handler)].as_slice())
+        );
+        machine.frames.pop();
+        assert!(
+            matches!(machine.control.take(), Some(Control::Return(value)) if value.to_string() == "42")
+        );
+        let group = machine.frames.pop().unwrap();
+        machine.return_from(group, integer("42")).unwrap();
+        assert_eq!(
+            machine.effect_trace.as_deref(),
+            Some(
+                [
+                    EffectTraceEvent::Resume(handler),
+                    EffectTraceEvent::ClauseReturned(handler),
+                    EffectTraceEvent::ClauseReturned(handler),
+                    EffectTraceEvent::ClauseReturned(handler),
+                ]
+                .as_slice()
+            )
+        );
+        assert!(
+            matches!(machine.control, Some(Control::Return(ref value)) if value.to_string() == "42")
+        );
+    }
+
+    #[test]
+    fn completion_grouping_respects_identity_ownership_and_intervening_work() {
+        let (program, node, handler, owner) = completion_resume_fixture();
+        for case in 0..7 {
+            let mut machine = Machine::new_effect(&program);
+            machine.control.take();
+            let other_handler = HandlerId::new(handler.value() + 1);
+            let other_owner = ResumeId::new(owner.value() + 1);
+            let predecessor = match case {
+                0 => consumed_completion(handler, other_owner, 1),
+                1 => consumed_completion(other_handler, owner, 1),
+                2 => live_completion(handler, owner, Vec::new()),
+                3 => Frame::ClauseBoundary {
+                    handler,
+                    owner,
+                    continuation: None,
+                    registration: Some(RegistrationKey(99)),
+                    completion_count: 1,
+                },
+                4 => Frame::Request {
+                    node,
+                    instantiation: Instantiation::default(),
+                },
+                5 => consumed_completion(handler, owner, usize::MAX),
+                6 => consumed_completion(handler, owner, 1),
+                _ => unreachable!(),
+            };
+            machine.frames.push(predecessor);
+            machine
+                .frames
+                .push(live_completion(handler, owner, Vec::new()));
+            if case == 6 {
+                machine.frames.push(Frame::Request {
+                    node,
+                    instantiation: Instantiation::default(),
+                });
+            }
+            machine.return_resume(node, integer("42")).unwrap();
+            assert_eq!(
+                machine.frames.len(),
+                if case == 6 { 3 } else { 2 },
+                "case {case}"
+            );
+            assert!(
+                matches!(
+                    machine.frames[1],
+                    Frame::ClauseBoundary {
+                        continuation: None,
+                        completion_count: 1,
+                        ..
+                    }
+                ),
+                "case {case}"
+            );
+            assert_eq!(
+                machine.effect_trace.as_deref(),
+                Some([EffectTraceEvent::Resume(handler)].as_slice())
+            );
+            assert!(
+                matches!(machine.control, Some(Control::Return(ref value)) if value.to_string() == "42")
+            );
+        }
+    }
+
+    #[test]
+    fn grouped_completion_keeps_nearest_consumed_identity_cut() {
+        let (program, node, handler, owner) = completion_resume_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine.control.take();
+        machine
+            .frames
+            .push(live_completion(handler, owner, Vec::new()));
+        machine.frames.push(consumed_completion(handler, owner, 3));
+        assert_eq!(
+            machine.return_resume(node, integer("42")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(
+            machine.discard(handler, owner),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert!(matches!(
+            machine.frames[0],
+            Frame::ClauseBoundary {
+                continuation: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            machine.frames[1],
+            Frame::ClauseBoundary {
+                continuation: None,
+                completion_count: 3,
+                ..
+            }
+        ));
+        assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_completion_counts_are_rejected_before_capture_transfer() {
+        let (program, node, handler, owner) = completion_resume_fixture();
+        for invalid in [0, 2] {
+            let mut machine = Machine::new_effect(&program);
+            machine.control.take();
+            machine.frames.push(Frame::ClauseBoundary {
+                handler,
+                owner,
+                continuation: Some(CapturedContinuation { frames: Vec::new() }),
+                registration: None,
+                completion_count: invalid,
+            });
+            assert_eq!(
+                machine.return_resume(node, integer("42")),
+                Err(RuntimeFailure::InvalidControlState)
+            );
+            assert_eq!(
+                machine.discard(handler, owner),
+                Err(RuntimeFailure::InvalidControlState)
+            );
+            assert!(matches!(
+                machine.frames[0],
+                Frame::ClauseBoundary {
+                    continuation: Some(_),
+                    ..
+                }
+            ));
+            assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+        }
+        let mut machine = Machine::new_effect(&program);
+        machine.control.take();
+        for (count, registration) in [(0, None), (2, Some(RegistrationKey(0)))] {
+            assert_eq!(
+                machine.return_from(
+                    Frame::ClauseBoundary {
+                        handler,
+                        owner,
+                        continuation: None,
+                        registration,
+                        completion_count: count,
+                    },
+                    integer("42")
+                ),
+                Err(RuntimeFailure::InvalidControlState)
+            );
+            assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn grouped_completion_trace_and_resume_reservations_fail_before_mutation() {
+        let (program, node, handler, owner) = completion_resume_fixture();
+        for tracing in [true, false] {
+            let mut machine = Machine::new_effect(&program);
+            machine.control.take();
+            machine.effect_trace = tracing.then(Vec::new);
+            machine.frames.push(consumed_completion(handler, owner, 2));
+            machine.frames.push(live_completion(
+                handler,
+                owner,
+                vec![Frame::Request {
+                    node,
+                    instantiation: Instantiation::default(),
+                }],
+            ));
+            machine.captured_cells = 1;
+            machine_test_hooks::FAIL_CONTROL_RESERVATION
+                .set(Some(ResourceFailureCause::AllocatorRefused));
+            let failure = machine.return_resume(node, integer("42")).unwrap_err();
+            machine_test_hooks::reset();
+            let RuntimeFailure::Report(report) = failure else {
+                panic!("resource report")
+            };
+            assert_eq!(
+                report.primary.resource().unwrap().resource,
+                if tracing {
+                    RuntimeResource::EffectTrace
+                } else {
+                    RuntimeResource::FrameStorage
+                }
+            );
+            assert_eq!(machine.captured_cells, 1);
+            assert!(matches!(
+                machine.frames[0],
+                Frame::ClauseBoundary {
+                    continuation: None,
+                    completion_count: 2,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                machine.frames[1],
+                Frame::ClauseBoundary {
+                    continuation: Some(_),
+                    completion_count: 1,
+                    ..
+                }
+            ));
+            if tracing {
+                assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+            }
+        }
+        let mut machine = Machine::new_effect(&program);
+        machine.control.take();
+        machine_test_hooks::FAIL_CONTROL_RESERVATION
+            .set(Some(ResourceFailureCause::AllocatorRefused));
+        let failure = machine
+            .return_from(consumed_completion(handler, owner, 3), integer("42"))
+            .unwrap_err();
+        machine_test_hooks::reset();
+        let RuntimeFailure::Report(report) = failure else {
+            panic!("resource report")
+        };
+        assert_eq!(
+            report.primary.resource().unwrap().resource,
+            RuntimeResource::EffectTrace
+        );
+        assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn grouped_completion_in_saved_region_segment_uses_physical_quota_on_discard() {
+        let program = resource_program();
+        let resource = resource_node(&program);
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        for limit in [2, 3] {
+            let mut machine = Machine::new_effect_with_capture_limit(&program, limit);
+            machine.control.take();
+            machine.live_resources = 1;
+            machine.captured_cells = 2;
+            machine.frames.push(Frame::RegionAllocated {
+                segment: CapturedContinuation {
+                    frames: vec![
+                        consumed_completion(handler, owner, 50),
+                        Frame::ResourceBoundary {
+                            node: resource,
+                            key: ActivationKey(0),
+                            payload: ResourcePayload::Cell(Value::SmallInteger(41)),
+                        },
+                    ],
+                },
+                invocation: super::super::value::RegionInvocation {
+                    owner: ActivationKey(0),
+                    serial: 0,
+                },
+                registered: true,
+            });
+            let captured = machine.capture_from(0);
+            if limit == 2 {
+                assert!(is_configured_capacity(
+                    captured.unwrap_err(),
+                    RuntimeFailure::CapturedControlCapacity,
+                    RuntimeResource::FrameStorage
+                ));
+                assert_eq!(machine.captured_cells, 2);
+                assert_eq!(machine.frames.len(), 1);
+                continue;
+            }
+            let captured = captured.expect("three physical cells fit exactly");
+            assert_eq!(machine.captured_cells, 3);
+            machine.frames.push(Frame::ClauseBoundary {
+                handler,
+                owner,
+                continuation: Some(captured),
+                registration: None,
+                completion_count: 1,
+            });
+            machine.discard(handler, owner).unwrap();
+            assert_eq!(machine.captured_cells, 0);
+            let result = machine.run().unwrap();
+            assert_eq!(result.value.to_string(), "()");
+            assert_eq!(
+                result.effect_trace(),
+                [
+                    EffectTraceEvent::Discard(handler),
+                    EffectTraceEvent::ResourceReleased(0),
+                    EffectTraceEvent::ClauseReturned(handler),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn discard_rejects_malformed_nested_completion_before_transfer() {
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        for case in 0..3 {
+            let mut machine = capture_machine(1);
+            machine.frames.clear();
+            machine.frames.push(Frame::ClauseBoundary {
+                handler,
+                owner,
+                continuation: (case == 1).then(|| CapturedContinuation { frames: Vec::new() }),
+                registration: (case == 2).then_some(RegistrationKey(0)),
+                completion_count: if case == 0 { 0 } else { 2 },
+            });
+            let captured = machine.capture_from(0).unwrap();
+            machine.frames.push(Frame::ClauseBoundary {
+                handler,
+                owner,
+                continuation: Some(captured),
+                registration: None,
+                completion_count: 1,
+            });
+            machine.control.take();
+            assert_eq!(
+                machine.discard(handler, owner),
+                Err(RuntimeFailure::InvalidControlState)
+            );
+            assert_eq!(machine.captured_cells, 1);
+            assert!(matches!(
+                machine.frames[0],
+                Frame::ClauseBoundary {
+                    continuation: Some(_),
+                    ..
+                }
+            ));
+            assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn generic_execution_instantiation_work_is_exact_and_retryable() {
         let program = effect_program(concat!(
             "effect E<T> {\nask : Unit -> Int\n}\n",
@@ -4594,6 +5212,7 @@ mod tests {
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             let nested = machine.capture_from(0).unwrap();
             machine.frames.push(Frame::ClauseBoundary {
+                completion_count: 1,
                 registration: None,
                 handler: HandlerId::new(1),
                 owner: ResumeId::new(1),
@@ -4606,6 +5225,7 @@ mod tests {
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             let captured = machine.capture_from(0).unwrap();
             machine.frames.push(Frame::ClauseBoundary {
+                completion_count: 1,
                 registration: None,
                 handler,
                 owner,
@@ -4696,6 +5316,7 @@ mod tests {
                 RuntimeResource::CleanupOwners
             ));
             machine.frames.push(Frame::ClauseBoundary {
+                completion_count: 1,
                 registration: None,
                 handler: HandlerId::new(0),
                 owner: ResumeId::new(0),
@@ -5005,6 +5626,7 @@ mod tests {
         assert_eq!(captured.frames.len(), 1);
         let forest = CapturedContinuation {
             frames: vec![Frame::ClauseBoundary {
+                completion_count: 1,
                 handler: wrong,
                 owner: ResumeId::new(0),
                 continuation: Some(captured),
@@ -5539,6 +6161,7 @@ mod tests {
         machine.return_from(restored, integer("4")).unwrap();
         let events = machine.effect_trace.clone();
         let duplicate = Frame::ClauseBoundary {
+            completion_count: 1,
             handler: handler_id,
             owner,
             continuation: None,
@@ -6298,6 +6921,7 @@ mod tests {
                 let handler = HandlerId::new(0);
                 let owner = ResumeId::new(0);
                 machine.frames.push(Frame::ClauseBoundary {
+                    completion_count: 1,
                     registration: None,
                     handler,
                     owner,
@@ -6372,6 +6996,7 @@ mod tests {
         let handler = HandlerId::new(0);
         let owner = ResumeId::new(0);
         machine.frames.push(Frame::ClauseBoundary {
+            completion_count: 1,
             registration: None,
             handler,
             owner,
@@ -6916,6 +7541,7 @@ mod tests {
             let handler = HandlerId::new(0);
             let owner = ResumeId::new(0);
             machine.frames.push(Frame::ClauseBoundary {
+                completion_count: 1,
                 registration: None,
                 handler,
                 owner,
@@ -7069,6 +7695,7 @@ mod tests {
                                 payload: ResourcePayload::Cell(Value::SmallInteger(41)),
                             },
                             Frame::ClauseBoundary {
+                                completion_count: 1,
                                 registration: None,
                                 handler: HandlerId::new(0),
                                 owner: ResumeId::new(0),
@@ -7078,6 +7705,7 @@ mod tests {
                     };
                 }
                 failure.frames.push(Frame::ClauseBoundary {
+                    completion_count: 1,
                     registration: None,
                     handler: HandlerId::new(0),
                     owner: ResumeId::new(0),
@@ -7214,6 +7842,7 @@ mod tests {
                 for depth in 0..32_768_u32 {
                     continuation = CapturedContinuation {
                         frames: vec![Frame::ClauseBoundary {
+                            completion_count: 1,
                             registration: None,
                             handler: HandlerId::new(depth),
                             owner: ResumeId::new(depth),
@@ -7332,6 +7961,7 @@ mod tests {
         machine.captured_cells = 1;
         let captured = machine.capture_from(0).expect("exact remaining quota");
         machine.frames.push(Frame::ClauseBoundary {
+            completion_count: 1,
             registration: None,
             handler: HandlerId::new(1),
             owner: ResumeId::new(1),
@@ -7343,6 +7973,7 @@ mod tests {
             }),
         });
         machine.frames.push(Frame::ClauseBoundary {
+            completion_count: 1,
             registration: None,
             handler,
             owner,
@@ -7415,6 +8046,7 @@ mod tests {
             pending_invocations: 1,
         });
         machine.frames.push(Frame::ClauseBoundary {
+            completion_count: 1,
             handler: HandlerId::new(1),
             owner: ResumeId::new(1),
             continuation: None,
@@ -7428,6 +8060,7 @@ mod tests {
         machine.live_cleanups = 1;
         let captured = machine.capture_from(1).unwrap();
         machine.frames.push(Frame::ClauseBoundary {
+            completion_count: 1,
             handler,
             owner,
             continuation: Some(captured),
@@ -7493,6 +8126,7 @@ mod tests {
             let mut captured = machine.capture_from(0).expect("capture fits");
             if nested {
                 captured.frames[1] = Frame::ClauseBoundary {
+                    completion_count: 1,
                     registration: None,
                     handler: HandlerId::new(1),
                     owner: ResumeId::new(1),
@@ -7507,6 +8141,7 @@ mod tests {
             }
             machine.captured_cells = retained;
             machine.frames.push(Frame::ClauseBoundary {
+                completion_count: 1,
                 registration: None,
                 handler: found_handler,
                 owner: found_owner,
@@ -7582,6 +8217,7 @@ mod tests {
                         if live_nested {
                             captured = CapturedContinuation {
                                 frames: vec![Frame::ClauseBoundary {
+                                    completion_count: 1,
                                     registration: None,
                                     handler,
                                     owner,
@@ -7590,6 +8226,7 @@ mod tests {
                             };
                         } else {
                             captured.frames.push(Frame::ClauseBoundary {
+                                completion_count: 1,
                                 registration: None,
                                 handler,
                                 owner,
@@ -7615,6 +8252,7 @@ mod tests {
                         assert!(machine.frames.is_empty());
                     }
                     machine.frames.push(Frame::ClauseBoundary {
+                        completion_count: 1,
                         registration: None,
                         handler,
                         owner,
@@ -7650,12 +8288,14 @@ mod tests {
         let mut machine = capture_machine(3);
         let captured = machine.capture_from(0).expect("capture fits");
         machine.frames.push(Frame::ClauseBoundary {
+            completion_count: 1,
             registration: None,
             handler,
             owner,
             continuation: Some(captured),
         });
         machine.frames.push(Frame::ClauseBoundary {
+            completion_count: 1,
             registration: None,
             handler,
             owner,

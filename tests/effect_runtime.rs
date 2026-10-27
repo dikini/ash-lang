@@ -851,6 +851,53 @@ fn nested_forwarding_restores_intervening_handlers_in_original_order() {
 }
 
 #[test]
+fn tail_and_strict_resumes_keep_later_effect_and_clause_order() {
+    for (clause, expected) in [
+        ("resume 41", "42"),
+        ("{\nlet continued = resume 41\ncontinued + 1\n}", "43"),
+        ("1 + (resume 41)", "43"),
+    ] {
+        let source = format!(
+            "effect Ask {{\nask : Unit -> Int\n}}\n\
+             effect Mark {{\nmark : Int -> Int\n}}\n\
+             main : Unit -> Int\nmain () = handle (\n\
+             handle ({{\nlet value = perform Ask.ask ()\nperform Mark.mark value\n}}) with Ask {{\n\
+             ask ignored => {clause}\n}}\n) with Mark {{\nmark value => resume (value + 1)\n}}\n"
+        );
+        let (evaluation, trace) = run_effect_source_with_trace("strict-resume", &source);
+        assert_eq!(evaluation.value.to_string(), expected);
+        let [
+            EffectTraceEvent::HandlerActivated(outer),
+            EffectTraceEvent::HandlerActivated(inner),
+            ..,
+        ] = trace.as_slice()
+        else {
+            panic!("handler activation order: {trace:?}");
+        };
+        let significant = trace
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    EffectTraceEvent::Request(_)
+                        | EffectTraceEvent::Resume(_)
+                        | EffectTraceEvent::ClauseReturned(_)
+                )
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(
+            matches!(significant.as_slice(), [
+            EffectTraceEvent::Request(_), EffectTraceEvent::Resume(resumed_inner),
+            EffectTraceEvent::Request(_), EffectTraceEvent::Resume(resumed_outer),
+            EffectTraceEvent::ClauseReturned(returned_inner), EffectTraceEvent::ClauseReturned(returned_outer),
+        ] if resumed_inner == inner && returned_inner == inner && resumed_outer == outer && returned_outer == outer),
+            "source effects and deferred returns: {significant:?}"
+        );
+    }
+}
+
+#[test]
 fn nearest_delegation_and_sequential_requests_preserve_clause_control() {
     let (evaluation, source_trace) = run_effect_source_with_trace(
         "delegation",

@@ -9,8 +9,9 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active tasks are listed. The lexical-region product's language rules are in
-the [specification](../../spec/README.md); its existing
+The active [TASK-0056](TASK-0056-evaluator-completion-frames.md) addresses
+evaluator completion-frame growth. The lexical-region product's language rules
+are in the [specification](../../spec/README.md); its existing
 [model evidence](../design/lexical-regions/evidence.md) retains the bounded proof
 scope. [R5 #70](https://github.com/dikini/ash-lang/issues/70) records product
 acceptance and the separately authorized Main-delivery boundary.
