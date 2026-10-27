@@ -778,3 +778,159 @@ fn integer_pending_digits_refuse_after_an_initialized_value() {
         b"mar",
     );
 }
+
+const FIXED_REFUSAL_ENTRY: &str = r#"import native as Raw
+import @builtin.regions as Region
+import @builtin.foreign as F
+import @builtin.cell as Cell
+import @builtin.string as Text
+
+effect Refused {
+    out : Unit -> Unit
+}
+
+provider<R> : F.Address -> ((Region.Request -> Region.Storage<R> ! {Raw.Allocate, Refused}), (Unit -> Unit ! {Raw.Release}))
+provider state = {
+    let allocate : Region.Request -> Region.Storage<R> ! {Raw.Allocate, Refused} = fn(request) {
+        let backing = perform Raw.Allocate.call state
+        let _ = match F.is_null backing {
+            true => perform Refused.out ()
+            false => ()
+        }
+        Region.from_backing (request, backing, 4096, 64)
+    }
+    let release : Unit -> Unit ! {Raw.Release} = fn(ignored) {
+        perform Raw.Release.call state
+    }
+    (allocate, release)
+}
+
+old_is_expected : (Int, Int) -> Bool
+old_is_expected pair = match pair {
+    (left, right) => match left == 20 {
+        true => right == 22
+        false => false
+    }
+}
+
+main : Unit -> Int ! {Raw.Make, Raw.Allocate, Raw.Release, Raw.InspectHost}
+main () = resource cell<C> completed = 0 {
+    let state = perform Raw.Make.call ()
+    let writeback = (completed, 42)
+    let inspection = Text.to_utf8 "**"
+    let _ = handle (region<R> owner = (provider state) {
+        let old = (20, 22)
+        cleanup fn(ignored) {
+            match old_is_expected old {
+                true => {
+                    let _ = perform Raw.InspectHost.call inspection
+                    Cell.write writeback
+                }
+                false => ()
+            }
+        } {
+            let _ = (1, 2)
+            ()
+        }
+    }) with Refused {
+        out ignored => discard
+    }
+    Cell.read completed
+}
+"#;
+
+#[test]
+fn fixed_capacity_refusal_preserves_initialized_values_until_cleanup_and_release() {
+    // The same Source succeeds with three requests: the old tuple, cleanup
+    // record, then the body tuple. Two real blocks preserve the first two and
+    // force the body request to refuse, before cleanup reads either old field.
+    const BLOCKS: usize = 2;
+    let c = format!("#define REGION_CAPACITY_BLOCKS {BLOCKS}\n{C}")
+        .replace(
+            "struct state { struct block *blocks; };",
+            "struct state { struct block *blocks; struct block *next; size_t used; unsigned refusals; unsigned cleanup_seen; };\nstatic unsigned releases;",
+        )
+        .replace(
+            r#"void *region_make(void) {
+    struct state *state = calloc(1, sizeof *state);
+    if (!state) abort();
+    current = state;
+    trace('m');
+    return state;
+}"#,
+            r#"void *region_make(void) {
+    if (current || releases || REGION_CAPACITY_BLOCKS == 0) abort();
+    struct state *state = calloc(1, sizeof *state);
+    if (!state) abort();
+    for (size_t i = 0; i < REGION_CAPACITY_BLOCKS; ++i) {
+        struct block *block = malloc(sizeof *block);
+        if (!block) abort();
+        block->bytes = aligned_alloc(64, 4096);
+        if (!block->bytes) abort();
+        memset(block->bytes, 0xa5, 4096);
+        block->next = state->blocks;
+        state->blocks = block;
+    }
+    state->next = state->blocks;
+    current = state;
+    trace('m');
+    return state;
+}"#,
+        )
+        .replace(
+            r#"void *region_allocate(void *opaque) {
+    struct state *state = opaque;
+    struct block *block = malloc(sizeof *block);
+    if (!block) abort();
+    block->bytes = aligned_alloc(64, 4096);
+    if (!block->bytes) abort();
+    memset(block->bytes, 0xa5, 4096);
+    block->next = state->blocks;
+    state->blocks = block;
+    trace('a');
+    return block->bytes;
+}"#,
+            r#"void *region_allocate(void *opaque) {
+    struct state *state = opaque;
+    if (releases || state != current || state->refusals) abort();
+    if (!state->next) {
+        if (state->used != REGION_CAPACITY_BLOCKS) abort();
+        state->refusals++;
+        trace('f');
+        return NULL;
+    }
+    struct block *block = state->next;
+    state->next = block->next;
+    state->used++;
+    trace('a');
+    return block->bytes;
+}"#,
+        )
+        .replace(
+            r#"void region_inspect_host(const unsigned char *bytes) {
+    if (bytes[0] != 42 || bytes[1] != 42) abort();
+    trace('b');
+}"#,
+            r#"void region_inspect_host(const unsigned char *bytes) {
+    if (releases || !current || current->next ||
+        current->used != REGION_CAPACITY_BLOCKS || current->refusals != 1 ||
+        current->cleanup_seen || bytes[0] != 42 || bytes[1] != 42) abort();
+    for (struct block *block = current->blocks; block; block = block->next) {
+        unsigned char *backing = block->bytes;
+        int changed = 0;
+        for (size_t i = 0; i < 4096; ++i) changed |= backing[i] != 0xa5;
+        if (!changed) abort();
+    }
+    current->cleanup_seen = 1;
+    trace('c');
+}"#,
+        )
+        .replace(
+            "void region_release(void *opaque) {\n    struct state *state = opaque;",
+            "void region_release(void *opaque) {\n    if (++releases != 1 || opaque != current) abort();\n    struct state *state = opaque;\n    if (state->next || state->used != REGION_CAPACITY_BLOCKS || state->refusals != 1 || state->cleanup_seen != 1) abort();",
+        );
+    let mut expected = vec![b'm'];
+    expected.extend(std::iter::repeat_n(b'a', BLOCKS));
+    expected.extend_from_slice(b"fcr");
+    run_native_with_c("fixed-refusal", FIXED_REFUSAL_ENTRY, &expected, &c);
+}

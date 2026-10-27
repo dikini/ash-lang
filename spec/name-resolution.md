@@ -120,6 +120,16 @@ conversion. Complete and targeted imports, aliases and public re-exports preserv
 the original nominal and function identities. A same-spelled ordinary declaration
 does not select builtin execution or become the canonical ABI Address type.
 
+### Compiler-owned region bindings
+
+`@builtin.regions` supplies the canonical binding facade for `Request`,
+`Storage<R>`, `usable_bytes`, `alignment` and `from_backing`. A graph retains one
+canonical private region service and its foreign dependency. Its identities
+also supply implicit allocation defaults and generated control. The facade's
+ordinary imports and re-exports expose no constructor, owner creation or release
+authority. The private service and `DefaultAlloc` are not source-importable APIs;
+a same-spelled declaration cannot select them.
+
 ### Source foreign-library identities
 
 A foreign library introduces a defining library identity without a nested source
@@ -771,6 +781,15 @@ Two local globals cannot have the same name. In an equational definition, the
 name in the global signature must equal the name at every equation head.
 
 ## Local scope
+
+In `region<R> r = provider { body }`, fresh kind-`Type` R is in the provider's
+lexical type context and the body. Both refer to the same prospective activation;
+publishing it does not replace its identity. The term r is available only in the
+body. Provider evaluation occurs once under the preceding allocation selection
+and grants no live r access. Omitting the provider preserves these scopes.
+`using operand { body }` resolves its operand ordinarily in the preceding scope;
+selection acquires no owner and changes no existing value's residency. These
+forms preserve ordinary shadowing and restore the preceding scopes on exit.
 
 A block resolves its bindings from left to right. A local initializer uses the
 scope before its binder, so the binding is nonrecursive. The binder is visible

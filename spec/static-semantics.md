@@ -314,11 +314,19 @@ it leaves a closed row unchanged, or leaves an open row unchanged only when its
 tail already lacks `H`. Otherwise discharge is ambiguous. This relation adds
 no lacks fact and does not relax ordinary handler admission or exact removal.
 
-Surface `A -> B` denotes `Function(A, B ! {})`. A written row changes only the
-complete computation codomain to which it attaches. Consequently,
-`A -> B -> C ! {E}` is a pure call from `A` returning a function whose call may
-request `E`, while `A -> (B -> C) ! {E}` may request `E` while returning a pure
-function.
+Let `delta` denote the exact canonical private `DefaultAlloc` instance.
+Every Source value-function arrow expands its codomain row by idempotent union
+with `{delta}`, including nested arrows. Thus omitted rows and written `! {}`
+include allocation, and written `! {E}` includes allocation and E. A written row
+still attaches only to its own computation codomain. For example,
+`A -> B -> C ! {E}` has allocation at both calls and E at the second call;
+`A -> (B -> C) ! {E}` has E at the first call and allocation at both.
+
+The outer pure arrow of an effect operation declaration remains its required
+operation shape. Value-function types nested in its domain or result receive
+ordinary expansion. Host/control leaves retain their actual complete rows.
+This expansion infers no unrelated omitted effects and hides no observable
+provider effect. Core has no implicit defaults.
 
 The executable tests
 `closed_rows_are_unordered_idempotent_exact_instance_sets`,
@@ -406,10 +414,16 @@ main () = ()
 ### Row lifting for existing expression rules
 
 The expression rules below use one row-lifting convention where they retain a
-predecessor judgment without an explicit row. A literal, variable occurrence,
-constructor occurrence, or function creation has row `{}`. An ordinary strict
-form with evaluated expression children `e_1` through `e_n` has the partial
-union of their rows, accumulated in the existing left-to-right checking order.
+predecessor judgment without an explicit row. A variable lookup, code-only
+constructor/intrinsic value, or known immediate literal has row `{}`. Persistent
+construction adds the canonical allocation requirement to its strict-child rows;
+this includes tuples, nominal records, buffers, large integers and materialized
+ordinary function records. Potentially large arithmetic carries that requirement
+even when a particular result is immediate. Erased newtype conversions add no
+allocation. Generated wrappers allocate only when lowered to ordinary Function.
+An ordinary strict form with evaluated expression children `e_1` through `e_n`
+otherwise has the partial union of their rows, accumulated in the existing
+left-to-right checking order.
 A match has the scrutinee row unioned with every arm-body row. A block has every
 initializer row unioned with its remainder row. A checking judgment also
 requires the synthesized row to weaken to the expected row. The value-type,
@@ -516,8 +530,11 @@ follows `T-Apply`; it does not have a special call rule.
 ## Functions and application
 
 An anonymous function checks only when an expected function type supplies its
-parameter and computation result. Function creation is pure; the body row is
-stored in the function's latent computation codomain. Application first
+parameter and computation result. Evaluating the function creates its record
+and actual captures once in the selected region, adding `{delta}`. The body row
+remains latent; calling the stored function uses the caller's allocation
+selection for fresh body construction. Lookup, copying and type instantiation
+do not recreate or relocate the record. Application first
 synthesizes the function, then checks the argument against its domain, and
 unions both strict-child rows with that latent row.
 
@@ -529,7 +546,7 @@ family function-typing:
     GAMMA, bindings |- body ⇐ codomain ! body_effects
     ===>
     GAMMA |- fn(pattern) { body }
-      ⇐ Function(domain, codomain ! body_effects) ! {}
+      ⇐ Function(domain, codomain ! body_effects) ! {delta}
 
   T-Effectful-Apply :=
     GAMMA |- function
@@ -1146,8 +1163,8 @@ because an action uses that cell before release. Surviving source handlers,
 including clause-local handlers around discard, check and discharge residual
 effects at their own boundaries. Discard is not universally pure.
 
-This complete handler discharges `Cell`, so `main` has a pure computation
-codomain and evaluates to `42`:
+This complete handler discharges `Cell`, leaving only the default allocation
+requirement in main's computation codomain, and evaluates to `42`:
 
 ```ash
 effect Cell {
@@ -1433,6 +1450,52 @@ linked Core permission is published without the dependency proof. Canonical
 metadata imports and conditional helpers remain admissible. Execution requires
 this source/Core proof and the separate runtime operation, complete type and
 activation checks described in the dynamic semantics.
+
+## Lexical regions and construction dependencies
+
+A region's complete provider type is the ordinary monomorphic pair
+`(Request -> Storage<R> ! ea, Unit -> Unit ! er)` after instantiation. Check its
+evaluation under the preceding selection, with fresh prospective R but no live
+term access. The same activation becomes live only after complete preparation.
+R may occur in the provider result only through the retained member contracts,
+not in provider-evaluation outward requirements. Setup cannot request its
+not-yet-live prospective region. The pair fixes allocate, release and their
+shared implementation/state for that activation. Region access permits selection/allocation, never release ownership.
+Omission selects the host-backed default provider with the same lifecycle.
+
+`using access { body }` requires live access. It changes only the selected
+allocation context for new construction and called helpers, restoring the
+preceding selection on return. Ordinary blocks/calls create no region, and
+aliases and explicit captured access keep their original residency/identity.
+
+Constructed values retain actual residency and field/capture dependencies.
+Initialization requires fresh compatible supplied storage and completed children;
+only initialized access is published. Existing lifetime and actual-dependency
+checking rejects stale access, younger escapes, owner cycles and invalid
+backpatches. Immutable data cycles remain distinct from owner cycles; recursive
+guardedness is unchanged. Pending group state retains completed construction
+through capture/resume without replay or a whole-group rollback transaction.
+
+A region's outward row includes provider evaluation and both callback rows.
+Default-service discharge requires the actual protecting owner/control proof;
+additional observable provider effects remain visible. Requests carry independent
+layout requirements, while younger fields/captures stay local. Required cleanup
+and dependent uses finish with backing live before the original paired release;
+copied access owns no close. Removed interpreters and running-completion barriers
+retain their existing cleanup/discard rules.
+
+`Int` remains mathematical and unbounded. Its type alone proves no independence.
+Known immediate literals and intrinsically bounded leaves are independent only
+when their complete persistent representation is immediate. Large literals
+retain digit-backing residency. Unknown results, potentially large addition and
+multiplication conservatively retain selected residency even for a small runtime
+result; aliases, projections, calls and Cell reads preserve actual facts. Thus
+literal `42` may leave an inner region, while `20 + 22` cannot acquire independence
+from its numeric result. Selecting an outer region before arithmetic can make
+that result survive an inner close without relocation. No range propagation or
+implicit copying is added. Immediate representation covers byte values and
+checked request-size/alignment metadata; its exact range is not a public Int
+bound.
 
 ## Scoped cells and resource dependencies
 
@@ -2388,7 +2451,7 @@ family module-and-program-typing:
     checked_program = checked_modules in dependency order
     main is a local checked scheme in entry
     main is monomorphic Function(Unit, result_type ! effects) with no requirements
-    effects is empty or a closed row of admitted native symbol instances
+    effects is a closed row containing only the private default allocation instance and admitted native symbol instances
     closed(result_type)
     ===>
     |-program checked_program, entry ⇒ result_type
@@ -2447,10 +2510,12 @@ neither validation nor synthesis selects implementations again.
 `T-Program` checks each module after all its dependencies. The entry must
 declare exactly one local `main`; an imported `main` cannot satisfy the
 premise. Its checked scheme must have no type parameters, domain `Unit`, a
-closed result and no requirements. Its latent effect row must be empty or a
-closed row containing only admitted native symbol instances. The linked
-entry is wrapped by the explicit native Core interpretation when needed; its
-outward row after exact subtraction must be empty. Entry failures have this
+closed result and no requirements. Its latent effect row is closed and contains
+only the canonical default allocation requirement and admitted native symbol
+instances. The generated host-backed root encloses all module construction and
+the main application, discharging allocation with its protecting owner. Explicit
+native interpretation discharges required admitted symbols. The final outer
+expression has an empty row; the raw main application retains its complete row. Entry failures have this
 order: missing local `main`, polymorphic scheme, wrong domain, inadmissible effect
 row, open result, then constrained scheme. An ordinary outward effect, unresolved
 row tail or unsupported effect requirement is `entry.main-effects`. This preserves

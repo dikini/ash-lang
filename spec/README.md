@@ -56,6 +56,17 @@ the evidence is available only in the following lexical remainder. Selected
 methods lower to ordinary functions, and checked closures may retain them
 after that evidence block returns without exporting the evidence itself.
 
+Ordinary construction uses lexical region storage. `region<R> r [= provider]`
+establishes one owner with a fixed ordinary allocate/release pair; omission uses
+the host-backed default. `using r { body }` selects live access for fresh
+construction without ownership transfer or relocation. Values and actual captures
+retain their residency/dependencies, and required cleanup finishes before the
+original paired release bulk-reclaims that region. Ordinary blocks/calls create
+no region. Function records are created once; fresh call-body construction uses
+the caller's selection. Source value-function arrows include the default
+allocation requirement even when their written row is empty; extra provider
+effects remain visible. Core retains these requirements and controls explicitly.
+
 An interface declares one or more ordered, fixed-kinded type parameters and an
 ordered set of method signatures. It may declare one total forward
 determination edge from a nonempty parameter key to the entire dependent
@@ -162,10 +173,11 @@ Internal termination or exhaustion provides no source-cleanup guarantee.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
-Its computation row is empty or contains only required admitted native symbol
-effects, discharged by the generated interpretation. After checking every
-dependency, Ash links the
-module definition groups and evaluates `main ()`.
+Its computation row is closed and contains only the default allocation
+requirement and required admitted native symbol effects. After checking every
+dependency, Ash links the module groups and evaluates `main ()` inside an
+explicit host-backed root, established before module closure construction.
+That root and required native interpretation discharge the complete outward row.
 Imports, exports, aliases, and opacity are static access rules and do not remain
 as runtime operations. Interface identities, implementation identities, and
 their checking registries also erase. Selected evidence lowers to ordinary
@@ -504,9 +516,10 @@ The program observes:
 ```
 
 The method scheme is authenticated across both source-body-free summaries.
-Concrete evidence uses one generated adapter over the implementation method;
-this Pure program erases its type operations through the existing evaluator
-rules. The source filename retained by the test corpus is `interface.ash`, but
+Concrete evidence uses one generated adapter over the implementation method.
+This Source program uses Effect execution, retaining lexical instantiation and
+once-created records through the ordinary evaluator rules. Pure Core retains
+its separate type-erasure rules. The source filename retained by the test corpus is `interface.ash`, but
 the executable tree stages that content as `api.ash` because `interface` is reserved in
 a module path.
 
