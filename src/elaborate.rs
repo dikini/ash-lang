@@ -3045,6 +3045,9 @@ impl CoreLoweringFamily for EffectOperationFamily {
                 builder.resource_scope(resource, ty, effects, origin)
             }
             EffectOperation::Store(store) => builder.store_scope(store, ty, effects, origin),
+            EffectOperation::Continue(continuation) => {
+                builder.continue_control(continuation, ty, effects, origin)
+            }
             EffectOperation::Request(request) => {
                 let (effect, operation, operand) = request.into_parts();
                 builder.request(effect, operation, operand, ty, effects, origin)
@@ -10770,7 +10773,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     self.elaborate_foreign_constant(equational, &mut prepared.context)?,
                 ),
                 ResolvedDefinitionKind::Equational(equational) => {
-                    let function_type =
+                    let mut function_type =
                         ProvenancedTypeOwner::new(ProvenancedType::from_resolved_with_budget(
                             &equational.interface.annotation,
                             &mut self.type_work,
@@ -10784,7 +10787,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     }
                     (
                         &equational.interface.name,
-                        if let Some(intrinsic) =
+                        if let Some(module) = equational.interface.name.id.module()
+                            && module.is_builtin_retained_control()
+                            && equational.interface.name.spelling == "advance"
+                        {
+                            // Build all of the intrinsic's ports from the same
+                            // scheme-wide row qualification as an ordinary
+                            // equation body, before allocating its binders.
+                            self.qualify_checking_type(&mut function_type, true)?;
+                            let ty = self.clone_type(&function_type.ty)?;
+                            let node = self.lower_store_advance(module, &ty, definition.span())?;
+                            TypedNode {
+                                node,
+                                ty,
+                                effects: EffectRow::empty(),
+                                provenance: function_type.provenance.clone(),
+                            }
+                        } else if let Some(intrinsic) =
                             self.builtin_intrinsic(&equational.interface.name, &function_type.ty)?
                         {
                             let ty = self.clone_type(&function_type.ty)?;
@@ -13267,6 +13286,130 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    // The canonical builtin is a real callable, so aliases and imported
+    // helpers retain the same structural Continue body.
+    fn lower_store_advance(
+        &mut self,
+        module: crate::module::ModuleId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<NodeId, TypeError> {
+        let function = ty.function_view().ok_or_else(invalid_state)?;
+        let Type::Tuple(arguments) = function.domain() else {
+            return Err(invalid_state());
+        };
+        let [store_type, key_type] = arguments.as_ref() else {
+            return Err(invalid_state());
+        };
+        let (api, identity, ports) =
+            crate::core::effect::store_ports(store_type).ok_or_else(invalid_state)?;
+        if api.module() != module {
+            return Err(invalid_state());
+        }
+        self.type_work.charge(4).map_err(|()| type_resource())?;
+        let expected_key = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.key())),
+            Box::new(self.clone_type(identity)?),
+        ));
+        let expected_result = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.option())),
+            Box::new(self.clone_type(ports.value())?),
+        ));
+        if !same_type_with_budget(key_type, &expected_key, &mut self.type_work)
+            .map_err(|()| type_resource())?
+            || !same_type_with_budget(function.value(), &expected_result, &mut self.type_work)
+                .map_err(|()| type_resource())?
+        {
+            return Err(invalid_state());
+        }
+        let row = function.effects().ok_or_else(invalid_state)?;
+        let drive = EffectRow::singleton(EffectInstance::new(
+            api.drive(),
+            Box::new([self.clone_type(identity)?]),
+        ));
+        let latent = match ports.effects() {
+            Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
+                .map_err(|()| type_resource())?,
+            None => EffectRow::empty(),
+        };
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        self.expected_effect_rows
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        self.expected_effect_rows.push(
+            clone_effect_row_with_budget(row, &mut self.type_work).map_err(|()| type_resource())?,
+        );
+        let reconstructed = self.union_effects(&drive, &latent, span);
+        self.expected_effect_rows.pop();
+        let reconstructed = reconstructed?;
+        if !self.same_effect_rows(&reconstructed, row)? {
+            return Err(invalid_state());
+        }
+
+        let parameter_type = self.pure_core_type(function.domain())?;
+        let parameter = self.builder.binder(parameter_type, Origin::Source(span))?;
+        let parameter_type = self.pure_core_type(function.domain())?;
+        let scrutinee =
+            self.builder
+                .variable(parameter.id(), parameter_type, Origin::Source(span))?;
+        let store_binder_type = self.pure_core_type(store_type)?;
+        let store = self
+            .builder
+            .binder(store_binder_type, Origin::Source(span))?;
+        let key_binder_type = self.pure_core_type(key_type)?;
+        let key = self.builder.binder(key_binder_type, Origin::Source(span))?;
+        let store_value_type = self.pure_core_type(store_type)?;
+        let store_value =
+            self.builder
+                .variable(store.id(), store_value_type, Origin::Source(span))?;
+        let key_value_type = self.pure_core_type(key_type)?;
+        let key_value = self
+            .builder
+            .variable(key.id(), key_value_type, Origin::Source(span))?;
+        let result_type = self.pure_core_type(function.value())?;
+        let effects = self.core_effect_row(row)?;
+        let body = self.push_effect_core(
+            result_type,
+            effects,
+            Origin::Source(span),
+            EffectOperation::Continue(crate::core::effect::ContinueNode {
+                store: store_value,
+                key: key_value,
+            }),
+        )?;
+        let store_pattern_type = self.pure_core_type(store_type)?;
+        let key_pattern_type = self.pure_core_type(key_type)?;
+        let tuple_pattern_type = self.pure_core_type(function.domain())?;
+        let pattern = CorePattern::new(
+            tuple_pattern_type,
+            Origin::Source(span),
+            CorePatternKind::Tuple(
+                vec![
+                    CorePattern::new(
+                        store_pattern_type,
+                        Origin::Source(span),
+                        CorePatternKind::Binder(store),
+                    ),
+                    CorePattern::new(
+                        key_pattern_type,
+                        Origin::Source(span),
+                        CorePatternKind::Binder(key),
+                    ),
+                ]
+                .into_boxed_slice(),
+            ),
+        );
+        let match_type = self.pure_core_type(function.value())?;
+        let body = self.builder.match_expression(
+            scrutinee,
+            vec![CoreMatchArm::new(pattern, body, Origin::Source(span))],
+            match_type,
+            Origin::Source(span),
+        )?;
+        let core_type = self.pure_core_type(ty)?;
+        self.construct_function(parameter, body, core_type, Origin::Source(span))
+    }
+
     fn step_store_body<'a>(
         &mut self,
         store: &'a crate::resolved::ResolvedStoreExpr,
@@ -13355,7 +13498,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         context.remove_and_discard(store.handle.id);
         let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
         let body_effects = self.zonk_effect_row(&body.effects)?;
-        let effects = self.union_effects(&initializer.effects, &body_effects, span)?;
+        let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+            .ok_or_else(invalid_state)?;
+        let drive = EffectInstance::new(api.drive(), Box::new([Type::Variable(store.identity.id)]));
+        let outward = self.remove_cleanup_effect(&body_effects, &drive, span, true)?;
+        let effects = self.union_effects(&initializer.effects, &outward, span)?;
         let row_type = IterativeTypeOwner::new(Type::function_computation(
             Type::Unit,
             ComputationType::new(Type::Unit, self.core_effect_row(&effects)?),
@@ -14078,7 +14225,28 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let ty = IterativeTypeOwner::new(ty);
 
         let arguments = OwnedTypeBuffer(arguments);
-        let provenance = fact.provenance.clone();
+        // Instantiation can add scheme-wide row exclusions to a nested row,
+        // changing the shape described by the original source provenance.
+        let provenance = if !fact.quantified.is_empty()
+            && !fact
+                .provenance
+                .aligns_with_budget(&ty, &mut self.type_work)
+                .map_err(|()| type_resource())?
+        {
+            if !fact
+                .provenance
+                .aligns_with_budget(&fact.ty, &mut self.type_work)
+                .map_err(|()| type_resource())?
+            {
+                return Err(invalid_state());
+            }
+            match fact.provenance.span() {
+                Some(span) => self.at_span_provenance(&ty, span)?,
+                None => self.unknown_provenance(&ty)?,
+            }
+        } else {
+            fact.provenance.clone()
+        };
         let has_lowered_global_scheme = self
             .evidence_lowering
             .as_ref()
@@ -25125,7 +25293,13 @@ fn charge_type_provenance_nodes(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
         budget.charge(1)?;
         match ty {
             Type::Function(domain, codomain) | Type::Application(domain, codomain) => {
+                work.try_reserve(2).map_err(|_| ())?;
                 work.push(codomain);
+                work.push(domain);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                work.try_reserve(2).map_err(|_| ())?;
+                work.push(codomain.value());
                 work.push(domain);
             }
             _ => {}
@@ -34269,6 +34443,25 @@ mod tests {
             .expect("the fixture leaves exactly five provenance nodes");
         let provenance = unknown_provenance_with_budget(&ty, &mut exact)
             .expect("the complete rebuilt provenance should fit");
+        assert!(provenance.aligns(&ty));
+        assert_eq!(exact.charge(1), Err(()));
+    }
+
+    #[test]
+    fn rebuilt_effectful_provenance_charges_its_function_children() {
+        let source = SourceFile::new("provenance-effect.ash", "").expect("source fits");
+        let effect = EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::from(source.id()), 0),
+            Box::new([]),
+        );
+        let ty = Type::function_computation(
+            Type::Int,
+            crate::types::ComputationType::new(Type::Bool, EffectRow::singleton(effect)),
+        );
+        let mut short = TypeWorkBudget::with_limit(2);
+        assert_eq!(unknown_provenance_with_budget(&ty, &mut short), Err(()));
+        let mut exact = TypeWorkBudget::with_limit(3);
+        let provenance = unknown_provenance_with_budget(&ty, &mut exact).expect("three nodes fit");
         assert!(provenance.aligns(&ty));
         assert_eq!(exact.charge(1), Err(()));
     }

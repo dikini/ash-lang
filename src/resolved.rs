@@ -83,6 +83,110 @@ impl StoreApi {
     pub(crate) fn store(self) -> NominalTypeId {
         NominalTypeId::new(self.module, 0)
     }
+
+    pub(crate) fn module(self) -> ModuleId {
+        self.module
+    }
+
+    pub(crate) fn key(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 1)
+    }
+
+    pub(crate) fn option(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 2)
+    }
+
+    pub(crate) fn drive(self) -> EffectId {
+        EffectId::new(self.module, 0)
+    }
+
+    pub(crate) fn hides_constructor(self, id: ConstructorId) -> bool {
+        id.owner() == self.store() || id.owner() == self.key()
+    }
+
+    /// Authenticate the fixed store, locator, answer and drive declarations.
+    pub(crate) fn registry(self, registry: &ResolvedRegistry) -> bool {
+        for (id, name, parameters, constructors) in [
+            (
+                self.store(),
+                "Store",
+                &[(0, "N"), (1, "D")][..],
+                &[("HiddenStore", None)][..],
+            ),
+            (
+                self.key(),
+                "Key",
+                &[(2, "N")][..],
+                &[("HiddenKey", None)][..],
+            ),
+            (
+                self.option(),
+                "Option",
+                &[(3, "A")][..],
+                &[("None", None), ("Some", Some(3))][..],
+            ),
+        ] {
+            let (Some(nominal), Some(actual_parameters)) =
+                (registry.nominal(id), registry.nominal_parameters(id))
+            else {
+                return false;
+            };
+            if nominal.id != id
+                || nominal.spelling != name
+                || nominal.declaration_kind != ResolvedNominalDeclarationKind::Data
+                || nominal.representation.is_some()
+                || nominal.representation_provenance.is_some()
+                || actual_parameters.len() != parameters.len()
+                || !actual_parameters
+                    .iter()
+                    .zip(parameters)
+                    .all(|(actual, (ordinal, spelling))| {
+                        actual.id == TypeVariableId::resolved(self.module, *ordinal)
+                            && actual.kind == Kind::Type
+                            && actual.spelling == *spelling
+                    })
+                || nominal.constructors.len() != constructors.len()
+            {
+                return false;
+            }
+            for (ordinal, (spelling, parameter)) in constructors.iter().enumerate() {
+                let constructor_id = ConstructorId::new(id, ordinal as u32);
+                let Some(actual) = registry.constructor(constructor_id) else {
+                    return false;
+                };
+                if nominal.constructors[ordinal] != constructor_id
+                    || actual.id != constructor_id
+                    || actual.owner != id
+                    || actual.spelling != *spelling
+                    || match (actual.payload.as_ref(), parameter) {
+                        (None, None) => false,
+                        (Some(Type::Variable(actual)), Some(expected)) => {
+                            *actual != TypeVariableId::resolved(self.module, *expected)
+                        }
+                        _ => true,
+                    }
+                {
+                    return false;
+                }
+            }
+        }
+        let Some(effect) = registry.effect(self.drive()) else {
+            return false;
+        };
+        effect.id == self.drive()
+            && effect.public
+            && effect.spelling == "Drive"
+            && effect.native_contract.is_none()
+            && effect.parameters.len() == 1
+            && effect.parameters[0].id == TypeVariableId::resolved(self.module, 4)
+            && effect.parameters[0].kind == Kind::Type
+            && effect.parameters[0].spelling == "N"
+            && effect.operations.len() == 1
+            && effect.operations[0].id == OperationId::new(self.drive(), 0)
+            && effect.operations[0].spelling == "internal"
+            && matches!(&effect.operations[0].annotation.ty,
+                Type::Function(domain, value) if **domain == Type::Unit && **value == Type::Unit)
+    }
 }
 
 /// The fixed relation admitted by the loader's private resource origins.

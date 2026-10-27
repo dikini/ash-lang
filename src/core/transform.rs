@@ -307,6 +307,15 @@ impl TransformFamily for EffectOperationFamily {
                     origin,
                 )
             }
+            EffectOperation::Continue(continuation) => builder.continue_control(
+                super::effect::ContinueNode {
+                    store: remap(remapped, continuation.store)?,
+                    key: remap(remapped, continuation.key)?,
+                },
+                ty.into_inner(),
+                effects,
+                origin,
+            ),
 
             EffectOperation::NativeInterpret(boundary) => {
                 let copied = (|| -> Result<_, TransformError> {

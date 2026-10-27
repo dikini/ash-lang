@@ -2524,6 +2524,10 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
             &[index(store.initializer) + 1, index(store.body) + 1],
             budget,
         )?),
+        Some(EffectOperation::Continue(continuation)) => Control::Sequence(copy_slice(
+            &[index(continuation.store) + 1, index(continuation.key) + 1],
+            budget,
+        )?),
         Some(EffectOperation::Request(request)) => {
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let perform = graph.code.len();

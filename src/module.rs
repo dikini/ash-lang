@@ -48,6 +48,10 @@ const GENERIC_CELL_SOURCE: &str = concat!(
 const RETAINED_CONTROL_SOURCE: &str = concat!(
     "pub opaque type Store<N,D> = HiddenStore\n",
     "pub opaque type Key<N> = HiddenKey\n",
+    "pub type Option<A> = None\n| Some(A)\n",
+    "pub effect Drive<N> {\ninternal : Unit -> Unit\n}\n",
+    "pub advance<N,A,E : EffectRow> : (Store<N,(Unit -> A ! {| E})>, Key<N>) -> Option<A> ! {Drive<N> | E}\n",
+    "advance pair = advance pair\n",
 );
 
 // One authenticated identity supplies the public binding facade and private

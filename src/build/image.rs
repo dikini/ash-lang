@@ -7827,7 +7827,7 @@ impl Encoder<'_> {
                 initializer: self.node(scope.initializer())?,
                 body: self.node(scope.body())?,
             }),
-            EffectExprKind::Operation(EffectOperation::Store(_)) => {
+            EffectExprKind::Operation(EffectOperation::Store(_) | EffectOperation::Continue(_)) => {
                 Err(ImageFailure::Unsupported(Unsupported::EffectOperation))
             }
             EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => Ok(NodeTag::Cleanup {

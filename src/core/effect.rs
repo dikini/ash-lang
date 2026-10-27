@@ -449,6 +449,38 @@ impl StoreScopeNode {
     }
 }
 
+/// A structural continue evaluates the actual store before its locator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContinueNode {
+    pub(crate) store: NodeId,
+    pub(crate) key: NodeId,
+}
+
+/// Read fixed ports from the actual typed store operand, not copied metadata.
+pub(crate) fn store_ports(
+    ty: &Type,
+) -> Option<(
+    crate::resolved::StoreApi,
+    &Type,
+    crate::types::FunctionTypeView<'_>,
+)> {
+    let Type::Application(owner, descriptor) = ty else {
+        return None;
+    };
+    let Type::Application(head, identity) = &**owner else {
+        return None;
+    };
+    let Type::Nominal(store) = &**head else {
+        return None;
+    };
+    let api = crate::resolved::StoreApi::for_module(store.module())?;
+    if *store != api.store() {
+        return None;
+    }
+    let ports = descriptor.function_view()?;
+    matches!(ports.domain(), Type::Unit).then_some((api, identity, ports))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectOperation {
     NativeInterpret(NativeInterpretNode),
@@ -456,6 +488,7 @@ pub enum EffectOperation {
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
     Store(Box<StoreScopeNode>),
+    Continue(ContinueNode),
     Region(Box<super::region::RegionScopeNode>),
     RegionAllocate(super::region::RegionAllocateNode),
     RegionValueRequest(super::region::RegionValueRequestNode),
@@ -615,6 +648,7 @@ impl CoreOperationFamily for EffectOperationFamily {
                 None
             }
             EffectOperation::RegionAllocate(_)
+            | EffectOperation::Continue(_)
             | EffectOperation::RegionValueRequest(_)
             | EffectOperation::RegionTuple(_)
             | EffectOperation::RegionBuffer(_) => None,
@@ -728,6 +762,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Store(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::Continue(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Region(_)) => 3,
             EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => 2,
             EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => 0,
@@ -777,6 +812,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Store(store)) => match index {
                 0 => Some(store.initializer),
                 1 => Some(store.body),
+                _ => None,
+            },
+            EffectExprKind::Operation(EffectOperation::Continue(continuation)) => match index {
+                0 => Some(continuation.store),
+                1 => Some(continuation.key),
                 _ => None,
             },
             EffectExprKind::Operation(EffectOperation::Region(region)) => match index {
@@ -846,6 +886,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::Store(store)) => drop(store),
+            EffectExprKind::Operation(EffectOperation::Continue(_)) => {}
             EffectExprKind::Operation(EffectOperation::Region(region)) => drop(region),
             EffectExprKind::Operation(
                 EffectOperation::RegionAllocate(_)
@@ -913,6 +954,15 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<NodeId, super::BuildError> {
         self.push_operation(ty, effects, origin, EffectOperation::Store(store))
     }
+    pub(crate) fn continue_control(
+        &mut self,
+        continuation: ContinueNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, EffectOperation::Continue(continuation))
+    }
     pub fn with_effect_registry(registry: Arc<ResolvedRegistry>) -> Self {
         Self::with_registry_for_family(registry)
     }
@@ -952,6 +1002,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Handler(EffectInstance, usize, bool),
             Resource(EffectInstance, NodeId, NodeId),
             Store(NodeId, NodeId),
+            Continue(NodeId, NodeId),
 
             Keep,
         }
@@ -1024,6 +1075,9 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                     EffectExprKind::Operation(EffectOperation::Store(store)) => {
                         Equation::Store(store.initializer, store.body)
+                    }
+                    EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                        Equation::Continue(continuation.store, continuation.key)
                     }
 
                     EffectExprKind::Pure(_) => Equation::Pure,
@@ -1244,6 +1298,61 @@ impl CoreBuilder<EffectOperationFamily> {
                             .union_with_budget(body, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::Continue(store, key) => {
+                        let store = self
+                            .nodes
+                            .get(store.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        let key = self
+                            .nodes
+                            .get(key.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?;
+                        let (api, owner, ports) =
+                            store_ports(&store.ty).ok_or(super::BuildError::InvalidPayload)?;
+                        let drive = EffectRow::singleton(EffectInstance::new(
+                            api.drive(),
+                            Box::new([crate::types::clone_type_with_budget(
+                                owner,
+                                &mut self.type_work,
+                            )
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?]),
+                        ));
+                        let mut row = store
+                            .effects
+                            .union_with_budget(&key.effects, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?;
+                        row = row
+                            .union_with_budget(&drive, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?;
+                        if let Some(latent) = ports.effects() {
+                            // Preserve provisional lexical exclusions as for ordinary
+                            // calls. Linked validation proves every added fact.
+                            let reported = &self.nodes[index].effects;
+                            let latent = match (latent.tail(), reported.tail()) {
+                                (Some(tail), Some(previous))
+                                    if tail.variable() == previous.variable() =>
+                                {
+                                    crate::types::rebuild_effect_row_with_budget(
+                                        latent.known(),
+                                        Some(tail.variable()),
+                                        tail.lacks().iter().chain(previous.lacks()),
+                                        crate::types::clone_type_with_budget,
+                                        &mut self.type_work,
+                                    )
+                                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                }
+                                _ => clone_effect_row_with_budget(latent, &mut self.type_work)
+                                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+                            };
+                            row = row
+                                .union_with_budget(&latent, &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        row
                     }
 
                     Equation::Pure => self.infer_pure_effects_at(index)?,

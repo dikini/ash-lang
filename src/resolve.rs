@@ -757,6 +757,8 @@ pub enum ResolveReason {
     ForeignContract,
     /// Source evidence cannot introduce the compiler-owned cell provider.
     SealedProvider,
+    /// The compiler-owned store drive can be named in rows but not performed or handled.
+    SealedDrive,
     /// Resource acquisition requires a direct compiler-owned cell dependency.
     ResourceBuiltinRequired,
     /// An occurrence has no binding in lexical scope.
@@ -822,6 +824,7 @@ impl fmt::Display for ResolveReason {
         formatter.write_str(match self {
             Self::ForeignContract => "foreign.contract",
             Self::SealedProvider => "resolve.sealed-provider",
+            Self::SealedDrive => "resolve.sealed-drive",
             Self::ResourceBuiltinRequired => "resolve.resource-builtin-required",
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
@@ -1096,6 +1099,9 @@ impl ResolveError {
             ResolveReason::SealedProvider => {
                 return Some((self.message()?, "sealed_provider_declaration"));
             }
+            ResolveReason::SealedDrive => {
+                return Some((self.message()?, "sealed_store_drive"));
+            }
             ResolveReason::ResourceBuiltinRequired => {
                 return Some((self.message()?, "resource_acquisition"));
             }
@@ -1248,6 +1254,7 @@ impl ResolveError {
             }
             ResolveReason::EffectOperationShape
             | ResolveReason::SealedProvider
+            | ResolveReason::SealedDrive
             | ResolveReason::DuplicateEffect => None,
             _ => Some(("name", "identifier", self.found.as_deref()?)),
         }
@@ -1327,6 +1334,9 @@ impl ResolveError {
             }
             ResolveReason::SealedProvider => {
                 return Some(crate::message::Message::resolve_sealed_provider());
+            }
+            ResolveReason::SealedDrive => {
+                return Some(crate::message::Message::resolve_sealed_drive());
             }
             ResolveReason::ResourceBuiltinRequired => {
                 return Some(crate::message::Message::resolve_builtin_required(
@@ -12376,6 +12386,15 @@ impl Resolver {
             &handler.effect.arguments,
             handler.effect.span,
         )?;
+        if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+            .is_some_and(|api| effect.instance.effect() == api.drive())
+        {
+            return Err(error(
+                ResolveReason::SealedDrive,
+                handler.effect.span,
+                "the store drive cannot be handled directly",
+            ));
+        }
         let body = ResolvedExpressionOwner::new(self.resolve_expr(&handler.body)?);
         self.type_work.charge(handler.clauses.len()).map_err(|()| {
             error(
@@ -12504,6 +12523,15 @@ impl Resolver {
                     &registration.effect.arguments,
                     registration.effect.span,
                 )?;
+                if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| effect.instance.effect() == api.drive())
+                {
+                    return Err(error(
+                        ResolveReason::SealedDrive,
+                        registration.effect.span,
+                        "the store drive cannot be registered directly",
+                    ));
+                }
                 self.type_work.charge(3).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -12531,6 +12559,15 @@ impl Resolver {
                     &hook.effect.arguments,
                     hook.effect.span,
                 )?;
+                if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| effect.instance.effect() == api.drive())
+                {
+                    return Err(error(
+                        ResolveReason::SealedDrive,
+                        hook.effect.span,
+                        "the store drive cannot be hooked directly",
+                    ));
+                }
                 self.type_work.charge(2).map_err(|()| {
                     error(
                         ResolveReason::TypeResourceExhausted,
@@ -12932,6 +12969,15 @@ impl Resolver {
                     &request.arguments,
                     request.effect.span(),
                 )?;
+                if crate::resolved::StoreApi::for_module(effect.instance.effect().module())
+                    .is_some_and(|api| effect.instance.effect() == api.drive())
+                {
+                    return Err(error(
+                        ResolveReason::SealedDrive,
+                        request.effect.span(),
+                        "the store drive cannot be performed directly",
+                    ));
+                }
                 let operation =
                     self.resolved_operation(effect.instance.effect(), &request.operation)?;
                 self.type_work.charge(2).map_err(|()| {
