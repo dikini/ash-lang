@@ -1396,16 +1396,17 @@ mod tests {
     }
 
     fn linked_row_bearing_fold_fixture() -> LinkedTransformFixture {
+        linked_transform_fixture(concat!(
+            "pub fold<F : Type -> Type> : F<Int> -> Int\n",
+            "fold value = 1 + 2\n\n",
+            "main : Unit -> Int\n",
+            "main () = 0\n",
+        ))
+    }
+
+    fn linked_transform_fixture(text: &str) -> LinkedTransformFixture {
         let directory = LinkedTransformDirectory::create();
-        let entry = directory.write(
-            "entry.ash",
-            concat!(
-                "pub fold<F : Type -> Type> : F<Int> -> Int\n",
-                "fold value = 1 + 2\n\n",
-                "main : Unit -> Int\n",
-                "main () = 0\n",
-            ),
-        );
+        let entry = directory.write("entry.ash", text);
         let graph = load_module_graph(&entry, &ModuleRoots::empty())
             .expect("the linked transform graph should load");
         let checked = checked_linked_transform_graph(&graph);
@@ -1842,6 +1843,157 @@ mod tests {
                 Kind::Type | Kind::EffectRow => return depth,
             }
         }
+    }
+
+    #[test]
+    fn source_identity_retains_opaque_region_metadata_under_exact_child_remapping() {
+        use super::super::region::{RegionBufferOperation, RegionClosureCode};
+        let mut seen = [false; 7];
+        for text in [
+            include_str!("../../tests/fixtures/first-stratum/valid/v008-mixed.ash"),
+            "main : Unit -> Bool\nmain () = true\n",
+            "main : Unit -> Unit\nmain () = ()\n",
+            "main : Unit -> Bool\nmain () = 1 == 1\n",
+        ] {
+            let fixture = linked_transform_fixture(text);
+            let after = super::super::validate_effect_modules(
+                identity_effect_traversal(&fixture.program).unwrap(),
+                &fixture.sources(),
+                &fixture.module_sources,
+            )
+            .expect("the same Source identity should independently validate");
+            let mut forward = std::collections::HashMap::new();
+            let mut reverse = std::collections::HashMap::new();
+            let mut pending = vec![(fixture.program.root(), after.root())];
+            while let Some((left, right)) = pending.pop() {
+                if let Some(previous) = forward.insert(left, right) {
+                    assert_eq!(previous, right);
+                    continue;
+                }
+                assert!(reverse.insert(right, left).is_none());
+                let a = fixture.program.node(left).unwrap();
+                let b = after.node(right).unwrap();
+                assert_eq!(a.ty, b.ty);
+                assert_eq!(a.effects, b.effects);
+                assert_eq!(a.origin, b.origin);
+                let binder = |value: &super::super::TypedBinder| {
+                    (value.id(), value.ty().clone(), value.origin().clone())
+                };
+                match (&a.kind, &b.kind) {
+                    (EffectExprKind::Pure(_), EffectExprKind::Pure(_)) => {} // Complete public comparison lives in semantics.rs.
+                    (EffectExprKind::Operation(a), EffectExprKind::Operation(b)) => match (a, b) {
+                        (EffectOperation::Region(a), EffectOperation::Region(b)) => {
+                            seen[0] = true;
+                            assert_eq!(a.entry, b.entry);
+                            assert_eq!(a.api, b.api);
+                            assert_eq!(a.identity, b.identity);
+                            assert_eq!(binder(&a.access), binder(&b.access));
+                        }
+                        (
+                            EffectOperation::RegionAllocate(a),
+                            EffectOperation::RegionAllocate(b),
+                        ) => {
+                            seen[1] = true;
+                            assert_eq!(a.api, b.api);
+                        }
+                        (
+                            EffectOperation::RegionValueRequest(a),
+                            EffectOperation::RegionValueRequest(b),
+                        ) => {
+                            seen[2] = true;
+                            assert_eq!(a, b);
+                        }
+                        (EffectOperation::RegionBuffer(a), EffectOperation::RegionBuffer(b)) => {
+                            assert_eq!(a.api, b.api);
+                            assert_eq!(a.operation, b.operation);
+                            assert_eq!(a.operand.is_some(), b.operand.is_some());
+                            assert_eq!(a.right.is_some(), b.right.is_some());
+                            if matches!(
+                                a.operation,
+                                RegionBufferOperation::IntegerArithmetic(Primitive::Add)
+                            ) {
+                                seen[3] = true;
+                            }
+                            if matches!(
+                                a.operation,
+                                RegionBufferOperation::IntegerArithmetic(Primitive::Multiply)
+                            ) {
+                                seen[4] = true;
+                            }
+                        }
+                        (EffectOperation::RegionTuple(a), EffectOperation::RegionTuple(b)) => {
+                            assert_eq!(a.api, b.api);
+                            assert_eq!(a.constructor, b.constructor);
+                            assert_eq!(a.fields.len(), b.fields.len());
+                        }
+                        (EffectOperation::RegionClosure(a), EffectOperation::RegionClosure(b)) => {
+                            seen[5] = true;
+                            assert_eq!(a.api, b.api);
+                            assert_eq!(a.captures.len(), b.captures.len());
+                            match (&a.code, &b.code) {
+                                (
+                                    RegionClosureCode::Function(a),
+                                    RegionClosureCode::Function(b),
+                                ) => assert_eq!(binder(a.parameter()), binder(b.parameter())),
+                                (
+                                    RegionClosureCode::Adapter { .. },
+                                    RegionClosureCode::Adapter { .. },
+                                ) => {}
+                                _ => panic!("identity changed stored code kind"),
+                            }
+                        }
+                        (EffectOperation::Request(a), EffectOperation::Request(b)) => {
+                            seen[6] = true;
+                            assert_eq!(a.effect(), b.effect());
+                            assert_eq!(a.operation(), b.operation());
+                        }
+                        (EffectOperation::Handler(a), EffectOperation::Handler(b)) => {
+                            assert_eq!(a.id(), b.id());
+                            assert_eq!(a.effect(), b.effect());
+                            assert_eq!(a.hook_root, b.hook_root);
+                            assert_eq!(a.hook_registration, b.hook_registration);
+                            assert_eq!(a.clauses().len(), b.clauses().len());
+                            for (a, b) in a.clauses().iter().zip(b.clauses()) {
+                                assert_eq!(a.operation(), b.operation());
+                                assert_eq!(a.resume(), b.resume());
+                                assert_eq!(a.pattern().ty, b.pattern().ty);
+                                assert_eq!(a.pattern().origin, b.pattern().origin);
+                                match (&a.pattern().kind, &b.pattern().kind) {
+                                    (CorePatternKind::Binder(a), CorePatternKind::Binder(b)) => {
+                                        assert_eq!(binder(a), binder(b))
+                                    }
+                                    _ => assert_eq!(a.pattern(), b.pattern()),
+                                }
+                                assert_eq!(a.origin(), b.origin());
+                            }
+                        }
+                        (EffectOperation::Resume(a), EffectOperation::Resume(b)) => {
+                            assert_eq!(a.handler(), b.handler());
+                            assert_eq!(a.owner(), b.owner());
+                            assert_eq!(a.use_state(), b.use_state());
+                        }
+                        (EffectOperation::Discard(a), EffectOperation::Discard(b)) => {
+                            assert_eq!(a, b)
+                        }
+                        _ => panic!("unexpected or changed Effect operation in original Sources"),
+                    },
+                    _ => panic!("identity changed a Core family"),
+                }
+                assert_eq!(a.kind.child_count(), b.kind.child_count());
+                pending.extend((0..a.kind.child_count()).map(|index| {
+                    (
+                        a.kind.child_at(index).unwrap(),
+                        b.kind.child_at(index).unwrap(),
+                    )
+                }));
+            }
+            assert_eq!(forward.len(), fixture.program.node_count());
+            assert_eq!(reverse.len(), after.node_count());
+        }
+        assert!(
+            seen.into_iter().all(|present| present),
+            "original Sources must reach region/allocation/request/closure/Add/Multiply controls"
+        );
     }
 
     #[test]

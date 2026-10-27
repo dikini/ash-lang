@@ -31,8 +31,10 @@ controls pass all 43 and 25 original tests. Module loading now passes all 24
 original tests; library imports now passes all 17. Core validation now passes
 all 67 original tests and resource modules all 16. Effect Core, typing and
 module targets pass all 6, 30 and 15 original tests. Module resolution and
-provenance now pass all 11 and 4 original tests. Their nine new restorations
-are disjoint from the prior 437, giving 446 staged integration restorations.
+provenance now pass all 11 and 4 original tests. Semantics now passes all 13
+original tests. Its eight new restorations are disjoint from the prior 446,
+giving 454 staged integration restorations. One new private identity unit is
+additional coverage, not a restored name.
 The fresh library inventory passes all 1,597 tests; all 35 Library10 unit
 failures are restored separately. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
@@ -46,6 +48,29 @@ factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
 transformed effect traces still equal the original trace.
 
+
+
+Semantics Source execution uses complete independently validated Effect Core for
+self-reference and all five original newtype representations. Exact public nominal
+types, values, conversion counts and child adjacency, and whole repeated traces
+remain. Five intentional Pure contracts now use one explicit scalar-main donor
+with the original Unit-call shape and optional local recursive group. Unchanged
+Source companions still check and execute through Effect Core. Exact Pure 7/9
+and 9-to-7 traces, strict recursive fold reduction, mathematical integer payloads,
+primitive equality, full metadata and the original-span ConstantFolding cause
+remain separate from allocation-bearing Source execution.
+The final identity fixture keeps all four original Sources. Its public check
+compares complete exposed metadata, typed binders, ordered children, bidirectional
+sharing and every raw Enter event under the exact remap. One new crate-local
+complement checks opaque region, allocation, request, buffer, tuple and stored
+closure metadata against the same Sources, including actual Add/Multiply and
+region/allocation/request/closure coverage. Fresh arena membership is independently
+validated while resolver identities, full types and origins remain equal. No
+public inspector, decoder or product change is introduced. Semantics225 passes
+all 13 original names plus the new private unit and existing row-registry caller;
+Final226 formatting and canonical Clippy use identical executed bytes. Library11
+remains the prior complete library result with the added focused unit reported
+separately. No fresh complete integration or native inventory is claimed.
 
 The resolution/provenance fixtures authenticate each actual dependency target
 before resolving the intended entry or named module. Resolved-only controls do
