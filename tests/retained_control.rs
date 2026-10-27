@@ -42,6 +42,21 @@ fn generic_continue_accepts_a_row_bearing_answer() {
 }
 
 #[test]
+fn generic_continue_accepts_a_descriptor_that_already_contains_drive() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "forward<N> : ",
+        "(Control.Store<N,(Unit -> Int ! {Control.Drive<N>})>, Control.Key<N>) -> ",
+        "Control.Option<Int> ! {Control.Drive<N>}\n",
+        "forward pair = Control.advance_with_drive pair\n",
+        "main : Unit -> Int\nmain () = 42\n",
+    );
+    let observation = support::run_module("store-answer-with-drive.ash", source)
+        .expect("a closed descriptor row may already contain the store drive");
+    assert_eq!(observation.value_display(), "42");
+}
+
+#[test]
 fn fresh_store_answer_resolves_but_unproved_close_is_rejected() {
     let source = concat!(
         "import @builtin.retained_control as Control\n",

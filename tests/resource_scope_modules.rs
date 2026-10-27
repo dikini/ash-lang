@@ -47,9 +47,13 @@ fn retained_continue_crosses_imported_generic_helpers_with_shared_answer_row() {
             "(Control.Store<N,(Unit -> A ! {| E})>,Control.Key<N>) -> ",
             "Control.Option<A> ! {Control.Drive<N> | E}\n",
             "forward pair = Control.advance pair\n",
+            "pub forward_driven<N,A,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> A ! {Control.Drive<N> | E})>,Control.Key<N>) -> ",
+            "Control.Option<A> ! {Control.Drive<N> | E}\n",
+            "forward_driven pair = Control.advance_with_drive pair\n",
         ),
     );
-    tree.write("facade.ash", "pub import helper (forward)\n");
+    tree.write("facade.ash", "pub import helper (forward,forward_driven)\n");
     let entry = tree.write(
         "entry.ash",
         concat!(
@@ -58,6 +62,13 @@ fn retained_continue_crosses_imported_generic_helpers_with_shared_answer_row() {
             "(Control.Store<N,(Unit -> (Unit -> Int ! {| E}) ! {| E})>,Control.Key<N>) -> ",
             "Control.Option<(Unit -> Int ! {| E})> ! {Control.Drive<N> | E}\n",
             "nested pair = F.forward pair\n",
+            "nested_driven<N,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> (Unit -> Int ! {| E}) ! {Control.Drive<N> | E})>,Control.Key<N>) -> ",
+            "Control.Option<(Unit -> Int ! {| E})> ! {Control.Drive<N> | E}\n",
+            "nested_driven pair = {\nlet alias : ",
+            "(Control.Store<N,(Unit -> (Unit -> Int ! {| E}) ! {Control.Drive<N> | E})>,Control.Key<N>) -> ",
+            "Control.Option<(Unit -> Int ! {| E})> ! {Control.Drive<N> | E} = F.forward_driven\n",
+            "alias pair\n}\n",
             "main : Unit -> Int\nmain () = 42\n",
         ),
     );

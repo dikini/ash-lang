@@ -52,6 +52,8 @@ const RETAINED_CONTROL_SOURCE: &str = concat!(
     "pub effect Drive<N> {\ninternal : Unit -> Unit\n}\n",
     "pub advance<N,A,E : EffectRow> : (Store<N,(Unit -> A ! {| E})>, Key<N>) -> Option<A> ! {Drive<N> | E}\n",
     "advance pair = advance pair\n",
+    "pub advance_with_drive<N,A,E : EffectRow> : (Store<N,(Unit -> A ! {Drive<N> | E})>, Key<N>) -> Option<A> ! {Drive<N> | E}\n",
+    "advance_with_drive pair = advance_with_drive pair\n",
 );
 
 // One authenticated identity supplies the public binding facade and private

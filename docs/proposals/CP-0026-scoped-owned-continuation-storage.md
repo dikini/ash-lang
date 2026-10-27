@@ -125,6 +125,14 @@ linked Core reject attempts to perform or handle it directly. The owning store
 scope supplies that requirement. This avoids allowing a source handler to
 discharge a requirement for a structural move it cannot intercept.
 
+The initial source API exposes two ordinary, aliasable callables that lower to
+the same structural carrier. `advance` accepts a descriptor `Unit -> A ! E`
+when the existing row contract establishes that `E` lacks `Drive<N>`.
+`advance_with_drive` accepts a descriptor `Unit -> A ! {Drive<N> | E}`. Both
+return `Option<A>` with row `{Drive<N> | E}`. These spellings cover the two
+expressible cases under Ash's existing partial row union and lacks rules; they
+do not make an ambiguous unknown tail admissible or change Core row union.
+
 On a live generation, continue prepares the move, spends the slot and restores
 the captured segment above a `Some` answer adapter and that current consumer.
 The restored computation includes its selected handler and nested clause and

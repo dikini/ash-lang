@@ -20546,43 +20546,54 @@ mod tests {
         let refs = sources.iter().collect::<Vec<_>>();
         for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
             let clean = transform(&donor).unwrap();
-            let (index, continuation) = clean
+            let carriers = clean
                 .nodes
                 .iter()
                 .enumerate()
-                .find_map(|(index, node)| match &node.kind {
+                .filter_map(|(index, node)| match &node.kind {
                     EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
                         Some((index, *continuation))
                     }
                     _ => None,
                 })
-                .expect("the builtin keeps its structural Continue");
-            let continue_id = node_id(clean.arena, index).unwrap();
-            assert!(
-                clean.nodes.iter().any(|node| match &node.kind {
-                    EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
-                        let body = closure.code.body();
-                        matches!(&clean.nodes[body.index().unwrap()].kind,
+                .collect::<Vec<_>>();
+            assert_eq!(
+                carriers.len(),
+                2,
+                "both builtin callables keep a structural Continue"
+            );
+            for (index, continuation) in &carriers {
+                let continue_id = node_id(clean.arena, *index).unwrap();
+                assert!(
+                    clean.nodes.iter().any(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::RegionClosure(closure)) => {
+                            let body = closure.code.body();
+                            matches!(&clean.nodes[body.index().unwrap()].kind,
                         EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(m)))
                             if m.arms().iter().any(|arm| arm.body() == continue_id))
-                    }
-                    _ => false,
-                }),
-                "the carrier remains in the builtin's real callable body"
-            );
+                        }
+                        _ => false,
+                    }),
+                    "the carrier remains in the builtin's real callable body"
+                );
+                assert_ne!(continuation.store, continuation.key);
+            }
             let valid = validate_effect_modules(clean, &refs, &relation).unwrap();
-            for corruption in 0..2 {
+            for (ordinal, corruption) in
+                (0..2).flat_map(|ordinal| (0..2).map(move |corruption| (ordinal, corruption)))
+            {
                 let mut forged = identity_effect_traversal(&valid).unwrap();
                 let (index, continuation) = forged
                     .nodes
                     .iter()
                     .enumerate()
-                    .find_map(|(index, node)| match &node.kind {
+                    .filter_map(|(index, node)| match &node.kind {
                         EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
                             Some((index, *continuation))
                         }
                         _ => None,
                     })
+                    .nth(ordinal)
                     .unwrap();
                 let id = node_id(forged.arena, index).unwrap();
                 match corruption {
@@ -20608,14 +20619,17 @@ mod tests {
                 }
                 let error = validate_effect_modules(forged, &refs, &relation)
                     .expect_err("forged continuation ports or row must be rejected");
-                assert_eq!(error.node(), Some(id), "corruption {corruption}: {error:?}");
+                assert_eq!(
+                    error.node(),
+                    Some(id),
+                    "carrier {ordinal}, corruption {corruption}: {error:?}"
+                );
                 assert_eq!(
                     error.reason(),
                     ValidationReason::NodeType,
-                    "corruption {corruption}"
+                    "carrier {ordinal}, corruption {corruption}"
                 );
             }
-            assert_ne!(continuation.store, continuation.key);
         }
     }
 

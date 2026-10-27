@@ -10789,7 +10789,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         &equational.interface.name,
                         if let Some(module) = equational.interface.name.id.module()
                             && module.is_builtin_retained_control()
-                            && equational.interface.name.spelling == "advance"
+                            && matches!(
+                                equational.interface.name.spelling.as_str(),
+                                "advance" | "advance_with_drive"
+                            )
                         {
                             // Build all of the intrinsic's ports from the same
                             // scheme-wide row qualification as an ordinary
@@ -39906,6 +39909,39 @@ mod tests {
             elaborator.synthesize(&function.body.result, &context),
             Err(TypeError::Internal(ElaborationFailure::InvalidState))
         );
+    }
+
+    #[test]
+    fn quantified_global_cannot_rebuild_an_invalid_original_provenance() {
+        let program = resolved_module_fixture(
+            "quantified-invalid-provenance.ash",
+            "identity<A> : A -> A\nidentity value = value\n",
+            "(Int -> Int)",
+            "identity",
+        );
+        let expression = fixture_result(&program);
+        let ResolvedExprKind::Occurrence(occurrence) = &expression.kind else {
+            panic!("expected a global occurrence");
+        };
+        let binder = occurrence.global_binder().unwrap();
+        let parameter = TypeVariableId::generated(42);
+        let mut context = TypeContext::new();
+        context.binders.insert(
+            binder,
+            TypeFact {
+                ty: Type::Function(
+                    Box::new(Type::Variable(parameter)),
+                    Box::new(Type::Variable(parameter)),
+                ),
+                provenance: TypeProvenance::atom(None),
+                quantified: Box::new([(parameter, Kind::Type)]),
+            },
+        );
+        let mut elaborator = Elaborator::for_module(&program).unwrap();
+        assert!(matches!(
+            elaborator.synthesize_global_occurrence(binder, occurrence, expression.span, &context),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+        ));
     }
 
     #[test]
