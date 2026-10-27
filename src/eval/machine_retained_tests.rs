@@ -96,6 +96,170 @@ fn retained_move_restores_once_above_the_current_consumer() {
 }
 
 #[test]
+fn retained_adapter_uses_the_current_consumer_region_after_restoration() {
+    let source = concat!(
+        "import @builtin.retained_control as Control\n",
+        "forward<N,A,E : EffectRow> : ",
+        "(Control.Store<N,(Unit -> A ! {| E})>, Control.Key<N>) -> ",
+        "Control.Option<A> ! {Control.Drive<N> | E}\n",
+        "forward pair = Control.advance pair\n",
+        "main : Unit -> Int\nmain () = 42\n",
+    );
+    let (program, _, _) = crate::core::validate::generic_cell_source_fixture_for_test(source, None);
+    let mut pending = vec![program.root()];
+    let mut visited = std::collections::HashSet::new();
+    let mut region = None;
+    let mut adapter = None;
+    let mut branch = None;
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let expression = program.node(id).unwrap();
+        match &expression.kind {
+            EffectExprKind::Operation(EffectOperation::Region(scope)) if scope.entry => {
+                region = Some(id);
+            }
+            EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                adapter = Some(continuation.adapter.clone());
+            }
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer)))
+                if integer.value().to_i128() == Some(42) =>
+            {
+                branch = Some(id)
+            }
+            _ => {}
+        }
+        pending
+            .extend((0..expression.kind.child_count()).filter_map(|i| expression.kind.child_at(i)));
+    }
+    let (region, adapter, branch) = (region.unwrap(), adapter.unwrap(), branch.unwrap());
+
+    let consumer = || {
+        let mut machine = Machine::new_effect(&program);
+        let scope = machine.region_scope(region).unwrap();
+        let (identity, access, handler) = (scope.identity(), scope.access().id(), scope.body());
+        assert!(machine.handler(handler).is_some());
+        let selected = ActivationKey(9);
+        let mut environment = Environment::new();
+        environment.instantiation = environment
+            .instantiation
+            .acquire(identity, selected, &mut machine.instantiation_work, None)
+            .unwrap();
+        environment = environment
+            .extend(access, Value::RegionView(selected))
+            .unwrap();
+        machine.frames.push(Frame::RegionBoundary {
+            node: region,
+            key: selected,
+            allocate: Value::RegionHostFunction {
+                owner: selected,
+                release: false,
+            },
+            release: Value::RegionHostFunction {
+                owner: selected,
+                release: true,
+            },
+            preceding: Value::Unit,
+            records: Vec::new(),
+        });
+        machine.frames.push(Frame::HandlerBoundary {
+            node: handler,
+            environment: environment.clone(),
+            registration: None,
+        });
+        (machine, environment, access)
+    };
+
+    let (mut machine, consumer_environment, access) = consumer();
+    // The old branch environment points elsewhere. Only the current consumer
+    // has a live allocator; using the saved branch environment would fail.
+    let branch_environment = consumer_environment
+        .clone()
+        .extend(access, Value::RegionView(ActivationKey(99)))
+        .unwrap();
+    let mut store = RetainedStore::new(ActivationKey(7));
+    let mut capture = Some(CapturedContinuation {
+        frames: vec![Frame::Bind {
+            binder: adapter.answer.id(),
+            body: branch,
+            environment: branch_environment,
+        }],
+    });
+    let key = store
+        .retain(&mut capture, &mut machine.instantiation_work)
+        .unwrap();
+    machine.captured_cells = 1;
+    assert!(
+        store
+            .restore(
+                key,
+                &mut machine.frames,
+                Frame::Bind {
+                    binder: adapter.answer.id(),
+                    body: adapter.some,
+                    environment: consumer_environment.clone()
+                },
+                &mut machine.captured_cells,
+                &mut machine.instantiation_work,
+            )
+            .unwrap()
+    );
+    assert!(
+        machine.heap.is_empty(),
+        "restoring must not run the adapter or allocate an Ash record"
+    );
+    machine.control = Some(Control::Return(Value::Unit));
+    let result = machine.run_loop().unwrap();
+    assert_eq!(result.value.to_string(), "Some(42)");
+    assert_eq!(machine.next_region_invocation, 1);
+    let entered = |node| {
+        result
+            .trace
+            .iter()
+            .position(|event| *event == TraceEvent::Enter(node))
+    };
+    assert!(entered(branch).unwrap() < entered(adapter.some).unwrap());
+    assert!(entered(adapter.none).is_none());
+
+    let (mut missing, consumer_environment, _) = consumer();
+    let frame_count = missing.frames.len();
+    assert!(
+        !store
+            .restore(
+                key,
+                &mut missing.frames,
+                Frame::Bind {
+                    binder: adapter.answer.id(),
+                    body: adapter.some,
+                    environment: consumer_environment.clone()
+                },
+                &mut missing.captured_cells,
+                &mut missing.instantiation_work,
+            )
+            .unwrap()
+    );
+    assert_eq!(missing.frames.len(), frame_count);
+    missing.control = Some(Control::Evaluate(adapter.none, consumer_environment));
+    let result = missing.run_loop().unwrap();
+    assert_eq!(result.value.to_string(), "None");
+    assert_eq!(missing.next_region_invocation, 1);
+    assert!(
+        result
+            .trace
+            .iter()
+            .any(|event| *event == TraceEvent::Enter(adapter.none))
+    );
+    assert!(
+        !result
+            .trace
+            .iter()
+            .any(|event| *event == TraceEvent::Enter(branch)
+                || *event == TraceEvent::Enter(adapter.some))
+    );
+}
+
+#[test]
 fn retained_move_prepares_storage_before_taking_either_owner() {
     let mut store = RetainedStore::new(ActivationKey(3));
     let mut owner = Some(CapturedContinuation {

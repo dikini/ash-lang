@@ -139,6 +139,8 @@ when the existing row contract establishes that `E` lacks `Drive<N>`.
 return `Option<A>` with row `{Drive<N> | E}`. These spellings cover the two
 expressible cases under Ash's existing partial row union and lacks rules; they
 do not make an ambiguous unknown tail admissible or change Core row union.
+As with other source value-function arrows, the descriptor and result rows also
+include the canonical default allocation effect.
 
 On a live generation, continue prepares the move, spends the slot and restores
 the captured segment above a `Some` answer adapter and that current consumer.
@@ -148,8 +150,11 @@ to the current consumer. It does not return to the clause that transferred the
 earlier capture. An absent or spent generation returns `None` without executing
 control; copying a key cannot restore a generation twice. Continue evaluates
 the store operand before the key. Its row includes both operand effects, the
-drive requirement and `rho`, combined under the existing partial row and lacks
-rules. Those rules do not gain a new union or projection algebra.
+drive requirement, `rho`, and the result adapters' allocation effects,
+combined under the existing partial row and lacks rules. Adapter allocation
+runs after the resumed control returns, or on the absent-key path; preparing
+the move does not execute it. Those rules do not gain a new union or projection
+algebra.
 
 A checkpoint in a nested clause before its `resume` retains that clause's live
 owner; one after `resume` retains its consumed state and the remaining suffix.

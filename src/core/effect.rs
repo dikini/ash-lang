@@ -450,10 +450,19 @@ impl StoreScopeNode {
 }
 
 /// A structural continue evaluates the actual store before its locator.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContinueNode {
     pub(crate) store: NodeId,
     pub(crate) key: NodeId,
+    pub(crate) adapter: Box<ContinueAdapter>,
+}
+
+/// The Some body receives the resumed answer; the None body has no such binder.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContinueAdapter {
+    pub(crate) answer: super::TypedBinder,
+    pub(crate) some: NodeId,
+    pub(crate) none: NodeId,
 }
 
 /// A root carrier evaluates the actual store before entering its handler.
@@ -601,6 +610,9 @@ impl CoreOperationFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Store(store)) = kind {
             visit(&store.handle);
         }
+        if let EffectExprKind::Operation(EffectOperation::Continue(continuation)) = kind {
+            visit(&continuation.adapter.answer);
+        }
         if let EffectExprKind::Operation(EffectOperation::Region(region)) = kind {
             visit(&region.access);
         }
@@ -663,8 +675,13 @@ impl CoreOperationFamily for EffectOperationFamily {
                 }
                 None
             }
+            EffectOperation::Continue(continuation) => {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    continuation.adapter.answer.ty(),
+                ));
+                None
+            }
             EffectOperation::RegionAllocate(_)
-            | EffectOperation::Continue(_)
             | EffectOperation::RetainedRoot(_)
             | EffectOperation::Retain(_)
             | EffectOperation::RegionValueRequest(_)
@@ -729,6 +746,14 @@ impl CoreOperationFamily for EffectOperationFamily {
                 store.handle.rewrite_type(&mut |ty| rewrite(ty))?;
                 return Ok(());
             }
+            EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                charge(1)?;
+                continuation
+                    .adapter
+                    .answer
+                    .rewrite_type(&mut |ty| rewrite(ty))?;
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Region(region)) => {
                 charge(1)?;
                 region.access.rewrite_type(&mut |ty| rewrite(ty))?;
@@ -780,7 +805,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Store(_)) => 2,
-            EffectExprKind::Operation(EffectOperation::Continue(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::Continue(_)) => 4,
             EffectExprKind::Operation(EffectOperation::RetainedRoot(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Region(_)) => 3,
             EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => 2,
@@ -810,6 +835,7 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn operation_extra_edge_count(kind: &Self::Kind) -> usize {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
+            EffectExprKind::Operation(EffectOperation::Continue(_)) => 2,
             _ => 0,
         }
     }
@@ -838,6 +864,8 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Continue(continuation)) => match index {
                 0 => Some(continuation.store),
                 1 => Some(continuation.key),
+                2 => Some(continuation.adapter.some),
+                3 => Some(continuation.adapter.none),
                 _ => None,
             },
             EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => match index {
@@ -915,10 +943,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::Store(store)) => drop(store),
             EffectExprKind::Operation(
-                EffectOperation::Continue(_)
-                | EffectOperation::RetainedRoot(_)
-                | EffectOperation::Retain(_),
+                EffectOperation::RetainedRoot(_) | EffectOperation::Retain(_),
             ) => {}
+            EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                drop(continuation);
+            }
             EffectExprKind::Operation(EffectOperation::Region(region)) => drop(region),
             EffectExprKind::Operation(
                 EffectOperation::RegionAllocate(_)
@@ -1052,7 +1081,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Handler(EffectInstance, usize, bool),
             Resource(EffectInstance, NodeId, NodeId),
             Store(EffectInstance, NodeId, NodeId),
-            Continue(NodeId, NodeId),
+            Continue(NodeId, NodeId, NodeId, NodeId),
             RetainedRoot(NodeId, NodeId),
 
             Keep,
@@ -1140,7 +1169,12 @@ impl CoreBuilder<EffectOperationFamily> {
                         )
                     }
                     EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
-                        Equation::Continue(continuation.store, continuation.key)
+                        Equation::Continue(
+                            continuation.store,
+                            continuation.key,
+                            continuation.adapter.some,
+                            continuation.adapter.none,
+                        )
                     }
                     EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => {
                         Equation::RetainedRoot(root.store, root.handler)
@@ -1394,7 +1428,7 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
-                    Equation::Continue(store, key) => {
+                    Equation::Continue(store, key, some, none) => {
                         let store = self
                             .nodes
                             .get(store.index()?)
@@ -1418,6 +1452,17 @@ impl CoreBuilder<EffectOperationFamily> {
                             .union_with_budget(&key.effects, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?;
+                        for adapter in [some, none] {
+                            let effects = &self
+                                .nodes
+                                .get(adapter.index()?)
+                                .ok_or(super::BuildError::InvalidNodeId)?
+                                .effects;
+                            row = row
+                                .union_with_budget(effects, &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
                         row = row
                             .union_with_budget(&drive, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?

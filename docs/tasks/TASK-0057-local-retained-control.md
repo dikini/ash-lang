@@ -37,9 +37,11 @@ source review and the frozen integration build; the
 inputs and limits. C1 was retained and independently verified at
 `6d530614d426db3f31fd0e9fe1f01d12399f78c9` by
 [PR #160](https://github.com/dikini/ash-lang/pull/160); [C1 #71](https://github.com/dikini/ash-lang/issues/71)
-is closed. C2 store work is active. The source private-root and structural
-Retain carriers are being connected to execution and ownership admission;
-linked Core currently rejects their release. C2–C5 and the connected
+is closed. C2 store work is active. Structural Continue has deferred ordinary
+result adapters exercised against a current-consumer region in an internal
+slot fixture. The source private-root and structural Retain carriers are being
+connected to execution and ownership admission; linked Core currently rejects
+their release. C2–C5 and the connected
 full-workspace and Main gates remain open.
 
 ## Verification

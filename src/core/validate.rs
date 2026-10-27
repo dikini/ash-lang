@@ -3499,6 +3499,13 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         child: usize,
         visit: &mut dyn FnMut(BinderId),
     ) {
+        if let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Continue(
+            continuation,
+        )) = kind
+            && child == 2
+        {
+            visit(continuation.adapter.answer.id());
+        }
         if let super::effect::EffectExprKind::Operation(
             super::effect::EffectOperation::RegionClosure(closure),
         ) = kind
@@ -14025,6 +14032,78 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    fn validate_continue_adapter(
+        &self,
+        id: NodeId,
+        child: NodeId,
+        result: &Type,
+        constructor: ConstructorId,
+        answer: Option<&TypedBinder>,
+    ) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let invalid = || ValidationError::new(ValidationReason::NodeType, Some(id));
+        if !self.same_type_charged(&self.node(child)?.ty, result)? {
+            return Err(invalid());
+        }
+        let PureExprKind::Computation(PureComputation::Bind(binding)) = self.pure_kind(child)?
+        else {
+            return Err(invalid());
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) =
+            &self.node(binding.body())?.kind
+        else {
+            return Err(invalid());
+        };
+        let region = crate::resolved::RegionApi::for_module(tuple.api).ok_or_else(invalid)?;
+        let EffectExprKind::Operation(EffectOperation::Request(query)) =
+            &self.node(binding.initializer())?.kind
+        else {
+            return Err(invalid());
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionAllocate(allocation)) =
+            &self.node(tuple.storage)?.kind
+        else {
+            return Err(invalid());
+        };
+        let EffectExprKind::Operation(EffectOperation::RegionValueRequest(request)) =
+            &self.node(allocation.request)?.kind
+        else {
+            return Err(invalid());
+        };
+        let PureExprKind::Variable(context) = self.pure_kind(tuple.context)? else {
+            return Err(invalid());
+        };
+        if tuple.constructor != Some(constructor)
+            || allocation.api != tuple.api
+            || allocation.context != tuple.context
+            || request.api != tuple.api
+            || request.fields != 1 + usize::from(answer.is_some())
+            || context.binder() != binding.binder().id()
+            || query.effect().effect() != region.default_alloc()
+            || !query.effect().arguments().is_empty()
+            || query.operation() != OperationId::new(region.default_alloc(), 1)
+            || !matches!(
+                self.pure_kind(query.operand())?,
+                PureExprKind::Value(PureValue::Unit(_))
+            )
+        {
+            return Err(invalid());
+        }
+        match (answer, tuple.fields.as_ref()) {
+            (None, []) => {}
+            (Some(answer), [field]) => {
+                let PureExprKind::Variable(value) = self.pure_kind(*field)? else {
+                    return Err(invalid());
+                };
+                if value.binder() != answer.id() {
+                    return Err(invalid());
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(())
+    }
+
     fn continue_row(
         &self,
         id: NodeId,
@@ -14032,6 +14111,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         continuation: &super::effect::ContinueNode,
         store_effects: &EffectRow,
         key_effects: &EffectRow,
+        some_effects: &EffectRow,
+        none_effects: &EffectRow,
         type_binders: &CoreTypeBinders<'_>,
     ) -> Result<EffectRow, ValidationError> {
         let invalid = || ValidationError::new(ValidationReason::NodeType, Some(id));
@@ -14051,9 +14132,24 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             || !matches!(&**answer_head, Type::Nominal(nominal) if *nominal == api.option())
             || !self.same_type_charged(key_owner, owner)?
             || !self.same_type_charged(answer, ports.value())?
+            || !self.same_type_charged(continuation.adapter.answer.ty(), ports.value())?
         {
             return Err(invalid());
         }
+        self.validate_continue_adapter(
+            id,
+            continuation.adapter.some,
+            &node.ty,
+            ConstructorId::new(api.option(), 1),
+            Some(&continuation.adapter.answer),
+        )?;
+        self.validate_continue_adapter(
+            id,
+            continuation.adapter.none,
+            &node.ty,
+            ConstructorId::new(api.option(), 0),
+            None,
+        )?;
         let mut budget =
             TypeWorkBudget::with_limit(self.type_work_limit.saturating_sub(self.type_work.get()));
         let owner = crate::types::clone_type_with_budget(owner, &mut budget);
@@ -14069,6 +14165,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let latent = self.qualify_callable_row(latent, &node.effects, type_binders, id)?;
             row = self.union_effect_rows_charged(&row, &latent, id)?;
         }
+        row = self.union_effect_rows_charged(&row, some_effects, id)?;
+        row = self.union_effect_rows_charged(&row, none_effects, id)?;
         Ok(row)
     }
 
@@ -14596,6 +14694,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     continuation,
                     &store.effects,
                     &key.effects,
+                    &self.node(continuation.adapter.some)?.effects,
+                    &self.node(continuation.adapter.none)?.effects,
                     type_binders,
                 )?;
                 if !self.same_effect_row_charged(&node.effects, &expected, id)? {
@@ -15463,6 +15563,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 continuation,
                                 child_row(continuation.store)?,
                                 child_row(continuation.key)?,
+                                child_row(continuation.adapter.some)?,
+                                child_row(continuation.adapter.none)?,
                                 type_binders,
                             )?,
                         EffectExprKind::Operation(EffectOperation::RetainedRoot(root)) => self
@@ -20545,6 +20647,162 @@ mod tests {
     }
 
     #[test]
+    fn retained_continue_keeps_deferred_some_and_none_adapters() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let source = concat!(
+            "import @builtin.retained_control as Control\n",
+            "forward<N,A,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> A ! {| E})>, Control.Key<N>) -> ",
+            "Control.Option<A> ! {Control.Drive<N> | E}\n",
+            "forward pair = Control.advance pair\n",
+            "main : Unit -> Int\nmain () = 42\n",
+        );
+        let (donor, _, _) = generic_cell_source_fixture(source, None);
+        let carriers = donor
+            .nodes()
+            .iter()
+            .filter_map(|node| match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Continue(_)) => Some(&node.kind),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(carriers.len(), 2);
+        for carrier in carriers {
+            assert_eq!(
+                carrier.child_count(),
+                4,
+                "store, key and two delayed result alternatives"
+            );
+        }
+    }
+
+    #[test]
+    fn retained_continue_authenticates_deferred_adapters_and_allocation() {
+        use super::super::effect::{EffectOperation, store_ports};
+        let source = concat!(
+            "import @builtin.retained_control as Control\n",
+            "forward<N,A,E : EffectRow> : ",
+            "(Control.Store<N,(Unit -> A ! {| E})>, Control.Key<N>) -> ",
+            "Control.Option<A> ! {Control.Drive<N> | E}\n",
+            "forward pair = Control.advance pair\n",
+            "main : Unit -> Int\nmain () = 42\n",
+        );
+        let (donor, sources, relation) = generic_cell_source_fixture(source, None);
+        let refs = sources.iter().collect::<Vec<_>>();
+        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+            let valid =
+                validate_effect_modules(transform(&donor).unwrap(), &refs, &relation).unwrap();
+            for corruption in 0..3 {
+                let mut forged = identity_effect_traversal(&valid).unwrap();
+                let (index, continuation) = forged
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, node)| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                            Some((index, continuation.clone()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                match corruption {
+                    0 => {
+                        let PureExprKind::Computation(PureComputation::Bind(binding)) =
+                            (match &forged.nodes[continuation.adapter.some.index().unwrap()].kind {
+                                EffectExprKind::Pure(kind) => kind,
+                                _ => panic!("Some adapter binding"),
+                            })
+                        else {
+                            panic!("Some adapter binding")
+                        };
+                        let tuple = binding.body().index().unwrap();
+                        let EffectExprKind::Operation(EffectOperation::RegionTuple(tuple)) =
+                            &mut forged.nodes[tuple].kind
+                        else {
+                            panic!("Some tuple")
+                        };
+                        let constructor = tuple.constructor.unwrap();
+                        tuple.constructor = Some(ConstructorId::new(constructor.owner(), 0));
+                    }
+                    1 => {
+                        let EffectExprKind::Operation(EffectOperation::Continue(current)) =
+                            &mut forged.nodes[index].kind
+                        else {
+                            unreachable!()
+                        };
+                        // Some's answer binder must not be in scope in the None arm.
+                        current.adapter.none = current.adapter.some;
+                    }
+                    2 => {
+                        let default = forged.nodes[index]
+                            .effects
+                            .known()
+                            .iter()
+                            .find(|effect| effect.effect().module().is_builtin_region())
+                            .unwrap()
+                            .clone();
+                        forged.nodes[index].effects =
+                            forged.nodes[index].effects.remove_exact(&default).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                validate_effect_modules(forged, &refs, &relation).expect_err(
+                    "wrong constructor, escaped binder or omitted allocation must fail",
+                );
+            }
+
+            // This focused reconstruction uses a pure descriptor, which Source
+            // arrows do not produce. The adapter's own allocation must still
+            // appear in the row independently of the descriptor's latent row.
+            let mut forged = identity_effect_traversal(&valid).unwrap();
+            let (index, continuation) = forged
+                .nodes
+                .iter()
+                .enumerate()
+                .find_map(|(index, node)| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
+                        Some((index, continuation.clone()))
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let store = continuation.store.index().unwrap();
+            let (api, owner, ports) = store_ports(&forged.nodes[store].ty).unwrap();
+            let owner = owner.clone();
+            let answer = ports.value().clone();
+            forged.nodes[store].ty = Type::Application(
+                Box::new(Type::Application(
+                    Box::new(Type::Nominal(api.store())),
+                    Box::new(owner.clone()),
+                )),
+                Box::new(Type::Function(Box::new(Type::Unit), Box::new(answer))),
+            );
+            forged.nodes[index].effects =
+                EffectRow::singleton(EffectInstance::new(api.drive(), Box::new([owner])));
+            let validator = Validator::new(&forged, &refs);
+            let node = &forged.nodes[index];
+            let row = validator
+                .continue_row(
+                    node_id(forged.arena, index).unwrap(),
+                    node,
+                    &continuation,
+                    &forged.nodes[store].effects,
+                    &forged.nodes[continuation.key.index().unwrap()].effects,
+                    &forged.nodes[continuation.adapter.some.index().unwrap()].effects,
+                    &forged.nodes[continuation.adapter.none.index().unwrap()].effects,
+                    &CoreTypeBinders::new(),
+                )
+                .unwrap();
+            assert!(
+                row.known()
+                    .iter()
+                    .any(|effect| effect.effect().module().is_builtin_region())
+            );
+            assert_ne!(row, node.effects);
+        }
+    }
+
+    #[test]
     fn retained_continue_reconstructs_ports_and_row_after_core_transforms() {
         use super::super::effect::{EffectOperation, store_ports};
         let helper = concat!(
@@ -20572,7 +20830,7 @@ mod tests {
                 .enumerate()
                 .filter_map(|(index, node)| match &node.kind {
                     EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
-                        Some((index, *continuation))
+                        Some((index, continuation.clone()))
                     }
                     _ => None,
                 })
@@ -20609,7 +20867,7 @@ mod tests {
                     .enumerate()
                     .filter_map(|(index, node)| match &node.kind {
                         EffectExprKind::Operation(EffectOperation::Continue(continuation)) => {
-                            Some((index, *continuation))
+                            Some((index, continuation.clone()))
                         }
                         _ => None,
                     })

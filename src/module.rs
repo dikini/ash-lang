@@ -1608,6 +1608,8 @@ pub fn load_module_graph(
                         admit_builtin_retained_control(
                             graph_identity,
                             import.span,
+                            builtin_region
+                                .ok_or_else(|| ModuleFailure::resource(ModuleResource::Sources))?,
                             &mut budget,
                             &mut staged,
                             &mut dependency_order,
@@ -2006,6 +2008,7 @@ fn admit_builtin_resource(
 fn admit_builtin_retained_control(
     graph: u32,
     import_span: Span,
+    region: ModuleId,
     budget: &mut GraphBudget,
     staged: &mut Vec<StagedModule>,
     dependency_order: &mut Vec<ModuleId>,
@@ -2031,13 +2034,19 @@ fn admit_builtin_retained_control(
         graph,
         value,
     };
+    budget.charge_edge()?;
+    let service_span = surface.span;
     staged.push(StagedModule {
         id,
         canonical_path: path,
         owners: OwnerSet::from_paths(&[], budget)?,
         source,
         surface,
-        dependencies: Vec::new(),
+        dependencies: vec![ModuleDependency {
+            target: region,
+            import_span: service_span,
+            region_service: true,
+        }],
         relative_edges: Vec::new(),
         state: VisitState::Finished,
     });

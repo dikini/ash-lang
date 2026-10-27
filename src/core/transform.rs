@@ -95,6 +95,9 @@ impl TransformFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Store(store)) = kind {
             binders.push(store.handle.id());
         }
+        if let EffectExprKind::Operation(EffectOperation::Continue(continuation)) = kind {
+            binders.push(continuation.adapter.answer.id());
+        }
         if let EffectExprKind::Operation(EffectOperation::Region(scope)) = kind {
             binders.push(scope.access.id());
         }
@@ -307,15 +310,28 @@ impl TransformFamily for EffectOperationFamily {
                     origin,
                 )
             }
-            EffectOperation::Continue(continuation) => builder.continue_control(
-                super::effect::ContinueNode {
-                    store: remap(remapped, continuation.store)?,
-                    key: remap(remapped, continuation.key)?,
-                },
-                ty.into_inner(),
-                effects,
-                origin,
-            ),
+            EffectOperation::Continue(continuation) => {
+                let answer = &continuation.adapter.answer;
+                let answer_type = IterativeTypeOwner::new(copy_type(builder, answer.ty())?);
+                let answer_id = copy_binder_id(builder, answer.id())?;
+                let answer_origin = copy_origin(builder, answer.origin())?;
+                let answer =
+                    builder.resolved_binder(answer_id, answer_type.into_inner(), answer_origin)?;
+                builder.continue_control(
+                    super::effect::ContinueNode {
+                        store: remap(remapped, continuation.store)?,
+                        key: remap(remapped, continuation.key)?,
+                        adapter: Box::new(super::effect::ContinueAdapter {
+                            answer,
+                            some: remap(remapped, continuation.adapter.some)?,
+                            none: remap(remapped, continuation.adapter.none)?,
+                        }),
+                    },
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
             EffectOperation::RetainedRoot(root) => builder.retained_root(
                 super::effect::RetainedRootNode {
                     store: remap(remapped, root.store)?,

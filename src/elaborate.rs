@@ -13490,6 +13490,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .map_err(|()| type_resource())?,
             None => EffectRow::empty(),
         };
+        let region = self.region_api_at(span)?;
+        let allocation =
+            EffectRow::singleton(EffectInstance::new(region.default_alloc(), Box::new([])));
         self.type_work.charge(1).map_err(|()| type_resource())?;
         self.expected_effect_rows
             .try_reserve(1)
@@ -13497,7 +13500,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.expected_effect_rows.push(
             clone_effect_row_with_budget(row, &mut self.type_work).map_err(|()| type_resource())?,
         );
-        let reconstructed = self.union_effects(&drive, &latent, span);
+        let reconstructed = (|| {
+            let resumed = self.union_effects(&drive, &latent, span)?;
+            self.union_effects(&resumed, &allocation, span)
+        })();
         self.expected_effect_rows.pop();
         let reconstructed = reconstructed?;
         if !self.same_effect_rows(&reconstructed, row)? {
@@ -13524,6 +13530,27 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let key_value = self
             .builder
             .variable(key.id(), key_value_type, Origin::Source(span))?;
+        let answer_type = self.pure_core_type(ports.value())?;
+        let answer = self.builder.binder(answer_type, Origin::Source(span))?;
+        let answer_type = self.pure_core_type(ports.value())?;
+        let answer_value = self
+            .builder
+            .variable(answer.id(), answer_type, Origin::Source(span))?;
+        let some = self.initialize_region_record(
+            Some(crate::types::ConstructorId::new(api.option(), 1)),
+            vec![answer_value],
+            function.value(),
+            &allocation,
+            span,
+        )?;
+        let none = self.initialize_region_record(
+            Some(crate::types::ConstructorId::new(api.option(), 0)),
+            Vec::new(),
+            function.value(),
+            &allocation,
+            span,
+        )?;
+        self.type_work.charge(1).map_err(|()| type_resource())?;
         let result_type = self.pure_core_type(function.value())?;
         let effects = self.core_effect_row(row)?;
         let body = self.push_effect_core(
@@ -13533,6 +13560,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             EffectOperation::Continue(crate::core::effect::ContinueNode {
                 store: store_value,
                 key: key_value,
+                adapter: Box::new(crate::core::effect::ContinueAdapter { answer, some, none }),
             }),
         )?;
         let store_pattern_type = self.pure_core_type(store_type)?;
