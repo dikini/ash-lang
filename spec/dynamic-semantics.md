@@ -295,9 +295,9 @@ The validated Core program may retain method authentication records and method
 schemes as static authority. A retained Core type application records its complete
 method arguments; Effect execution preserves their validated instantiation in
 lexical metadata, including when an authenticated adapter forwards an existing
-callable without entering that application node. The evaluator does not inspect
-method authentication records or method schemes. It does not turn an interface
-identity, selection record, implementation authorization route, method scheme,
+callable without entering that application node.
+The evaluator does not inspect method authentication records or method schemes.
+It does not turn an interface identity, selection record, implementation authorization route, method scheme,
 or method argument into a runtime value, term binding, heap cell, interface
 lookup, or interface-specific transition. Effect type applications retain
 instantiation as described above; this does not turn method authentication or

@@ -1,11 +1,12 @@
 # Lexical region R1 candidate evidence
 
 The [model and module guide](README.md) and [single correspondence report](correspondence.md)
-define this evidence's scope. CP-0025 is accepted for transition after independent
-source/map review and actual frozen-gate audit. Frozen integration and exact
+define this evidence's scope. The matched CP-0025 contract was accepted after
+independent source/map review and actual frozen-gate audit. Frozen integration and exact
 transfer passed. Exact-head review and [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924` retain the reviewed tree;
-retained verification and R1/R2 acceptance are complete. This closes no product
-criterion. R3 is active and partial.
+retained verification and R1/R2 acceptance are complete. This finite result
+closes no product criterion; product evidence and acceptance are recorded
+separately in [R5 #70](https://github.com/dikini/ash-lang/issues/70).
 
 ## Frozen integration and transfer
 
@@ -34,9 +35,11 @@ The gate did not claim that this edited script matched the unchanged Git tree.
 
 ## Exact working records
 
-These records remain available while the delivery and acceptance are live under
-the [documentation policy](../../project/documentation.md#working-records-and-build-history).
-They identify evidence, not additional report copies or semantic authority.
+These paths and hashes identify the historical working records under the
+[documentation policy](../../project/documentation.md#working-records-and-build-history).
+Their paths are not a permanent availability guarantee. Preserve records still
+needed by a live delivery/checkpoint; retained Git/PR provenance and the hashes
+below identify their bounded scope without making them semantic authority.
 
 | Record | Path | SHA-256 |
 | --- | --- | --- |
@@ -67,5 +70,7 @@ The retained verification receipt is `/tmp/ash-m2-pr146-retained-verification.js
 (SHA-256 `54227c9b4a9c4925a4021a0cc614efe14a884e8874e17a5f13d3a3b73dd78e61`);
 final issue readback is `/tmp/ash-m2-acceptance-final-readback1.json`
 (SHA-256 `51bd69f868de1eb0769a1d0cae863205ba238657ee6666da2e3ce9353f85df15`).
-R3–R5 remain active/pending under TASK-0055; root owns integration and
-acceptance. Main integration retains its separate gate.
+The [specification](../../../spec/README.md) records the product language rules.
+[R5 #70](https://github.com/dikini/ash-lang/issues/70) records product integration,
+verification and acceptance separately from this finite proof. Main integration
+retains its separate gate.

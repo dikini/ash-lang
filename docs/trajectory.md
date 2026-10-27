@@ -36,22 +36,21 @@ protected-launch, isolation and full SQLite assignments remain superseded or
 deferred, not completed.
 
 Overall [program #51](https://github.com/dikini/ash-lang/issues/51) still tracks
-later [M2 #53](https://github.com/dikini/ash-lang/issues/53),
+separately authorized Main delivery of the lexical-region product and later
 [M3 #54](https://github.com/dikini/ash-lang/issues/54) and
-[M4 #55](https://github.com/dikini/ash-lang/issues/55). M2's agreed delivery
-scope includes default placement for ordinary construction and explicit region
-selection, lexical ownership, bulk reclamation, closures and recursive immutable
-graphs. Only usage/lifetime-based placement inference is deferred as a placement
-optimization. Closest-live defaults, caller-selected construction, the paired allocator
-interface and fully explicit Core are approved directions; exact source/Core
-contracts, layouts and their matched proof still require R1/R2 acceptance; [DN-0054](design/DN-0054-base-lexical-region-memory-contracts.md)
-and [DN-0055](design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md) remain
-informative. R1's bounded model/proof and R2's matching contract are design gates,
-not a demand to complete the wider algebra before M2. [TASK-0055](tasks/TASK-0055-lexical-regions.md) and its
-[execution plan](tasks/plans/lexical-regions.md) organize staged R1/R2 work.
-Product R3 remains held until the accepted contract and matched bounded proof
-are retained; this planning delivery executes neither proofs nor product work. M3 retained control and M4 workers
-remain separate later milestones.
+[M4 #55](https://github.com/dikini/ash-lang/issues/55).
+[M2 #53](https://github.com/dikini/ash-lang/issues/53) covers default placement,
+explicit selection, lexical ownership, bulk reclamation, stored closures and
+recursive immutable graphs. The [specification](../spec/README.md) records the
+product language rules; [R5 #70](https://github.com/dikini/ash-lang/issues/70)
+records its retained checkpoint, review, verification and acceptance. The
+[finite model evidence](design/lexical-regions/evidence.md) retains the separate
+bounded R1/R2 result and its assumptions; it is not a whole-compiler or native
+allocator proof. Usage/lifetime placement inference and the wider explorations in
+[DN-0054](design/DN-0054-base-lexical-region-memory-contracts.md) and
+[DN-0055](design/DN-0055-algebra-of-regions-lifetimes-and-ownership.md) remain
+informative future work. Product retirement does not complete Main integration,
+M3 retained control, M4 workers or the overall program.
 
 The Mini-Ash milestone is retained historically at the `mini-ash` tag, whose
 peeled commit is `d62d3ba`. Its

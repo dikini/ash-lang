@@ -23,11 +23,11 @@ No proposed changes are listed.
 
 ## Accepted changes
 
-[CP-0025: Lexical region construction and paired allocators](CP-0025-lexical-region-construction.md)
-is accepted for transition with a reviewed bounded preservation proof and an
-independently audited frozen gate, retained through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`.
-Retained verification and R1/R2 acceptance are complete. R3 implementation is
-active and partial; no product criterion is complete. It is not current Ash.
+No accepted transitions are listed. The [region specification](../../spec/README.md)
+records the lexical-region language rules; the bounded
+[model evidence](../design/lexical-regions/evidence.md) retains its separate proof
+scope. Proposal retirement prepares the product branch and does not replace
+separately authorized Main integration.
 
 The [generic cell checkpoint evidence](../design/generic-cell/evidence.md)
 retains the completed transition, verified local Main integration and
