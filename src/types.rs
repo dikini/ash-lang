@@ -26,7 +26,9 @@ use owner_arguments::{
 /// Shared base capacity for cumulative structural Type cells, Kind nodes, and
 /// retained or visited binder-kind records.
 ///
-/// Most compiler phases use this capacity directly. Independent Core
+/// Most compiler phases use this capacity directly. Public standalone module
+/// checking has a separate Source-only default for complete capture publication;
+/// explicit caller-owned budgets retain their supplied limits. Independent Core
 /// validation has an accepted validator-local multiplier because it
 /// reauthenticates the complete Core program across several cumulative passes.
 pub const TYPE_WORK_LIMIT: usize = 327_680;

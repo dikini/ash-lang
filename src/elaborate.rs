@@ -21135,6 +21135,11 @@ pub(crate) fn check_newtype_representation_cycles(
     Ok(())
 }
 
+// Public standalone Source checking owns one cumulative allowance per module.
+// Complete capture publication needs more work than the shared structural base;
+// explicit caller/driver budgets and independent builder/rewrite owners are separate.
+const DEFAULT_MODULE_SOURCE_TYPE_WORK_LIMIT: usize = 720_896;
+
 /// Checks every local definition and publishes an immutable dependency summary.
 ///
 /// No Core program escapes this phase. A summary is created only after all
@@ -21145,7 +21150,10 @@ pub(crate) fn check_newtype_representation_cycles(
 /// Returns the first source typing error or bounded internal elaboration
 /// failure. Failed modules do not produce a [`CheckedModule`].
 pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
-    let mut type_work = TypeWorkBudget::default();
+    let mut type_work = TypeWorkBudget::with_limit(crate::calibration::limit(
+        DEFAULT_MODULE_SOURCE_TYPE_WORK_LIMIT,
+        crate::calibration::DiagnosticOwner::Structural,
+    ));
     let mut coverage_work = UsefulnessBudget::default();
     let mut constraint_work = InterfaceConstraintBudget::default();
     check_module_with_budget(

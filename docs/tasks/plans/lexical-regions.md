@@ -28,13 +28,16 @@ tests respectively. The module-newtype and local-newtype targets now pass 23
 and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 original
 tests. Functions passes all 19 original tests. Polymorphism and interface-module
 controls pass all 43 and 25 original tests. Module loading now passes all 24
-original tests; library imports has 15 passes and two unchanged budget failures,
-and Core validation has 60 passes and seven remaining Source/Pure producer
-failures. Their 20 restored names (9 + 7 + 4) are disjoint from the prior 379,
-giving 399 staged restorations. Repeated passes are counted once. Two constructor
+original tests; library imports now passes all 17, and Core validation has 60
+passes and seven remaining Source/Pure producer failures. The two normal
+standalone Source-budget restorations are disjoint from the prior 399, giving
+401 staged restorations. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
-These selected observations do not refresh Library9 (1,560/35) or Integration69
-(1,276/504). The scoped controls retain exact
+A fresh Library10 inventory at the final policy inputs records 1,562 passes and
+35 unchanged failures over 1,597 names. Both added unit tests pass; no prior name
+is missing or newly failing, and all 8,565 tracked inputs stayed equal during
+the run. Integration69 (1,276/504) remains the latest complete integration
+baseline. The scoped controls retain exact
 resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
@@ -49,13 +52,20 @@ source-owned full-typed evidence closures, ordered complete arguments and fresh
 validation after both transforms remain. Manual Pure corruption, owner, depth,
 resource and poison controls are unchanged.
 
-The unchanged 128-method and 192-function standalone publication witnesses still
-refuse in the source-checking type-work owner. Separate temporary refusal-only
-tracing observed 323,970/327,680 with a 4,125-unit capture-summary type charge,
-and 324,970/327,680 with a 9,986-unit capture-graph charge. These are atomic refusal
-prefixes, not complete costs or a basis for a policy fit. Original type-meter
-source bytes were restored; no limit, source width or program changed. Complete
-owner costs must be measured before choosing optimization or policy work.
+The original 128-method and 192-function public standalone publication witnesses
+first refused in the Source type-work owner. Separate temporary tracing recorded
+atomic prefixes of 323,970/327,680/request 4,125 and
+324,970/327,680/request 9,986. A finite Source-only completion probe then measured
+complete defining-module costs of 366,561 and 534,701, with independent entry
+costs of 71,000 and 201,323; all four modules completed before the unchanged
+stale census failed. Exact original meter/checker bytes were restored afterward.
+The reviewed public `check_module` Source-only normal default is now 720,896
+structural-work units (next 65,536-unit step above the 668,377 reserve target),
+with Structural calibration preserved. All explicit caller/driver budgets,
+other defaults and original programs/widths remain unchanged. Normal verification
+passes all 17 library-import cases and the existing cumulative-owner, policy,
+observer and reporting checks (30 distinct cases); it is separate from the
+temporary probes and restores the two original default-checking witnesses.
 
 Runtime trace controls retain all 13 original Source programs, exact user event
 vectors/counts/handler identities and whole raw transformed-trace equality. A
@@ -66,7 +76,8 @@ The manual 4,096-addition/256 KiB continuation and 24-hook/256 KiB fresh-process
 witnesses retain their original controls after actual-entry/provenance repair.
 Primitive admission now checks only preceding dependencies; its deliberate Pure
 scalar pipeline, exact trace, huge integers, poisoning and manual closure remain.
-No Source rule, API, runtime limit or production policy changed in this slice.
+Those runtime/primitive fixture migrations changed no Source rule, API or
+runtime limit. The public Source-default policy exception is recorded above.
 
 Function Source Core controls retain exact original binders, owned callable
 subtrees, parameter identities, source spans and causal origins, with complete

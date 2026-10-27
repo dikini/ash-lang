@@ -99,6 +99,27 @@ each arena starts with fresh independent primary and rewrite meters. Primary
 construction remains excluded from the Source/Final reports. Standalone,
 default and private-image primary limits retain their existing capacities.
 
+Public standalone Source checking has a separate current exception. The public
+`check_module` entry uses one cumulative 720,896 structural-work-unit allowance
+per module, with the existing Structural diagnostic calibration override. It
+carries that same owner through body checking and export collection/freeze.
+Explicit `check_module_with_budget` callers, driver phase policies and all other
+structural, primary, rewrite, private-image, coverage and constraint defaults
+retain their existing limits; this is not graph-wide credit or a refill.
+
+The original 128-method and 192-function publication witnesses completed with a
+finite diagnostic Source-only allowance of 1,310,720 units. Their defining
+module owners used 366,561 and 534,701; entry owners used 71,000 and 201,323,
+while independent foreign/region owners used 442 and 3,575 each. Do not sum those
+independent owners to fit a module limit. The largest completed owner, 534,701,
+has an integer 25% reserve target of 668,377. Rounding to the next 65,536-work-unit
+step selects 720,896, giving 34.82% reserve over that completed cost. This is a
+work allowance, not a memory size. The diagnostic probes still reached the
+original stale two-versus-four module census; normal verification corrects only
+that census to exact graph identities and retains the original programs and
+public default-checking route. Earlier unchanged-standalone Source statements
+describe the policies before this narrow exception, not a current global claim.
+
 On 2026-10-26 the unchanged 8,000-member recursive-group/call-chain test exposed
 the fixed primary builder cap and repeated whole-arena variable searches during
 closure preparation. One temporary, charged first-variable index per existing

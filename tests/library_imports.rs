@@ -232,7 +232,18 @@ fn method_rich_capture_publication_fits_the_default_type_work_budget() {
         &[("dep.ash", &dependency)],
     );
     let checked = check_graph(&graph);
-    assert_eq!(checked.len(), 2);
+    assert_eq!(checked.len(), 4);
+    let checked_ids = checked
+        .iter()
+        .map(|module| module.module())
+        .collect::<std::collections::HashSet<_>>();
+    let graph_ids = graph
+        .modules()
+        .iter()
+        .map(|module| module.id())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(checked_ids.len(), checked.len());
+    assert_eq!(checked_ids, graph_ids);
 }
 
 #[test]
@@ -256,7 +267,18 @@ fn shared_capture_graph_exports_fit_the_default_type_work_budget() {
         &[("dep.ash", &dependency)],
     );
     let checked = check_graph(&graph);
-    assert_eq!(checked.len(), 2);
+    assert_eq!(checked.len(), 4);
+    let checked_ids = checked
+        .iter()
+        .map(|module| module.module())
+        .collect::<std::collections::HashSet<_>>();
+    let graph_ids = graph
+        .modules()
+        .iter()
+        .map(|module| module.id())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(checked_ids.len(), checked.len());
+    assert_eq!(checked_ids, graph_ids);
 }
 
 #[test]
