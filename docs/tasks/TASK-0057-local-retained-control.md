@@ -32,10 +32,12 @@ narrowing the original issue criteria.
 
 ## Progress
 
-The C1 proposal is under consideration. The bounded model, its correspondence,
-independent review and frozen integration are pending. No C1–C5 acceptance
-criterion is complete and no product implementation is authorized by the
-proposed contract.
+The C1 proposal is under consideration. Its bounded model and correspondence
+passed independent source review and the frozen integration build; the
+[record](evidence/local-retained-control/c1-model/README.md) identifies the
+inputs and limits. Retained-result verification and proposal acceptance remain
+pending. No C1–C5 acceptance criterion is complete and no product
+implementation is authorized by the proposed contract.
 
 ## Verification
 

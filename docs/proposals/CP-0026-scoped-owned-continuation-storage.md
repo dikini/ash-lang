@@ -44,6 +44,10 @@ Fresh branches start by ordinary calls under admitted private handler roots.
 Admission checks the actual function captures, dependencies and effects as
 well as later retained control. A private root surrounds all branch-local
 handlers, their suffixes after `resume`, and cleanup that must survive a yield.
+Its selected checkpoint clause consumes its owner only by retaining it or by
+resuming it; discarding that capture would abandon the root's outstanding
+completion and is rejected. Inner user handlers keep their existing checked
+discard behavior when outside completion remains protected.
 The store owner and its driver, including a running drain cleanup, lie outside
 that root. The private association from a checkpoint handler to `N` is
 administrative and non-owning; it grants no general aliasing or dependency-cycle
@@ -83,7 +87,10 @@ current consumer must satisfy these requirements. A matching type, row, effect
 name or same-instance outer handler alone does not establish equivalence. If a
 requirement or selected interpretation cannot be established, admission fails.
 Handlers captured inside the segment return in their existing order; this does
-not make a removed outside handler available.
+not make a removed outside handler available. In this fragment an external
+interpreter's actual enclosing frame remains live around `N`; checking the
+current consumer must also exclude a nearer conflicting interpreter. The
+contract does not require assigning a new runtime identity to that frame.
 
 ### Transfer and restoration
 
@@ -130,10 +137,12 @@ drain's own completion remains outside the stored capture.
 
 After committed transfer, the store owns the capture and its completion until
 restoration; after committed restoration, active control owns them. Internal
-failure disposal must account for each owner exactly once and be iterative.
-As with current failure teardown, it promises neither source cleanup nor
-rollback of already performed effects. Preparation failure before either move
-must not duplicate, lose or partially publish an owner. Source cancellation,
+failure teardown traverses the actual owned-control edges iteratively and must
+not release any owner twice. If teardown itself cannot obtain required working
+storage, it reports incomplete teardown; residual objects may remain
+unreleased. As with current failure teardown, it promises neither source cleanup
+nor rollback of already performed effects. Preparation failure before either
+move must not duplicate, lose or partially publish an owner. Source cancellation,
 arbitrary discard of retained work and a dummy answer are not added.
 
 ### Abstract transitions
@@ -165,10 +174,13 @@ transferred `C`.
    owns `C`. When `C` produces `a : A`, the adapter delivers `Some(a)` to `D`.
    No transition re-enters the earlier transfer-clause suffix. Subsequent
    checkpoints can transfer a new live capture to a fresh generation.
-5. **Failure disposal.** At an internal failure, the host owns teardown of the
-   actual active control and every live slot, including recursively owned
-   captures. It traverses these ownership edges iteratively and releases each
-   once. It does not resume suspended source control or promise source cleanup.
+5. **Failure disposal.** At an internal failure, the host takes responsibility
+   for teardown of actual active control and live slots, including recursively
+   owned captures. It traverses these ownership edges iteratively and never
+   releases an owner twice. If teardown completes, the represented owners have
+   been released; a further resource failure reports incomplete teardown and
+   may leave residual objects unreleased. It does not resume suspended source
+   control or promise source cleanup.
 
 Slot reuse assigns a generation that cannot alias a previous key during the
 activation. At every committed point each capture and its required completion

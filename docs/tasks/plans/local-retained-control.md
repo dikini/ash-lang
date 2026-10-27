@@ -36,6 +36,40 @@ Remove it when the task closes.
    Retire transition artifacts only at their authorized checkpoint. Main
    integration remains separate.
 
+For C2, start with one end-to-end store acquisition, checkpoint, retain and
+continue path. Use the existing resource acquisition syntax and sealed builtin
+identity pattern as the first candidate: resolve the initializer in its old
+scope, bind fresh `N`, then check the inside-scope answer `A<N>` and body. A
+store-specific builtin family can provide the opaque key and exact provider
+and operation identities; ordinary user declarations with the same types must
+not authenticate them. Existing nominal parameters cannot directly carry an
+effect row. Before implementing the API, check whether a function-type
+descriptor can express the fixed `rho`, or whether checked store metadata is
+needed. Preserve the same fixed ports across source, imports and linked Core;
+return any unexpressible contract to CP-0026 instead of silently weakening it.
+
+For the private checkpoint root, first try the existing handler form and a
+clause-scoped retain carrier alongside `resume` and `discard`, with an explicit
+store association checked from actual control. The private root and its
+administrative clause must remain associated with `N` through clause return,
+including when the handler itself has moved into a capture. If existing syntax
+cannot express and authenticate that root, return the precise gap to the
+proposal before selecting another source form. Add only the needed Core scope
+and retain metadata; linked validation must reconstruct the association and
+consumption rather than trust stored flags.
+
+At runtime, extend the existing scoped owner with a fixed slot table and
+non-owning activation/slot/generation keys. Reserve and authenticate before
+taking the existing `CapturedContinuation`; a restore installs its answer
+adapter above the current consumer. Keep captured cleanup and nested clause
+states intact, update the existing capture accounting once, and extend the
+iterative failure teardown over live slot edges. Actual branch completion, not
+an answer constructor or queue entry, retires its obligation. Preserve normal
+source-handler precedence and surviving interpreter frames. Exercise live and
+stale keys, pre-commit refusal, current-consumer suffixes, shared outer access,
+self-capture, running cleanup and linked/transformed validation. Keep close
+admission unavailable until C3 proves its release predecessor.
+
 For C3, first compare the concrete alias, import and mutual-recursion examples
 against a store-focused projection of the existing capture graph and its actual
 handler, resume and cleanup walk. The current unlabeled match choices lose the

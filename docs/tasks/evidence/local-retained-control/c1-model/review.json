@@ -1,0 +1,138 @@
+{
+  "schema": "ash-bounded-source-review/v1",
+  "status": "pass",
+  "source_review_pass": true,
+  "scope": "Independent source review of the complete v3 bounded C1 model, examples, correspondence and proposed contract; ready for frozen AD-0012 integration only",
+  "reviewer": {
+    "role": "independent reviewer",
+    "model": "Sol 6.1",
+    "reasoning_effort": "xhigh",
+    "exact_model_runtime": "unavailable"
+  },
+  "parent_head": "33af1ed1e9adfaa2efa73443a6c0709131b00ff6",
+  "checkpoint": "/tmp/ash-m3/c1-model-manifest-v3.json",
+  "checkpoint_sha256": "bfa3460d74c10736681b143515d809f425a797643c9fc151ec3e689f567ca95d",
+  "source_directory": "/tmp/ash-m3/c1-model-source-v3",
+  "source_files": {
+    "Ownership.lean": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee",
+    "OwnershipExamples.lean": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99",
+    "correspondence.md": "daef0a1616e1c4da0e12a4507bbdc2330c2b3420bb33f079340a9ae67c64d69a",
+    "README.md": "722dbba624e56d8939d758529bb46d44f2bfb593dda9025576f8c8aded9587cb",
+    "CP-0026-scoped-owned-continuation-storage.md": "29476af39aa7de8f939e61c57105a07706f745c8a918ab8183296332c4133731",
+    "DN-0056-scoped-continuation-retention-and-library-scheduling.md": "b16bb62c7019e1aca8a508a63bb81314465d67e0fc990096e55cc53f347e09ed"
+  },
+  "reviewed_modules": [
+    {
+      "module": "Ownership",
+      "source": "/tmp/ash-m3/c1-model-source-v3/Ownership.lean",
+      "source_sha256": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee",
+      "reports": [
+        "Ash.RetainedControl.step_accounting",
+        "Ash.RetainedControl.step_preserves_unique",
+        "Ash.RetainedControl.trace_preserves_unique",
+        "Ash.RetainedControl.trace_preserves_slot_ids",
+        "Ash.RetainedControl.trace_preserves_generation_bound",
+        "Ash.RetainedControl.normal_step_preserves_capacity",
+        "Ash.RetainedControl.restore_cannot_replay",
+        "Ash.RetainedControl.restore_requires_live_key",
+        "Ash.RetainedControl.source_release_predecessor",
+        "Ash.RetainedControl.actual_finish_requires_completion",
+        "Ash.RetainedControl.running_drain_is_not_skipped",
+        "Ash.RetainedControl.no_work_excludes_clause",
+        "Ash.RetainedControl.no_work_excludes_active",
+        "Ash.RetainedControl.no_work_excludes_slot",
+        "Ash.RetainedControl.admission_excludes_self",
+        "Ash.RetainedControl.admission_keeps_outside_completion",
+        "Ash.RetainedControl.admission_rejects_local_escape",
+        "Ash.RetainedControl.trace_preserves_context"
+      ]
+    },
+    {
+      "module": "OwnershipExamples",
+      "source": "/tmp/ash-m3/c1-model-source-v3/OwnershipExamples.lean",
+      "source_sha256": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99",
+      "reports": [
+        "Ash.RetainedControl.Examples.initial_unique_owners",
+        "Ash.RetainedControl.Examples.initial_context_safe",
+        "Ash.RetainedControl.Examples.root_admission_starts_fresh_work",
+        "Ash.RetainedControl.Examples.retain_p",
+        "Ash.RetainedControl.Examples.restore_to_current_consumer",
+        "Ash.RetainedControl.Examples.resumed_cleanup_keeps_saved_result",
+        "Ash.RetainedControl.Examples.resumed_cleanup_is_still_running",
+        "Ash.RetainedControl.Examples.nested_owner_remains_live_before_resume",
+        "Ash.RetainedControl.Examples.yield_again_to_current_consumer",
+        "Ash.RetainedControl.Examples.current_consumer_completion_trace",
+        "Ash.RetainedControl.Examples.current_consumer_trace_preserves_ownership_and_context",
+        "Ash.RetainedControl.Examples.running_drain_yield_trace",
+        "Ash.RetainedControl.Examples.running_drain_yield_keeps_q",
+        "Ash.RetainedControl.Examples.completion_returns_to_current_consumer",
+        "Ash.RetainedControl.Examples.other_branch_remains_owned",
+        "Ash.RetainedControl.Examples.old_key_cannot_replay_after_any_finite_trace",
+        "Ash.RetainedControl.Examples.shared_outer_support_is_admitted",
+        "Ash.RetainedControl.Examples.preparation_refusal_retains_the_original_owner",
+        "Ash.RetainedControl.Examples.retained_q_prevents_release",
+        "Ash.RetainedControl.Examples.reject_self_capture",
+        "Ash.RetainedControl.Examples.reject_skipped_outside_completion",
+        "Ash.RetainedControl.Examples.reject_branch_local_escape",
+        "Ash.RetainedControl.Examples.reject_wrong_interpretation",
+        "Ash.RetainedControl.Examples.reject_captured_outside_owner",
+        "Ash.RetainedControl.Examples.reject_unreferenced_outside_owner",
+        "Ash.RetainedControl.Examples.generation_exhaustion_has_no_recycle_capacity",
+        "Ash.RetainedControl.Examples.teardown_can_report_incomplete",
+        "Ash.RetainedControl.Examples.teardown_can_complete",
+        "Ash.RetainedControl.Examples.partial_teardown_then_refusal",
+        "Ash.RetainedControl.Examples.partial_teardown_records_distinct_outcomes",
+        "Ash.RetainedControl.Examples.outer_close_complete_trace"
+      ]
+    }
+  ],
+  "local_feedback": {
+    "ownership-local-v2.log": "729df22023784976e6a8fd3cf14db587677866b7ae37a20b9f532a757e877255",
+    "ownership-examples-local-v3.log": "e70c6dd746b77459488acec3ae1fe5198a24822fb91afdd5ed126ace542b2c3e"
+  },
+  "report": "/tmp/ash-m3/c1-model-review-v3.md",
+  "report_sha256": "5dc1dea892bc75b17e28e09cb7d9cf30c62d7d113fe408d3633dc71a9694178b",
+  "findings": [],
+  "resolved_findings": [
+    "Actual activation/slot/generation matching and slot identity uniqueness",
+    "Fixed store interpretation and actual consumer compatibility",
+    "NoWork bridge to absence of represented branch control",
+    "Normal release guards against failed, closed or running-drain states",
+    "Complete versus reported incomplete host teardown with no double release",
+    "Captured ownership disjoint from every enclosing support/completion owner",
+    "Opaque saved body result and nested/cleanup phase preservation",
+    "Actual repeated yield while outer drain is running"
+  ],
+  "checks": {
+    "source_hashes_verified": 6,
+    "local_log_hashes_verified": 2,
+    "report_names_match_source_logs_and_gate": true,
+    "model_reports": 18,
+    "example_reports": 31,
+    "total_reports": 49,
+    "reported_axioms": [
+      "propext",
+      "Quot.sound"
+    ],
+    "local_logs_have_no_errors_warnings_or_sorryAx": true,
+    "unfinished_proofs_or_custom_axioms_found": false,
+    "relative_file_links_checked": 53,
+    "missing_relative_file_links": 0,
+    "trailing_whitespace_found": false,
+    "reviewer_lean_or_cargo_builds": 0
+  },
+  "assumptions_and_limits": [
+    "Complete actual capture inventories and exact interpreter-context tokens are explicit model premises; product must derive them from real source and linked Core",
+    "Retain includes the administrative clause return as a bounded macro-step with an actual-clear-suffix premise",
+    "Unit input and one model answer family do not formalize general owner-indexed A<N>, rows, action bodies or a frame forest",
+    "Finite traces over finite lists do not constitute exhaustive checking of a globally finite state space",
+    "Completed, disposed and unresolved owner histories are ghost proof state, not required runtime tables",
+    "Ordinary private-clause resume and checked inner discard are inherited current semantics",
+    "C3 recursive normal-return proof, runtime/source/Core correspondence and libraries remain separate"
+  ],
+  "frozen_integration_complete": false,
+  "semantic_acceptance_granted": false,
+  "product_implementation_authorized": false,
+  "issue_acceptance_complete": false,
+  "next_owner": "Root verifies the source review and initiates the frozen gate; assigned developer remains sole compiler operator"
+}

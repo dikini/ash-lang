@@ -2226,8 +2226,9 @@ local disjoint-footprint requirement.
 Prove preservation of the selected ownership and completion invariants for
 each admitted transition and finite traces, no second restoration of the same
 generation, and no release with unfinished owned work. Preparation refusal
-must leave the original owner intact; post-commit failure disposal must account
-for owners without claiming source cleanup ran. Prove these from local step
+must leave the original owner intact; post-commit teardown must distinguish
+successful disposal from reported incomplete teardown without double release
+or a claim that source cleanup ran. Prove these from local step
 premises, not by taking the successor invariant as a premise. State any
 provider, scheduler, runtime or admission assumptions explicitly. A separate
 proof of C3's recursive normal-return analysis is required before its release

@@ -1,0 +1,93 @@
+{
+  "status": "Root-verified independent source review; authorized frozen C1 integration only, not semantic acceptance or product authority",
+  "proof_directory": "docs/design/retained-control",
+  "worktree": "/home/dikini/Projects/ash-lang/.worktree/m3-retained-control",
+  "parent_head": "33af1ed1e9adfaa2efa73443a6c0709131b00ff6",
+  "parent_evidence": "/tmp/ash-m3/c1-empty-seed.json",
+  "parent_evidence_sha256": "bd7e6590bfb2ca0dab265a0562bd1b3e6aa15241d9834355c0c05f8cd4600549",
+  "compiler": "/home/dikini/.elan/toolchains/leanprover--lean4---v4.33.1/bin/lean",
+  "module_cache": "/home/dikini/Projects/ash-lang/.worktree/generic-cells/target/lean-module-cache",
+  "jobs": 1,
+  "memory_mb": 4096,
+  "headroom_mb": 4096,
+  "output_prefix": "/tmp/ash-m3/c1-frozen-v3",
+  "new_registered_order": [
+    "Ownership",
+    "OwnershipExamples"
+  ],
+  "components": [
+    {
+      "name": "local-retained-control-c1",
+      "root_verified_review_pass": true,
+      "checkpoint": "/tmp/ash-m3/c1-model-manifest-v3.json",
+      "checkpoint_sha256": "bfa3460d74c10736681b143515d809f425a797643c9fc151ec3e689f567ca95d",
+      "review": "/tmp/ash-m3/c1-model-review-v3.json",
+      "review_sha256": "c82a10d73e6fe09137eac249fc8d50a757e8da61ce090048579f34cef73f4921",
+      "sources": [
+        {
+          "module": "Ownership",
+          "source": "/tmp/ash-m3/c1-model-source-v3/Ownership.lean",
+          "source_sha256": "5103f2a5b155da16d98b75d8d65a8cb0edd9bf9056c2de033f35efe3e81b71ee",
+          "reports": [
+            "Ash.RetainedControl.step_accounting",
+            "Ash.RetainedControl.step_preserves_unique",
+            "Ash.RetainedControl.trace_preserves_unique",
+            "Ash.RetainedControl.trace_preserves_slot_ids",
+            "Ash.RetainedControl.trace_preserves_generation_bound",
+            "Ash.RetainedControl.normal_step_preserves_capacity",
+            "Ash.RetainedControl.restore_cannot_replay",
+            "Ash.RetainedControl.restore_requires_live_key",
+            "Ash.RetainedControl.source_release_predecessor",
+            "Ash.RetainedControl.actual_finish_requires_completion",
+            "Ash.RetainedControl.running_drain_is_not_skipped",
+            "Ash.RetainedControl.no_work_excludes_clause",
+            "Ash.RetainedControl.no_work_excludes_active",
+            "Ash.RetainedControl.no_work_excludes_slot",
+            "Ash.RetainedControl.admission_excludes_self",
+            "Ash.RetainedControl.admission_keeps_outside_completion",
+            "Ash.RetainedControl.admission_rejects_local_escape",
+            "Ash.RetainedControl.trace_preserves_context"
+          ]
+        },
+        {
+          "module": "OwnershipExamples",
+          "source": "/tmp/ash-m3/c1-model-source-v3/OwnershipExamples.lean",
+          "source_sha256": "0ca6f7915479fca02a8abc8099e845b27a6706e2030ea51a8350d44f7b194c99",
+          "reports": [
+            "Ash.RetainedControl.Examples.initial_unique_owners",
+            "Ash.RetainedControl.Examples.initial_context_safe",
+            "Ash.RetainedControl.Examples.root_admission_starts_fresh_work",
+            "Ash.RetainedControl.Examples.retain_p",
+            "Ash.RetainedControl.Examples.restore_to_current_consumer",
+            "Ash.RetainedControl.Examples.resumed_cleanup_keeps_saved_result",
+            "Ash.RetainedControl.Examples.resumed_cleanup_is_still_running",
+            "Ash.RetainedControl.Examples.nested_owner_remains_live_before_resume",
+            "Ash.RetainedControl.Examples.yield_again_to_current_consumer",
+            "Ash.RetainedControl.Examples.current_consumer_completion_trace",
+            "Ash.RetainedControl.Examples.current_consumer_trace_preserves_ownership_and_context",
+            "Ash.RetainedControl.Examples.running_drain_yield_trace",
+            "Ash.RetainedControl.Examples.running_drain_yield_keeps_q",
+            "Ash.RetainedControl.Examples.completion_returns_to_current_consumer",
+            "Ash.RetainedControl.Examples.other_branch_remains_owned",
+            "Ash.RetainedControl.Examples.old_key_cannot_replay_after_any_finite_trace",
+            "Ash.RetainedControl.Examples.shared_outer_support_is_admitted",
+            "Ash.RetainedControl.Examples.preparation_refusal_retains_the_original_owner",
+            "Ash.RetainedControl.Examples.retained_q_prevents_release",
+            "Ash.RetainedControl.Examples.reject_self_capture",
+            "Ash.RetainedControl.Examples.reject_skipped_outside_completion",
+            "Ash.RetainedControl.Examples.reject_branch_local_escape",
+            "Ash.RetainedControl.Examples.reject_wrong_interpretation",
+            "Ash.RetainedControl.Examples.reject_captured_outside_owner",
+            "Ash.RetainedControl.Examples.reject_unreferenced_outside_owner",
+            "Ash.RetainedControl.Examples.generation_exhaustion_has_no_recycle_capacity",
+            "Ash.RetainedControl.Examples.teardown_can_report_incomplete",
+            "Ash.RetainedControl.Examples.teardown_can_complete",
+            "Ash.RetainedControl.Examples.partial_teardown_then_refusal",
+            "Ash.RetainedControl.Examples.partial_teardown_records_distinct_outcomes",
+            "Ash.RetainedControl.Examples.outer_close_complete_trace"
+          ]
+        }
+      ]
+    }
+  ]
+}
