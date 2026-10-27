@@ -106,6 +106,12 @@ fn retained_move_prepares_storage_before_taking_either_owner() {
     assert!(store.retain(&mut owner, &mut no_work).is_err());
     assert!(owner.is_some());
     assert!(store.slots.is_empty());
+    // The slot reservation can succeed before capture inspection runs out of
+    // work; this must still leave the owner and published slot set unchanged.
+    let mut inspection_work = TypeWorkBudget::with_limit(1);
+    assert!(store.retain(&mut owner, &mut inspection_work).is_err());
+    assert!(owner.is_some());
+    assert!(store.slots.is_empty());
     machine_test_hooks::FAIL_CONTROL_RESERVATION.set(Some(ResourceFailureCause::AllocatorRefused));
     assert!(store.retain(&mut owner, &mut work).is_err());
     machine_test_hooks::reset();
@@ -132,6 +138,34 @@ fn retained_move_prepares_storage_before_taking_either_owner() {
             .unwrap()
     );
     assert_eq!(captured_cells, 0);
+}
+
+#[test]
+fn retained_move_rejects_its_owner_inside_nested_captures() {
+    let program = super::tests::effect_program("main : Unit -> Int\nmain () = 42\n");
+    let node = program.root();
+    let key = ActivationKey(3);
+    let mut store = RetainedStore::new(key);
+    let nested = CapturedContinuation {
+        frames: vec![Frame::ResourceBoundary {
+            node,
+            key,
+            payload: ResourcePayload::Store(Box::new(RetainedStore::new(key))),
+        }],
+    };
+    let mut owner = Some(CapturedContinuation {
+        frames: vec![Frame::ClauseBoundary {
+            handler: HandlerId::new(1),
+            owner: ResumeId::new(1),
+            continuation: Some(nested),
+            registration: None,
+            completion_count: 1,
+        }],
+    });
+    let result = store.retain(&mut owner, &mut TypeWorkBudget::default());
+    assert!(matches!(result, Err(RuntimeFailure::InvalidControlState)));
+    assert!(owner.is_some());
+    assert!(store.slots.is_empty());
 }
 
 #[test]
@@ -164,6 +198,58 @@ fn retained_store_edges_are_disposed_without_recursive_stack_growth() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[test]
+fn retained_store_disposal_reports_incomplete_without_retrying_growth() {
+    let program = super::tests::effect_program("main : Unit -> Int\nmain () = 42\n");
+    let node = program.root();
+    let payload: Arc<[u8]> = Arc::from(&b"retained"[..]);
+    let forest = || {
+        let slots = (0..12)
+            .map(|_| RetainedSlot {
+                generation: 0,
+                continuation: Some(CapturedContinuation {
+                    frames: vec![Frame::CleanupCompletion {
+                        saved: Value::Bytes(Arc::clone(&payload)),
+                    }],
+                }),
+            })
+            .collect();
+        CapturedContinuation {
+            frames: vec![Frame::ResourceBoundary {
+                node,
+                key: ActivationKey(3),
+                payload: ResourcePayload::Store(Box::new(RetainedStore {
+                    activation: ActivationKey(3),
+                    slots,
+                })),
+            }],
+        }
+    };
+    drop(forest());
+    assert_eq!(Arc::strong_count(&payload), 1);
+
+    let captured = forest();
+    let scope = disposal::Scope::enter();
+    disposal::reset_growth_attempts();
+    machine_test_hooks::FAIL_DISPOSAL_GROWTH.set(true);
+    drop(captured);
+    assert!(disposal::check().is_err());
+    assert_eq!(disposal::growth_attempts(), 1);
+    let RuntimeFailure::Report(report) = scope.finish(Ok::<_, RuntimeFailure>(())).unwrap_err()
+    else {
+        panic!("incomplete disposal should report its resource failure");
+    };
+    let details = report.primary.resource().unwrap();
+    assert_eq!(details.phase, RuntimePhase::Teardown);
+    assert_eq!(details.resource, RuntimeResource::CapturedDisposal);
+    assert_eq!(details.cause, ResourceFailureCause::AllocatorRefused);
+    assert_eq!(report.cleanup, super::super::CleanupStatus::Incomplete);
+    // The failed teardown abandons the residual owners; it does not release
+    // any of these values a second time or execute their saved cleanups.
+    assert_eq!(Arc::strong_count(&payload), 13);
+    machine_test_hooks::reset();
 }
 
 #[test]

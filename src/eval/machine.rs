@@ -799,6 +799,8 @@ impl RetainedStore {
             reserve_control(&mut self.slots, 1, RuntimeResource::RetainedSlots, false)?;
             (self.slots.len(), 0)
         };
+        let capture = owner.as_ref().ok_or(RuntimeFailure::InvalidControlState)?;
+        inspect_retained_owner(capture, self.activation, work)?;
         let key = RetainedKey {
             activation: self.activation,
             slot: index,
@@ -866,6 +868,62 @@ impl RetainedStore {
         *captured_cells = remaining;
         Ok(true)
     }
+}
+
+// Follow the same owned capture edges as teardown. A store may not move its
+// own boundary into itself, even through a nested clause or another store.
+fn inspect_retained_owner(
+    capture: &CapturedContinuation,
+    activation: ActivationKey,
+    work: &mut TypeWorkBudget,
+) -> Result<(), RuntimeFailure> {
+    let mut pending = Vec::new();
+    reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+    pending.push(capture);
+    while let Some(capture) = pending.pop() {
+        charge_effect_work(
+            work,
+            capture.frames.len().saturating_add(1),
+            RuntimePhase::Capture,
+        )?;
+        for frame in &capture.frames {
+            match frame {
+                Frame::ResourceBoundary { key, .. } if *key == activation => {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                Frame::ResourceBoundary {
+                    payload: ResourcePayload::Store(store),
+                    ..
+                } => {
+                    charge_effect_work(work, store.slots.len(), RuntimePhase::Capture)?;
+                    for slot in &store.slots {
+                        if let Some(nested) = &slot.continuation {
+                            reserve_control(
+                                &mut pending,
+                                1,
+                                RuntimeResource::CaptureInspection,
+                                false,
+                            )?;
+                            pending.push(nested);
+                        }
+                    }
+                }
+                Frame::RegionAllocated { segment, .. } => {
+                    reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+                    pending.push(segment);
+                }
+                Frame::ClauseBoundary {
+                    continuation: Some(nested),
+                    ..
+                } => {
+                    reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+                    pending.push(nested);
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 // An explicit first handler is the segment's selected cut. A mismatched
