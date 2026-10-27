@@ -18,6 +18,9 @@ pub(super) fn refuse_disposal_growth() -> bool {
     machine_test_hooks::FAIL_DISPOSAL_GROWTH.replace(false)
 }
 #[cfg(test)]
+#[path = "machine_retained_tests.rs"]
+mod machine_retained_tests;
+#[cfg(test)]
 #[path = "machine_storage_tests.rs"]
 mod machine_storage_tests;
 
@@ -727,6 +730,10 @@ enum ResourcePayload {
         value: Value,
         instance: EffectInstance,
     },
+    // Kept behind the existing uniquely owned resource boundary. Source
+    // execution remains closed until the authenticated carriers are wired.
+    #[allow(dead_code, reason = "the C2 source carriers are not wired yet")]
+    Store(Box<RetainedStore>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -735,6 +742,130 @@ struct RegistrationKey(u32);
 #[derive(Debug)]
 struct CapturedContinuation {
     frames: Vec<Frame>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RetainedKey {
+    activation: ActivationKey,
+    slot: usize,
+    generation: u64,
+}
+
+#[derive(Debug)]
+struct RetainedSlot {
+    generation: u64,
+    continuation: Option<CapturedContinuation>,
+}
+
+/// A store owns each capture exactly once; keys only identify a generation.
+#[derive(Debug)]
+struct RetainedStore {
+    activation: ActivationKey,
+    slots: Vec<RetainedSlot>,
+}
+
+#[allow(dead_code, reason = "the C2 source carriers are not wired yet")]
+impl RetainedStore {
+    fn new(activation: ActivationKey) -> Self {
+        Self {
+            activation,
+            slots: Vec::new(),
+        }
+    }
+
+    fn retain(
+        &mut self,
+        owner: &mut Option<CapturedContinuation>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<RetainedKey, RuntimeFailure> {
+        disposal::check()?;
+        if owner.is_none() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        charge_effect_work(work, 1, RuntimePhase::Capture)?;
+        let mut available = None;
+        for (index, slot) in self.slots.iter().enumerate() {
+            charge_effect_work(work, 1, RuntimePhase::Capture)?;
+            if slot.continuation.is_none()
+                && let Some(generation) = slot.generation.checked_add(1)
+            {
+                available = Some((index, generation));
+                break;
+            }
+        }
+        let (index, generation) = if let Some(available) = available {
+            available
+        } else {
+            reserve_control(&mut self.slots, 1, RuntimeResource::RetainedSlots, false)?;
+            (self.slots.len(), 0)
+        };
+        let key = RetainedKey {
+            activation: self.activation,
+            slot: index,
+            generation,
+        };
+        // No fallible work follows taking the clause's owned capture.
+        let continuation = owner.take().ok_or(RuntimeFailure::InvalidControlState)?;
+        if index == self.slots.len() {
+            self.slots.push(RetainedSlot {
+                generation,
+                continuation: Some(continuation),
+            });
+        } else {
+            let slot = &mut self.slots[index];
+            slot.generation = generation;
+            slot.continuation = Some(continuation);
+        }
+        Ok(key)
+    }
+
+    fn restore(
+        &mut self,
+        key: RetainedKey,
+        frames: &mut Vec<Frame>,
+        adapter: Frame,
+        captured_cells: &mut usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, RuntimeFailure> {
+        disposal::check()?;
+        charge_effect_work(work, 1, RuntimePhase::Capture)?;
+        if key.activation != self.activation {
+            return Ok(false);
+        }
+        let Some(slot) = self.slots.get(key.slot) else {
+            return Ok(false);
+        };
+        let Some(captured) = slot
+            .continuation
+            .as_ref()
+            .filter(|_| slot.generation == key.generation)
+        else {
+            return Ok(false);
+        };
+        let captured_len = captured.frames.len();
+        let remaining = captured_cells
+            .checked_sub(captured_len)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let needed = captured_len.checked_add(1).ok_or_else(|| {
+            control_failure(
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimeResource::FrameStorage,
+                None,
+                None,
+            )
+        })?;
+        reserve_control(frames, needed, RuntimeResource::FrameStorage, false)?;
+        // The actual adapter was prepared for the current consumer before this
+        // call. Capacity and accounting are checked while the slot owns C.
+        let mut captured = self.slots[key.slot]
+            .continuation
+            .take()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        frames.push(adapter);
+        frames.append(&mut captured.frames);
+        *captured_cells = remaining;
+        Ok(true)
+    }
 }
 
 // An explicit first handler is the segment's selected cut. A mismatched
@@ -787,6 +918,19 @@ impl Drop for CapturedContinuation {
             {
                 for child in nested.frames.drain(..) {
                     pending.push(child);
+                }
+            }
+            if let Frame::ResourceBoundary {
+                payload: ResourcePayload::Store(store),
+                ..
+            } = &mut frame
+            {
+                for slot in &mut store.slots {
+                    if let Some(mut nested) = slot.continuation.take() {
+                        for child in nested.frames.drain(..) {
+                            pending.push(child);
+                        }
+                    }
                 }
             }
         }
@@ -1342,6 +1486,9 @@ impl<'runtime> Machine<'runtime> {
                 self.acquire_resource(node, environment, value)?;
             }
             Frame::ResourceBoundary { key, payload, .. } => {
+                if matches!(&payload, ResourcePayload::Store(_)) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
                 self.live_resources = self
                     .live_resources
                     .checked_sub(1)
@@ -1967,6 +2114,9 @@ impl<'runtime> Machine<'runtime> {
                 continue;
             }
             if let Frame::ResourceBoundary { node, key, payload } = frame {
+                if matches!(payload, ResourcePayload::Store(_)) {
+                    continue;
+                }
                 let resource = self
                     .resource(*node)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
@@ -1987,6 +2137,9 @@ impl<'runtime> Machine<'runtime> {
                                 &effect,
                                 &mut self.instantiation_work,
                             )?
+                    }
+                    ResourcePayload::Store(_) => {
+                        unreachable!("store boundaries are not cell providers")
                     }
                 };
                 if matches {
