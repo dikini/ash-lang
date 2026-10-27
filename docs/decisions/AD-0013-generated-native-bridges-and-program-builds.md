@@ -100,7 +100,7 @@ construction remains excluded from the Source/Final reports. Standalone,
 default and private-image primary limits retain their existing capacities.
 
 Public standalone Source checking has a separate current exception. The public
-`check_module` entry uses one cumulative 720,896 structural-work-unit allowance
+`check_module` entry uses one cumulative 15,663,104 structural-work-unit allowance
 per module, with the existing Structural diagnostic calibration override. It
 carries that same owner through body checking and export collection/freeze.
 Explicit `check_module_with_budget` callers, driver phase policies and all other
@@ -113,12 +113,25 @@ module owners used 366,561 and 534,701; entry owners used 71,000 and 201,323,
 while independent foreign/region owners used 442 and 3,575 each. Do not sum those
 independent owners to fit a module limit. The largest completed owner, 534,701,
 has an integer 25% reserve target of 668,377. Rounding to the next 65,536-work-unit
-step selects 720,896, giving 34.82% reserve over that completed cost. This is a
-work allowance, not a memory size. The diagnostic probes still reached the
+step selected the earlier 720,896 allowance, giving 34.82% reserve over that
+completed cost. This is a work allowance, not a memory size. The diagnostic probes still reached the
 original stale two-versus-four module census; normal verification corrects only
 that census to exact graph identities and retains the original programs and
 public default-checking route. Earlier unchanged-standalone Source statements
 describe the policies before this narrow exception, not a current global claim.
+
+The unchanged recursive resource fixtures then exposed the larger completed
+Source cost of capture/control publication. Four independent entry owners
+completed at 799,093, 828,475, 852,554 and 4,220,960 units; their intended
+`ResourceEscape` negative companions retained their source diagnostics. The
+original 24-scope/256 KiB fresh-process witness completed at 12,517,818 units
+under a finite Source-only diagnostic allowance. Its earlier 11,534,334-unit
+refusal is a truncated prefix, not a completed cost. All temporary probes were
+restored exactly. The largest complete owner has a ceiling 25% reserve target
+of 15,647,273; the next 65,536-work-unit step is 15,663,104, giving 25.1265%
+reserve. This replaces the earlier fixed 720,896 fit, without a new scaling
+rule, changed capture semantics or work sharing between independent owners.
+
 
 On 2026-10-26 the unchanged 8,000-member recursive-group/call-chain test exposed
 the fixed primary builder cap and repeated whole-arena variable searches during

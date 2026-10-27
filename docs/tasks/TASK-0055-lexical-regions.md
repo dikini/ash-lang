@@ -29,11 +29,12 @@ and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 origin
 tests. Functions passes all 19 original tests. Polymorphism and interface-module
 controls pass all 43 and 25 original tests. Module loading now passes all 24
 original tests; library imports now passes all 17, and Core validation has 60
-passes and seven remaining Source/Pure producer failures. The two normal
-standalone Source-budget restorations are disjoint from the prior 399, giving
-401 staged restorations. Repeated passes are counted once. Two constructor
+passes and seven remaining Source/Pure producer failures. The nine unchanged
+resource-typing/runtime restorations are disjoint from the published 401, giving
+410 staged integration restorations. Three focused unit
+repairs are counted separately. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
-A fresh Library10 inventory at the final policy inputs records 1,562 passes and
+The latest complete Library10 inventory at checkpoint20 policy inputs records 1,562 passes and
 35 unchanged failures over 1,597 names. Both added unit tests pass; no prior name
 is missing or newly failing, and all 8,565 tracked inputs stayed equal during
 the run. Integration69 (1,276/504) remains the latest complete integration
@@ -59,13 +60,38 @@ atomic prefixes of 323,970/327,680/request 4,125 and
 complete defining-module costs of 366,561 and 534,701, with independent entry
 costs of 71,000 and 201,323; all four modules completed before the unchanged
 stale census failed. Exact original meter/checker bytes were restored afterward.
-The reviewed public `check_module` Source-only normal default is now 720,896
+The earlier reviewed public `check_module` Source-only normal default was 720,896
 structural-work units (next 65,536-unit step above the 668,377 reserve target),
 with Structural calibration preserved. All explicit caller/driver budgets,
 other defaults and original programs/widths remain unchanged. Normal verification
 passes all 17 library-import cases and the existing cumulative-owner, policy,
 observer and reporting checks (30 distinct cases); it is separate from the
 temporary probes and restores the two original default-checking witnesses.
+
+Three focused library tests now pass after exact expectation repairs: canonical
+DefaultAlloc after Cell discharge, the complete five-group authorization graph,
+and the derived six structural cells plus one provenance handle for a resolved
+type copy. These are three unit restorations, separate from integration keys.
+An unchanged resource-typing run records 97 passes and five Source-work
+refusals over 102 original names, restoring three more Integration69 names
+(an intermediate 404 staged integration restorations). The five original
+residuals were measured without changing programs, depth 24 or the 256 KiB stack.
+Four complete entry owners used 799,093, 828,475, 852,554 and 4,220,960 units;
+the nested witness completed at 12,517,818. Temporary probes were restored
+exactly. The selected public Source-only default is now 15,663,104 work units,
+the next 65,536-unit step above the ceiling 25% reserve target of 15,647,273
+(25.1265% reserve). Structural calibration and all explicit/driver/other owner
+policies remain unchanged. Normal166 passes all 102 original resource-typing cases, all 17 library-import
+cases, the three repaired units and 13 existing owner/policy/calibration/reporting
+controls: 135 distinct names. All eight old resource failures now pass without
+program, stack or depth changes; no original resource name is missing or newly
+failing. The three unit repairs leave 32 names in the selected Library10 backlog,
+not a refreshed complete library count. Diagnostics remain separate from normal
+verification, and integration-only inventory/full-gate clearance remain pending.
+The connected unchanged resource-runtime target also passes all 32 original
+names, restoring its one old Source-work failure. These fresh target observations
+remain separate from the complete Integration69 baseline.
+
 
 Runtime trace controls retain all 13 original Source programs, exact user event
 vectors/counts/handler identities and whole raw transformed-trace equality. A

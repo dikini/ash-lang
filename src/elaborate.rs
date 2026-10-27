@@ -21138,7 +21138,7 @@ pub(crate) fn check_newtype_representation_cycles(
 // Public standalone Source checking owns one cumulative allowance per module.
 // Complete capture publication needs more work than the shared structural base;
 // explicit caller/driver budgets and independent builder/rewrite owners are separate.
-const DEFAULT_MODULE_SOURCE_TYPE_WORK_LIMIT: usize = 720_896;
+const DEFAULT_MODULE_SOURCE_TYPE_WORK_LIMIT: usize = 15_663_104;
 
 /// Checks every local definition and publishes an immutable dependency summary.
 ///
@@ -29586,6 +29586,12 @@ mod tests {
         ] {
             let module = cell_resource_fixture(source);
             let mut elaborator = cell_resource_elaborator(&module);
+            let api = elaborator
+                .active_region_api()
+                .expect("the region API lookup should fit")
+                .expect("the resource fixture should retain its canonical allocation API");
+            let expected_row =
+                EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
             let mut context = elaborator.base_context.clone();
             let typed = elaborator
                 .elaborate_expression_with_context(
@@ -29597,7 +29603,9 @@ mod tests {
                 )
                 .expect("resource typed structure");
             assert_eq!(typed.ty, Type::Int);
-            assert!(typed.effects.is_empty());
+            // Resource discharge removes its exact Cell.Ops instance; allocation
+            // retained by initializer/body calls remains in the closed outward row.
+            assert_eq!(typed.effects, expected_row);
             let _core = elaborator
                 .builder
                 .finish(typed.node)
@@ -32585,24 +32593,80 @@ mod tests {
         let (exact, exact_used) = link_public_authorization_fixture_with_limit(WIDTH, exact_limit);
         let program = exact.expect("the measured link budget should retain every public route");
         assert_eq!(exact_used, exact_limit);
-        assert_eq!(program.groups().len(), 3);
+        assert_eq!(program.groups().len(), 5);
 
         let group_for_route_length = |route_length| {
-            program
+            let groups = program
                 .groups()
                 .iter()
-                .find(|group| {
+                .filter(|group| {
                     let table = group.public_implementation_authorizations();
                     table.len() == WIDTH
                         && table.iter().all(|authorization| {
                             authorization.authorization().hops().len() == route_length
                         })
                 })
-                .expect("each dependency layer should retain one uniform lightweight table")
+                .collect::<Vec<_>>();
+            let [group] = groups.as_slice() else {
+                panic!(
+                    "each source dependency layer should retain exactly one uniform lightweight table"
+                );
+            };
+            *group
         };
         let base = group_for_route_length(0);
         let facade = group_for_route_length(1);
         let entry = group_for_route_length(2);
+        let foreign_groups = program
+            .groups()
+            .iter()
+            .filter(|group| group.module().is_builtin_foreign())
+            .collect::<Vec<_>>();
+        let region_groups = program
+            .groups()
+            .iter()
+            .filter(|group| group.module().is_builtin_region())
+            .collect::<Vec<_>>();
+        let [foreign] = foreign_groups.as_slice() else {
+            panic!("the complete graph should retain one canonical Foreign group");
+        };
+        let [region] = region_groups.as_slice() else {
+            panic!("the complete graph should retain one canonical Region group");
+        };
+        let expected_ids = HashSet::from([
+            foreign.module(),
+            region.module(),
+            base.module(),
+            facade.module(),
+            entry.module(),
+        ]);
+        assert_eq!(expected_ids.len(), 5);
+        assert_eq!(
+            program
+                .groups()
+                .iter()
+                .map(ResolvedModuleGroup::module)
+                .collect::<HashSet<_>>(),
+            expected_ids
+        );
+        assert_eq!(entry.module(), program.entry());
+        let dependency_ids = |group: &ResolvedModuleGroup| {
+            group
+                .direct_dependencies()
+                .iter()
+                .map(|edge| edge.target())
+                .collect::<Vec<_>>()
+        };
+        assert!(foreign.direct_dependencies().is_empty());
+        assert_eq!(dependency_ids(region), [foreign.module()]);
+        assert_eq!(dependency_ids(base), [region.module()]);
+        assert_eq!(dependency_ids(facade), [base.module(), region.module()]);
+        assert_eq!(dependency_ids(entry), [facade.module(), region.module()]);
+        for service in [*foreign, *region] {
+            assert!(service.public_implementation_authorizations().is_empty());
+            assert!(service.implementations().is_empty());
+            assert!(service.implementation_facts().is_empty());
+        }
         let implementation_ids = |group: &ResolvedModuleGroup| {
             group
                 .public_implementation_authorizations()
@@ -32611,6 +32675,11 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
+        assert!(
+            implementation_ids(base)
+                .iter()
+                .all(|identity| identity.module() == base.module())
+        );
         assert_eq!(implementation_ids(facade), implementation_ids(base));
         assert_eq!(implementation_ids(entry), implementation_ids(base));
         assert_eq!(base.implementations().len(), WIDTH);
@@ -33807,10 +33876,28 @@ mod tests {
             panic!("the fixture should resolve to an equational definition");
         };
         let annotation = &equational.interface.annotation;
+        let api = resolved
+            .imported_facts()
+            .effects()
+            .find_map(|effect| crate::resolved::RegionApi::for_module(effect.id.module()))
+            .expect("the annotation should retain its canonical defining allocation API");
+        let expected_row =
+            EffectRow::singleton(EffectInstance::new(api.default_alloc(), Box::new([])));
+        let Type::EffectfulFunction(domain, computation) = &annotation.ty else {
+            panic!("the source arrow should retain its complete computation annotation");
+        };
+        assert_eq!(domain.as_ref(), &Type::Int);
+        assert_eq!(computation.value(), &Type::Bool);
+        assert_eq!(computation.effects(), &expected_row);
+        // Function root + computation box + two scalar leaves + row + its
+        // zero-argument DefaultAlloc instance are six structural cells.
+        // The retained provenance adds one shared arena handle.
+        const TYPE_CELLS: usize = 1 + 1 + 2 + 1 + 1;
+        const EXACT_WORK: usize = TYPE_CELLS + 1;
 
         let mut short = TypeWorkBudget::default();
         short
-            .charge(crate::types::TYPE_WORK_LIMIT - 3)
+            .charge(crate::types::TYPE_WORK_LIMIT - (EXACT_WORK - 1))
             .expect("the fixture leaves one fewer unit than type plus the shared arena handle");
         assert_eq!(
             ProvenancedType::from_resolved_with_budget(annotation, &mut short),
@@ -33821,11 +33908,12 @@ mod tests {
 
         let mut exact = TypeWorkBudget::default();
         exact
-            .charge(crate::types::TYPE_WORK_LIMIT - 4)
-            .expect("the fixture leaves three type cells and one shared arena handle");
+            .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
+            .expect("the fixture leaves all six structural cells and one shared arena handle");
         let copied = ProvenancedType::from_resolved_with_budget(annotation, &mut exact)
             .expect("the exact retained copy should fit");
         assert_eq!(copied.ty, annotation.ty);
+        assert_eq!(exact.used(), crate::types::TYPE_WORK_LIMIT);
         assert_eq!(exact.charge(1), Err(()));
     }
 
