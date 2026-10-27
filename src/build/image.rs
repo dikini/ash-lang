@@ -825,6 +825,8 @@ fn encode_program<'work, F: crate::core::dialect::CoreOperationFamily>(
                     ModuleRoleRecord::BuiltinRegion
                 } else if module.is_builtin_generic_cell() {
                     ModuleRoleRecord::BuiltinGenericCell
+                } else if module.is_builtin_retained_control() {
+                    ModuleRoleRecord::BuiltinRetainedControl
                 } else if module.is_builtin_cell() {
                     ModuleRoleRecord::BuiltinCell
                 } else if module.is_builtin_string() {
@@ -2939,7 +2941,9 @@ impl PureImage {
                     }
                     crate::module::ImageModuleRole::BuiltinBytes
                 }
-                ModuleRoleRecord::BuiltinCell | ModuleRoleRecord::BuiltinGenericCell => {
+                ModuleRoleRecord::BuiltinCell
+                | ModuleRoleRecord::BuiltinGenericCell
+                | ModuleRoleRecord::BuiltinRetainedControl => {
                     return Err(ImageFailure::Unsupported(Unsupported::RegistryMetadata));
                 }
                 ModuleRoleRecord::BuiltinForeign => {
@@ -5934,6 +5938,7 @@ enum ModuleRoleRecord {
     BuiltinForeign,
     BuiltinCell,
     BuiltinGenericCell,
+    BuiltinRetainedControl,
     BuiltinString,
     BuiltinBytes,
 }
@@ -6178,6 +6183,7 @@ impl Wire for ModuleRoleRecord {
             Self::BuiltinGenericCell => 5,
             Self::BuiltinRegion => 6,
             Self::BuiltinRegionFacade => 7,
+            Self::BuiltinRetainedControl => 8,
         }
         .write(writer)
     }
@@ -6191,6 +6197,7 @@ impl Wire for ModuleRoleRecord {
             5 => Ok(Self::BuiltinGenericCell),
             6 => Ok(Self::BuiltinRegion),
             7 => Ok(Self::BuiltinRegionFacade),
+            8 => Ok(Self::BuiltinRetainedControl),
             _ => Err(ImageFailure::InvalidEncoding),
         }
     }
@@ -7820,6 +7827,9 @@ impl Encoder<'_> {
                 initializer: self.node(scope.initializer())?,
                 body: self.node(scope.body())?,
             }),
+            EffectExprKind::Operation(EffectOperation::Store(_)) => {
+                Err(ImageFailure::Unsupported(Unsupported::EffectOperation))
+            }
             EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => Ok(NodeTag::Cleanup {
                 callback: self.binder_id(scope.callback)?,
                 body: self.node(scope.body)?,
@@ -8565,6 +8575,7 @@ impl PureImage {
         let mut seen_common = false;
         let mut seen_cell = false;
         let mut seen_generic_cell = false;
+        let mut seen_retained_control = false;
         let mut seen_region = false;
         let mut seen_region_facade = false;
         let mut seen_string = false;
@@ -8606,6 +8617,12 @@ impl PureImage {
                         return Err(ImageFailure::InvalidRecord);
                     }
                     crate::module::ImageModuleRole::BuiltinGenericCell
+                }
+                ModuleRoleRecord::BuiltinRetainedControl => {
+                    if std::mem::replace(&mut seen_retained_control, true) {
+                        return Err(ImageFailure::InvalidRecord);
+                    }
+                    crate::module::ImageModuleRole::BuiltinRetainedControl
                 }
                 ModuleRoleRecord::BuiltinCell => {
                     if std::mem::replace(&mut seen_cell, true) {

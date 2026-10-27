@@ -92,6 +92,9 @@ impl TransformFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             binders.push(resource.handle.id());
         }
+        if let EffectExprKind::Operation(EffectOperation::Store(store)) = kind {
+            binders.push(store.handle.id());
+        }
         if let EffectExprKind::Operation(EffectOperation::Region(scope)) = kind {
             binders.push(scope.access.id());
         }
@@ -278,6 +281,27 @@ impl TransformFamily for EffectOperationFamily {
                         initializer: remap(remapped, resource.initializer)?,
                         body: remap(remapped, resource.body)?,
                     }),
+                    ty.into_inner(),
+                    effects,
+                    origin,
+                )
+            }
+            EffectOperation::Store(store) => {
+                let handle_type = IterativeTypeOwner::new(copy_type(builder, store.handle.ty())?);
+                let handle_id = copy_binder_id(builder, store.handle.id())?;
+                let handle_origin = copy_origin(builder, store.handle.origin())?;
+                let handle =
+                    builder.resolved_binder(handle_id, handle_type.into_inner(), handle_origin)?;
+                let mut acquisition = store.acquisition;
+                acquisition.identity = copy_variable_id(builder, acquisition.identity)?;
+                acquisition.handle = copy_binder_id(builder, acquisition.handle)?;
+                builder.store_scope(
+                    Box::new(super::effect::StoreScopeNode::new(
+                        acquisition,
+                        handle,
+                        remap(remapped, store.initializer)?,
+                        remap(remapped, store.body)?,
+                    )),
                     ty.into_inner(),
                     effects,
                     origin,

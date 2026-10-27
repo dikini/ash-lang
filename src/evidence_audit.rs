@@ -135,6 +135,11 @@ where
                 [resource.initializer.as_ref(), resource.body.as_ref()],
                 budget,
             )?,
+            ResolvedExprKind::Store(store) => reserve_and_extend(
+                &mut pending,
+                [store.initializer.as_ref(), store.body.as_ref()],
+                budget,
+            )?,
             ResolvedExprKind::Cleanup(cleanup) => reserve_and_extend(
                 &mut pending,
                 [cleanup.body.as_ref(), cleanup.action.as_ref()],

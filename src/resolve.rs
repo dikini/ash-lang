@@ -1688,6 +1688,7 @@ fn resolve_module_names_with_budget(
         if !owner.is_builtin_foreign()
             && !owner.is_builtin_region()
             && !owner.is_builtin_region_facade()
+            && !owner.is_builtin_retained_control()
         {
             return Ok(());
         }
@@ -1700,7 +1701,9 @@ fn resolve_module_names_with_budget(
                     "builtin source authentication exceeded its type-work budget",
                 )
             })?;
-        let canonical = if owner.is_builtin_region_facade() {
+        let canonical = if owner.is_builtin_retained_control() {
+            crate::module::retained_control_builtin_source_text()
+        } else if owner.is_builtin_region_facade() {
             crate::module::region_facade_builtin_source_text()
         } else if owner.is_builtin_region() {
             crate::module::region_builtin_source_text()
@@ -11009,6 +11012,135 @@ impl Resolver {
         Ok(())
     }
 
+    fn start_builtin_store<'a>(
+        &mut self,
+        source: &'a crate::surface::SurfaceProviderResourceExpr,
+        builtin: ModuleId,
+        span: Span,
+        tasks: &mut ResolveTaskBuffer<'a>,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        if source.arguments.len() != 2 {
+            return Err(error(
+                ResolveReason::TypeKind,
+                span,
+                "store requires an identity and a function descriptor",
+            ));
+        }
+        let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity_source)) =
+            &source.arguments[0].kind
+        else {
+            return Err(error(
+                ResolveReason::TypeKind,
+                source.arguments[0].span,
+                "store owner must be a fresh unqualified Type identity",
+            ));
+        };
+        let initializer = expressions.pop_owned().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "store initializer is missing",
+            )
+        })?;
+        let identity = self.allocate_type_variable(identity_source, None, Kind::Type)?;
+        let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+        self.type_work.charge(6).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store scope exceeded its budget",
+            )
+        })?;
+        self.lexical_method_parameters
+            .0
+            .try_reserve(1)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "store identity could not be reserved",
+                )
+            })?;
+        let retained = self.clone_type_variable_for_retention(
+            &identity,
+            span,
+            "store identity retention exceeded its budget",
+        )?;
+        self.lexical_method_parameters.push(retained);
+        let scope_checkpoint = self.scopes.len();
+        let type_scope_checkpoint = self.type_scopes.len();
+        let mut terms = HashMap::new();
+        terms.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store handle scope could not be reserved",
+            )
+        })?;
+        terms.insert(
+            handle.spelling.clone(),
+            ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+        );
+        let mut types = HashMap::new();
+        types.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store type scope could not be reserved",
+            )
+        })?;
+        types.insert(identity.spelling.clone(), identity.id);
+        self.scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store scope could not be reserved",
+            )
+        })?;
+        self.type_scopes.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store type scope could not be reserved",
+            )
+        })?;
+        self.scopes.push(terms);
+        self.type_scopes.push(types);
+        let descriptor = ResolvedStoreDescriptorOwner(Some(Box::new(
+            self.resolve_owner_argument(&source.arguments[1])?,
+        )));
+        if !matches!(
+            descriptor.0.as_ref().map(|arg| &arg.ty),
+            Some(crate::types::KindedArgument::TypeArg(_))
+        ) {
+            return Err(error(
+                ResolveReason::TypeKind,
+                source.arguments[1].span,
+                "store descriptor must have kind Type",
+            ));
+        }
+        tasks.0.try_reserve(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "store body could not be scheduled",
+            )
+        })?;
+        tasks.push(ResolveTask::FinishStore {
+            builtin,
+            descriptor,
+            identity,
+            handle,
+            initializer: Box::new(initializer),
+            scope_checkpoint,
+            type_scope_checkpoint,
+            span,
+        });
+        tasks.push(ResolveTask::VisitBlock(&source.body));
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn finish_resource_expression(
         &mut self,
@@ -11543,6 +11675,60 @@ impl Resolver {
                     tasks,
                     expressions,
                 )?;
+            }
+            ResolveTask::StoreInitializer {
+                source,
+                builtin,
+                span,
+            } => {
+                self.start_builtin_store(source, builtin, span, tasks, expressions)?;
+            }
+            ResolveTask::FinishStore {
+                builtin,
+                descriptor,
+                identity,
+                handle,
+                initializer,
+                scope_checkpoint,
+                type_scope_checkpoint,
+                span,
+            } => {
+                let body = expressions.pop_owned().ok_or_else(|| {
+                    error(ResolveReason::InternalState, span, "store body is missing")
+                })?;
+                self.scopes.truncate(scope_checkpoint);
+                self.type_scopes.truncate(type_scope_checkpoint);
+                self.type_work.charge(3).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "store owner retention exceeded its budget",
+                    )
+                })?;
+                let descriptor = descriptor.into_inner().ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "store descriptor is missing",
+                    )
+                })?;
+                let acquisition = crate::resolved::StoreAcquisition {
+                    builtin,
+                    identity: identity.id,
+                    handle: handle.id,
+                    span,
+                };
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Store(Box::new(crate::resolved::ResolvedStoreExpr {
+                        acquisition,
+                        identity,
+                        handle,
+                        descriptor,
+                        initializer: Box::new(initializer.into_inner()),
+                        body: Box::new(body.into_inner()),
+                    })),
+                    span,
+                });
             }
             ResolveTask::FinishResource {
                 builtin,
@@ -12368,6 +12554,31 @@ impl Resolver {
 
             SurfaceExprKind::ProviderResource(source) => {
                 let family = self.nominal_reference(&source.family)?;
+                if let Some(api) = crate::resolved::StoreApi::for_module(family.id.module())
+                    && family.id == api.store()
+                {
+                    self.type_work.charge(2).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "store scheduling exceeded its budget",
+                        )
+                    })?;
+                    tasks.0.try_reserve(2).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "store tasks could not reserve storage",
+                        )
+                    })?;
+                    tasks.push(ResolveTask::StoreInitializer {
+                        source,
+                        builtin: family.id.module(),
+                        span: expression.span,
+                    });
+                    tasks.push(ResolveTask::VisitExpr(&source.initializer));
+                    return Ok(());
+                }
                 if let Some(api) = crate::resolved::ResourceApi::for_module(family.id.module())
                     && api.generic()
                     && family.id == api.handle()
@@ -12812,6 +13023,20 @@ impl Drop for ResolvedCellPayloadOwner {
     }
 }
 
+struct ResolvedStoreDescriptorOwner(Option<Box<crate::resolved::ResolvedOwnerArgument>>);
+impl ResolvedStoreDescriptorOwner {
+    fn into_inner(mut self) -> Option<crate::resolved::ResolvedOwnerArgument> {
+        self.0.take().map(|descriptor| *descriptor)
+    }
+}
+impl Drop for ResolvedStoreDescriptorOwner {
+    fn drop(&mut self) {
+        if let Some(descriptor) = self.0.take() {
+            descriptor.discard_iteratively();
+        }
+    }
+}
+
 struct ResolvedBinderBuffer(Vec<Binder>);
 
 impl Deref for ResolvedBinderBuffer {
@@ -12909,6 +13134,11 @@ enum ResolveTask<'a> {
         builtin: ModuleId,
         span: Span,
     },
+    StoreInitializer {
+        source: &'a crate::surface::SurfaceProviderResourceExpr,
+        builtin: ModuleId,
+        span: Span,
+    },
     ResourceInitializer {
         source: &'a crate::surface::SurfaceResourceExpr,
         span: Span,
@@ -12916,6 +13146,16 @@ enum ResolveTask<'a> {
     FinishResource {
         builtin: ModuleId,
         payload: ResolvedCellPayloadOwner,
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        initializer: Box<ResolvedExpressionOwner>,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
+    FinishStore {
+        builtin: ModuleId,
+        descriptor: ResolvedStoreDescriptorOwner,
         identity: ResolvedTypeVariable,
         handle: Binder,
         initializer: Box<ResolvedExpressionOwner>,
@@ -13010,8 +13250,10 @@ impl ResolveTask<'_> {
             | Self::FinishHook { span, .. }
             | Self::FinishRegistration { span, .. }
             | Self::GenericResourceInitializer { span, .. }
+            | Self::StoreInitializer { span, .. }
             | Self::ResourceInitializer { span, .. }
             | Self::FinishResource { span, .. }
+            | Self::FinishStore { span, .. }
             | Self::FinishBinary { span, .. }
             | Self::FinishBlock { span, .. }
             | Self::FinishFunction { span, .. }

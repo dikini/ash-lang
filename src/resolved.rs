@@ -67,6 +67,24 @@ impl RegionApi {
     }
 }
 
+/// Fixed source identities belonging to the compiler-owned store module.
+#[derive(Clone, Copy)]
+pub(crate) struct StoreApi {
+    module: ModuleId,
+}
+
+impl StoreApi {
+    pub(crate) fn for_module(module: ModuleId) -> Option<Self> {
+        module
+            .is_builtin_retained_control()
+            .then_some(Self { module })
+    }
+
+    pub(crate) fn store(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 0)
+    }
+}
+
 /// The fixed relation admitted by the loader's private resource origins.
 /// This descriptor contains identities only; ordinary registries own its facts.
 #[derive(Clone, Copy)]
@@ -22874,6 +22892,13 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                 pending.push(&resource.initializer);
                 pending.push(&resource.body);
             }
+            ResolvedExprKind::Store(store) => {
+                budget.charge(1)?;
+                bound.try_reserve(1).map_err(|_| ())?;
+                bound.insert(store.handle.id);
+                pending.push(&store.initializer);
+                pending.push(&store.body);
+            }
             ResolvedExprKind::Perform(request) => pending.push(&request.operand),
             ResolvedExprKind::Cleanup(cleanup) => {
                 pending.push(&cleanup.body);
@@ -22993,6 +23018,8 @@ pub enum ResolvedExprKind {
     Discard(ResolvedDiscardExpr),
     /// A scoped resource acquisition with a rigid, nongeneralized identity.
     Resource(Box<ResolvedResourceExpr>),
+    /// A local retained-control store with a fresh scoped identity.
+    Store(Box<ResolvedStoreExpr>),
     /// A prospective region identity, prepared before its access binder is live.
     Region(Box<ResolvedRegionExpr>),
     /// Explicit fresh-allocation selection with a restoration boundary.
@@ -23214,6 +23241,46 @@ pub struct ResolvedResourceExpr {
     /// The initializer in the preceding term and type scope.
     pub initializer: Box<ResolvedExpr>,
     /// The body, including compiler-owned exact provider methods.
+    pub body: Box<ResolvedExpr>,
+}
+
+/// Authenticated source coordinates for one store owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StoreAcquisition {
+    pub(crate) builtin: ModuleId,
+    pub(crate) identity: TypeVariableId,
+    pub(crate) handle: BinderId,
+    pub(crate) span: Span,
+}
+
+impl StoreAcquisition {
+    pub(crate) fn owns(self, store: &ResolvedStoreExpr) -> bool {
+        self.builtin.is_builtin_retained_control()
+            && self == store.acquisition
+            && self.identity == store.identity.id
+            && self.handle == store.handle.id
+            && store.identity.kind == Kind::Type
+            && self.identity.module().is_some()
+            && self.identity.module() == self.handle.module()
+            && self.span.cover(store.identity.origin.primary_span()) == Some(self.span)
+            && self.span.cover(store.handle.origin.primary_span()) == Some(self.span)
+    }
+}
+
+/// A store's descriptor and body are checked under its fresh identity; the
+/// initializer remains in the preceding scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedStoreExpr {
+    pub(crate) acquisition: StoreAcquisition,
+    /// The rigid kind-Type identity owned by the store.
+    pub identity: ResolvedTypeVariable,
+    /// The body-local non-owning store handle.
+    pub handle: Binder,
+    /// Its fixed function descriptor, checked inside the identity scope.
+    pub descriptor: ResolvedOwnerArgument,
+    /// The initializer in the preceding term and type scope.
+    pub initializer: Box<ResolvedExpr>,
+    /// The store-scoped computation.
     pub body: Box<ResolvedExpr>,
 }
 
@@ -23709,6 +23776,13 @@ fn discard_resolved_body_work(
                 discard_binder(resource.handle);
                 expressions.push(*resource.initializer);
                 expressions.push(*resource.body);
+            }
+            ResolvedExprKind::Store(store) => {
+                discard_resolved_type_variable(store.identity);
+                discard_binder(store.handle);
+                store.descriptor.discard_iteratively();
+                expressions.push(*store.initializer);
+                expressions.push(*store.body);
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 expressions.push(*cleanup.body);

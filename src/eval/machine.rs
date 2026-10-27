@@ -3027,6 +3027,7 @@ fn dispatch_entry(
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
+                    EffectOperation::Store(_) => return Err(RuntimeFailure::InvalidControlState),
                     EffectOperation::Cleanup(_) => return Err(RuntimeFailure::InvalidControlState),
                     EffectOperation::Resource(resource) => Transition::suspend(
                         Control::Evaluate(resource.initializer(), environment.clone()),

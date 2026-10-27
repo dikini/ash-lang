@@ -9,8 +9,8 @@ Remove it when the task closes.
    Model finite owner locations, structural completions and explicit transitions;
    check refusal and negative examples as well as successful traces. Record the
    correspondence and limits. The accepted contract and model passed source
-   review and the frozen AD-0012 gate; verify their retained result before C2.
-2. **C2 store.** After authorization, reuse the existing captured-continuation,
+   review, the frozen AD-0012 gate and retained-result verification.
+2. **C2 store.** Reuse the existing captured-continuation,
    frame, cleanup and iterative-disposal machinery. Add only the authenticated
    fixed-port store operations and their checked ownership moves. Exercise
    preparation failure, generation reuse, current-consumer returns, nested

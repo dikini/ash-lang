@@ -114,19 +114,27 @@ lifetime or escape its existing identity and dependency checks. Generation
 reuse must not make a stale key name new control; representational exhaustion
 fails instead of wrapping into an old live identity.
 
-The authenticated continue operation requires executor authority, a key for
-`N`, unit input and an admitted current consumer satisfying `I`. On a live
-generation, it prepares the move, spends the slot and restores the captured
-segment above a `Some` answer adapter and that current consumer. The restored
-computation includes its selected handler and nested clause and cleanup state.
-Its return, including an answer from a later checkpoint, flows to the current
-consumer. It does not return to the clause that transferred the earlier
-capture. An absent or spent generation returns `None` without executing control;
-copying a key cannot restore a generation twice. The continue row includes
-the store operation and `rho`. If it is presented through an ordinary effect
-request, a source handler retains its existing precedence: only the admitted
-store interpreter performs the store move. An intercepted result alone grants
-no ownership or completion fact.
+The authenticated continue carrier requires executor authority, the actual
+typed store operand, a key for `N`, unit input and an admitted current consumer
+satisfying `I`. It is structural control, not an ordinary overridable request.
+Its store operand fixes an authenticated `Unit -> A ! rho` descriptor; source
+and linked Core checks independently recover the complete ports and row from
+that operand. A compiler-owned drive requirement identifies `N` alone and may
+be named in rows. It is not an ordinary source request or handler: source and
+linked Core reject attempts to perform or handle it directly. The owning store
+scope supplies that requirement. This avoids allowing a source handler to
+discharge a requirement for a structural move it cannot intercept.
+
+On a live generation, continue prepares the move, spends the slot and restores
+the captured segment above a `Some` answer adapter and that current consumer.
+The restored computation includes its selected handler and nested clause and
+cleanup state. Its return, including an answer from a later checkpoint, flows
+to the current consumer. It does not return to the clause that transferred the
+earlier capture. An absent or spent generation returns `None` without executing
+control; copying a key cannot restore a generation twice. Continue evaluates
+the store operand before the key. Its row includes both operand effects, the
+drive requirement and `rho`, combined under the existing partial row and lacks
+rules. Those rules do not gain a new union or projection algebra.
 
 A checkpoint in a nested clause before its `resume` retains that clause's live
 owner; one after `resume` retains its consumed state and the remaining suffix.
@@ -199,10 +207,13 @@ that yields again transfers its obligation to the new capture instead. These
 are ownership and analysis facts, not necessarily runtime token objects.
 Constructing `Finished` or `Suspended` data, or losing a ready-queue key, does
 not register or retire an obligation. `W(N)` excludes the store owner and the
-drain's own running cleanup. The authenticated store probe
-returns `Quiescent` exactly when `W(N)` is empty; an empty ready queue is not
-enough. Normal release requires emptiness on every reachable normal predecessor
-of release, after actual handler and cleanup suffixes. Existing cleanup may
+drain's own running cleanup. The store probe is a separate ordinary effect
+request, so the nearest matching source handler retains its usual precedence.
+Only the selected authenticated store interpreter returns `Quiescent` exactly
+when `W(N)` is empty; an intercepted result grants no work or completion fact.
+An empty ready queue is not enough. Normal release requires emptiness on every
+reachable normal predecessor of release, after actual handler and cleanup
+suffixes. Existing cleanup may
 invoke a library drain, but its `Unit -> Unit` type alone proves nothing about
 that postcondition. An outer discard that owns `N` must establish the same empty
 state at the actual structural close predecessor, after its armed drain action

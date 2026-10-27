@@ -82,6 +82,8 @@ pub enum TypeReason {
     FunctionNeedsContext,
     /// An application function position did not have a function type.
     NotApplicable,
+    /// A retained-control store needs a Unit-domain function descriptor.
+    StoreDescriptor,
     /// An application argument did not match the function domain.
     Argument,
     /// An annotated binding initializer did not match its annotation.
@@ -557,6 +559,7 @@ impl fmt::Display for TypeReason {
             Self::OperatorOperand => formatter.write_str("type.operator-operand"),
             Self::FunctionNeedsContext => formatter.write_str("type.function-needs-context"),
             Self::NotApplicable => formatter.write_str("type.not-applicable"),
+            Self::StoreDescriptor => formatter.write_str("type.store-descriptor"),
             Self::Argument => formatter.write_str("type.argument"),
             Self::BindingInitializer => formatter.write_str("type.binding-initializer"),
             Self::DefinitionResult => formatter.write_str("type.definition-result"),
@@ -2843,6 +2846,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
     active_acquisitions: Vec<crate::resolved::ResourceAcquisition>,
+    active_stores: Vec<crate::resolved::StoreAcquisition>,
     // A generic computation requires complete dependency inference before summary publication.
     generic_dependency_origin: Option<Span>,
 
@@ -3040,6 +3044,7 @@ impl CoreLoweringFamily for EffectOperationFamily {
             EffectOperation::Resource(resource) => {
                 builder.resource_scope(resource, ty, effects, origin)
             }
+            EffectOperation::Store(store) => builder.store_scope(store, ty, effects, origin),
             EffectOperation::Request(request) => {
                 let (effect, operation, operand) = request.into_parts();
                 builder.request(effect, operation, operand, ty, effects, origin)
@@ -3306,6 +3311,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            active_stores: Vec::new(),
             generic_dependency_origin: None,
 
             monomorphic_recursive: HashSet::new(),
@@ -3448,6 +3454,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            active_stores: Vec::new(),
             generic_dependency_origin: None,
 
             monomorphic_recursive: HashSet::new(),
@@ -3581,6 +3588,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            active_stores: Vec::new(),
             generic_dependency_origin: None,
 
             monomorphic_recursive: HashSet::new(),
@@ -4020,6 +4028,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
             active_acquisitions: Vec::new(),
+            active_stores: Vec::new(),
             generic_dependency_origin: None,
 
             monomorphic_recursive: HashSet::new(),
@@ -13238,6 +13247,171 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn schedule_store<'a>(
+        &mut self,
+        store: &'a crate::resolved::ResolvedStoreExpr,
+        span: Span,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(2).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::StoreBody { store, span });
+        tasks.push(ElaborationTask::Check {
+            expression: &store.initializer,
+            expected: ProvenancedType {
+                ty: Type::Unit,
+                provenance: TypeProvenance::atom(Some(store.initializer.span)),
+            },
+            kind: CheckKind::General,
+        });
+        Ok(())
+    }
+
+    fn step_store_body<'a>(
+        &mut self,
+        store: &'a crate::resolved::ResolvedStoreExpr,
+        span: Span,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        if !F::EFFECTS || !store.acquisition.owns(store) {
+            return Err(invalid_state());
+        }
+        let initializer = values.pop().ok_or_else(invalid_state)?;
+        let crate::types::KindedArgument::TypeArg(descriptor) = &store.descriptor.ty else {
+            return Err(invalid_state());
+        };
+        let descriptor = IterativeTypeOwner::new(self.zonk(descriptor)?);
+        if !descriptor
+            .function_view()
+            .is_some_and(|view| matches!(view.domain(), Type::Unit))
+        {
+            return Err(inference_failure(
+                TypeReason::StoreDescriptor,
+                store.descriptor.span,
+                "a store descriptor must be a function from Unit",
+            ));
+        }
+        let api = crate::resolved::StoreApi::for_module(store.acquisition.builtin)
+            .ok_or_else(invalid_state)?;
+        self.type_work.charge(7).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        context
+            .binders
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        self.active_stores
+            .try_reserve(1)
+            .map_err(|_| type_resource())?;
+        let handle_type = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Application(
+                Box::new(Type::Nominal(api.store())),
+                Box::new(Type::Variable(store.identity.id)),
+            )),
+            Box::new(descriptor.into_inner()),
+        ));
+        let provenance =
+            self.at_span_provenance(&handle_type, store.handle.origin.primary_span())?;
+        let fact = self.clone_type(&handle_type)?;
+        if context.insert_with_provenance(store.handle.id, fact, provenance)? {
+            return Err(invalid_state());
+        }
+        self.active_stores.push(store.acquisition);
+        let handle = self.builder.resolved_binder(
+            store.handle.id,
+            handle_type.into_inner(),
+            store.handle.origin.clone(),
+        )?;
+        tasks.push(ElaborationTask::FinishStore(Box::new(StoreProgress {
+            store,
+            span,
+            initializer,
+            handle,
+        })));
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &store.body,
+            cause: None,
+        });
+        Ok(())
+    }
+
+    fn step_store_completion(
+        &mut self,
+        progress: Box<StoreProgress<'_>>,
+        context: &mut TypeContext,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let StoreProgress {
+            store,
+            span,
+            initializer,
+            handle,
+        } = *progress;
+        let body = values.pop().ok_or_else(invalid_state)?;
+        if self.active_stores.pop() != Some(store.acquisition) {
+            return Err(invalid_state());
+        }
+        context.remove_and_discard(store.handle.id);
+        let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+        let body_effects = self.zonk_effect_row(&body.effects)?;
+        let effects = self.union_effects(&initializer.effects, &body_effects, span)?;
+        let row_type = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Unit, self.core_effect_row(&effects)?),
+        ));
+        for outward in [&*ty, &*row_type] {
+            self.defer_resource_escape(store.identity.id, outward, store.body.span, span)?;
+            if type_contains_variable(outward, store.identity.id, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    store.body.span,
+                    span,
+                    "this outward computation contains the store identity",
+                ));
+            }
+        }
+        self.type_work
+            .charge(context.binders.capacity())
+            .map_err(|()| type_resource())?;
+        for fact in context.binders.values() {
+            let fact_type = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+            let fact_span = fact.provenance.span().unwrap_or(store.body.span);
+            self.defer_resource_escape(store.identity.id, &fact_type, fact_span, span)?;
+            if type_contains_variable(&fact_type, store.identity.id, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    fact_span,
+                    span,
+                    "an enclosing binding contains the store identity",
+                ));
+            }
+        }
+        let core_type = self.clone_type(&ty)?;
+        let core_effects = self.core_effect_row(&effects)?;
+        let provenance = body.provenance.clone();
+        let node = self.push_effect_core(
+            core_type,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Store(Box::new(crate::core::effect::StoreScopeNode::new(
+                store.acquisition,
+                handle,
+                initializer.node,
+                body.node,
+            ))),
+        )?;
+        values.push(TypedNode {
+            node,
+            ty: ty.into_inner(),
+            effects,
+            provenance,
+        });
+        Ok(())
+    }
+
     fn schedule_resource<'a>(
         &mut self,
         resource: &'a crate::resolved::ResolvedResourceExpr,
@@ -13709,9 +13883,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
         let checkpoint = self.active_acquisitions.len();
+        let store_checkpoint = self.active_stores.len();
         let result = self.elaborate_expression_work(initial, context);
         while self.active_acquisitions.len() > checkpoint {
             if let Some(acquisition) = self.active_acquisitions.pop() {
+                context.remove_and_discard(acquisition.handle);
+            }
+        }
+        while self.active_stores.len() > store_checkpoint {
+            if let Some(acquisition) = self.active_stores.pop() {
                 context.remove_and_discard(acquisition.handle);
             }
         }
@@ -14589,6 +14769,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ResolvedExprKind::Resource(resource) => {
                 self.schedule_resource(resource, current.span, tasks)?;
             }
+            ResolvedExprKind::Store(store) => {
+                self.schedule_store(store, current.span, tasks)?;
+            }
             ResolvedExprKind::Region(region) => {
                 self.schedule_region(region, current.span, tasks)?
             }
@@ -14732,6 +14915,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ElaborationTask::ResourceBody { resource, span } => {
                 self.step_resource_body(resource, span, context, tasks, values)?;
             }
+            ElaborationTask::StoreBody { store, span } => {
+                self.step_store_body(store, span, context, tasks, values)?;
+            }
             ElaborationTask::RegionBody { source, span } => {
                 self.region_body(source, span, context, tasks, values)?
             }
@@ -14746,6 +14932,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             ElaborationTask::FinishResource(progress) => {
                 self.step_resource_completion(progress, context, values)?;
+            }
+            ElaborationTask::FinishStore(progress) => {
+                self.step_store_completion(progress, context, values)?;
             }
 
             ElaborationTask::Equation(_) => return Err(invalid_state()),
@@ -21878,6 +22067,11 @@ enum ElaborationTask<'a> {
         span: Span,
     },
     FinishResource(Box<ResourceProgress<'a>>),
+    StoreBody {
+        store: &'a crate::resolved::ResolvedStoreExpr,
+        span: Span,
+    },
+    FinishStore(Box<StoreProgress<'a>>),
 
     Equation(EquationTask<'a>),
     RetainLocalNewtype(NominalTypeId),
@@ -22271,6 +22465,13 @@ enum ElaboratedDeclaration {
 
 struct ResourceProgress<'a> {
     resource: &'a crate::resolved::ResolvedResourceExpr,
+    span: Span,
+    initializer: TypedNodeOwner,
+    handle: TypedBinder,
+}
+
+struct StoreProgress<'a> {
+    store: &'a crate::resolved::ResolvedStoreExpr,
     span: Span,
     initializer: TypedNodeOwner,
     handle: TypedBinder,
@@ -23223,10 +23424,12 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
         | ElaborationTask::SelectionBody { .. }
         | ElaborationTask::FinishSelection(_)
         | ElaborationTask::ResourceBody { .. }
+        | ElaborationTask::StoreBody { .. }
         | ElaborationTask::FinishCleanup { .. }
         | ElaborationTask::BeginCleanupBinding { .. }
         | ElaborationTask::FinishHookBody { .. }
         | ElaborationTask::FinishResource(_)
+        | ElaborationTask::FinishStore(_)
         | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
@@ -24466,6 +24669,10 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Resource(resource) => {
                 work.push(&resource.body);
                 work.push(&resource.initializer);
+            }
+            ResolvedExprKind::Store(store) => {
+                work.push(&store.body);
+                work.push(&store.initializer);
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 work.push(&cleanup.body);
@@ -26952,6 +27159,10 @@ fn resume_usage_with_budget(
                     push(&mut tasks, Task::Visit(&resource.body), budget)?;
                     push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
                 }
+                ResolvedExprKind::Store(store) => {
+                    push(&mut tasks, Task::Visit(&store.body), budget)?;
+                    push(&mut tasks, Task::Visit(&store.initializer), budget)?;
+                }
                 ResolvedExprKind::Cleanup(cleanup) => {
                     push(&mut tasks, Task::Visit(&cleanup.action), budget)?;
                     push(&mut tasks, Task::Visit(&cleanup.body), budget)?;
@@ -27167,6 +27378,10 @@ fn contains_resume_owner_with_budget(
             ResolvedExprKind::Resource(resource) => {
                 schedule(&mut pending, &resource.body, budget)?;
                 schedule(&mut pending, &resource.initializer, budget)?;
+            }
+            ResolvedExprKind::Store(store) => {
+                schedule(&mut pending, &store.body, budget)?;
+                schedule(&mut pending, &store.initializer, budget)?;
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 schedule(&mut pending, &cleanup.body, budget)?;
@@ -27457,6 +27672,7 @@ fn effect_expression_work_contains_syntax(
             | ResolvedExprKind::Region(_)
             | ResolvedExprKind::RegionSelection(_)
             | ResolvedExprKind::Resource(_)
+            | ResolvedExprKind::Store(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
             | ResolvedExprKind::Resume(_)
@@ -27724,6 +27940,11 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                 binders.push(resource.handle.id);
                 expressions.push(&resource.body);
                 expressions.push(&resource.initializer);
+            }
+            ResolvedExprKind::Store(store) => {
+                binders.push(store.handle.id);
+                expressions.push(&store.body);
+                expressions.push(&store.initializer);
             }
             ResolvedExprKind::Cleanup(cleanup) => {
                 expressions.push(&cleanup.body);

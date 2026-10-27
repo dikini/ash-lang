@@ -363,6 +363,8 @@ pub enum ValidationReason {
     DiscardUnsafe,
     /// A stored value crosses the boundary of its resource owner.
     ResourceEscape,
+    /// The store's release has no established drain proof.
+    RetainedRelease,
 }
 
 impl fmt::Display for ValidationReason {
@@ -391,6 +393,7 @@ impl fmt::Display for ValidationReason {
             Self::Resume => "core.validation.resume",
             Self::DiscardUnsafe => "core.validation.discard-unsafe",
             Self::ResourceEscape => "core.validation.resource-escape",
+            Self::RetainedRelease => "core.validation.retained-release",
         })
     }
 }
@@ -3371,6 +3374,9 @@ struct ScopeRequirement {
 type ScopeRequirements = HashMap<ScopeRequirementKey, ScopeRequirement>;
 
 pub(super) trait ScopeFamily: CoreOperationFamily {
+    fn has_unproved_store(_kind: &Self::Kind) -> bool {
+        false
+    }
     fn region_scope(_kind: &Self::Kind) -> Option<&super::region::RegionScopeNode> {
         None
     }
@@ -3402,6 +3408,13 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
 impl ScopeFamily for PureOperationFamily {}
 
 impl ScopeFamily for super::effect::EffectOperationFamily {
+    fn has_unproved_store(kind: &Self::Kind) -> bool {
+        matches!(
+            kind,
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Store(_))
+        )
+    }
+
     fn region_scope(kind: &Self::Kind) -> Option<&super::region::RegionScopeNode> {
         match kind {
             super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Region(
@@ -9746,6 +9759,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<(), ValidationError> {
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
+            // Until drain analysis is connected, no store has a release proof.
+            // Reuse the envelope pass so store-free programs need no extra scan.
+            if F::has_unproved_store(&node.kind) {
+                return Err(ValidationError::new(
+                    ValidationReason::RetainedRelease,
+                    Some(id),
+                ));
+            }
             if !F::ALLOWS_EFFECTFUL_TYPES
                 && !authenticated_method_evidence.contains(&id)
                 && !self.valid_type(Some(&node.ty))?
@@ -14439,6 +14460,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 self.validate_resource_node(id, node, resource)?;
             }
+            EffectExprKind::Operation(EffectOperation::Store(_)) => {
+                return Err(ValidationError::new(
+                    ValidationReason::RetainedRelease,
+                    Some(id),
+                ));
+            }
 
             EffectExprKind::Operation(EffectOperation::NativeInterpret(boundary)) => {
                 self.validate_native_interpret(id, node, boundary, type_binders, native_registry)?;
@@ -15284,6 +15311,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 id,
                             )?
                         }
+                        EffectExprKind::Operation(EffectOperation::Store(store)) => self
+                            .union_effect_rows_charged(
+                                child_row(store.initializer)?,
+                                child_row(store.body)?,
+                                id,
+                            )?,
                         EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => self
                             .union_effect_rows_charged(
                                 child_row(scope.body)?,

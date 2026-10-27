@@ -2517,6 +2517,13 @@ fn compile_other_capture_control<F: CoreOperationFamily>(
                 budget,
             )?)
         }
+        // Public store release remains rejected by linked Core validation. This
+        // staging path preserves child evaluation order; retained-control
+        // ownership is added here before that release restriction is lifted.
+        Some(EffectOperation::Store(store)) => Control::Sequence(copy_slice(
+            &[index(store.initializer) + 1, index(store.body) + 1],
+            budget,
+        )?),
         Some(EffectOperation::Request(request)) => {
             graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
             let perform = graph.code.len();

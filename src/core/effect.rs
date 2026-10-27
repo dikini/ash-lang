@@ -423,12 +423,39 @@ impl ResourceScopeNode {
     }
 }
 
+/// The fresh store identity owns the body-local handle and fixed descriptor.
+/// Its initializer is evaluated before either identity or handle is in scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoreScopeNode {
+    pub(crate) acquisition: crate::resolved::StoreAcquisition,
+    pub(super) handle: super::TypedBinder,
+    pub(super) initializer: NodeId,
+    pub(super) body: NodeId,
+}
+
+impl StoreScopeNode {
+    pub(crate) fn new(
+        acquisition: crate::resolved::StoreAcquisition,
+        handle: super::TypedBinder,
+        initializer: NodeId,
+        body: NodeId,
+    ) -> Self {
+        Self {
+            acquisition,
+            handle,
+            initializer,
+            body,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectOperation {
     NativeInterpret(NativeInterpretNode),
     Cleanup(CleanupScopeNode),
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
+    Store(Box<StoreScopeNode>),
     Region(Box<super::region::RegionScopeNode>),
     RegionAllocate(super::region::RegionAllocateNode),
     RegionValueRequest(super::region::RegionValueRequestNode),
@@ -522,6 +549,9 @@ impl CoreOperationFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             visit(&resource.handle);
         }
+        if let EffectExprKind::Operation(EffectOperation::Store(store)) = kind {
+            visit(&store.handle);
+        }
         if let EffectExprKind::Operation(EffectOperation::Region(region)) = kind {
             visit(&region.access);
         }
@@ -561,6 +591,12 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectOperation::Resource(resource) => {
                 visit(super::dialect::OperationTypeMetadata::Type(
                     resource.handle.ty(),
+                ));
+                None
+            }
+            EffectOperation::Store(store) => {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    store.handle.ty(),
                 ));
                 None
             }
@@ -636,6 +672,11 @@ impl CoreOperationFamily for EffectOperationFamily {
                 resource.handle.rewrite_type(&mut |ty| rewrite(ty))?;
                 return Ok(());
             }
+            EffectExprKind::Operation(EffectOperation::Store(store)) => {
+                charge(1)?;
+                store.handle.rewrite_type(&mut |ty| rewrite(ty))?;
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Region(region)) => {
                 charge(1)?;
                 region.access.rewrite_type(&mut |ty| rewrite(ty))?;
@@ -686,6 +727,7 @@ impl CoreOperationFamily for EffectOperationFamily {
 
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::Store(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Region(_)) => 3,
             EffectExprKind::Operation(EffectOperation::RegionAllocate(_)) => 2,
             EffectExprKind::Operation(EffectOperation::RegionValueRequest(_)) => 0,
@@ -730,6 +772,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => match index {
                 0 => Some(resource.initializer),
                 1 => Some(resource.body),
+                _ => None,
+            },
+            EffectExprKind::Operation(EffectOperation::Store(store)) => match index {
+                0 => Some(store.initializer),
+                1 => Some(store.body),
                 _ => None,
             },
             EffectExprKind::Operation(EffectOperation::Region(region)) => match index {
@@ -798,6 +845,7 @@ impl CoreOperationFamily for EffectOperationFamily {
                 EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
+            EffectExprKind::Operation(EffectOperation::Store(store)) => drop(store),
             EffectExprKind::Operation(EffectOperation::Region(region)) => drop(region),
             EffectExprKind::Operation(
                 EffectOperation::RegionAllocate(_)
@@ -856,6 +904,15 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<NodeId, super::BuildError> {
         self.push_operation(ty, effects, origin, EffectOperation::Resource(resource))
     }
+    pub(crate) fn store_scope(
+        &mut self,
+        store: Box<StoreScopeNode>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, EffectOperation::Store(store))
+    }
     pub fn with_effect_registry(registry: Arc<ResolvedRegistry>) -> Self {
         Self::with_registry_for_family(registry)
     }
@@ -894,6 +951,7 @@ impl CoreBuilder<EffectOperationFamily> {
             NativeInterpret(NodeId, Box<[NativeInterpretation]>),
             Handler(EffectInstance, usize, bool),
             Resource(EffectInstance, NodeId, NodeId),
+            Store(NodeId, NodeId),
 
             Keep,
         }
@@ -963,6 +1021,9 @@ impl CoreBuilder<EffectOperationFamily> {
                             resource.initializer,
                             resource.body,
                         )
+                    }
+                    EffectExprKind::Operation(EffectOperation::Store(store)) => {
+                        Equation::Store(store.initializer, store.body)
                     }
 
                     EffectExprKind::Pure(_) => Equation::Pure,
@@ -1165,6 +1226,22 @@ impl CoreBuilder<EffectOperationFamily> {
                             .ok_or(super::BuildError::InvalidNodeId)?
                             .effects
                             .union_with_budget(&outward, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
+                    Equation::Store(initializer, body) => {
+                        let initializer = &self
+                            .nodes
+                            .get(initializer.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        let body = &self
+                            .nodes
+                            .get(body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        initializer
+                            .union_with_budget(body, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
