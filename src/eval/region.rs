@@ -997,6 +997,25 @@ impl Machine<'_> {
             return Err(RuntimeFailure::InvalidControlState);
         }
         let captured_len = self.frames.len() - index - 1;
+        #[cfg(test)]
+        {
+            let suffix = &self.frames[index + 1..];
+            let clauses = suffix.iter().filter_map(|frame| match frame {
+                Frame::ClauseBoundary {
+                    completion_count, ..
+                } => Some(*completion_count),
+                _ => None,
+            });
+            let (physical, logical) = clauses.fold((0, 0), |(physical, logical), count| {
+                (physical + 1, logical + count)
+            });
+            self.allocation_frames.calls += 1;
+            self.allocation_frames.suffix_total += captured_len;
+            self.allocation_frames.suffix_max = self.allocation_frames.suffix_max.max(captured_len);
+            self.allocation_frames.clause_max = self.allocation_frames.clause_max.max(physical);
+            self.allocation_frames.logical_completions_max =
+                self.allocation_frames.logical_completions_max.max(logical);
+        }
         let retained = self
             .captured_cells
             .checked_add(captured_len)
