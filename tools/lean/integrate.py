@@ -71,7 +71,8 @@ parent_path = Path(configuration["parent_evidence"])
 parent = read_pinned(parent_path, configuration["parent_evidence_sha256"])
 work = Path(configuration["worktree"])
 proof_directory = configuration.get("proof_directory", "docs/design/direct-effects/one-shot")
-assert proof_directory in {"docs/design/direct-effects/one-shot", "docs/design/lexical-regions"}, \
+assert proof_directory in {"docs/design/direct-effects/one-shot", "docs/design/lexical-regions",
+                           "docs/design/retained-control"}, \
     "Unreviewed proof directory"
 live = work / proof_directory
 assert live.resolve() == work.resolve() / proof_directory, "Proof directory escapes through symlink"
