@@ -20946,13 +20946,15 @@ impl ResolvedRegistry {
             )?;
             self.abstract_nominal_names
                 .insert(resource.family, resource.spelling.clone());
-            self.abstract_nominal_kinds.insert(
+            if let Some(displaced) = self.abstract_nominal_kinds.insert(
                 resource.family,
                 NonMaterializedNominalKindFact {
                     kind,
                     origin: resource.origin.primary_span(),
                 },
-            );
+            ) {
+                discard_non_materialized_nominal_kind_fact(displaced);
+            }
         }
         Ok(self)
     }

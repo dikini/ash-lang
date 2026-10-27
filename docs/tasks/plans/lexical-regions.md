@@ -32,23 +32,57 @@ original tests; library imports now passes all 17. Core validation now passes
 all 67 original tests and resource modules all 16. Effect Core, typing and
 module targets pass all 6, 30 and 15 original tests. Module resolution and
 provenance now pass all 11 and 4 original tests. Semantics now passes all 13
-original tests. Its eight new restorations are disjoint from the prior 446,
-giving 454 staged integration restorations. One new private identity unit is
-additional coverage, not a restored name.
-The fresh library inventory passes all 1,597 tests; all 35 Library10 unit
-failures are restored separately. Repeated passes are counted once. Two constructor
-negatives and a private Core census remain new coverage, not restored names.
-The latest complete Library11 inventory records 1,597 passes, zero failures
-and zero ignored tests. All 35 Library10 failures now pass, with no added,
-missing or newly failing names; all 8,565 tracked inputs stayed equal during
-the run. The two previously added unit names remain coverage, not restorations. Integration69 (1,276/504) remains the latest complete integration
-baseline. The scoped controls retain exact
+original tests. Architecture now passes all 47 original tests; its four new
+restorations are disjoint from the prior 454, giving 458 staged integration
+restorations. New constructor negatives, the private Core census and the opaque
+identity unit remain additional coverage, not restored names.
+
+Fresh Library12 passes all 1,598 tests, with zero failures or ignored tests.
+Its names equal Library11's 1,597 plus the previously focused opaque identity
+unit; no names are missing or newly failing. All 35 Library10 unit failures
+remain restored separately. Repeated passes are counted once.
+
+Integration227 is the latest complete integration inventory: all 103 targets
+ran, with 81 passing and 22 failing. Its 1,782 unique names record 1,732 passes
+and 50 failures, with no ignored, incomplete or unexecuted cases. All 1,780
+Integration69 names remain, plus two previously disclosed passing constructor
+negatives. The 454 original restorations had no regressions or newly failing
+old passes. All 8,565 tracked inputs stayed equal in each complete inventory.
+Architecture240 subsequently restores four of those 50 failures. The resulting
+46 unmatched keys are staged subtraction, not a fresh complete failure count. The scoped controls retain exact
 resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
 transformed effect traces still equal the original trace.
 
 
+
+
+Architecture240 audits the complete carrier inventory: 65 new sites and nine
+exact coordinate renames retain existing ownership profiles and iterative
+owners. Region binders and transient values remain owned; runtime values share
+immutable facts, while captured frame segments retain mixed ownership. No new
+ownership mechanism or observed runtime disposal defect is claimed.
+The evaluator's existing transition handoff now checks its empty control slot
+before frame mutation; all 53 previously direct production refills use that handoff. Direct-step
+unit fixtures consume and check their expected pending control only at the
+simulated step, retaining original refusal-state, budget, trace and heap checks.
+Core row replacement uses the existing family disposal contract. Vacant map
+insertion avoids replacing prepared quantifiers; displaced nominal-kind facts
+use their existing disposer. Tight transfer checks cover the existing heap,
+captured-continuation and fallible quantifier handoffs, with adversarial cases.
+The scanner retains the source backing field at unmatched closing delimiters;
+its synthetic fixtures now include the canonical recursive Kind declaration.
+Existing glob/shadowing guards remain fail-closed. Two compile-time identifiers
+are permitted only at their defining Core paths. The closed Pure mock keeps one
+authenticated conversion; its unchanged Source independently uses Effect Core.
+
+Final normal evidence passes architecture 47/0, Library12 1,598/0/0, semantics
+13/0, effect runtime 27/0 and existing native storage 31/0, at identical executable
+inputs. The native target executes actual C-backed generated programs and retains
+exact values and traces. This is connected native evidence, not R5 finite-provider
+or canonical full-gate acceptance. Only subsequent TASK/plan result prose changes
+after these runs; the latest complete integration result remains Integration227.
 
 Semantics Source execution uses complete independently validated Effect Core for
 self-reference and all five original newtype representations. Exact public nominal

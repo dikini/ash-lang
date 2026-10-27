@@ -2654,7 +2654,10 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         });
         self.consumed_method_evidence[expectation] = true;
         if let Some(row) = computation_row {
-            self.nodes[row_node].effects = F::store_effects(row);
+            F::discard_effects(std::mem::replace(
+                &mut self.nodes[row_node].effects,
+                F::store_effects(row),
+            ));
         }
         Ok(())
     }

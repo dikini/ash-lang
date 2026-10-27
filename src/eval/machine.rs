@@ -985,7 +985,7 @@ impl<'runtime> Machine<'runtime> {
                             .entry
                     {
                         self.retain_root_completion()?;
-                        self.control = Some(Control::Return(value));
+                        self.apply(Transition::direct(Control::Return(value)));
                         continue;
                     }
                     if matches!(self.frames.last(), Some(Frame::RegionBoundary { .. })) {
@@ -1040,6 +1040,7 @@ impl<'runtime> Machine<'runtime> {
     }
 
     fn apply(&mut self, transition: Transition) {
+        assert!(self.control.is_none());
         if let Some(frame) = transition.frame {
             self.frames.push(frame);
             self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
@@ -1097,7 +1098,7 @@ impl<'runtime> Machine<'runtime> {
                             value,
                         )?;
                     } else {
-                        self.control = Some(Control::Return(value));
+                        self.apply(Transition::direct(Control::Return(value)));
                     }
                     let Some(Control::Return(value)) = self.control.take() else {
                         return Err(RuntimeFailure::InvalidControlState);
@@ -1112,12 +1113,14 @@ impl<'runtime> Machine<'runtime> {
                         _ => return Err(RuntimeFailure::InvalidControlState),
                     };
                     view.abstraction = Some(abstraction);
-                    self.control = Some(Control::Return(Value::RegionFunction(view)));
+                    self.apply(Transition::direct(Control::Return(Value::RegionFunction(
+                        view,
+                    ))));
                 } else {
-                    self.control = Some(Control::Return(Value::Polymorphic {
+                    self.apply(Transition::direct(Control::Return(Value::Polymorphic {
                         abstraction,
                         environment,
-                    }));
+                    })));
                 }
             }
             Frame::RegionAbstraction { .. } => return Err(RuntimeFailure::InvalidControlState),
@@ -1166,7 +1169,7 @@ impl<'runtime> Machine<'runtime> {
                 });
                 self.frames.push(Frame::ApplyArgument { function: release });
                 self.drop_region_rust_fields_before_release()?;
-                self.control = Some(Control::Return(Value::Unit));
+                self.apply(Transition::direct(Control::Return(Value::Unit)));
             }
             Frame::RegionCompletion {
                 node,
@@ -1197,7 +1200,7 @@ impl<'runtime> Machine<'runtime> {
                         }
                     }
                 }
-                self.control = Some(Control::Return(saved));
+                self.apply(Transition::direct(Control::Return(saved)));
             }
             Frame::RegionContext { node, environment } => {
                 let request = self
@@ -1205,7 +1208,7 @@ impl<'runtime> Machine<'runtime> {
                     .ok_or(RuntimeFailure::InvalidControlState)?
                     .request();
                 self.frames.push(Frame::RegionRequest { context: value });
-                self.control = Some(Control::Evaluate(request, environment));
+                self.apply(Transition::direct(Control::Evaluate(request, environment)));
             }
             Frame::RegionRequest { context } => self.invoke_region_allocate(context, value)?,
             Frame::RegionAllocated {
@@ -1227,22 +1230,22 @@ impl<'runtime> Machine<'runtime> {
                     .checked_sub(segment.frames.len())
                     .ok_or(RuntimeFailure::InvalidControlState)?;
                 self.frames.append(&mut segment.frames);
-                self.control = Some(Control::Return(value));
+                self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::ApplyArgument {
                 function: function @ (Value::RegionFunction(_) | Value::Location(_)),
             } => {
                 let function = self.read_callable(&function)?;
-                self.control = Some(Control::Evaluate(
+                self.apply(Transition::direct(Control::Evaluate(
                     function.body,
                     function.environment.extend(function.parameter, value)?,
-                ));
+                )));
             }
             Frame::ApplyArgument {
                 function: Value::RegionBackingFunction(owner),
             } => {
                 let storage = self.register_region_backing(owner, value)?;
-                self.control = Some(Control::Return(storage));
+                self.apply(Transition::direct(Control::Return(storage)));
             }
             Frame::ApplyArgument {
                 function: Value::RegionHostFunction { owner, release },
@@ -1253,17 +1256,17 @@ impl<'runtime> Machine<'runtime> {
                     {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
-                    self.control = Some(Control::Return(Value::Unit));
+                    self.apply(Transition::direct(Control::Return(Value::Unit)));
                 } else {
                     let storage = self.allocate_host_region_storage(owner, value)?;
-                    self.control = Some(Control::Return(storage));
+                    self.apply(Transition::direct(Control::Return(storage)));
                 }
             }
             Frame::CloseCompletion => {
                 if !matches!(value, Value::Unit) {
                     return Err(RuntimeFailure::InvalidControlState);
                 }
-                self.control = Some(Control::Return(Value::Unit));
+                self.apply(Transition::direct(Control::Return(Value::Unit)));
             }
             Frame::CleanupBoundary {
                 action,
@@ -1281,7 +1284,7 @@ impl<'runtime> Machine<'runtime> {
                     )
                 })?;
                 self.frames.push(Frame::CleanupCompletion { saved: value });
-                self.control = Some(Control::Evaluate(action, environment));
+                self.apply(Transition::direct(Control::Evaluate(action, environment)));
             }
             Frame::CleanupCompletion { saved } => {
                 if !matches!(value, Value::Unit) {
@@ -1291,7 +1294,7 @@ impl<'runtime> Machine<'runtime> {
                     .live_cleanups
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                self.control = Some(Control::Return(saved));
+                self.apply(Transition::direct(Control::Return(saved)));
             }
             Frame::RegistrationBoundary {
                 handler_active,
@@ -1309,7 +1312,7 @@ impl<'runtime> Machine<'runtime> {
                 drop(callback);
                 disposal::check()?;
                 self.live_registrations = live;
-                self.control = Some(Control::Return(value));
+                self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::ResourceInitializer { node, environment } => {
                 self.acquire_resource(node, environment, value)?;
@@ -1322,10 +1325,10 @@ impl<'runtime> Machine<'runtime> {
                 drop(payload);
                 let result = value;
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
-                self.control = Some(Control::Return(result));
+                self.apply(Transition::direct(Control::Return(result)));
             }
             Frame::NativeInterpretBoundary { .. } => {
-                self.control = Some(Control::Return(value));
+                self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::HandlerBoundary {
                 node, registration, ..
@@ -1342,7 +1345,7 @@ impl<'runtime> Machine<'runtime> {
                     }
                     *handler_active = false;
                 }
-                self.control = Some(Control::Return(value));
+                self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::Request {
                 node,
@@ -1379,7 +1382,7 @@ impl<'runtime> Machine<'runtime> {
                         .ok_or(RuntimeFailure::InvalidControlState)?;
                 }
                 self.trace_effect(EffectTraceEvent::ClauseReturned(handler));
-                self.control = Some(Control::Return(value));
+                self.apply(Transition::direct(Control::Return(value)));
             }
             Frame::ApplyArgument {
                 function: Value::Intrinsic(intrinsic),
@@ -1390,14 +1393,14 @@ impl<'runtime> Machine<'runtime> {
                     &mut self.heap,
                     &mut self.instantiation_work,
                 )?;
-                self.control = Some(Control::Return(result));
+                self.apply(Transition::direct(Control::Return(result)));
             }
             Frame::PrimitiveRight { primitive, left } => {
                 let left = read_integer(&left, &self.heap, &mut self.instantiation_work)?;
                 let right = read_integer(&value, &self.heap, &mut self.instantiation_work)?;
                 let result =
                     apply_primitive(primitive, Value::Integer(left), Value::Integer(right))?;
-                self.control = Some(Control::Return(result));
+                self.apply(Transition::direct(Control::Return(result)));
             }
             frame => {
                 let transition = dispatch_return(frame, value, &mut self.heap)?;
@@ -1549,7 +1552,10 @@ impl<'runtime> Machine<'runtime> {
         });
         self.live_cleanups = live;
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
-        self.control = Some(Control::Evaluate(scope.body, environment));
+        self.apply(Transition::direct(Control::Evaluate(
+            scope.body,
+            environment,
+        )));
         Ok(())
     }
 
@@ -1658,7 +1664,7 @@ impl<'runtime> Machine<'runtime> {
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
         self.trace.push(TraceEvent::Enter(scope.body));
         self.trace_effect(EffectTraceEvent::HandlerActivated(scope.handler));
-        self.control = Some(Control::Evaluate(body, environment));
+        self.apply(Transition::direct(Control::Evaluate(body, environment)));
         Ok(())
     }
 
@@ -1782,7 +1788,7 @@ impl<'runtime> Machine<'runtime> {
         self.next_activation = next;
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
         self.trace_effect(EffectTraceEvent::ResourceAcquired(key.0));
-        self.control = Some(Control::Evaluate(body, environment));
+        self.apply(Transition::direct(Control::Evaluate(body, environment)));
         Ok(())
     }
 
@@ -1815,7 +1821,10 @@ impl<'runtime> Machine<'runtime> {
                     application.row_arguments(),
                     &mut self.instantiation_work,
                 )?;
-                self.control = Some(Control::Evaluate(abstraction.body(), environment));
+                self.apply(Transition::direct(Control::Evaluate(
+                    abstraction.body(),
+                    environment,
+                )));
             }
             value @ (Value::RegionFunction(_) | Value::Location(_)) => {
                 let (code, mut environment, abstraction) = self.read_stored_callable(&value)?;
@@ -1838,7 +1847,7 @@ impl<'runtime> Machine<'runtime> {
                     && let crate::core::region::RegionClosureCode::Adapter { body } = closure.code
                 {
                     environment.instantiation = instantiation;
-                    self.control = Some(Control::Evaluate(body, environment));
+                    self.apply(Transition::direct(Control::Evaluate(body, environment)));
                     return Ok(());
                 }
                 let record = match value {
@@ -1846,15 +1855,17 @@ impl<'runtime> Machine<'runtime> {
                     Value::Location(location) => location,
                     _ => return Err(RuntimeFailure::InvalidControlState),
                 };
-                self.control = Some(Control::Return(Value::RegionFunction(
+                self.apply(Transition::direct(Control::Return(Value::RegionFunction(
                     crate::eval::value::RegionFunction {
                         record,
                         instantiation: Some(instantiation),
                         abstraction: None,
                     },
-                )));
+                ))));
             }
-            value @ Value::ConstructorFunction(_) => self.control = Some(Control::Return(value)),
+            value @ Value::ConstructorFunction(_) => {
+                self.apply(Transition::direct(Control::Return(value)))
+            }
             _ => return Err(RuntimeFailure::InvalidControlState),
         }
         Ok(())
@@ -2076,7 +2087,10 @@ impl<'runtime> Machine<'runtime> {
         self.trace_effect(EffectTraceEvent::HandlerSelected(handler_id));
         self.trace_effect(EffectTraceEvent::ClauseEntered(handler_id, operation));
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
-        self.control = Some(Control::Evaluate(clause_body, clause_environment));
+        self.apply(Transition::direct(Control::Evaluate(
+            clause_body,
+            clause_environment,
+        )));
         Ok(())
     }
 
@@ -2157,7 +2171,7 @@ impl<'runtime> Machine<'runtime> {
             _ => return Err(RuntimeFailure::ForeignBinding),
         };
         drop(retained);
-        self.control = Some(Control::Return(result));
+        self.apply(Transition::direct(Control::Return(result)));
         Ok(())
     }
 
@@ -2223,7 +2237,7 @@ impl<'runtime> Machine<'runtime> {
             )
         };
         self.trace_effect(event);
-        self.control = Some(Control::Return(result));
+        self.apply(Transition::direct(Control::Return(result)));
         Ok(())
     }
 
@@ -2298,7 +2312,7 @@ impl<'runtime> Machine<'runtime> {
         };
         self.trace_effect(EffectTraceEvent::Request(operation));
         self.trace_effect(event);
-        self.control = Some(Control::Return(result));
+        self.apply(Transition::direct(Control::Return(result)));
         Ok(())
     }
 
@@ -2483,7 +2497,7 @@ impl<'runtime> Machine<'runtime> {
             *handler_active = true;
         }
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
-        self.control = Some(Control::Return(value));
+        self.apply(Transition::direct(Control::Return(value)));
         Ok(())
     }
 
@@ -2694,7 +2708,7 @@ impl<'runtime> Machine<'runtime> {
         self.frames.extend(closing.into_iter().rev());
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
         self.trace_effect(EffectTraceEvent::Discard(handler));
-        self.control = Some(Control::Return(Value::Unit));
+        self.apply(Transition::direct(Control::Return(Value::Unit)));
         Ok(())
     }
 
@@ -4508,6 +4522,10 @@ mod tests {
         let exact = 2 + environment.len();
         for allowance in [exact - 1, exact, exact] {
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
             let result = machine.acquire_cleanup(scope, environment.clone());
             if allowance < exact {
@@ -4521,8 +4539,15 @@ mod tests {
             }
         }
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.cleanup_limit = 1;
-        for _ in 0..3 {
+        for round in 0..3 {
+            if round > 0 {
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
+            }
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             assert!(is_configured_capacity(
                 machine
@@ -4533,12 +4558,20 @@ mod tests {
             ));
             assert_eq!(machine.frames.len(), 1);
             let owner = machine.frames.pop().unwrap();
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.return_from(owner, integer("42")).unwrap();
             assert_eq!(
                 machine.live_cleanups, 1,
                 "running completion retains capacity"
             );
             let completion = machine.frames.pop().unwrap();
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.return_from(completion, Value::Unit).unwrap();
             assert_eq!(machine.live_cleanups, 0);
             assert!(
@@ -4554,6 +4587,10 @@ mod tests {
         let owner = ResumeId::new(0);
         let prepared = || {
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             let nested = machine.capture_from(0).unwrap();
             machine.frames.push(Frame::ClauseBoundary {
@@ -4562,6 +4599,10 @@ mod tests {
                 owner: ResumeId::new(1),
                 continuation: Some(nested),
             });
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             let captured = machine.capture_from(0).unwrap();
             machine.frames.push(Frame::ClauseBoundary {
@@ -4576,12 +4617,19 @@ mod tests {
             machine
         };
         let mut measured = prepared();
+        assert!(matches!(measured.control.take(), Some(Control::Return(..))));
         measured.discard(handler, owner).unwrap();
         let exact = measured.instantiation_work.used();
         assert!(exact > 0);
         for allowance in [exact - 1, exact, exact] {
             let mut machine = prepared();
             machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            if allowance == exact {
+                assert!(matches!(
+                    machine.control.take(),
+                    Some(Control::Return(Value::Unit))
+                ));
+            }
             let result = machine.discard(handler, owner);
             assert_eq!(machine.live_cleanups, 2);
             if allowance < exact {
@@ -4629,8 +4677,15 @@ mod tests {
     fn owned_capture_and_running_action_share_cleanup_capacity_until_close() {
         let (program, scope, environment) = cleanup_fixture();
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.cleanup_limit = 1;
-        for _ in 0..3 {
+        for round in 0..3 {
+            if round > 0 {
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
+            }
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             let captured = machine.capture_from(machine.frames.len() - 1).unwrap();
             assert!(is_configured_capacity(
@@ -4646,6 +4701,10 @@ mod tests {
                 owner: ResumeId::new(0),
                 continuation: Some(captured),
             });
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine
                 .discard(HandlerId::new(0), ResumeId::new(0))
                 .unwrap();
@@ -4657,6 +4716,7 @@ mod tests {
                 RuntimeResource::CleanupOwners
             ));
             let armed = machine.frames.pop().unwrap();
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine.return_from(armed, Value::Unit).unwrap();
             assert!(is_configured_capacity(
                 machine
@@ -4666,12 +4726,18 @@ mod tests {
                 RuntimeResource::CleanupOwners
             ));
             let running = machine.frames.pop().unwrap();
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.return_from(running, Value::Unit).unwrap();
             assert_eq!(machine.live_cleanups, 0);
             assert_eq!(machine.captured_cells, 0);
             let driver = machine.frames.pop().unwrap();
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine.return_from(driver, Value::Unit).unwrap();
             let clause = machine.frames.pop().unwrap();
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine.return_from(clause, Value::Unit).unwrap();
         }
     }
@@ -4681,9 +4747,17 @@ mod tests {
         let (program, scope, environment) = cleanup_fixture();
         for allowance in [1, 2, 2] {
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
             let owner = machine.frames.pop().unwrap();
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             let result = machine.return_from(owner, integer("42"));
             assert_eq!(machine.live_cleanups, 1);
             if allowance == 1 {
@@ -4990,6 +5064,10 @@ mod tests {
     fn registration_capacity_preflight_is_exact_atomic_and_reuses_fresh_activations() {
         let (program, node, environment) = registration_fixture();
         let mut measured = Machine::new_effect(&program);
+        assert!(matches!(
+            measured.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         measured
             .acquire_registration(node, environment.clone())
             .unwrap();
@@ -4997,6 +5075,10 @@ mod tests {
         assert_eq!(work, 3 + environment.len());
         for allowance in [work - 1, work, work] {
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
             let result = machine.acquire_registration(node, environment.clone());
             if allowance < work {
@@ -5011,8 +5093,15 @@ mod tests {
             }
         }
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.registration_limit = 1;
         for expected in 0..3 {
+            if expected > 0 {
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
+            }
             machine
                 .acquire_registration(node, environment.clone())
                 .unwrap();
@@ -5031,8 +5120,13 @@ mod tests {
             assert_eq!(machine.live_registrations, 1);
             assert_eq!(machine.next_registration, expected + 1);
             let handler = machine.frames.pop().unwrap();
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.return_from(handler, integer("42")).unwrap();
             let owner = machine.frames.pop().unwrap();
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine.return_from(owner, integer("42")).unwrap();
             assert_eq!(machine.live_registrations, 0);
         }
@@ -5047,6 +5141,10 @@ mod tests {
         assert!(machine.frames.is_empty());
         assert_eq!(machine.live_registrations, 0);
         let mut missing = Machine::new_effect(&program);
+        assert!(matches!(
+            missing.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         assert_eq!(
             missing.acquire_registration(node, Environment::new()),
             Err(RuntimeFailure::MissingBinding)
@@ -5112,6 +5210,10 @@ mod tests {
     fn registration_stale_duplicate_and_incomplete_facts_reject_before_mutation() {
         let (program, node, environment) = registration_fixture();
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .acquire_registration(node, environment.clone())
             .unwrap();
@@ -5169,6 +5271,10 @@ mod tests {
     fn registration_invocation_preflight_keeps_the_owner_and_capture_unchanged() {
         let (program, node, environment) = registration_fixture();
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.acquire_registration(node, environment).unwrap();
         let handler = machine.registration(node).unwrap().body;
         let mut pending = vec![machine.handler(handler).unwrap().clauses()[0].body()];
@@ -5218,6 +5324,10 @@ mod tests {
     fn registration_request_and_resume_reject_stale_and_duplicate_nonowning_facts() {
         let (program, node, environment) = registration_fixture();
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .acquire_registration(node, environment.clone())
             .unwrap();
@@ -5269,6 +5379,10 @@ mod tests {
         assert_eq!(machine.captured_cells, 0);
         assert_eq!(machine.effect_trace, events);
         machine.frames.pop();
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .return_request(request, &Instantiation::default(), integer("3"))
             .unwrap();
@@ -5344,6 +5458,10 @@ mod tests {
             unreachable!()
         };
         captured.frames.pop();
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.return_resume(resume, integer("4")).unwrap();
         assert_eq!(
             machine.return_resume(resume, integer("4")),
@@ -5353,9 +5471,11 @@ mod tests {
         assert_eq!(machine.live_registrations, 1);
         for _ in 0..3 {
             let frame = machine.frames.pop().unwrap();
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine.return_from(frame, integer("42")).unwrap();
         }
         assert_eq!(machine.live_registrations, 0);
+        assert!(matches!(machine.control.take(), Some(Control::Return(..))));
         machine
             .acquire_registration(node, environment.clone())
             .unwrap();
@@ -5376,6 +5496,10 @@ mod tests {
     fn registration_duplicate_consumed_clause_rejects_before_owner_mutation() {
         let (program, node, environment) = registration_fixture();
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.acquire_registration(node, environment).unwrap();
         let handler_node = machine.registration(node).unwrap().body;
         let handler = machine.handler(handler_node).unwrap();
@@ -5396,13 +5520,22 @@ mod tests {
                     .filter_map(|index| expression.kind.child_at(index)),
             );
         }
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .return_request(request.unwrap(), &Instantiation::default(), integer("3"))
             .unwrap();
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .return_resume(resume.unwrap(), integer("4"))
             .unwrap();
         let restored = machine.frames.pop().unwrap();
+        assert!(matches!(machine.control.take(), Some(Control::Return(..))));
         machine.return_from(restored, integer("4")).unwrap();
         let events = machine.effect_trace.clone();
         let duplicate = Frame::ClauseBoundary {
@@ -5429,6 +5562,7 @@ mod tests {
         ));
         for _ in 0..2 {
             let frame = machine.frames.pop().unwrap();
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine.return_from(frame, integer("4")).unwrap();
         }
         assert_eq!(machine.live_registrations, 0);
@@ -5447,6 +5581,10 @@ mod tests {
     fn assert_registration_duplicate_rejected(resume_transition: bool) {
         let (program, node, environment) = registration_fixture();
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .acquire_registration(node, environment.clone())
             .unwrap();
@@ -5467,6 +5605,10 @@ mod tests {
                     .filter_map(|index| expression.kind.child_at(index)),
             );
         }
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         if resume_transition {
             machine
                 .return_request(request.unwrap(), &Instantiation::default(), integer("3"))
@@ -5677,6 +5819,10 @@ mod tests {
         let (program, _) = crate::core::validate::generic_cell_validated_fixture_for_test();
         let node = resource_node(&program);
         let mut measured = Machine::new_effect(&program);
+        assert!(matches!(
+            measured.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         measured.instantiation_work = TypeWorkBudget::unbounded();
         measured
             .acquire_resource(node, Environment::new(), integer("41"))
@@ -5684,6 +5830,7 @@ mod tests {
         let required = measured.instantiation_work.used();
         for allowance in 0..required {
             let mut short = Machine::new_effect(&program);
+            assert!(matches!(short.control.take(), Some(Control::Evaluate(..))));
             short.instantiation_work = TypeWorkBudget::with_limit(allowance);
             let trace = short.effect_trace.clone();
             let failure = short
@@ -5697,6 +5844,7 @@ mod tests {
         }
         for _ in 0..2 {
             let mut exact = Machine::new_effect(&program);
+            assert!(matches!(exact.control.take(), Some(Control::Evaluate(..))));
             exact.instantiation_work = TypeWorkBudget::with_limit(required);
             exact
                 .acquire_resource(node, Environment::new(), integer("41"))
@@ -5713,6 +5861,10 @@ mod tests {
         let node = resource_node(&program);
         let prepare = || {
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine
                 .acquire_resource(node, Environment::new(), integer("41"))
                 .unwrap();
@@ -5738,6 +5890,10 @@ mod tests {
                 .ops(),
             1,
         );
+        assert!(matches!(
+            measured.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         measured.interpret_cell(0, write, operand).unwrap();
         let required = measured.instantiation_work.used();
         assert_eq!(
@@ -5770,6 +5926,7 @@ mod tests {
         for _ in 0..2 {
             let (mut exact, operand) = prepare();
             exact.instantiation_work = TypeWorkBudget::with_limit(required);
+            assert!(matches!(exact.control.take(), Some(Control::Evaluate(..))));
             exact.interpret_cell(0, write, operand).unwrap();
             assert_eq!(exact.instantiation_work.used(), required);
             assert_eq!(
@@ -5892,9 +6049,17 @@ mod tests {
                 .unwrap();
         }
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .acquire_resource(node, environment.clone(), integer("41"))
             .unwrap();
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .acquire_resource(node, environment.clone(), integer("99"))
             .unwrap();
@@ -5932,6 +6097,10 @@ mod tests {
             "runtime.foreign-binding"
         );
         assert_eq!(machine.effect_trace, trace);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .return_request(
                 int_request,
@@ -5944,8 +6113,10 @@ mod tests {
         );
         for _ in 0..2 {
             let frame = machine.frames.pop().unwrap();
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine.return_from(frame, Value::Unit).unwrap();
         }
+        assert!(matches!(machine.control.take(), Some(Control::Return(..))));
         machine
             .acquire_resource(node, environment, integer("7"))
             .unwrap();
@@ -6009,6 +6180,10 @@ mod tests {
         let mut costs = Vec::new();
         for depth in [1, 4096] {
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             for index in 0..depth {
                 let next = ((index + 1) % depth) * 2;
                 machine.heap.push(HeapCell::Constructor(
@@ -6033,7 +6208,18 @@ mod tests {
                     .ops(),
                 0,
             );
-            for _ in 0..2 {
+            for read_index in 0..2 {
+                if read_index == 0 {
+                    assert!(matches!(
+                        machine.control.take(),
+                        Some(Control::Evaluate(..))
+                    ));
+                } else {
+                    assert!(matches!(
+                        machine.control.take(),
+                        Some(Control::Return(Value::Location(0)))
+                    ));
+                }
                 machine.instantiation_work = TypeWorkBudget::unbounded();
                 machine
                     .interpret_cell(0, read, Value::ResourceHandle(ActivationKey(0)))
@@ -6068,6 +6254,10 @@ mod tests {
         let node = resource_node(&program);
         for discard in [false, true] {
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.resource_limit = 1;
             machine
                 .acquire_resource(node, Environment::new(), integer("41"))
@@ -6081,6 +6271,10 @@ mod tests {
                 ])),
             )
             .unwrap();
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine
                 .interpret_cell(0, OperationId::new(api.ops(), 1), Value::Location(operand))
                 .unwrap();
@@ -6109,16 +6303,21 @@ mod tests {
                     owner,
                     continuation: Some(captured),
                 });
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
                 machine.discard(handler, owner).unwrap();
                 let frame = machine.frames.pop().unwrap();
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
                 machine.return_from(frame, Value::Unit).unwrap();
                 let frame = machine.frames.pop().unwrap();
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
                 machine.return_from(frame, Value::Unit).unwrap();
                 let frame = machine.frames.pop().unwrap();
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
                 machine.return_from(frame, Value::Unit).unwrap();
             } else {
                 machine.frames.append(&mut captured.frames);
                 machine.captured_cells = 0;
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
                 machine
                     .interpret_cell(
                         0,
@@ -6130,10 +6329,12 @@ mod tests {
                     matches!(&machine.control,Some(Control::Return(Value::Integer(value))) if value.to_string()=="99")
                 );
                 let frame = machine.frames.pop().unwrap();
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
                 machine.return_from(frame, Value::Unit).unwrap();
             }
             assert_eq!(machine.live_resources, 0);
             assert_eq!(machine.captured_cells, 0);
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine
                 .acquire_resource(node, Environment::new(), integer("7"))
                 .unwrap();
@@ -6176,9 +6377,14 @@ mod tests {
             owner,
             continuation: Some(captured),
         });
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.discard(handler, owner).unwrap();
         for _ in 0..3 {
             let frame = machine.frames.pop().unwrap();
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine.return_from(frame, Value::Unit).unwrap();
         }
         assert!(machine.frames.is_empty());
@@ -6240,12 +6446,20 @@ mod tests {
                         1
                     );
                     let mut machine = Machine::new_effect(&program);
+                    assert!(matches!(
+                        machine.control.take(),
+                        Some(Control::Evaluate(..))
+                    ));
                     machine
                         .acquire_resource(node, Environment::new(), Value::Function(function))
                         .unwrap();
                     match mode {
                         0 => {
                             let frame = machine.frames.pop().unwrap();
+                            assert!(matches!(
+                                machine.control.take(),
+                                Some(Control::Evaluate(..))
+                            ));
                             machine.return_from(frame, Value::Unit).unwrap();
                             assert_eq!(machine.live_resources, 0);
                         }
@@ -6259,6 +6473,10 @@ mod tests {
                                 ])),
                             )
                             .unwrap();
+                            assert!(matches!(
+                                machine.control.take(),
+                                Some(Control::Evaluate(..))
+                            ));
                             machine
                                 .interpret_cell(
                                     0,
@@ -6417,6 +6635,10 @@ mod tests {
         let mut previous = template.clone();
         previous.environment = frontier.pop().unwrap();
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         let node = resource_node(&program);
         machine
             .acquire_resource(node, Environment::new(), Value::Function(previous))
@@ -6439,10 +6661,15 @@ mod tests {
             ])),
         )
         .unwrap();
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         let report = {
             let scope = disposal::Scope::enter();
             disposal::reset_growth_attempts();
             machine_test_hooks::FAIL_DISPOSAL_GROWTH.set(true);
+
             assert!(
                 machine
                     .interpret_cell(0, operation, Value::Location(operand))
@@ -6478,6 +6705,10 @@ mod tests {
         let program = resource_program();
         let node = resource_node(&program);
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.resource_limit = 0;
         machine.instantiation_work = TypeWorkBudget::with_limit(0);
         assert_eq!(
@@ -6493,8 +6724,15 @@ mod tests {
         let program = resource_program();
         let node = resource_node(&program);
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine.resource_limit = 1;
         for expected in 0..3 {
+            if expected > 0 {
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
+            }
             machine
                 .acquire_resource(node, Environment::new(), integer("41"))
                 .unwrap();
@@ -6517,6 +6755,10 @@ mod tests {
             assert_eq!(machine.live_resources, 1);
             assert_eq!(machine.next_activation, expected + 1);
             let frame = machine.frames.pop().unwrap();
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.return_from(frame, integer("42")).unwrap();
             assert_eq!(machine.live_resources, 0);
         }
@@ -6575,6 +6817,10 @@ mod tests {
         let program = resource_program();
         let node = resource_node(&program);
         let mut measured = Machine::new_effect(&program);
+        assert!(matches!(
+            measured.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         measured
             .acquire_resource(node, Environment::new(), integer("41"))
             .unwrap();
@@ -6582,6 +6828,12 @@ mod tests {
         assert!(work > 0);
         for remaining in [work - 1, work, work] {
             let mut machine = Machine::new_effect(&program);
+            if remaining == work {
+                assert!(matches!(
+                    machine.control.take(),
+                    Some(Control::Evaluate(..))
+                ));
+            }
             machine.instantiation_work = TypeWorkBudget::with_limit(remaining);
             let result = machine.acquire_resource(node, Environment::new(), integer("41"));
             if remaining < work {
@@ -6598,6 +6850,7 @@ mod tests {
             }
         }
         let mut machine = Machine::new_effect(&program);
+
         let environment = Environment {
             len: usize::MAX,
             ..Environment::new()
@@ -6635,6 +6888,10 @@ mod tests {
             let program = resource_program();
             let node = resource_node(&program);
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.resource_limit = 1;
             machine
                 .acquire_resource(node, Environment::new(), integer("41"))
@@ -6665,6 +6922,10 @@ mod tests {
                 continuation: Some(captured),
             });
             if discard {
+                assert!(matches!(
+                    machine.control.take(),
+                    Some(Control::Evaluate(..))
+                ));
                 machine.discard(handler, owner).unwrap();
                 assert_eq!(machine.captured_cells, 0);
                 assert_eq!(machine.live_resources, 1);
@@ -6679,6 +6940,17 @@ mod tests {
                 machine.frames.append(&mut captured.frames);
                 machine.captured_cells = 0;
             }
+            if discard {
+                assert!(matches!(
+                    machine.control.take(),
+                    Some(Control::Return(Value::Unit))
+                ));
+            } else {
+                assert!(matches!(
+                    machine.control.take(),
+                    Some(Control::Evaluate(..))
+                ));
+            }
             let frame = machine.frames.pop().unwrap();
             machine
                 .return_from(frame, if discard { Value::Unit } else { integer("42") })
@@ -6687,6 +6959,7 @@ mod tests {
             if discard {
                 let frame = machine.frames.pop().unwrap();
                 assert!(matches!(frame, Frame::CloseCompletion));
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
                 machine.return_from(frame, Value::Unit).unwrap();
                 let frame = machine.frames.pop().unwrap();
                 assert!(matches!(
@@ -6696,8 +6969,10 @@ mod tests {
                         ..
                     }
                 ));
+                assert!(matches!(machine.control.take(), Some(Control::Return(..))));
                 machine.return_from(frame, Value::Unit).unwrap();
             }
+            assert!(matches!(machine.control.take(), Some(Control::Return(..))));
             machine
                 .acquire_resource(node, Environment::new(), integer("42"))
                 .unwrap();
@@ -6710,6 +6985,10 @@ mod tests {
         let program = resource_program();
         let node = resource_node(&program);
         let mut machine = Machine::new_effect(&program);
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .acquire_resource(node, Environment::new(), integer("41"))
             .unwrap();
@@ -6739,6 +7018,10 @@ mod tests {
                 matches!(&machine.frames[0], Frame::ResourceBoundary { payload: ResourcePayload::Cell(cell), .. } if cell.to_string() == "41")
             );
         }
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .interpret_cell(0, read, Value::ResourceHandle(ActivationKey(0)))
             .unwrap();
@@ -6758,6 +7041,7 @@ mod tests {
                 let mut normal = Machine::new_effect(&program);
                 normal.resource_limit = DEPTH;
                 for _ in 0..DEPTH {
+                    assert!(matches!(normal.control.take(), Some(Control::Evaluate(..))));
                     normal
                         .acquire_resource(node, Environment::new(), integer("41"))
                         .unwrap();
@@ -7068,6 +7352,10 @@ mod tests {
             node: root,
             instantiation: Instantiation::default(),
         });
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         machine
             .discard(handler, owner)
             .expect("discard should release its three cells");
@@ -7225,6 +7513,10 @@ mod tests {
                 continuation: Some(captured),
             });
             if nested && retained == 3 {
+                assert!(matches!(
+                    machine.control.take(),
+                    Some(Control::Evaluate(..))
+                ));
                 machine.discard(handler, owner).unwrap();
                 assert_eq!(machine.captured_cells, 0);
                 assert!(matches!(

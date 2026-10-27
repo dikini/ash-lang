@@ -1,5 +1,11 @@
 //! Region ownership and target-directed service at its structural owner frame.
-use super::*;
+use super::{
+    ActivationKey, CapturedContinuation, Control, EffectExprKind, EffectOperation, Environment,
+    ExecutableNode, Frame, HeapCell, Location, Machine, NodeId, PureExprKind, PureValue,
+    ResourceFailureCause, RuntimeFailure, RuntimePhase, RuntimeResource, Transition, Value,
+    allocate_heap, borrowed_bytes, charge_effect_work, control_failure, disposal,
+    packed_tuple_location, pure_expression, read_integer, reserve_control,
+};
 use crate::eval::value::{Address, RegionInvocation, RegionStorage};
 
 /// Registration facts only. Physical validity and isolation remain the binding
@@ -338,7 +344,7 @@ impl Machine<'_> {
                 progress.step = 1;
                 let environment = progress.environment.clone();
                 self.frames.push(Frame::RegionBuffer(progress));
-                self.control = Some(Control::Evaluate(operand, environment));
+                self.apply(Transition::direct(Control::Evaluate(operand, environment)));
                 return Ok(());
             }
             progress.prepared = Some(self.prepare_buffer(progress.node, Value::Unit, None)?);
@@ -352,7 +358,7 @@ impl Machine<'_> {
                 progress.step = 4;
                 let environment = progress.environment.clone();
                 self.frames.push(Frame::RegionBuffer(progress));
-                self.control = Some(Control::Evaluate(right, environment));
+                self.apply(Transition::direct(Control::Evaluate(right, environment)));
                 return Ok(());
             }
             progress.prepared = Some(self.prepare_buffer(progress.node, value, None)?);
@@ -392,7 +398,7 @@ impl Machine<'_> {
                     initialized = Value::RegionInteger { digits, negative };
                 }
                 if prepared.constructor.is_none() {
-                    self.control = Some(Control::Return(initialized));
+                    self.apply(Transition::direct(Control::Return(initialized)));
                     return Ok(());
                 }
                 prepared.payload = Some(initialized);
@@ -406,7 +412,7 @@ impl Machine<'_> {
                 ));
                 fields.extend(prepared.payload.take());
                 let initialized = self.initialize_region_tuple(storage, fields)?;
-                self.control = Some(Control::Return(initialized));
+                self.apply(Transition::direct(Control::Return(initialized)));
                 return Ok(());
             }
         }
@@ -415,13 +421,13 @@ impl Machine<'_> {
             .as_ref()
             .ok_or(RuntimeFailure::InvalidControlState)?;
         if prepared.bytes.is_none() && prepared.constructor.is_none() {
-            self.control = Some(Control::Return(
+            self.apply(Transition::direct(Control::Return(
                 progress
                     .prepared
                     .as_mut()
                     .and_then(|p| p.payload.take())
                     .ok_or(RuntimeFailure::InvalidControlState)?,
-            ));
+            )));
             return Ok(());
         }
         let (usable_bytes, alignment, step) = if let Some(bytes) = &prepared.bytes {
@@ -567,7 +573,7 @@ impl Machine<'_> {
             } else {
                 initialized
             };
-            self.control = Some(Control::Return(initialized));
+            self.apply(Transition::direct(Control::Return(initialized)));
             return Ok(());
         };
         if let Some(following) = following {
@@ -579,7 +585,10 @@ impl Machine<'_> {
                 next: next + 1,
                 fields,
             });
-            self.control = Some(Control::Evaluate(following, environment));
+            self.apply(Transition::direct(Control::Evaluate(
+                following,
+                environment,
+            )));
         } else {
             return Err(RuntimeFailure::InvalidControlState);
         }
@@ -698,13 +707,13 @@ impl Machine<'_> {
                 .checked_mul(core::mem::size_of::<Value>())
                 .filter(|bytes| *bytes <= isize::MAX as usize)
                 .ok_or(RuntimeFailure::HeapCapacity)?;
-            self.control = Some(Control::Return(Value::RegionRequest(
+            self.apply(Transition::direct(Control::Return(Value::RegionRequest(
                 crate::eval::value::RegionRequest {
                     usable_bytes,
                     alignment: core::mem::align_of::<Value>(),
                     invocation: None,
                 },
-            )));
+            ))));
             return Ok(true);
         }
         if let Some(buffer) = self.buffer_node(node) {
@@ -718,7 +727,10 @@ impl Machine<'_> {
                 prepared: None,
                 left: None,
             }));
-            self.control = Some(Control::Evaluate(context, environment.clone()));
+            self.apply(Transition::direct(Control::Evaluate(
+                context,
+                environment.clone(),
+            )));
             return Ok(true);
         }
         if let Some(closure) = self.region_closure(node) {
@@ -744,7 +756,10 @@ impl Machine<'_> {
                 next: 0,
                 fields,
             });
-            self.control = Some(Control::Evaluate(context, environment.clone()));
+            self.apply(Transition::direct(Control::Evaluate(
+                context,
+                environment.clone(),
+            )));
             return Ok(true);
         }
         if let Some(tuple) = self.region_tuple(node) {
@@ -763,7 +778,10 @@ impl Machine<'_> {
                 next: 0,
                 fields,
             });
-            self.control = Some(Control::Evaluate(context, environment.clone()));
+            self.apply(Transition::direct(Control::Evaluate(
+                context,
+                environment.clone(),
+            )));
             return Ok(true);
         }
         if let Some(scope) = self.region_scope(node) {
@@ -779,7 +797,10 @@ impl Machine<'_> {
                     node,
                     environment: environment.clone(),
                 });
-                self.control = Some(Control::Evaluate(preceding, environment.clone()));
+                self.apply(Transition::direct(Control::Evaluate(
+                    preceding,
+                    environment.clone(),
+                )));
             }
             return Ok(true);
         }
@@ -792,7 +813,10 @@ impl Machine<'_> {
                 node,
                 environment: environment.clone(),
             });
-            self.control = Some(Control::Evaluate(context, environment.clone()));
+            self.apply(Transition::direct(Control::Evaluate(
+                context,
+                environment.clone(),
+            )));
             return Ok(true);
         }
         if let Ok(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) =
@@ -806,7 +830,9 @@ impl Machine<'_> {
                 let owner = environment
                     .instantiation
                     .owner(owner, &mut self.instantiation_work)?;
-                self.control = Some(Control::Return(Value::RegionBackingFunction(owner)));
+                self.apply(Transition::direct(Control::Return(
+                    Value::RegionBackingFunction(owner),
+                )));
                 return Ok(true);
             }
             if let Intrinsic::RegionHostAllocate { owner, .. }
@@ -818,10 +844,15 @@ impl Machine<'_> {
                 let key = environment
                     .instantiation
                     .owner(owner, &mut self.instantiation_work)?;
-                self.control = Some(Control::Return(Value::RegionHostFunction {
-                    owner: key,
-                    release: matches!(intrinsic.operation(), Intrinsic::RegionHostRelease { .. }),
-                }));
+                self.apply(Transition::direct(Control::Return(
+                    Value::RegionHostFunction {
+                        owner: key,
+                        release: matches!(
+                            intrinsic.operation(),
+                            Intrinsic::RegionHostRelease { .. }
+                        ),
+                    },
+                )));
                 return Ok(true);
             }
         }
@@ -863,7 +894,7 @@ impl Machine<'_> {
             preceding,
         });
         self.next_activation = next;
-        self.control = Some(Control::Evaluate(provider, environment));
+        self.apply(Transition::direct(Control::Evaluate(provider, environment)));
         Ok(())
     }
 
@@ -906,7 +937,7 @@ impl Machine<'_> {
             preceding,
             records: Vec::new(),
         });
-        self.control = Some(Control::Evaluate(body, environment));
+        self.apply(Transition::direct(Control::Evaluate(body, environment)));
         Ok(())
     }
 
@@ -996,7 +1027,9 @@ impl Machine<'_> {
         self.next_region_invocation = next;
         self.frames
             .push(Frame::ApplyArgument { function: allocate });
-        self.control = Some(Control::Return(Value::RegionRequest(request)));
+        self.apply(Transition::direct(Control::Return(Value::RegionRequest(
+            request,
+        ))));
         Ok(())
     }
     pub(super) fn validate_region_storage(
@@ -1404,12 +1437,17 @@ impl Machine<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use super::super::{
+        Closure, EffectTraceEvent, PureComputation, TraceEvent, evaluate_effect, machine_test_hooks,
+    };
     use super::*;
     use crate::{
         core::{EffectCoreBuilder, validate_effect},
         eval::value::RegionRequest,
         source::{ByteRange, Origin, SourceFile},
-        types::Type,
+        types::{Type, TypeWorkBudget},
     };
 
     fn root_driver(payload: Value) -> Machine<'static> {
@@ -1882,6 +1920,10 @@ mod tests {
     #[test]
     fn host_allocate_reserves_actual_typed_fields_before_initialization() {
         let mut machine = prepared_driver();
+        assert!(matches!(
+            machine.control.take(),
+            Some(Control::Evaluate(..))
+        ));
         let request = RegionRequest {
             usable_bytes: 2 * core::mem::size_of::<Value>(),
             alignment: core::mem::align_of::<Value>(),
@@ -2434,6 +2476,10 @@ mod tests {
                 adapter,
             );
             let mut machine = Machine::new_effect(&program);
+            assert!(matches!(
+                machine.control.take(),
+                Some(Control::Evaluate(..))
+            ));
             machine.heap.push(HeapCell::NativeTuple(fields));
             machine.frames.reserve(2);
             if short {

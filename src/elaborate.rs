@@ -10067,12 +10067,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 prepared
                     .context
                     .set_quantified(method.binder, source_quantified.clone())?;
-                if prepared
-                    .quantifiers
-                    .insert(method.binder, source_quantified)
-                    .is_some()
-                {
-                    return Err(invalid_state());
+                match prepared.quantifiers.entry(method.binder) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(source_quantified);
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => {
+                        return Err(invalid_state());
+                    }
                 }
             }
         }

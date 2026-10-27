@@ -108,6 +108,10 @@ fn registration_validation_reports_work_before_scanning() {
         "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 4 {\nCell.read c\n}\n",
     );
     let mut machine = Machine::new_effect(&program);
+    assert!(matches!(
+        machine.control.take(),
+        Some(Control::Evaluate(..))
+    ));
     machine
         .acquire_resource(
             super::tests::resource_node(&program),
