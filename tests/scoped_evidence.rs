@@ -6,16 +6,20 @@ use std::{
 
 use ash::{
     core::{
-        transform::{fold_literal_primitives, identity_traversal},
-        validate_modules,
+        EffectExprKind, EffectOperation, PureComputation, PureExprKind,
+        transform::{fold_effect_literal_primitives, identity_effect_traversal},
+        validate_effect_modules,
     },
-    elaborate::{Elaborator, check_module, link_modules},
-    eval::{Value, evaluate},
+    elaborate::{EffectElaborator, check_module, link_modules},
+    eval::{Value, evaluate_effect},
     evidence_validation::validate_interface_evidence,
     interface::EvidenceNode,
     module::load_module_graph,
-    resolve::resolve_module,
-    resolved::{ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration},
+    resolve::{DependencyExports, resolve_module},
+    resolved::{
+        CheckedModule, ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration,
+        ResolvedPatternKind,
+    },
 };
 use ash::{
     driver::{RunConfiguration, run_path},
@@ -86,8 +90,27 @@ main () = {{
     assert_eq!(observation.ty(), &Type::Int);
 
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).expect("fixture should load");
-    let resolved = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
-    let checked = check_module(resolved).expect("fixture should check");
+    let mut modules = Vec::<CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let target = modules
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("the actual dependency should check first");
+                DependencyExports::new(edge, target.exports())
+                    .expect("the summary should match its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies).expect("fixture should resolve");
+        modules.push(check_module(resolved).expect("fixture should check"));
+    }
+    let checked = modules
+        .iter()
+        .find(|module| module.module() == graph.entry())
+        .expect("the exact entry should be checked");
     let main = checked.definitions().last().expect("fixture declares main");
     let ResolvedDefinitionKind::Equational(main) = main.kind() else {
         panic!("main is equational")
@@ -112,27 +135,95 @@ main () = {{
         if selected == source.id && methods == [source.method_groups[0].method.expect("supplied method is resolved")])
     );
 
-    let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+    let ResolvedLocalDeclaration::Newtype(token) = block.declarations[0] else {
+        panic!("the first declaration owns Token")
+    };
+    let ResolvedLocalDeclaration::Binding(saved) = &block.declarations[1] else {
+        panic!("the second declaration saves a Token")
+    };
+    let ResolvedPatternKind::Binder(saved) = &saved.pattern.kind else {
+        panic!("saved has its own lexical binder")
+    };
+    let saved = saved.id;
+    let method_binder = source.method_groups[0].binder.id;
+    let linked = link_modules(modules, graph.entry()).expect("fixture should link");
     let linked = validate_interface_evidence(linked)
         .expect("linked lexical selection should independently authenticate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("Core namespace should fit");
+        EffectElaborator::for_module_program(&linked).expect("Core namespace should fit");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("ordinary method bindings should lower");
     let unchecked = elaborator.finish(typed.node).expect("Core should finish");
-    let source = graph.modules()[0].source();
-    let program = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let relation = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let program = validate_effect_modules(unchecked, &sources, &relation)
         .expect("Core should independently authenticate lexical methods");
-    let identity = identity_traversal(&program).expect("identity traversal should validate");
-    let folded = fold_literal_primitives(&program).expect("folded Core should validate");
-    let identity = validate_modules(identity, &[source], &[(graph.entry(), source.id())])
+    let identity = identity_effect_traversal(&program).expect("identity traversal should validate");
+    let folded = fold_effect_literal_primitives(&program).expect("folded Core should validate");
+    let identity = validate_effect_modules(identity, &sources, &relation)
         .expect("identity Core should revalidate");
-    let folded = validate_modules(folded, &[source], &[(graph.entry(), source.id())])
+    let folded = validate_effect_modules(folded, &sources, &relation)
         .expect("folded Core should revalidate");
     for program in [program, identity, folded] {
+        let mut pending = vec![program.root()];
+        let mut method_initializer = None;
+        let mut saved_type = None;
+        let mut token_scopes = 0;
+        while let Some(id) = pending.pop() {
+            let node = program.node(id).unwrap();
+            match &node.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                    if binding.binder().id() == method_binder {
+                        assert!(method_initializer.replace(binding.initializer()).is_none());
+                    }
+                    if binding.binder().id() == saved {
+                        saved_type = Some(binding.binder().ty().clone());
+                    }
+                }
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::LocalNominalScope(scope),
+                )) if scope.owner() == token => token_scopes += 1,
+                _ => {}
+            }
+            pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
+        }
+        assert_eq!(token_scopes, 1);
+        assert_eq!(saved_type, Some(Type::Nominal(token)));
+        let mut pending =
+            vec![method_initializer.expect("the exact lexical method retains its binding")];
+        let mut captures_saved = 0;
+        while let Some(id) = pending.pop() {
+            let node = program.node(id).unwrap();
+            if matches!(
+                node.kind,
+                EffectExprKind::Operation(EffectOperation::RegionClosure(_))
+            ) {
+                let captures = (0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i))
+                    .filter(|id| matches!(program.node(*id).unwrap().kind,
+                        EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == saved))
+                    .collect::<Vec<_>>();
+                for capture in captures {
+                    assert_eq!(program.node(capture).unwrap().ty, Type::Nominal(token));
+                    captures_saved += 1;
+                }
+            }
+            pending.extend((0..node.kind.child_count()).filter_map(|i| node.kind.child_at(i)));
+        }
+        assert_eq!(
+            captures_saved, 1,
+            "the lexical method record retains the exact saved Token"
+        );
         assert!(
-            matches!(evaluate(&program).expect("ordinary method closure should execute").value, Value::SmallInteger(value) if value.to_string() == "42")
+            matches!(evaluate_effect(&program).expect("ordinary method closure should execute").value, Value::SmallInteger(value) if value.to_string() == "42")
         );
     }
 }

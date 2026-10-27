@@ -43,15 +43,14 @@ It retains all Library12 names and adds only the explicit constraint-owner unit.
 All 35 Library10 unit failures remain restored separately, with no lost names or
 new failures. Repeated passes are counted once.
 
-Integration244 is the latest complete integration inventory: all 103 targets
-ran, with 83 passing and 20 failing. Its 1,782 unique names record 1,739 passes
-and 43 failures, with no ignored, incomplete or unexecuted cases. All 1,780
-Integration69 names remain, plus the same two passing constructor negatives.
-The 43 failures are exactly the original 504 minus 461 restorations; no old
+Integration254 is the latest complete integration inventory: all 103 targets
+and all 1,782 unique tests pass, with no failures, ignored, incomplete or
+unexecuted cases. All 1,780 Integration69 names remain, plus the same two passing
+constructor negatives. All 504 original integration failures now pass; no old
 passes or prior restorations regressed. All 8,565 tracked inputs stayed equal
-in each complete inventory. Integration227 remains historical evidence at the
-preceding policy, not the latest result. The scoped controls retain exact
-resolver/checker reasons and labels, full dependency/source authority, defining
+through the run. Integration244's 43 failures and Integration227's 50 failures
+remain historical inventories, not current backlogs. The scoped controls retain
+exact resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
 transformed effect traces still equal the original trace.
@@ -59,10 +58,11 @@ transformed effect traces still equal the original trace.
 
 
 
-Fixtures246 passes all 255 original tests across twelve complete focused
-targets. The 25 restorations are disjoint from the prior 461, giving 486 original
-integration restorations. Eighteen of Integration244's 43 failures remain
-unmatched by this staged evidence; this is not a fresh complete failure count.
+At checkpoint31, Fixtures246 passed all 255 original tests across twelve
+complete focused targets. The 25 restorations are disjoint from the prior 461,
+giving 486 original integration restorations. At that boundary, eighteen of
+Integration244's 43 failures remained
+unmatched by staged evidence. Integration254 now confirms their restoration.
 No test names or Source programs were added, removed or changed.
 
 Diagnostic fixtures admit the actual preceding dependency summaries and resolve
@@ -84,11 +84,39 @@ namespace facts remain. The module-chain Source uses independently validated
 Effect Core with all source pairs, exact user group order, identity transform
 and result 42. Only test fixtures and subsequent result prose change; production,
 policy, unit, proof and native inputs stay at checkpoint30. Library13's complete
-1,599-pass result transfers unchanged. Integration244 remains the latest complete
-integration inventory; Final250 format/Clippy are bound at the same executable
-bytes. One unused Type import was removed after the first Clippy pass and the
+1,599-pass result transfers unchanged. Final250 format/Clippy were bound at
+that checkpoint's executable bytes. One unused Type import was removed after the
+first Clippy pass and the
 complete 80-test implementation target passed again; repeated names add no
 coverage. Canonical full-gate/R5/Main acceptance remains open.
+
+
+The remaining eight fixture targets pass all 135 original tests in focused
+verification. Source producers retain complete dependency admission, Effect Core
+and independent validation with every source pair. Constructor-field trace order,
+lexical evidence and saved captures retain their original identities. Dependency
+continuation checks require the entry group directly after its defining group.
+Generated programs use the actual Effect image while preserving source deletion,
+repeated execution and work accounting. Callable and diagnostic identities retain
+complete DefaultAlloc rows.
+
+Intentional manual Pure controls remain separate. Their intrinsic owners use the
+actual canonical builtins. A neighboring constructor-substitution negative now
+first validates the correct Bytes donor in its closed Pure registry, then changes
+only the constructor family and requires Registry refusal at the exact root.
+All nine packed-Core cases pass after that post-Integration254 correction; the
+canonical all-target gate will cover these successor bytes. Newtype Source
+controls retain conversion counts 1/0, value and public type, repeated complete
+traces and frame depth. Their obsolete predecessor startup counts 8/7 are removed
+without a synthetic Pure scaffold. Fee manifests distinguish derived local
+charges from complete measured admission boundaries at their owning probes.
+
+These changes affect only integration tests and this result prose; Library13's
+production, configuration and unit inputs remain unchanged. The fresh canonical
+seven-stage gate is pending at this prose freeze. Its final status must be bound
+to these exact files by the delivery receipt, rather than composed from focused
+checks. R5 finite-provider refusal, normative specification, final integrated
+verification and Main acceptance remain open.
 
 
 The graph-wide constraint default is now 1,376,256 work units, retaining its

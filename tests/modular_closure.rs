@@ -8,12 +8,12 @@ use std::{
 
 use ash::{
     core::{
-        NodeId, Primitive, PureComputation, PureExprKind, PureValue, ValidatedProgram,
-        validate_modules,
+        EffectExprKind, EffectOperation, NodeId, Primitive, PureComputation, PureExprKind,
+        ValidatedEffectProgram, validate_effect_modules,
     },
     diagnostic::SourceLabel,
     driver::{RunConfiguration, run_path},
-    elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
+    elaborate::{EffectElaborator, TypeError, TypeReason, check_module, link_modules},
     evidence_validation::validate_interface_evidence,
     interface::InterfaceReason,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
@@ -83,7 +83,7 @@ struct PositiveWitness {
     _tree: ModuleTree,
     entry: PathBuf,
     graph: ModuleGraph,
-    core: ValidatedProgram,
+    core: ValidatedEffectProgram,
     implementation_method: BinderId,
     same: BinderId,
     main: BinderId,
@@ -107,7 +107,7 @@ fn positive_witness() -> PositiveWitness {
     let checked = check_graph(&graph).expect("the equality module tree should check");
     let equality = checked
         .iter()
-        .find(|module| module.module() != graph.entry())
+        .find(|module| module.module() == module_named(&graph, "equality.ash").id())
         .expect("the equality dependency should remain checked");
     let implementation_method = equality
         .implementation_facts()
@@ -129,9 +129,9 @@ fn positive_witness() -> PositiveWitness {
 
     // Act: synthesize ordinary Core and validate it independently for inspection.
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the Core namespace should reserve");
+        EffectElaborator::for_module_program(&linked).expect("the Core namespace should reserve");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("validated evidence should synthesize ordinary Core");
     let unchecked = elaborator
         .finish(typed.node)
@@ -146,7 +146,7 @@ fn positive_witness() -> PositiveWitness {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let core = validate_modules(unchecked, &sources, &module_sources)
+    let core = validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("the synthesized Core should validate independently");
 
     PositiveWitness {
@@ -226,7 +226,7 @@ fn assert_no_label_overlaps(labels: &[SourceLabel], source: &SourceFile, needle:
     }));
 }
 
-fn node(program: &ValidatedProgram, id: NodeId) -> &ash::core::TypedExpr {
+fn node(program: &ValidatedEffectProgram, id: NodeId) -> &ash::core::EffectExpr {
     program
         .node(id)
         .expect("a retained Core handle should identify its node")
@@ -241,24 +241,82 @@ fn group_member(group: &ash::core::RecursiveBindingNode, binder: BinderId) -> No
         .initializer()
 }
 
-fn equational_body(program: &ValidatedProgram, initializer: NodeId) -> NodeId {
-    let PureExprKind::Value(PureValue::Function(function)) = &node(program, initializer).kind
-    else {
-        panic!("an equational global should lower to a function");
-    };
-    let body = function.body();
-    match &node(program, body).kind {
-        PureExprKind::Computation(PureComputation::Match(group)) => group
-            .arms()
-            .first()
-            .expect("the checked equation should retain its first arm")
-            .body(),
-        _ => body,
+fn find_node(
+    program: &ValidatedEffectProgram,
+    root: NodeId,
+    mut predicate: impl FnMut(&ash::core::EffectExpr) -> bool,
+) -> Option<NodeId> {
+    let mut pending = vec![root];
+    while let Some(id) = pending.pop() {
+        let expression = node(program, id);
+        if predicate(expression) {
+            return Some(id);
+        }
+        pending.extend(
+            (0..expression.kind.child_count())
+                .rev()
+                .filter_map(|index| expression.kind.child_at(index)),
+        );
     }
+    None
+}
+
+fn pure(program: &ValidatedEffectProgram, id: NodeId) -> &PureExprKind {
+    let EffectExprKind::Pure(kind) = &node(program, id).kind else {
+        panic!("the selected source operation should remain in the Pure family")
+    };
+    kind
+}
+
+fn equational_body(program: &ValidatedEffectProgram, initializer: NodeId) -> NodeId {
+    let body = find_node(program, initializer, |expression| {
+        matches!(&expression.kind,
+        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(group)))
+        if node(program, group.scrutinee()).ty == Type::Unit)
+    })
+    .expect("the main function retains its Unit equation match");
+    let PureExprKind::Computation(PureComputation::Match(group)) = pure(program, body) else {
+        unreachable!()
+    };
+    let [arm] = group.arms() else {
+        panic!("main retains its one Unit equation")
+    };
+    arm.body()
+}
+
+fn tuple_operands(program: &ValidatedEffectProgram, root: NodeId, types: &[Type]) -> Vec<NodeId> {
+    let ty = Type::Tuple(types.to_vec().into_boxed_slice());
+    let expression = node(program, root);
+    assert_eq!(expression.ty, ty);
+    let PureExprKind::Computation(PureComputation::Bind(binding)) = pure(program, root) else {
+        panic!("the original tuple retains its selected context binding")
+    };
+    let tuple = node(program, binding.body());
+    assert_eq!(tuple.ty, ty);
+    assert!(matches!(
+        tuple.kind,
+        EffectExprKind::Operation(EffectOperation::RegionTuple(_))
+    ));
+    assert_eq!(
+        tuple.origin.primary_span(),
+        expression.origin.primary_span()
+    );
+    let operands = (0..tuple.kind.child_count())
+        .filter_map(|i| tuple.kind.child_at(i))
+        .filter(|id| types.contains(&node(program, *id).ty))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        operands
+            .iter()
+            .map(|id| node(program, *id).ty.clone())
+            .collect::<Vec<_>>(),
+        types
+    );
+    operands
 }
 
 fn primitive_in_subtree(
-    program: &ValidatedProgram,
+    program: &ValidatedEffectProgram,
     root: NodeId,
     primitive: Primitive,
 ) -> Option<NodeId> {
@@ -267,7 +325,7 @@ fn primitive_in_subtree(
         let expression = node(program, id);
         if matches!(
             &expression.kind,
-            PureExprKind::Computation(PureComputation::Primitive(operation))
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Primitive(operation)))
                 if operation.primitive() == primitive
         ) {
             return Some(id);
@@ -309,11 +367,22 @@ fn direct_and_library_equality_retain_distinct_core_paths() {
     let entry_source = module_named(&witness.graph, "entry.ash").source();
 
     // Assert: module binder identity locates the implementation intrinsic.
+    let equality_group_id = find_node(core, core.root(), |expression| matches!(&expression.kind,
+        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(group)))
+        if group.members().iter().any(|member| member.binder().id() == witness.implementation_method)))
+        .expect("the equality owner retains its exact implementation binder");
     let PureExprKind::Computation(PureComputation::RecursiveBind(equality_group)) =
-        &node(core, core.root()).kind
+        pure(core, equality_group_id)
     else {
-        panic!("the dependency should lower to the outer recursive group");
+        unreachable!()
     };
+    assert!(
+        equality_group
+            .members()
+            .iter()
+            .all(|member| member.binder().id().module()
+                == Some(witness.implementation_method.module().unwrap()))
+    );
     let implementation_initializer = group_member(equality_group, witness.implementation_method);
     let implementation_equal =
         primitive_in_subtree(core, implementation_initializer, Primitive::Equal)
@@ -325,21 +394,20 @@ fn direct_and_library_equality_retain_distinct_core_paths() {
     ));
 
     // Assert: source tuple position and origin identify the direct intrinsic.
+    let entry_group_id = equality_group.body();
     let PureExprKind::Computation(PureComputation::RecursiveBind(entry_group)) =
-        &node(core, equality_group.body()).kind
+        pure(core, entry_group_id)
     else {
-        panic!("the entry should lower to the inner recursive group");
+        panic!("the entry recursive group must directly follow its equality dependency")
     };
+    assert_eq!(entry_group.members().len(), 1);
+    assert_eq!(entry_group.members()[0].binder().id(), witness.main);
     let main_body = equational_body(core, group_member(entry_group, witness.main));
-    let PureExprKind::Computation(PureComputation::Tuple(results)) = &node(core, main_body).kind
-    else {
-        panic!("main should construct the three equality results");
-    };
-    let [direct, method, constrained] = results.elements() else {
+    let results = tuple_operands(core, main_body, &[Type::Bool, Type::Bool, Type::Bool]);
+    let [direct, method, constrained] = results.as_slice() else {
         panic!("main should retain the three source tuple elements");
     };
-    let PureExprKind::Computation(PureComputation::Primitive(direct_equal)) =
-        &node(core, *direct).kind
+    let PureExprKind::Computation(PureComputation::Primitive(direct_equal)) = pure(core, *direct)
     else {
         panic!("direct source equality should remain a Core primitive");
     };
@@ -351,49 +419,48 @@ fn direct_and_library_equality_retain_distinct_core_paths() {
     ));
 
     // Assert: the imported method is an ordinary value application.
-    let PureExprKind::Computation(PureComputation::Apply(method_call)) = &node(core, *method).kind
-    else {
+    let PureExprKind::Computation(PureComputation::Apply(method_call)) = pure(core, *method) else {
         panic!("the explicit method call should lower to ordinary application");
     };
-    let PureExprKind::Variable(method_function) = node(core, method_call.function()).kind else {
+    let PureExprKind::Variable(method_function) = *pure(core, method_call.function()) else {
         panic!("the selected method should lower to its implementation binder");
     };
     assert_eq!(method_function.binder(), witness.implementation_method);
-    assert!(matches!(
-        node(core, method_call.argument()).kind,
-        PureExprKind::Computation(PureComputation::Tuple(_))
-    ));
+    assert_eq!(
+        tuple_operands(core, method_call.argument(), &[Type::Int, Type::Int]).len(),
+        2
+    );
 
     // Assert: the constrained global uses ordinary type, evidence, and value applications.
     let PureExprKind::Computation(PureComputation::Apply(value_application)) =
-        &node(core, *constrained).kind
+        pure(core, *constrained)
     else {
         panic!("the constrained call should retain its source-value application");
     };
     let PureExprKind::Computation(PureComputation::Apply(evidence_application)) =
-        &node(core, value_application.function()).kind
+        pure(core, value_application.function())
     else {
         panic!("the constrained call should apply evidence before its source value");
     };
     let PureExprKind::Computation(PureComputation::TypeApplication(type_application)) =
-        &node(core, evidence_application.function()).kind
+        pure(core, evidence_application.function())
     else {
         panic!("the constrained call should instantiate its ordinary global scheme");
     };
     assert_eq!(type_application.arguments(), &[Type::Int]);
-    let PureExprKind::Variable(same_function) = node(core, type_application.function()).kind else {
+    let PureExprKind::Variable(same_function) = *pure(core, type_application.function()) else {
         panic!("the type application should expose the ordinary same binder");
     };
     assert_eq!(same_function.binder(), witness.same);
-    let PureExprKind::Variable(evidence_method) = node(core, evidence_application.argument()).kind
+    let PureExprKind::Variable(evidence_method) = *pure(core, evidence_application.argument())
     else {
         panic!("the evidence argument should be the implementation method binder");
     };
     assert_eq!(evidence_method.binder(), witness.implementation_method);
-    assert!(matches!(
-        node(core, value_application.argument()).kind,
-        PureExprKind::Computation(PureComputation::Tuple(_))
-    ));
+    assert_eq!(
+        tuple_operands(core, value_application.argument(), &[Type::Int, Type::Int]).len(),
+        2
+    );
 }
 
 #[test]
