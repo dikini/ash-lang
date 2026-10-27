@@ -28,10 +28,9 @@ tests respectively. The module-newtype and local-newtype targets now pass 23
 and 20 tests. Runtime, hooks and primitive targets now pass 27, 15 and 12 original
 tests. Functions passes all 19 original tests. Polymorphism and interface-module
 controls pass all 43 and 25 original tests. Module loading now passes all 24
-original tests; library imports now passes all 17, and Core validation has 60
-passes and seven remaining Source/Pure producer failures. The nine unchanged
-resource-typing/runtime restorations are disjoint from the published 401, giving
-410 staged integration restorations. Three focused unit
+original tests; library imports now passes all 17. Core validation now passes
+all 67 original tests and resource modules all 16. Their fourteen restorations
+are disjoint from the published 410, giving 424 staged integration restorations. Three focused unit
 repairs are counted separately. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
 The latest complete Library10 inventory at checkpoint20 policy inputs records 1,562 passes and
@@ -52,6 +51,28 @@ controls use all-source Effect validation: exact nominal conversion owners,
 source-owned full-typed evidence closures, ordered complete arguments and fresh
 validation after both transforms remain. Manual Pure corruption, owner, depth,
 resource and poison controls are unchanged.
+
+The remaining seven Core evidence/linked controls retain source-owned complete
+callable schemes, exact adapter/method identities, ordered arguments and actual
+prerequisite application edges. Nested selections require two distinct adapters
+of the same implementation with different full heads, value 82 and both fresh
+transform validations. Their known Forall1 prerequisite comparison covers the
+whole effectful arrow, pair domain, each own bound variable and complete result
+computation, without a new equality API. The two linked fixtures retain their
+original sources, summary/route/kind/binder facts, registry sharing and public
+execution. Their exact source 40 + 2 operation remains an allocating RegionBuffer
+with full row and both direct operands after identity and folding. One small
+three-node Pure control, using each original arithmetic span, separately retains
+Add-before-fold, generated ConstantFolding cause and result 42. This split makes
+no claim that allocating Source arithmetic is optimized away. The extensive
+manual Pure corruption/depth/resource/ledger suffix is byte-identical.
+Resource-module fixtures retain the complete service/source inventory and exact
+checked module identities. Negative entry resolution authenticates each actual
+preceding dependency but never checks the malformed entry early; sealed-provider,
+constructor/privacy and direct-builtin acquisition obligations are unchanged.
+The final frozen targets pass 67 + 16 original names, with no added or missing
+names and no product, policy, API or program change.
+
 
 The original 128-method and 192-function public standalone publication witnesses
 first refused in the Source type-work owner. Separate temporary tracing recorded
