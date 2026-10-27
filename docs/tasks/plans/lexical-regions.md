@@ -30,9 +30,9 @@ tests. Functions passes all 19 original tests. Polymorphism and interface-module
 controls pass all 43 and 25 original tests. Module loading now passes all 24
 original tests; library imports now passes all 17. Core validation now passes
 all 67 original tests and resource modules all 16. Effect Core, typing and
-module targets pass all 6, 30 and 15 original tests. Their thirteen new
-restorations are disjoint from the prior 424, giving 437 staged integration
-restorations.
+module targets pass all 6, 30 and 15 original tests. Module resolution and
+provenance now pass all 11 and 4 original tests. Their nine new restorations
+are disjoint from the prior 437, giving 446 staged integration restorations.
 The fresh library inventory passes all 1,597 tests; all 35 Library10 unit
 failures are restored separately. Repeated passes are counted once. Two constructor
 negatives and a private Core census remain new coverage, not restored names.
@@ -45,6 +45,27 @@ resolver/checker reasons and labels, full dependency/source authority, defining
 factory privacy, result 42 and fresh independent validation after both Effect
 transforms. User-effect counts identify the complete instance and handler; whole
 transformed effect traces still equal the original trace.
+
+
+The resolution/provenance fixtures authenticate each actual dependency target
+before resolving the intended entry or named module. Resolved-only controls do
+not check their target; diagnostic controls retain two independent resolutions
+and fail only at entry checking. Hidden nominal selection uses its defining
+entry identity. Source provenance uses complete linked Effect Core and every
+source/module pair. Public source-binder ownership, exact function/body spans
+and the sole typed closure parameter retain RecursiveBindingLowering,
+FunctionLowering, TypeChecking and occurrence causes. Successful arithmetic
+checking records its cause on the returned context binding around RegionBuffer;
+the unchanged exact primary/related-span assertion checks that binding.
+The repeated-summary witness retains its original program, width and import
+count. Its obsolete fixed-limit refusal becomes normal-policy success plus the
+existing calibration observer's cumulative resolution owner check: one completed
+phase per canonical module, unchanged actual allowance, increasing work and one
+matching final endpoint above the old fixed limit. No product policy changes.
+Module216 passes 11 original names; Provenance215 passes four at unchanged final
+bytes. Final217 format and canonical Clippy pass without executable changes.
+Library11 remains carried complete library evidence; this is no fresh full
+integration or native gate.
 
 The latest admission repairs preserve exact defining/export identities and
 resolver-owned privacy errors across every actual dependency edge. Module-loading
