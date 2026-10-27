@@ -1,8 +1,13 @@
 # Lexical region correspondence and assumptions
 
-This report maps the bounded [model](README.md) to accepted
-[CP-0025](../../proposals/CP-0025-lexical-region-construction.md). It supplies
-R1/R2 evidence rather than current Ash semantics or product implementation.
+This report maps the bounded [model](README.md) to the historically matched
+[CP-0025 contract at R1/R2 retention](https://github.com/dikini/ash-lang/blob/aee02227b69fb6cbbd00c23904ffe2a0c7df6924/docs/proposals/CP-0025-lexical-region-construction.md).
+It supplies R1/R2 evidence rather than language authority or product
+implementation evidence. Current language rules belong in the
+[specification](../../../spec/README.md), including
+[construction dependencies](../../../spec/static-semantics.md#lexical-regions-and-construction-dependencies),
+[Core lowering](../../../spec/elaboration.md) and
+[region execution](../../../spec/dynamic-semantics.md#region-construction-and-close-steps).
 The [gate and transfer record](evidence.md) identifies the exact reviewed inputs.
 
 The aggregate `Coherent` predicate includes `Safe`, `ServiceContextsSafe` and
@@ -41,7 +46,7 @@ usable-reference liveness.
 The finite region extension leaves ordinary source effects and lexical evaluation abstract. operandHistory is an opaque already-performed-effects marker; region transitions do not roll it back or replay it. Internal work/control exhaustion is not an ordinary source allocator refusal and carries no new cleanup guarantee. Source/Core access, cleanup/interpreter compatibility and foreign module guarantees are stated assumptions, never `Coherent successor` premises. No runtime implementation or proof of a native allocator is claimed.
 
 The model has no numeric range domain or source `Int` classification. Under
-[CP-0025 integer admission](../../proposals/CP-0025-lexical-region-construction.md#integer-residency-admission),
+[integer residency admission](../../../spec/static-semantics.md#lexical-regions-and-construction-dependencies),
 an independent immediate needs no owned record; persistent digits instantiate
 existing request/supply/initialize/publication and dependency guards. Generic
 source/Core Scalar-to-Free lowering must not classify unknown Int as independent.
@@ -88,10 +93,11 @@ proof module or changed transition premise.
 
 This readback compared the finite model with the CP-0025 semantic candidate at
 `a21d0001c34a4ac5a0557e34cfcfb4ea2b1e44a0`, especially its explicit lowering,
-operational contract and R1 handoff. That semantic content is now accepted for
-transition, with retention still pending. The correspondence
-below identifies modeled updates and source/Core obligations; it does not claim
-that those obligations are implemented or proved by finite preservation.
+operational contract and R1 handoff. That matched contract/model boundary was
+retained through PR #146 at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`.
+The correspondence below identifies modeled updates and source/Core assumptions;
+finite preservation proves neither compiler implementation nor the later
+closure-creation and integer-residency amendments.
 
 **Default and explicit allocation.** Implicit construction lowers through the
 private generated `DefaultAlloc` handler to `RegionAllocate(selected_view,

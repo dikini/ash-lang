@@ -12,15 +12,13 @@
   [DN-0055](DN-0055-algebra-of-regions-lifetimes-and-ownership.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md)
 
-> This note separates region placement and allocation from ownership, lifetimes,
-> and reclamation. Lexical scope is the first ownership scheme: the scope owns
-> the region and its objects and determines the region's lifetime. Region
-> reclamation reclaims every remaining object together. The agreed M2 delivery
-> includes default placement for ordinary construction and explicit region
-> selection, lexical ownership, bulk reclamation, closures, and recursive
-> immutable graphs. Approved directions below constrain R1/R2 design. This note defines no
-> current Ash semantics, selects no source grammar or implementation
-> architecture, and authorizes no product implementation or prototype.
+> This informative note separates placement/allocation from ownership,
+> lifetimes and reclamation, and retains questions about broader compositions.
+> The lexical base is described by the [specification](../../spec/README.md).
+> Earlier candidate descriptions below explain the design boundary; they do not
+> override current syntax/semantics or authorize another implementation,
+> architecture or prototype. Nonlexical ownership, collection and transport
+> remain exploratory.
 
 ## Question
 
@@ -32,13 +30,15 @@ cycle restrictions of `Cell<R,T>`?
 
 ## Context
 
-The target is a possible extension after the completed slim FFI M1,
+The completed slim FFI M1 was
 [integrated into Main by PR #143](https://github.com/dikini/ash-lang/pull/143).
-Current [resource dependencies](../../spec/static-semantics.md#scoped-cells-and-resource-dependencies)
-and [execution rules](../../spec/dynamic-semantics.md#scoped-cell-execution)
-provide scoped access and completion, but no selectable region placement for
-ordinary construction. The current ordinary heap, mathematical integers,
-immutable sharing, recursive data, and lexical closures remain the baseline.
+The lexical-region product adds selectable construction to the existing
+[resource dependencies](../../spec/static-semantics.md#scoped-cells-and-resource-dependencies)
+and [execution rules](../../spec/dynamic-semantics.md#region-construction-and-close-steps).
+Its [construction rules](../../spec/static-semantics.md#lexical-regions-and-construction-dependencies)
+are the implemented baseline for the broader composition questions here;
+mathematical integers, immutable sharing, recursive data and lexical closures
+retain their specified contracts.
 The [FFI boundary](../../spec/static-semantics.md#source-foreign-declarations)
 aligns Bytes and opaque pointers; ordinary Ash binding modules express lifetime
 interpretation and cleanup, while native behavior remains an assumption.
@@ -74,12 +74,11 @@ data-only or explicit-allocation-only product does not complete that scope.
 Usage- or lifetime-based automatic placement inference is deferred as an
 optimization; default placement itself is required.
 
-The user-approved directions below constrain the proposed transition; they are
-not current Ash semantics or an accepted change proposal. [TASK-0055](../tasks/TASK-0055-lexical-regions.md)
-and its [execution plan](../tasks/plans/lexical-regions.md) organize R1/R2 first.
-R1 supplies the bounded model and mechanized preservation gate; R2 must obtain
-acceptance for a matching source/Core contract before product R3 begins.
-The broader algebra in DN-0055 is not an additional prerequisite.
+The [specification](../../spec/README.md) defines the implemented lexical base;
+the [bounded model evidence](lexical-regions/evidence.md) records the separate
+matched R1/R2 proof scope. The earlier candidate requirements in this note are
+informative design context, not pending M2 assignments or current language
+rules. The broader algebra in DN-0055 remains separate exploration.
 
 Construction, actual closure captures, ordinary graph cycles, projection,
 failure, suspension, escape and refusal remain required cases. No new numeric
@@ -119,9 +118,9 @@ when initialization permits it. Address alone is not initialization or lifetime
 proof.
 
 A small private, nonrecursive Request representation and established host
-startup/control machinery under existing limits are approved bootstrap
-directions. Concrete Request/Storage layouts and the supplied-storage seam still
-need the R1/R2 contract. Ordinary tuples or error constructors cannot be assumed
+startup/control machinery under existing limits supply the specified lexical
+bootstrap. The [Core contract](../../spec/elaboration.md) defines its concrete
+Request/Storage and supplied-storage boundary. Ordinary tuples or error constructors cannot be assumed
 allocation-free; setup, refusal delivery and root observation need an established
 storage foundation, without an untracked fallback destination.
 
@@ -151,14 +150,14 @@ storage foundation, without an untracked fallback destination.
   indexed operation metadata. Allocation introduces no exception for a request
   interpreted outside a required owner.
 - Distinguish source scope completion from permitted backing release. Required
-  ordinary dependencies and cleanup must remain accounted for; R2 must specify
-  failure and completion without importing a foreign-owner status protocol.
+  ordinary dependencies and cleanup remain accounted for by the specified
+  failure/completion rules, without a foreign-owner status protocol.
 - Cover default placement and explicit selection at allocation-capable helper
   boundaries. Use the agreed caller-context contract below while preserving
   current rank-1
   restrictions and actual closure dependencies.
-- Preserve existing ordinary construction until a separate proposal specifies
-  its region lowering, effects, failure, and entry-result contract.
+- Preserve the specified construction, effects, failure and entry-result
+  contract; changing that base requires the proposal workflow.
 - Keep checked operations and provider assumptions explicit. An interface
   implementation, numeric offset, or compatible type grants no memory authority.
 - Begin sequentially with lexical ownership, immutable region objects,
@@ -188,12 +187,13 @@ The base logical model distinguishes the following roles. Names such as
 | Completion obligations | Identify cleanup that must run before backing storage is released. |
 
 M2 covers default placement of ordinary construction and explicit region
-selection. R2 must describe their checked lowering and observable behavior. Storage can come from foreign allocation, caller backing,
+selection under the [specified lowering](../../spec/elaboration.md). Storage can
+come from foreign allocation, caller backing,
 static backing, or another admitted primitive. No native owner, resource
 declaration, or runtime acquisition is intrinsic to the region contract.
 
 This is a staged refinement of DN-0035 under the agreed default-selection
-direction below. Exact source and Core presentation still require R2 acceptance.
+direction below. The specification owns the exact source and Core presentation.
 One managed ordinary heap and individually owned storage remain comparison
 alternatives with the tradeoffs recorded there.
 
@@ -279,21 +279,18 @@ parametricity and handlers. Purity-compatible defaults, including allocation,
 may be omitted in surface rows: `Int -> Pair ! {}` includes those defaults;
 `Int -> Pair ! {Console}` includes them plus Console. Additional observable
 allocator effects remain visible in source contracts and expanded rows. The
-remaining implicit set and purity classification are not selected here. Broader
-inference of omitted definition rows is outside M2; preserve existing inference
-apart from the agreed default expansion.
+complete implicit-default expansion is specified; this note selects no additional
+implicit effects. Broader inference of omitted definition rows remains outside
+the lexical base, apart from the specified default expansion.
 
 Core contains no implicits: elaboration retains expanded effect rows, selected
 region/allocator arguments or bindings, request targets and handler/cleanup
-relationships explicitly. A proposed R2 realization uses monomorphic
-`DefaultAlloc` forwarding to exact `Alloc<R>`, an allocation-facing projection
-of the complete pair. A proposed region-independent `StorageView` must retain
-actual residency and lifetime dependencies; it cannot erase them as an Address
-cast. Schematic `region<R> r = Host.region(configuration) { body }` and
-`using r { computation }` are source candidates, not accepted grammar.
-Exact forwarding, public annotations, layouts and bootstrap lowering remain R2
-work matched to R1. No current constructor has acquired this effect merely
-because this note describes it.
+relationships explicitly. The [specified realization](../../spec/elaboration.md)
+uses explicit monomorphic default forwarding and the complete allocator pair;
+it is not an ambient object. `StorageView` retains actual residency/lifetime
+dependencies, rather than erasing them as an Address cast. The
+[source grammar](../../spec/syntax.md) owns the region/provider and selection
+forms; this note selects no alternative current syntax, layout or bootstrap.
 
 ### Checked construction
 
@@ -333,8 +330,8 @@ compiler lowering. It authenticates the exact reservation, extent, layout,
 initializer, and retained dependencies before publication. It executes in the
 constructing computation under R, invokes no source callback, and issues no
 outward request carrying the payload. Ordinary access types or compatible
-descriptors cannot manufacture this permission. This boundary is proposed work,
-not permission already supplied by the current pointer/Bytes FFI mapping.
+descriptors cannot manufacture this permission. The specified construction
+boundary is distinct from permission supplied by the pointer/Bytes FFI mapping.
 
 Any pending reservation belongs to that construction's completion obligation
 before fallible reply handling. Capture/resume preserves the same obligation;
@@ -360,8 +357,8 @@ not support arbitrary deep copying of graphs, sharing, closures, or cycles.
 
 Representation support must be declared. M2's ordinary-construction coverage
 includes closures and recursive immutable graphs, subject to valid captures,
-initialization and dependencies. R2 must account for that coverage rather than
-defer it as a later fragment or hide an unbounded heap fallback.
+initialization and dependencies. That product scope is not a later fragment
+and permits no hidden unbounded heap fallback.
 Mathematical `Int` does not become a wrapping fixed-width value. Any selected
 bounded encoding needs checked conversion and its own refusal behavior.
 
@@ -484,24 +481,24 @@ lifetime. Before ending source access, normal completion checks the body result
 and outward dependencies and performs required inner completion and scheduled
 cleanup while A is live. Backing release must respect
 required ordinary dependencies and completion. Reclaiming the region releases
-all remaining objects together, once permitted; R2 must define the normal,
-failure and partial-construction transitions. Ordinary unreachable-data
+all remaining objects together, once permitted; the
+[execution rules](../../spec/dynamic-semantics.md#region-construction-and-close-steps)
+define normal, failure and partial-construction transitions. Ordinary unreachable-data
 reclamation invokes no arbitrary effectful source cleanup.
 
 Composition with native calls uses the current slim FFI boundary and ordinary
 Ash handlers and scoped cleanup. It does not restore compiler-owned foreign
 quarantine, retained/consumed status reports, blocked-dependent native entry
 or host-destruction rules. A region proof cannot establish native memory
-validity or a library's cleanup behavior from its signature. R2 must make any
-such assumptions explicit while preserving required Ash-owned dependencies.
+validity or a library's cleanup behavior from its signature. The contract keeps
+those assumptions explicit while preserving required Ash-owned dependencies.
 
 Capture moves the same owner, storage, and obligations into owned control;
 resume restores them without acquisition or reinitialization. A textual boundary
 crossed during capture is not a release event. Checked discard completes its
 owned abandoned obligations in structural order and cannot skip required
-outside or running completion. R2 must preserve these ordinary rules and state
-its construction and cleanup failure behavior; no retired foreign completion
-codec is a prerequisite.
+outside or running completion. The specified construction and cleanup failure
+rules preserve that boundary; no retired foreign completion codec is required.
 
 The fixed-arena composition supplies no individual free, compaction, resize
 invalidation, or earlier reclamation guarantee. Repeated aliases do not
@@ -527,11 +524,14 @@ keep their existing limits on source cleanup and eventual release.
 | One-shot control moves ownership. | Capture/resume preserves activations and ordered completion; it creates no exclusive borrow proof. |
 | Ordinary values remain reusable. | Aliases share valid immutable data; resource owners remain separate obligations. |
 | Native signatures do not establish memory safety. | Admitted representation, initialization, provenance, and access are separate checked obligations. |
-| Current pure construction has no selectable allocation effect. | Its migration and observable failure contract require a separate proposal and lowering account. |
+| Source construction carries explicit allocation requirements in Core. | The current specification governs default expansion, placement, failure and entry observation; further variations need their own transition contract. |
 
 ## Evidence and experiments
 
-These are proposed requirements, not completed experiments or proofs:
+This table records comparison requirements and nearby failure modes. The
+specification and [R5 evidence](https://github.com/dikini/ash-lang/issues/70) own
+the implemented lexical cases; wider composition cases remain exploratory and
+are not completed proofs merely because the lexical product is retained:
 
 | Case | Required positive observation | Nearby rejection or failure |
 | --- | --- | --- |
@@ -578,11 +578,5 @@ workflow plus matching surface/Core semantics and evidence.
   and local-initialization boundary with the least new machinery?
 - How should independent validation retain value validity that can be shorter
   than its physical allocation, including through opaque public results?
-- Which exact explicit-region API, public annotations and effect forwarding
-  realize the agreed placement and effect rules without changing rank-1 types?
-- Which initialization protocol supports required recursive immutable graphs
-  with deterministic failure and bounded private construction work?
-- Which root configuration, Request/Storage layout and explicit Core lowering
-  realize the agreed entry/caller contract under existing resource limits?
 - Which concrete workloads justify temporary younger mutable dependencies,
   loans, earlier reclamation, or moving storage beyond this base?

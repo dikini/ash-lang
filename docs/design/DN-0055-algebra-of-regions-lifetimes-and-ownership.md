@@ -33,19 +33,16 @@ ownership contexts, and typed state transitions. Lexical scope is the first
 ownership scheme; a fixed arena with bulk reclamation is the first storage
 and reclamation composition.
 
-The agreed M2 delivery includes default placement for ordinary construction,
-explicit region selection, lexical ownership, bulk reclamation, closures and
-recursive immutable graphs. R1's bounded module-backed model (with fixed capacity as an instance) and mechanized
-preservation gate must support R2's matching contract, including construction,
-projection, failure, suspension, escape and refusal. The complete permission,
-channel and alternative-ownership explorations below are not M2 prerequisites.
-The approved closest-live default, caller-selected fresh construction, complete
-allocator pair and surface-default/Core-explicit policy are recorded in
-[DN-0054](DN-0054-base-lexical-region-memory-contracts.md). Exact source/Core
-contracts, layouts and matched proof remain R1/R2 work under
-[TASK-0055](../tasks/TASK-0055-lexical-regions.md). Usage- and
-lifetime-based automatic placement inference is a later optimization, not a
-substitute for required default placement.
+The lexical-region product supplies default placement, explicit selection,
+lexical ownership, bulk reclamation, stored closures and recursive immutable
+graphs. The [specification](../../spec/README.md) governs that base; the
+[finite model evidence](lexical-regions/evidence.md) records its separate bounded
+preservation result and assumptions. The broader permission, channel and
+alternative-ownership explorations below remain informative future work, not
+completed product behavior or additional M2 prerequisites. Usage- and
+lifetime-based placement inference remains a later optimization, not a substitute
+for the implemented default. [DN-0054](DN-0054-base-lexical-region-memory-contracts.md)
+retains related composition questions.
 
 A future comparison considers sequential processes communicating through
 dedicated channels. It tests ownership across communication without requiring
@@ -121,8 +118,9 @@ not a reinterpretation of those handles as exclusive references.
   Do not promote one protocol's exclusion or phase rule into a base axiom.
 - Keep other ownership schemes, owner transport, moving collection, concurrency,
   usage/lifetime-based placement inference, and source proof syntax outside
-  the first proof model. Default and explicit placement remain in M2; R2/R3
-  must supply their exact source/Core contract and model correspondence.
+  the bounded lexical proof model. The specification supplies the product's
+  default/explicit placement contract; that model's correspondence and limits
+  remain recorded separately.
   The channel comparison below explores additional obligations;
   it does not enlarge that model's established evidence or authorize execution.
 
@@ -366,8 +364,8 @@ require a separate scheme rule.
 For the later inference-optimization comparison, consider a variant where each entered lexical
 scope activation `s` successfully establishes one region `r_s`, owned by `s`
 and available for that activation's lifetime. This is a candidate variant,
-not M2's selected default behavior or a replacement for R2's call-boundary
-design. M2's ordinary blocks and calls acquire no region; explicit selection scopes
+not the implemented default behavior or a replacement for its call-boundary
+contract. Ordinary blocks and calls acquire no region; explicit selection scopes
 new construction without moving existing values. This variant selects no physical
 representation or source annotation syntax.
 
@@ -1298,17 +1296,12 @@ Product adoption requires the proposal or decision and task workflow.
 - Which payload variance and endpoint-duality relationships survive the chosen
   effects, usage, lifetime, and transport contracts without conflating them?
 
-To resume: first fix the state, context compatibility, and transition premises
-for lexical ownership parameterized by the allocator contract, with fixed
-capacity as an instance; then prove validity preservation and
-exercise the nested/projection, cycle, capture, and failure counterexamples.
-For M2, bound that model and its proof obligations to the agreed construction,
-closure, graph, lifetime and completion cases; R2 must match it to default and
-explicit placement with source/Core correspondence. This is not an assignment
-to finish every algebra or permission variation in this note. The required-use
-placement heuristic and comparisons with a second reclamation or ownership
-scheme remain separate later work; they do not postpone M2's default placement
-or require inference before its contract can be designed.
+Further algebra work must identify which state, context-compatibility and
+transition premises differ from the specified lexical base, and keep its
+additional proof obligations separate from the retained bounded model. This note
+authorizes no such work. Placement inference and comparisons with another
+reclamation or ownership scheme remain future questions; they do not redefine
+the product's default placement or enlarge the existing proof claim.
 The dedicated-channel case supplies a later comparison: start with copied,
 independent data, then compare transportable regions under the same message
 protocol. Preserve the separation between memory safety and progress claims.

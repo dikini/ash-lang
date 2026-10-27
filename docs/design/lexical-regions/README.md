@@ -1,12 +1,14 @@
 # Lexical region finite model
 
-This bounded sequential model supplies R1 evidence for accepted
-[CP-0025](../../proposals/CP-0025-lexical-region-construction.md), under
-[TASK-0055](../../tasks/TASK-0055-lexical-regions.md) and its
-[execution plan](../../tasks/plans/lexical-regions.md). It defines no current Ash
-semantics. The accepted contract and proof are retained through [PR #146](https://github.com/dikini/ash-lang/pull/146) at `aee02227b69fb6cbbd00c23904ffe2a0c7df6924`;
-independent review, retained verification and R1/R2 acceptance are complete.
-R3 is active and partial; this proof is not product implementation evidence.
+This bounded sequential model retains R1 evidence for the lexical-region
+transition. The [specification](../../../spec/README.md) defines the product's
+language rules; this proof defines none. The accepted contract and proof were
+retained through [PR #146](https://github.com/dikini/ash-lang/pull/146) at
+`aee02227b69fb6cbbd00c23904ffe2a0c7df6924`; independent review, retained
+verification and R1/R2 acceptance are complete. Product evidence and acceptance
+remain distinct and are recorded in
+[R5 #70](https://github.com/dikini/ash-lang/issues/70); Main integration has its
+separate gate.
 
 The reviewed eight-module candidate passed the frozen
 [AD-0012](../../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
@@ -35,7 +37,7 @@ No transition assumes its successor is coherent. Component `Valid`, `Invariant`
 and `MachineSafe` predicates are not substitutes for the aggregate theorem.
 
 The [correspondence and assumptions](correspondence.md) map the model to the
-accepted transition's source/Core contract, required examples and explicit proof limits.
+historically matched source/Core contract, required examples and explicit proof limits.
 Physical allocator correctness and lexical/compiler correspondence remain
 separate obligations. No native-memory, whole-compiler or product implementation
 claim follows from finite preservation.

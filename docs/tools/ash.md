@@ -745,7 +745,7 @@ main () = identity
 Its exact standard output is:
 
 ```text
-<function> : Int -> Int
+<function> : Int -> Int ! {DefaultAlloc}
 ```
 
 The executable test `tool_cyclic_data_uses_structural_rendering` runs:
@@ -801,8 +801,9 @@ implementation is reported without exposing that declaration's metadata.
 
 Entry failures are ordered as `entry.missing-main`, `entry.main-polymorphic`,
 `entry.main-domain`, `entry.main-effects`, `entry.main-open-result`, and
-`entry.main-constrained`. After exact native symbol interpretation when required,
-any residual ordinary effect requirement or open entry row is a source rejection.
+`entry.main-constrained`. The generated root discharges the default allocation
+requirement, and exact native interpretation discharges required admitted symbols.
+Any residual ordinary effect requirement or open entry row is a source rejection.
 Supplied native callback entries are checked against original symbols before
 Ash execution. A selected native invocation requires its exact entry; a missing
 entry is a terminal runtime failure after operand evaluation and boundary
