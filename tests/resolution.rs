@@ -207,14 +207,31 @@ fn retains_method_local_type_candidates_for_interface_checking() {
 
     assert!(!method.has_explicit_type_parameters);
     assert_eq!(candidate.spelling, "B");
-    let Type::Function(domain, codomain) = &method.annotation.ty else {
-        panic!("expected the method's resolved function type");
-    };
-    assert_eq!(domain.as_ref(), &Type::Variable(candidate.id));
+    let function = method
+        .annotation
+        .ty
+        .function_view()
+        .expect("the complete method type remains callable");
+    assert_eq!(function.domain(), &Type::Variable(candidate.id));
     assert_eq!(
-        codomain.as_ref(),
+        function.value(),
         &Type::Variable(interface.parameters[0].id)
     );
+    let row = function
+        .effects()
+        .expect("the Source arrow retains its allocation row");
+    let [allocation] = row.known() else {
+        panic!("the exact row has one allocation instance");
+    };
+    assert!(row.tail().is_none());
+    assert!(allocation.arguments().is_empty());
+    let fact = program
+        .imported_facts()
+        .effect(allocation.effect())
+        .expect("the allocation instance is authenticated");
+    assert_eq!(fact.spelling, "DefaultAlloc");
+    assert!(fact.parameters.is_empty());
+    assert_ne!(fact.id.module(), program.module());
 }
 
 #[test]

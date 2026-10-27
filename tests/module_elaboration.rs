@@ -5,9 +5,12 @@ use std::{
 };
 
 use ash::{
-    core::{PureComputation, PureExprKind, transform::identity_traversal, validate_modules},
-    elaborate::{ElaborationFailure, Elaborator, TypeError, check_module, link_modules},
-    eval::evaluate,
+    core::{
+        EffectExprKind, EffectOperation, PureComputation, PureExprKind,
+        transform::identity_effect_traversal, validate_effect_modules,
+    },
+    elaborate::{EffectElaborator, ElaborationFailure, TypeError, check_module, link_modules},
+    eval::evaluate_effect,
     evidence_validation::validate_interface_evidence,
     module::{ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
@@ -211,7 +214,10 @@ fn checked_modules_keep_their_stable_graph_identity() {
 
     let checked = check_graph(&graph).expect("the module should check");
 
-    assert_eq!(checked[0].module(), expected);
+    assert_eq!(
+        checked_module(&graph, &checked, "entry.ash").module(),
+        expected
+    );
 }
 
 #[test]
@@ -313,9 +319,9 @@ fn linked_modules_form_dependency_ordered_core_groups_and_evaluate() {
     let linked = link_modules(checked, graph.entry()).expect("the graph should link");
     let linked = validate_interface_evidence(linked).expect("linked evidence should validate");
     let mut elaborator =
-        Elaborator::for_module_program(&linked).expect("the graph namespace should reserve");
+        EffectElaborator::for_module_program(&linked).expect("the graph namespace should reserve");
     let typed = elaborator
-        .synthesize_module_program(&linked)
+        .synthesize_effect_module_program(&linked)
         .expect("final lowering should preserve checked schemes");
     assert_eq!(typed.ty, Type::Int);
     let unchecked = elaborator
@@ -331,33 +337,68 @@ fn linked_modules_form_dependency_ordered_core_groups_and_evaluate() {
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
-    let validated = validate_modules(unchecked, &sources, &module_sources)
+    let validated = validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("all canonical module sources should validate");
 
+    let expected_groups = ["base.ash", "middle.ash", "entry.ash"].map(|name| {
+        graph
+            .modules()
+            .iter()
+            .find(|module| Path::new(module.source().display_path()) == tree.0.join(name))
+            .expect("the named user module should be admitted")
+            .id()
+    });
+    let mut user_groups = Vec::new();
     let mut node = validated.root();
-    for _ in 0..3 {
-        let expression = validated.node(node).expect("group node should exist");
-        assert!(matches!(
-            expression.kind,
-            PureExprKind::Computation(PureComputation::RecursiveBind(_))
-        ));
-        node = expression
-            .kind
-            .child_at(expression.kind.child_count() - 1)
-            .expect("a recursive group should end in its body");
+    loop {
+        let expression = validated
+            .node(node)
+            .expect("continuation node should exist");
+        node = match &expression.kind {
+            EffectExprKind::Operation(EffectOperation::Region(region)) => region.body(),
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler.body(),
+            EffectExprKind::Operation(EffectOperation::NativeInterpret(native)) => native.body(),
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                binding.body()
+            }
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::RecursiveBind(
+                group,
+            ))) => {
+                let owners = group
+                    .members()
+                    .iter()
+                    .filter_map(|member| member.binder().id().module())
+                    .collect::<std::collections::HashSet<_>>();
+                assert_eq!(
+                    owners.len(),
+                    1,
+                    "one recursive group should retain one defining module"
+                );
+                let owner = *owners.iter().next().unwrap();
+                if expected_groups.contains(&owner) {
+                    assert_eq!(
+                        group.members().len(),
+                        1,
+                        "each user group retains its original definition"
+                    );
+                    user_groups.push(owner);
+                }
+                group.body()
+            }
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(_))) => break,
+            other => panic!("unexpected linked continuation {other:?}"),
+        };
     }
-    assert!(matches!(
-        validated.node(node).map(|expression| &expression.kind),
-        Some(PureExprKind::Computation(PureComputation::Apply(_)))
-    ));
+    assert_eq!(user_groups, expected_groups);
 
-    let evaluation = evaluate(&validated).expect("linked Core should evaluate");
+    let evaluation = evaluate_effect(&validated).expect("linked Core should evaluate");
     assert_eq!(evaluation.value.to_string(), "42");
 
-    let transformed = identity_traversal(&validated)
+    let transformed = identity_effect_traversal(&validated)
         .expect("a validated linked graph should preserve every identity");
-    let revalidated = validate_modules(transformed, &sources, &module_sources)
+    let revalidated = validate_effect_modules(transformed, &sources, &module_sources)
         .expect("transformed module identities should validate independently");
-    let reevaluation = evaluate(&revalidated).expect("transformed linked Core should evaluate");
+    let reevaluation =
+        evaluate_effect(&revalidated).expect("transformed linked Core should evaluate");
     assert_eq!(reevaluation.value.to_string(), "42");
 }

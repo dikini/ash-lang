@@ -4,7 +4,7 @@ use ash::{
     message::{Catalogue, Locale},
     module::{ModuleRoots, load_module_graph},
     presentation::{compile_type_diagnostic, write_human, write_short},
-    resolve::resolve_module,
+    resolve::{DependencyExports, resolve_module},
 };
 
 #[test]
@@ -102,7 +102,7 @@ fn driver_failure_owns_the_sources_needed_for_later_rendering() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/first-stratum/type/binding-initializer.ash");
     let failure = run_path(RunConfiguration {
-        entry: path,
+        entry: path.clone(),
         roots: ModuleRoots::empty(),
     })
     .unwrap_err();
@@ -111,7 +111,18 @@ fn driver_failure_owns_the_sources_needed_for_later_rendering() {
         panic!("expected the binding initializer failure");
     };
     let sources: Vec<_> = failure.sources().iter().collect();
-    assert_eq!(sources.len(), 1);
+    let mut actual = sources
+        .iter()
+        .map(|source| source.display_path().to_string())
+        .collect::<Vec<_>>();
+    let mut expected = vec![
+        "@builtin.foreign".to_owned(),
+        "@compiler.region".to_owned(),
+        path.display().to_string(),
+    ];
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
     let view = compile_type_diagnostic(error, &sources).unwrap();
     let mut output = Vec::new();
     write_human(
@@ -137,7 +148,7 @@ fn real_binding_error_keeps_initializer_and_annotation_context() {
         .iter()
         .find(|m| m.id() == graph.entry())
         .unwrap();
-    let resolved = resolve_module(loaded, &[]).unwrap();
+    let resolved = resolve_entry(&graph);
     let TypeError::Source(error) = check_module(resolved).unwrap_err() else {
         panic!("expected a structured type diagnostic");
     };
@@ -203,7 +214,7 @@ fn driver_retains_the_dependency_source_not_just_the_entry_file() {
     let entry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/diagnostic-source-retention/entry.ash");
     let failure = run_path(RunConfiguration {
-        entry,
+        entry: entry.clone(),
         roots: ModuleRoots::empty(),
     })
     .unwrap_err();
@@ -211,7 +222,20 @@ fn driver_retains_the_dependency_source_not_just_the_entry_file() {
     else {
         panic!("expected the dependency initializer failure");
     };
-    assert_eq!(failure.sources().len(), 2);
+    let mut actual = failure
+        .sources()
+        .iter()
+        .map(|source| source.display_path().to_string())
+        .collect::<Vec<_>>();
+    let mut expected = vec![
+        "@builtin.foreign".to_owned(),
+        "@compiler.region".to_owned(),
+        entry.display().to_string(),
+        entry.with_file_name("dependency.ash").display().to_string(),
+    ];
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
     let sources: Vec<_> = failure.sources().iter().collect();
     let view = compile_type_diagnostic(error, &sources).unwrap();
     let mut output = Vec::new();
@@ -225,4 +249,29 @@ fn driver_retains_the_dependency_source_not_just_the_entry_file() {
     assert!(output.contains("dependency.ash:3:24"));
     assert!(output.contains("dependency.ash:3:17"));
     assert!(!output.contains("entry.ash"));
+}
+
+fn resolve_entry(graph: &ash::module::ModuleGraph) -> ash::resolved::ResolvedModule {
+    let mut checked = Vec::<ash::resolved::CheckedModule>::new();
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked| checked.module() == edge.target())
+                    .expect("dependencies precede their importer");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the actual target authenticates its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved =
+            resolve_module(module, &dependencies).expect("the diagnostic fixture resolves");
+        if module.id() == graph.entry() {
+            return resolved;
+        }
+        checked.push(check_module(resolved).expect("diagnostic dependencies check"));
+    }
+    panic!("the graph retains its entry");
 }

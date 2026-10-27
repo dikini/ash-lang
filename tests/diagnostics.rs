@@ -1223,11 +1223,11 @@ fn escape_messages_relate_outward_dependencies_to_their_scope() {
             "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {{\nlet escaped = resource cell<R> c = 41 {{\n{body}\n}}\n42\n}}\n"
         )
     };
-    for (reason, text, lead, relation) in [
-        (TypeReason::LocalNominalEscape, "main : Unit -> Int\nmain () = {\nlet escaped = {\nnewtype Hidden = Hidden(Int)\nHidden(1)\n}\n0\n}\n".to_owned(), "This type or effect row exposes a local nominal type outside its scope.", "local_nominal_scope"),
-        (TypeReason::ResourceEscape, resource("c"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
-        (TypeReason::ResourceEscape, resource("let read_later : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nread_later"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
-        (TypeReason::ResourceEscape, resource("let later : Unit -> Int = fn(ignored) {\nhandle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlater"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
+    for (reason, text, lead, relation, capture) in [
+        (TypeReason::LocalNominalEscape, "main : Unit -> Int\nmain () = {\nlet escaped = {\nnewtype Hidden = Hidden(Int)\nHidden(1)\n}\n0\n}\n".to_owned(), "This type or effect row exposes a local nominal type outside its scope.", "local_nominal_scope", false),
+        (TypeReason::ResourceEscape, resource("c"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition", false),
+        (TypeReason::ResourceEscape, resource("let read_later : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nread_later"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition", false),
+        (TypeReason::ResourceEscape, resource("let later : Unit -> Int = fn(ignored) {\nhandle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlater"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition", true),
     ] {
         let fixture = ModuleFixture::load("escape-message.ash", &text);
         let failure = run_path(RunConfiguration { entry: fixture.loaded().canonical_path().to_path_buf(), roots: ModuleRoots::empty() }).unwrap_err();
@@ -1245,11 +1245,24 @@ fn escape_messages_relate_outward_dependencies_to_their_scope() {
         let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(json["responsibility"], "source");
         assert_eq!(json["facts"], serde_json::json!([]));
-        assert_eq!(json["labels"].as_array().unwrap().len(), 2);
+        assert_eq!(json["labels"].as_array().unwrap().len(), if capture { 3 } else { 2 }, "{json}");
+        assert_eq!(json["labels"][0]["role"], "primary");
+        assert_eq!(json["labels"][1]["role"], "related");
         assert_eq!(json["labels"][0]["relationship"], "escaping_dependency");
         assert_eq!(json["labels"][1]["relationship"], relation);
         assert_eq!(json["labels"][1]["byte_start"], error.related[0].span().range().start());
         assert_eq!(json["labels"][1]["byte_end"], error.related[0].span().range().end());
+        if capture {
+            let primary = text.rfind("\nlater").unwrap() + 1;
+            assert_eq!(json["labels"][0]["byte_start"], primary);
+            assert_eq!(json["labels"][0]["byte_end"], primary + "later".len());
+            assert_eq!(json["labels"][1]["byte_start"], text.find("resource cell").unwrap());
+            assert_eq!(json["labels"][1]["byte_end"], text.rfind("\n}\n42").unwrap() + 2);
+            assert_eq!(json["labels"][2]["role"], "related");
+            assert_eq!(json["labels"][2]["relationship"], "resource_capture");
+            assert_eq!(json["labels"][2]["byte_start"], text.find("fn(ignored)").unwrap());
+            assert_eq!(json["labels"][2]["byte_end"], text.rfind("\n}\nlater").unwrap() + 2);
+        }
     }
 }
 
@@ -1291,7 +1304,10 @@ fn general_type_mismatch_renders_retained_types_and_expression_span() {
         assert_eq!(json["responsibility"], "source");
         assert_eq!(json["facts"][0]["name"], "expected");
         assert_eq!(json["facts"][1]["name"], "found");
-        assert_eq!(json["facts"][1]["value"], ty);
+        assert_eq!(
+            json["facts"][1]["value"],
+            format!("{ty} ! {{DefaultAlloc}}")
+        );
         assert_eq!(json["labels"].as_array().unwrap().len(), 1);
         assert_eq!(json["labels"][0]["relationship"], "expression");
         assert_eq!(
@@ -2914,7 +2930,10 @@ fn unresolved_inference_is_anonymous_in_source_type_diagnostics() {
     };
     assert_eq!(operator.reason, TypeReason::OperatorOperand);
     assert_eq!(operator.expected.as_deref(), Some("Int"));
-    assert_eq!(operator.found.as_deref(), Some("_ -> Option<_>"));
+    assert_eq!(
+        operator.found.as_deref(),
+        Some("_ -> Option<_> ! {DefaultAlloc}")
+    );
     assert!(!operator.render_plain().contains('?'));
 
     let pattern_text = "main : Unit -> Int\nmain () = {\nlet split = fn(value) {\nlet (left, right) = value\nlet () = value\nleft\n}\nsplit\n}\n";

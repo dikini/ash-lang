@@ -124,9 +124,34 @@ fn linked_groups_retain_only_public_implementation_authorization_routes() {
         .expect("the transitive validation graph should load");
     let linked =
         link_modules(check_graph(&graph), graph.entry()).expect("the checked graph should link");
-    let [base, facade, entry] = linked.groups() else {
-        panic!("the linked graph should retain three dependency-ordered groups");
+    assert_eq!(linked.groups().len(), graph.modules().len());
+    assert_eq!(linked.groups().len(), 5);
+    assert_eq!(
+        linked
+            .groups()
+            .iter()
+            .map(|group| group.module())
+            .collect::<Vec<_>>(),
+        graph
+            .modules()
+            .iter()
+            .map(|module| module.id())
+            .collect::<Vec<_>>()
+    );
+    let group = |name: &str| {
+        let owner = graph
+            .modules()
+            .iter()
+            .find(|module| module.source().display_path().ends_with(name))
+            .unwrap()
+            .id();
+        linked
+            .groups()
+            .iter()
+            .find(|group| group.module() == owner)
+            .unwrap()
     };
+    let (base, facade, entry) = (group("base.ash"), group("facade.ash"), group("entry.ash"));
 
     assert_eq!(base.implementations().len(), 1);
     assert_eq!(base.checked_implementations().len(), 1);

@@ -6,7 +6,7 @@ use std::{
 
 use ash::{
     driver::{EntryReason, PipelineFailure, RunConfiguration, compile_path, execute, run_path},
-    module::ModuleRoots,
+    module::{ModuleRoots, load_module_graph},
     types::Type,
 };
 
@@ -58,8 +58,9 @@ fn compiled_pure_program_runs_after_source_replacement_without_new_compilation_w
     assert_eq!(compiled.type_display(), original.type_display());
     let mut retained_work = *original.compilation_work();
     // Reusable compilation retains one record and one shared source handle for
-    // this single-module graph; ordinary run_path retains neither.
-    retained_work.source_checking.as_mut().unwrap().used += 2;
+    // each canonical graph module, including both services; run_path retains neither.
+    let graph = load_module_graph(&tree.configuration().entry, &ModuleRoots::empty()).unwrap();
+    retained_work.source_checking.as_mut().unwrap().used += 2 * graph.modules().len();
     assert_eq!(compiled.compilation_work(), &retained_work);
 
     tree.write("entry.ash", "this replacement is not an Ash program\n");

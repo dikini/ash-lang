@@ -34,7 +34,7 @@ module targets pass all 6, 30 and 15 original tests. Module resolution and
 provenance now pass all 11 and 4 original tests. Semantics now passes all 13
 original tests. Architecture retains all 47 original passes. Interface resources
 now passes all six original tests; its three new restorations are disjoint from
-the prior 458, giving 461 original integration restorations. New constructor
+the prior 458, giving 461 original integration restorations at that boundary. New constructor
 negatives, the private Core census, opaque identity unit and explicit constraint
 owner unit remain additional coverage, not restored names.
 
@@ -57,6 +57,38 @@ transforms. User-effect counts identify the complete instance and handler; whole
 transformed effect traces still equal the original trace.
 
 
+
+
+Fixtures246 passes all 255 original tests across twelve complete focused
+targets. The 25 restorations are disjoint from the prior 461, giving 486 original
+integration restorations. Eighteen of Integration244's 43 failures remain
+unmatched by this staged evidence; this is not a fresh complete failure count.
+No test names or Source programs were added, removed or changed.
+
+Diagnostic fixtures admit the actual preceding dependency summaries and resolve
+the intended target before checking its negative. Complete canonical source
+catalogues remain retained for later rendering. Full DefaultAlloc arrow rows
+remain in exact mismatch facts and callable identities. The fourth handled
+resource escape retains the observed extra function-capture cause, with exact
+ordered primary/acquisition/capture ranges derived from its unchanged Source;
+the other three cases retain exactly two labels and their locale controls.
+Reusable compilation's retention debit is two per canonical graph module.
+Linked authorization groups retain the complete graph and original user
+implementation identities and route hops. Implementation preflight and failed
+publication retain their original diagnostic phases.
+
+The five module fixtures authenticate each actual edge target, retain detached
+body-free defining summaries and full canonical method rows, and select their
+actual user/entry owners. Diamond identities, hidden constructor visibility and
+namespace facts remain. The module-chain Source uses independently validated
+Effect Core with all source pairs, exact user group order, identity transform
+and result 42. Only test fixtures and subsequent result prose change; production,
+policy, unit, proof and native inputs stay at checkpoint30. Library13's complete
+1,599-pass result transfers unchanged. Integration244 remains the latest complete
+integration inventory; Final250 format/Clippy are bound at the same executable
+bytes. One unused Type import was removed after the first Clippy pass and the
+complete 80-test implementation target passed again; repeated names add no
+coverage. Canonical full-gate/R5/Main acceptance remains open.
 
 
 The graph-wide constraint default is now 1,376,256 work units, retaining its
