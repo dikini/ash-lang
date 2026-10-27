@@ -32,10 +32,11 @@ their validated hashes. The compiler is resolved through `elan` in the proof
 directory, or the configuration's explicit `compiler` path; its version and
 hash must match the parent evidence.
 
-The optional `proof_directory` selects one of two reviewed repository-relative
-roots: `docs/design/direct-effects/one-shot` (unchanged default) or
-`docs/design/lexical-regions`. The runner rejects other paths, symlink escapes
-and a parent evidence record for another root. Non-default evidence must name
+The optional `proof_directory` selects a reviewed repository-relative root:
+`docs/design/direct-effects/one-shot` (unchanged default),
+`docs/design/lexical-regions`, or `docs/design/retained-control`. The runner
+rejects other paths, symlink escapes and a parent evidence record for another
+root. Non-default evidence must name
 its root explicitly.
 
 A new root may begin with an explicitly labelled `seed_kind: empty-registration`

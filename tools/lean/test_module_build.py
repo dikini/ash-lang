@@ -179,9 +179,9 @@ class ModuleBuildTests(unittest.TestCase):
         with patch.object(native, "Path", side_effect=paths):
             self.assertEqual(native.external_compiler_count(), 2)
 
-    def empty_integration(self):
+    def empty_integration(self, directory="docs/design/lexical-regions"):
         work = self.root / "empty-work"
-        live = work / "docs/design/lexical-regions"
+        live = work / directory
         live.mkdir(parents=True)
         (live / "check.sh").write_text("#!/usr/bin/env bash\nset -euo pipefail\n")
         (live / "lean-toolchain").write_text("leanprover/lean4:v4.33.1\n")
@@ -189,7 +189,7 @@ class ModuleBuildTests(unittest.TestCase):
         subprocess.run(["git", "add", "."], cwd=work, check=True)
         subprocess.run(["git", "-c", "user.name=Tooling tests", "-c", "user.email=tests@example.invalid",
                         "-c", "commit.gpgSign=false", "commit", "-qm", "empty fixture"], cwd=work, check=True)
-        parent = {"seed_kind": "empty-registration", "proof_directory": "docs/design/lexical-regions",
+        parent = {"seed_kind": "empty-registration", "proof_directory": directory,
                   "registered_order": [], "imports": {}, "records": {}, "reports": 0,
                   "manifest": {p.name: digest(p) for p in live.iterdir()},
                   "version": subprocess.check_output([str(LEAN), "--version"], text=True).strip(),
@@ -201,7 +201,7 @@ class ModuleBuildTests(unittest.TestCase):
         source.write_text("theorem region_probe : True := True.intro\n#print axioms region_probe\n")
         review = self.root / "synthetic-review.json"
         review.write_text('{"scope": "runner test fixture only, not an actual review"}\n')
-        config = {"worktree": str(work), "proof_directory": "docs/design/lexical-regions",
+        config = {"worktree": str(work), "proof_directory": directory,
                   "parent_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=work, text=True).strip(),
                   "compiler": str(LEAN), "parent_evidence": str(parent_path),
                   "parent_evidence_sha256": digest(parent_path),
@@ -218,8 +218,11 @@ class ModuleBuildTests(unittest.TestCase):
     def run_integration(self, config):
         config_path = self.root / "empty-config.json"
         config_path.write_text(json.dumps(config))
+        build = self.runner.build
         with patch.dict(sys.modules, {"module_build": self.runner}), \
-                patch.object(sys, "argv", ["integrate.py", str(config_path)]):
+                patch.object(sys, "argv", ["integrate.py", str(config_path)]), \
+                patch.object(self.runner, "build",
+                             side_effect=lambda **args: build(**args, host_lock=self.root / "host.lock")):
             runpy.run_path(str(SCRIPT.with_name("integrate.py")), run_name="__main__")
 
     def test_empty_seed_integrates_without_claiming_parent_proofs(self):
@@ -231,6 +234,23 @@ class ModuleBuildTests(unittest.TestCase):
         self.assertEqual(result["reports"], 1)
         self.assertEqual(result["module_scheduler"]["max_running"], 1)
         self.assertTrue(result["all_modules_fresh"])
+
+    def test_retained_control_seed_accepts_only_its_exact_root(self):
+        directory = "docs/design/retained-control"
+        config, _ = self.empty_integration(directory)
+        self.run_integration(config)
+        result = json.loads(Path(config["output_prefix"] + "-evidence.json").read_text())
+        self.assertEqual(result["proof_directory"], directory)
+        self.assertEqual(result["registered_order"], ["RegionProbe"])
+        self.assertEqual(result["reports"], 1)
+        with self.assertRaisesRegex(AssertionError, "Unreviewed proof directory"):
+            self.run_integration({**config, "proof_directory": directory + "-other"})
+        live = Path(config["worktree"]) / directory
+        moved = self.root / "outside-retained-control"
+        live.rename(moved)
+        live.symlink_to(moved, target_is_directory=True)
+        with self.assertRaisesRegex(AssertionError, "symlink"):
+            self.run_integration(config)
 
     def test_empty_seed_rejects_directory_escape_and_wrong_parent(self):
         config, _ = self.empty_integration()
@@ -316,11 +336,7 @@ class ModuleBuildTests(unittest.TestCase):
         for label in ("first", "retry"):
             prefix = self.root / label
             config["output_prefix"] = str(prefix)
-            config_path = self.root / (label + ".json")
-            config_path.write_text(json.dumps(config))
-            with patch.dict(sys.modules, {"module_build": self.runner}), \
-                    patch.object(sys, "argv", ["integrate.py", str(config_path)]):
-                runpy.run_path(str(SCRIPT.with_name("integrate.py")), run_name="__main__")
+            self.run_integration(config)
             results.append(json.loads(Path(str(prefix) + "-evidence.json").read_text()))
         self.assertTrue(results[0]["all_modules_fresh"])
         self.assertFalse(results[1]["all_modules_fresh"])

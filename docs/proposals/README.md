@@ -19,7 +19,8 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed changes are listed.
+- [CP-0026: Scoped owned continuation storage](CP-0026-scoped-owned-continuation-storage.md)
+  proposes a local ownership-transfer and checked-release contract.
 
 ## Accepted changes
 

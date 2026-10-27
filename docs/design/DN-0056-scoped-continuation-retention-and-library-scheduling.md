@@ -11,8 +11,9 @@
   [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
 
 > This design note is informative. It defines no current Ash semantics,
-> accepts no architecture, and authorizes no implementation or prototype.
-> The rules below are candidate obligations, not an established soundness result.
+> accepts no architecture, and authorizes no product implementation. The
+> bounded proof assignment below is experimental evidence. The rules below are
+> candidate obligations, not an established soundness result.
 
 ## Question
 
@@ -2191,6 +2192,54 @@ is selected. The completion and authority obligations apply after transformation
 and during abandonment as well as on the ordinary return path.
 
 ## Evidence and experiments
+
+### C1 bounded ownership and completion proof assignment
+
+[C1 #71](https://github.com/dikini/ash-lang/issues/71) asks whether the local
+store transitions can preserve one owner and its completion obligations. This
+assignment authorizes a finite Lean model, not an evaluator implementation.
+[CP-0026](../proposals/CP-0026-scoped-owned-continuation-storage.md) is the
+proposed contract to compare with that model; its acceptance is separate. The
+[active task](../tasks/TASK-0057-local-retained-control.md) records the proof
+and the remaining product gates.
+
+Model a single store activation, finite branches and slots, and one executor.
+Include an active selected-clause capture, nested live and consumed owners,
+owned resource and cleanup completion, external support, exact consumer
+interpretation, slot generations, reserve refusal, committed transfer, restore,
+normal branch return and failure disposal. The model must represent the
+current consumer separately from the clause that transferred a capture. It
+must state how the store's owning boundary and outside completion relate to
+each capture, rather than assuming a successor is safe.
+
+Compare successful paths with self-capture, skipped outside completion,
+duplicate/stale keys, incompatible interpretation, branch-local dependency
+escape, and preparation failure. Check both armed and already-running cleanup
+and a second yield during drain. Show the actual premise that excludes each unsafe
+path. Include a finite trace where restored control returns to its current
+consumer, and an unrelated live slot remains unchanged. For this sequential
+fragment, compare shared access to a still-live outer cell with a branch-local
+owner; one scope/completion owner persists in each case. The earlier concurrent
+process isolation constraint remains future parallel pressure, not an added
+local disjoint-footprint requirement.
+
+Prove preservation of the selected ownership and completion invariants for
+each admitted transition and finite traces, no second restoration of the same
+generation, and no release with unfinished owned work. Preparation refusal
+must leave the original owner intact; post-commit failure disposal must account
+for owners without claiming source cleanup ran. Prove these from local step
+premises, not by taking the successor invariant as a premise. State any
+provider, scheduler, runtime or admission assumptions explicitly. A separate
+proof of C3's recursive normal-return analysis is required before its release
+facts are used; this assignment does not prove it.
+
+Retain the model and a correspondence map only if the named examples and
+proof obligations are independently reviewed and pass the frozen scoped
+[AD-0012](../decisions/AD-0012-proof-development-feedback-and-build-reuse.md)
+integration gate. Otherwise retain the finding in this note and discard the
+prototype; revise the proposed contract if the comparison exposes a semantic
+gap. Neither outcome establishes compiler or runtime correctness, external
+provider laws, termination, or the wider network claims in this note.
 
 This note contains a paper derivation against the linked current specification.
 It includes the partial-correctness argument above under explicit premises,
